@@ -5,7 +5,7 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <!-- Placeholder mark: a simple ring within the adaptive-icon safe zone.
-         Real branding is an M9 concern (ARCHITECTURE.md §14.7). -->
+         Real branding is an M9 concern (docs/agent/roadmap.md, M9). -->
     <path
         android:fillColor="#00000000"
         android:pathData="M54,30 A24,24 0 1 1 53.99,30"

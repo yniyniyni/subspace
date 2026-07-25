@@ -20,6 +20,17 @@ style:
     active: true
     maxLineLength: 120
 
+naming:
+  # @Composable functions are PascalCase by Jetpack Compose convention (they
+  # stand in for a widget/element, not an action) and every Compose style
+  # guide including Google's own conflicts with detekt's default
+  # [a-z][a-zA-Z0-9]* function-naming pattern on this basis. Excluding
+  # @Composable-annotated functions is the standard fix, not a loosening of
+  # the rule for anything else.
+  FunctionNaming:
+    active: true
+    ignoreAnnotated: ["Composable"]
+
 potential-bugs:
   # Left active because it DOES fire on :core:model and :core:parser, whose
   # detektMain task check depends on. It does NOT fire on the Android modules,

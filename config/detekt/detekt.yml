@@ -21,6 +21,13 @@ style:
     maxLineLength: 120
 
 potential-bugs:
+  # Left active because it DOES fire on :core:model and :core:parser, whose
+  # detektMain task check depends on. It does NOT fire on the Android modules,
+  # for the same type-resolution reason described above — so the §12 "no !!"
+  # ban is enforced for every module by scripts/check-forbidden.sh, and this
+  # entry is a second line of defence on the two JVM modules rather than the
+  # primary one. Do not delete check-forbidden.sh on the assumption that
+  # detekt has this covered; on :app and :service it does not.
   UnsafeCallOnNullableType:
     active: true
 

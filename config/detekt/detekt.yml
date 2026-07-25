@@ -1,0 +1,26 @@
+build:
+  maxIssues: 0
+
+style:
+  ForbiddenMethodCall:
+    active: true
+    methods:
+      - reason: 'ARCHITECTURE.md §12: no runBlocking outside tests'
+        value: 'kotlinx.coroutines.runBlocking'
+  MaxLineLength:
+    active: true
+    maxLineLength: 120
+
+potential-bugs:
+  UnsafeCallOnNullableType:
+    active: true
+
+coroutines:
+  GlobalCoroutineUsage:
+    active: true
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: true
+  SwallowedException:
+    active: true

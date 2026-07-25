@@ -18,3 +18,12 @@ dependencies {
     add("testImplementation", libs.findLibrary("kotest-assertions").get())
     add("testImplementation", libs.findLibrary("kotlinx-coroutines-test").get())
 }
+
+apply(plugin = "org.jlleitschuh.gradle.ktlint")
+apply(plugin = "io.gitlab.arturbosch.detekt")
+
+extensions.configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
+    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+    buildUponDefaultConfig = true
+    parallel = true
+}

@@ -6,12 +6,20 @@ plugins {
 }
 
 extensions.configure<LibraryExtension> {
-    compileSdk = 36
+    // compileSdk is deliberately ahead of targetSdk (36, set in :app).
+    // androidx.lifecycle 2.11 refuses to be consumed below 37. compileSdk only
+    // governs which APIs are visible at build time and has no runtime effect, so
+    // ARCHITECTURE.md §9/§14.1's foregroundServiceType analysis — which depends on
+    // targetSdk — is unaffected. Do not "align" these two numbers.
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        consumerProguardFiles("consumer-rules.pro")
+        // No consumerProguardFiles here: AGP fails the build if the named file is
+        // absent, and no module currently ships consumer rules. Add it per-module
+        // when one genuinely needs them — :core:xray likely will, once the libXray
+        // AAR arrives in M1 and its Go-generated classes need keep rules.
     }
 
     compileOptions {
@@ -25,4 +33,13 @@ extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtensi
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         allWarningsAsErrors.set(true)
     }
+}
+
+apply(plugin = "org.jlleitschuh.gradle.ktlint")
+apply(plugin = "io.gitlab.arturbosch.detekt")
+
+extensions.configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
+    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
+    buildUponDefaultConfig = true
+    parallel = true
 }

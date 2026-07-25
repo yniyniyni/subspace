@@ -13,4 +13,6 @@ dependencies {
     compileOnly(libs.plugin.kotlin.compose)
     compileOnly(libs.plugin.ksp.gradle)
     compileOnly(libs.plugin.hilt.gradle)
+    compileOnly(libs.plugin.ktlint.gradle)
+    compileOnly(libs.plugin.detekt.gradle)
 }

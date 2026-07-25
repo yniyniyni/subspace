@@ -1,0 +1,40 @@
+# ─── Agent working documents ────────────────────────────────────────────────
+# Planning, specs, and research live on disk but are not part of the published
+# project. ARCHITECTURE.md is the committed spec; everything here is scaffolding
+# around it. See CLAUDE.md.
+/CLAUDE.md
+/AGENTS.md
+/docs/agent/
+.claude/
+
+# ─── Vendored native artifacts ──────────────────────────────────────────────
+# Fetched by scripts/fetch-native.sh with pinned SHA-256 checksums. Never
+# committed: they are large, and a binary blob in an AGPL tree is a licensing
+# and supply-chain liability (ARCHITECTURE.md §10.7).
+/core/xray/libs/*.aar
+/service/src/main/jniLibs/
+/.native-cache/
+
+# ─── Gradle / Android ───────────────────────────────────────────────────────
+*.iml
+.gradle/
+build/
+captures/
+local.properties
+.cxx/
+release/
+
+# ─── IDE ────────────────────────────────────────────────────────────────────
+.idea/*
+!.idea/codeStyles/
+!.idea/inspectionProfiles/
+
+# ─── Signing ────────────────────────────────────────────────────────────────
+# A leaked upload key is unrecoverable, and it is the identity F-Droid,
+# IzzyOnDroid, and the HWID scheme (ARCHITECTURE.md §A.4.1) all key off.
+*.jks
+*.keystore
+keystore.properties
+
+# ─── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store

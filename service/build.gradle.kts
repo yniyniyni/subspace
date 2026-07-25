@@ -8,9 +8,13 @@ plugins {
 // submodule in a VPN client is a supply-chain question, so fail early and
 // usefully rather than with a screen of ndk-build errors.
 val hevDir = rootProject.file("third_party/hev-socks5-tunnel")
-if (!hevDir.resolve("Android.mk").exists()) {
+// Checks a NESTED submodule, not the outer one. `git submodule update --init`
+// without --recursive leaves the outer Android.mk present and the vendored
+// dependency trees empty, so guarding on the outer file would pass and hand the
+// developer exactly the raw ndk-build error this guard exists to prevent.
+if (!hevDir.resolve("third-part/lwip/Android.mk").exists()) {
     throw GradleException(
-        "third_party/hev-socks5-tunnel is missing or empty.\n" +
+        "third_party/hev-socks5-tunnel is missing or incompletely checked out.\n" +
             "Run: git submodule update --init --recursive",
     )
 }

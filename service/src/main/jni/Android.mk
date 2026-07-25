@@ -38,6 +38,15 @@ include $(HEV_DIR)/third-part/hev-task-system/Android.mk
 # sources by hand means a file added upstream is picked up on the next bump.
 SRCDIR := $(HEV_DIR)/src
 include $(HEV_DIR)/build.mk
+# The exclusion below is a safety property, not a tidy-up: without it, every
+# process loading this library aborts. It is a literal filename match against a
+# glob whose whole purpose is to pick up whatever upstream adds, so if a
+# submodule bump renames or splits that file the filter would quietly match
+# nothing, JNI_OnLoad would compile back in, and THE BUILD WOULD STAY GREEN.
+# That is §10.1 in one line. Fail at build time instead.
+ifeq ($(filter %/hev-jni.c,$(SRCFILES)),)
+$(error hev-socks5-tunnel no longer ships src/hev-jni.c - re-verify the JNI_OnLoad exclusion in service/src/main/jni/Android.mk)
+endif
 HEV_SRCFILES := $(filter-out %/hev-jni.c,$(SRCFILES))
 
 LOCAL_PATH := $(SUBSPACE_JNI_PATH)

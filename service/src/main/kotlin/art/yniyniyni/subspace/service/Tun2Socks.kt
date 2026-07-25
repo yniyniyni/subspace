@@ -39,7 +39,17 @@ internal object Tun2Socks {
         tunFd: Int,
     ): Boolean = nativeStart(config, tunFd)
 
-    /** Idempotent. Safe to call when nothing is running (§5.4). */
+    /**
+     * Idempotent, and safe under the concurrent teardown §5.4 describes.
+     *
+     * Two caveats for `TunnelService`:
+     *  - Do not call this before the state machine has observed a started
+     *    tunnel. Upstream's quit busy-waits, and in a narrow mid-startup-failure
+     *    window it can spin — see `docs/agent/research/hev-api.md` §4.
+     *  - If `System.loadLibrary` failed, touching this object throws
+     *    `NoClassDefFoundError`, including from `onDestroy`. §5.4 requires
+     *    teardown to finish anyway, so guard the call there.
+     */
     fun stop(): Unit = nativeStop()
 
     val isRunning: Boolean
@@ -74,6 +84,5 @@ internal fun tun2socksConfig(
       address: 127.0.0.1
       udp: 'udp'
     misc:
-      task-stack-size: 20480
       log-level: warn
     """.trimIndent()

@@ -17,7 +17,7 @@ license.
 |---|---|---|---|
 | [Xray-core](https://github.com/XTLS/Xray-core) | v26.7.11 | MPL-2.0 | File-level copyleft. GPL/AGPL-compatible. Consumed as a binary through libXray; not modified. |
 | [libXray](https://github.com/XTLS/libXray) | v26.7.11 | MIT | Attribution only. |
-| [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | v2.16.0 | MIT | Attribution only. |
+| [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | 2.16.0 (git submodule, `third_party/`) | MIT | Attribution only. Compiled from source into `libtun2socks.so`. One file, `src/hev-jni.c`, is excluded — it registers JNI natives against upstream's own app class and aborts any other process that loads it. See `service/src/main/jni/Android.mk`. Its vendored dependencies (yaml, lwip, hev-task-system) are built unmodified. |
 | [ZXing](https://github.com/zxing/zxing) | see version catalog | Apache-2.0 | Attribution + NOTICE. Replaces ML Kit, which is proprietary and disqualifies the app from F-Droid and IzzyOnDroid. |
 
 Bundled `geoip.dat` / `geosite.dat` originate from

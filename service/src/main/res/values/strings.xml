@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- §12: strings live here from the first commit; no hardcoded UI text.
+     §5.6: nothing here may interpolate a server address or profile name. -->
+<resources>
+    <string name="tunnel_session_name">Subspace</string>
+    <string name="notification_channel_tunnel">Tunnel</string>
+    <string name="notification_connecting">Connecting…</string>
+    <string name="notification_connected">Connected</string>
+</resources>

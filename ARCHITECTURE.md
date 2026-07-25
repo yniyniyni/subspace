@@ -440,6 +440,14 @@ about. Source: Android developer docs, "Foreground service types" and
 If the app is ever published on Google Play, this type must additionally be
 declared and justified in Play Console under Policy → App content.
 
+**Android lint will flag this and it is wrong.** `ForegroundServicePermission`
+asserts that `systemExempted` also requires `SCHEDULE_EXACT_ALARM` or
+`USE_EXACT_ALARM`. That encodes only the *alarm* branch of the type's qualifying
+criteria; the VPN branch is a runtime condition lint cannot see. Suppress it with
+`tools:ignore="ForegroundServicePermission"` on the `<service>` element, as Brave
+and Orbot do. Do **not** silence it by requesting an exact-alarm permission the
+app does not use.
+
 ### 14.2 libXray vs AndroidLibXrayLite — RESOLVED
 
 **`XTLS/libXray`, pinned to v26.7.11.** Two reasons, in order:

@@ -95,14 +95,30 @@ public class XrayController(
      */
     @Suppress("SwallowedException")
     public suspend fun stop() {
-        withContext(io) {
-            try {
-                LibXrayInvoke.call("stopXray")
-            } catch (e: XrayException) {
-                // Deliberately swallowed — see the KDoc above. Not logged, because
-                // the message can quote the config (§5.6) and the caller already
-                // publishes a state transition.
-            }
+        withContext(io) { stopBlocking() }
+    }
+
+    /**
+     * Same as [stop], without a coroutine.
+     *
+     * `VpnService.onDestroy` and `onRevoke` have no scope that outlives them, and
+     * §5.4 requires teardown to finish before the process goes away — a leaked fd
+     * wedges the VPN subsystem until reboot. Suspending there would mean either
+     * abandoning the teardown or wrapping it in `runBlocking`, which §12 bans.
+     *
+     * This does block its caller. That is a deliberate, bounded exception to
+     * §5.3: stopping the core is a single JSON call into an already-running Go
+     * runtime, and §5.4's "must complete" outranks §5.3's "must not block" on the
+     * teardown path specifically. Do not use this on the start path.
+     */
+    @Suppress("SwallowedException")
+    public fun stopBlocking() {
+        try {
+            LibXrayInvoke.call("stopXray")
+        } catch (e: XrayException) {
+            // Deliberately swallowed — see the KDoc above. Not logged, because
+            // the message can quote the config (§5.6) and the caller already
+            // publishes a state transition.
         }
     }
 }

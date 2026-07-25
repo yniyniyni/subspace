@@ -44,6 +44,11 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // Both convention plugins (subspace.android.library, subspace.jvm) set
+        // this; :app builds its own android {} block directly rather than
+        // through subspace.android.library, so it was the one module silently
+        // exempt from failing on compiler warnings.
+        allWarningsAsErrors.set(true)
     }
 }
 

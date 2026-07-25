@@ -21,7 +21,7 @@ if (!libXrayAar.exists()) {
 
 dependencies {
     implementation(project(":core:model"))
-    implementation(files("libs/libxray.aar"))
+    implementation(group = "", name = "libxray", ext = "aar")
     // §5.3: every libXray call is slow and runs on Dispatchers.IO.
     implementation(libs.kotlinx.coroutines.core)
 }

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- §12: strings live here from the first commit; no hardcoded UI text.
+     §5.6: no string here may interpolate a server address, uuid, or key. -->
+<resources>
+    <string name="home_title">Subspace</string>
+    <string name="home_input_label">vless:// link or Xray JSON config</string>
+    <string name="home_connect">Connect</string>
+    <string name="home_disconnect">Disconnect</string>
+
+    <string name="state_disconnected">Disconnected</string>
+    <string name="state_disconnecting">Disconnecting…</string>
+    <string name="state_connected">Connected</string>
+
+    <string name="stage_allocating_port">Allocating port…</string>
+    <string name="stage_generating_config">Generating config…</string>
+    <string name="stage_validating_config">Validating config…</string>
+    <string name="stage_starting_core">Starting core…</string>
+    <string name="stage_establishing_tun">Establishing tunnel interface…</string>
+    <string name="stage_starting_tunnel">Starting tunnel…</string>
+
+    <string name="failure_config_generation">Could not generate the config</string>
+    <string name="failure_config_rejected">The core rejected this config</string>
+    <string name="failure_port_allocation">Could not allocate a local port</string>
+    <string name="failure_core_start">The core failed to start</string>
+    <string name="failure_vpn_permission">VPN permission was not granted</string>
+    <string name="failure_tun_establish">Could not create the tunnel interface</string>
+    <string name="failure_tunnel_start">The tunnel failed to start</string>
+    <string name="failure_revoked">VPN permission was revoked</string>
+
+    <string name="error_unparseable">Not a vless:// link or a usable Xray config</string>
+    <string name="error_no_server_in_json">That config contains no server we can use</string>
+</resources>

@@ -28,6 +28,18 @@ exact source and release tag in the assets README when they are first added.
 
 ---
 
+## Build tooling
+
+| Component | Version pin | License | Obligation |
+|---|---|---|---|
+| Gradle Wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`) | Gradle 9.6.0 | Apache-2.0 | Attribution + NOTICE. Vendored so a clone builds without a pre-installed Gradle. Not modified. |
+| [detekt-formatting](https://github.com/detekt/detekt) | see version catalog (matches `detekt`) | Apache-2.0 | Attribution only. Wraps ktlint's rules as detekt rules; added because ktlint-gradle's own per-source-set check tasks never register on Android modules under AGP 9 (see `build.gradle.kts` and `subspace.android.library.gradle.kts` for why) — this is the actual enforcement of formatting on `:app`, `:service`, `:core:data`, `:core:xray`, and every `:feature:*` module. Justification per ARCHITECTURE.md §10.7. |
+
+M1 vendors an AAR (libXray) and a native library (hev-socks5-tunnel); this
+section is the precedent for how those get recorded.
+
+---
+
 ## Code adaptation sources
 
 Read these before writing the corresponding subsystem. **Licence determines

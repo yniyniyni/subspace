@@ -35,6 +35,12 @@ extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtensi
     }
 }
 
-// ktlint + detekt are applied uniformly to every real module (including
-// :app) from the root build.gradle.kts subprojects{} block, not here — see
-// that file for why.
+// ktlint and detekt are both applied uniformly to every real module
+// (including :app) from the root build.gradle.kts subprojects{} block, not
+// here — see that file for why. But "applied" is not "enforced": on Android
+// modules (this convention plugin's whole purpose), ktlint-gradle's own
+// per-source-set check tasks never register, because they are wired from
+// plugins.withId("org.jetbrains.kotlin.android"), a plugin AGP 9 hard-errors
+// on. Formatting is actually enforced here via detekt-formatting, which runs
+// inside the plain `detekt` task. Do not assume `ktlintCheck` lints Kotlin
+// sources on modules using this plugin — it does not.

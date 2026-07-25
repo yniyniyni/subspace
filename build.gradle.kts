@@ -2,7 +2,10 @@
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.library) apply false
-    alias(libs.plugins.kotlin.android) apply false
+    // No kotlin.android alias: AGP 9.3.1 supplies Kotlin support itself and
+    // hard-errors if org.jetbrains.kotlin.android is applied. Leaving the
+    // alias in the catalog would invite a future agent to apply it and hit
+    // that error, so it is deleted here, not just left unused.
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.ksp) apply false
@@ -42,7 +45,48 @@ subprojects {
             config.setFrom(rootProject.files("config/detekt/detekt.yml"))
             buildUponDefaultConfig = true
             parallel = true
+            // Android modules under AGP 9 never get a Kotlin-plugin-keyed
+            // source set (see the ktlint note below), so the default
+            // src/main + src/test source is all detekt would otherwise see.
+            // Add the variant-specific dirs explicitly so src/debug,
+            // src/release, and src/androidTest are actually analyzed instead
+            // of silently skipped.
+            source.setFrom(
+                "src/main/kotlin",
+                "src/main/java",
+                "src/test/kotlin",
+                "src/test/java",
+                "src/debug/kotlin",
+                "src/debug/java",
+                "src/release/kotlin",
+                "src/release/java",
+                "src/androidTest/kotlin",
+                "src/androidTest/java",
+            )
         }
+
+        // ktlint-gradle registers its per-source-set check tasks
+        // (ktlintMainSourceSetCheck etc.) from
+        // plugins.withId("org.jetbrains.kotlin.android"). AGP 9 supplies
+        // Kotlin support itself and hard-errors if that plugin is applied,
+        // so on every Android module (:app, :service, :core:data, :core:xray,
+        // every :feature:*) that callback never fires and ktlint lints
+        // nothing but .gradle.kts scripts there — a check that always
+        // passes regardless of formatting. detekt-formatting wraps ktlint's
+        // own rules as detekt rules and runs inside the plain `detekt` task,
+        // which IS confirmed working (via type-resolution-free analysis) on
+        // every module including Android ones, so it is wired here instead
+        // of relying on ktlint-gradle's source-set tasks. See
+        // THIRD_PARTY.md for licensing (Apache-2.0).
+        // rootProject, not the subproject `extensions`: this subprojects{}
+        // action runs against each subproject before that subproject's own
+        // build script (and its own plugin applications) has evaluated, so
+        // VersionCatalogsExtension is not yet guaranteed to exist on the
+        // subproject itself. The root project already has it — proven by
+        // `libs.plugins.*` working at the top of this very file — so look it
+        // up there instead.
+        val catalogLibs = rootProject.extensions.getByType<VersionCatalogsExtension>().named("libs")
+        dependencies.add("detektPlugins", catalogLibs.findLibrary("detekt-formatting").get())
 
         // Root-level verification tasks (SPDX headers, the runBlocking ban)
         // are resolved here at configuration time via the checkSpdx/

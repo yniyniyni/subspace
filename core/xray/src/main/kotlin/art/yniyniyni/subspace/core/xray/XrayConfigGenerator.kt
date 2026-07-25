@@ -44,8 +44,19 @@ public object XrayConfigGenerator {
 
         sb.appendLine("{")
         sb.appendLine("""  "log": {""")
-        // §5.6: "warning" keeps connection-level noise — which quotes addresses —
-        // out of the log entirely. Do not raise this to "debug" for convenience.
+        // §5.6, and this one was found on a device, not by reading: without
+        // "access": "none", Xray writes a line to logcat for EVERY destination
+        // the user reaches —
+        //
+        //   GoLog: from tcp:127.0.0.1:60680 accepted tcp:23.239.16.110:443 [socks-in >> proxy]
+        //
+        // gomobile pipes Go's stdout straight to logcat, so that is a live record
+        // of the user's browsing readable by anything holding READ_LOGS and
+        // captured by every bug report. loglevel alone does not suppress it —
+        // the access log is a separate stream.
+        sb.appendLine("""    "access": "none",""")
+        // Do not raise this to "debug" for convenience: error-level output quotes
+        // addresses too.
         sb.appendLine("""    "loglevel": "warning"""")
         sb.appendLine("""  },""")
 

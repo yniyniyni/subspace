@@ -9,4 +9,9 @@ plugins {
     alias(libs.plugins.hilt) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.detekt) apply false
+    id("subspace.dependency-rules") apply false
+}
+
+subprojects {
+    apply(plugin = "subspace.dependency-rules")
 }

@@ -43,6 +43,12 @@ extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtensi
 val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
 
 dependencies {
+    // §11 puts parsers, config generation, and routing-rule mapping on JVM unit
+    // tests and expects them to be thorough, so every Android library module gets
+    // the same unit-test kit the :core:model/:core:parser convention plugin has.
+    add("testImplementation", libs.findLibrary("junit").get())
+    add("testImplementation", libs.findLibrary("kotest-assertions").get())
+
     add("androidTestImplementation", libs.findLibrary("junit").get())
     add("androidTestImplementation", libs.findLibrary("androidx-test-runner").get())
     add("androidTestImplementation", libs.findLibrary("androidx-test-ext-junit").get())

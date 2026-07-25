@@ -15,7 +15,13 @@ import art.yniyniyni.subspace.service.ITunnelCallback;
 interface ITunnelService {
     void connect(in ProfileParcel profile);
 
-    void disconnect();
+    /**
+     * `oneway` deliberately. Teardown joins the tun2socks worker and stops the
+     * Go core; hev's quit can busy-wait (docs/agent/research/hev-api.md §4). A
+     * synchronous binder call would charge all of that to the caller's UI
+     * thread, which is exactly the freeze §5.3 forbids.
+     */
+    oneway void disconnect();
 
     /**
      * §5.5: after process death the UI must rebind and re-read actual state.

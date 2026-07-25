@@ -71,12 +71,30 @@ public class XrayController(
             // int, so the bridge narrows here. The Go wrapper discards the returned
             // boolean, so a false does not abort the dial — it surfaces only as
             // §5.1's symptom. SocketProtector's implementation must log it.
-            val controller = DialerController { fd -> protector.protect(fd.toInt()) }
-            LibXray.registerDialerController(controller)
-            LibXray.registerListenerController(controller)
+            LibXray.registerDialerController(ProtectorHolder)
+            LibXray.registerListenerController(ProtectorHolder)
+            ProtectorHolder.target = protector
 
             LibXrayInvoke.call("runXray", JSONObject().put("configPath", configFile.absolutePath))
         }
+    }
+
+    /**
+     * The one object the Go runtime ever holds.
+     *
+     * libXray's dialer controller is process-global state with no unregister
+     * call, so whatever is passed to it lives as long as the process. Passing a
+     * lambda that captured the `VpnService` would strand a destroyed service —
+     * and its `Context` — in native memory until the process dies.
+     *
+     * Instead Go holds this singleton forever and we swap [target], so a stopped
+     * session leaves nothing but a null field behind.
+     */
+    private object ProtectorHolder : DialerController {
+        @Volatile
+        var target: SocketProtector? = null
+
+        override fun protectFd(fd: Long): Boolean = target?.protect(fd.toInt()) ?: false
     }
 
     /** True when the core reports itself running. §5.5 — never infer this locally. */
@@ -113,6 +131,10 @@ public class XrayController(
      */
     @Suppress("SwallowedException")
     public fun stopBlocking() {
+        // Drop the protector first. Go keeps its reference to ProtectorHolder
+        // forever — there is no unregister — so this is the only way to stop a
+        // finished session's VpnService from being reachable from native code.
+        ProtectorHolder.target = null
         try {
             LibXrayInvoke.call("stopXray")
         } catch (e: XrayException) {

@@ -52,6 +52,9 @@ dependencies {
     add("androidTestImplementation", libs.findLibrary("junit").get())
     add("androidTestImplementation", libs.findLibrary("androidx-test-runner").get())
     add("androidTestImplementation", libs.findLibrary("androidx-test-ext-junit").get())
+    // XrayController's API is suspend-based (§5.3 puts every libXray call on IO),
+    // so instrumented tests need runTest to drive it.
+    add("androidTestImplementation", libs.findLibrary("kotlinx-coroutines-test").get())
 }
 
 // ktlint and detekt are both applied uniformly to every real module

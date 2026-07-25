@@ -14,7 +14,7 @@ class XrayConfigGeneratorTest {
     private val reality =
         Security.Reality(
             serverName = "www.microsoft.com",
-            publicKey = "SGVsbG8gdGhpcyBpcyBhIGZha2UgcmVhbGl0eQ",
+            publicKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
             shortId = "0123abcd",
             fingerprint = "chrome",
             spiderX = "/",

@@ -34,13 +34,37 @@ import art.yniyniyni.subspace.core.model.StartupStage
  *   rather than a missing permission.
  */
 @Composable
-internal fun HomeScreen(
+fun HomeScreen(
     onRequestConsent: (onGranted: () -> Unit) -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: HomeViewModel = hiltViewModel(),
 ) {
+    val viewModel: HomeViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    HomeScreenContent(
+        state = state,
+        onInputChanged = viewModel::onInputChanged,
+        onConnect = { onRequestConsent(viewModel::onConsentGranted) },
+        onDisconnect = viewModel::onDisconnect,
+        modifier = modifier,
+    )
+}
+
+/**
+ * The stateless half.
+ *
+ * Split out so the screen can be rendered from a state value alone — the
+ * ViewModel stays internal to this module, and §11's Compose UI tests get
+ * something they can drive without Hilt.
+ */
+@Composable
+internal fun HomeScreenContent(
+    state: HomeState,
+    onInputChanged: (String) -> Unit,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -52,7 +76,7 @@ internal fun HomeScreen(
 
         OutlinedTextField(
             value = state.input,
-            onValueChange = viewModel::onInputChanged,
+            onValueChange = onInputChanged,
             label = { Text(stringResource(R.string.home_input_label)) },
             isError = state.inputError != null,
             modifier = Modifier.fillMaxWidth(),
@@ -86,14 +110,14 @@ internal fun HomeScreen(
 
         if (state.canDisconnect) {
             Button(
-                onClick = viewModel::onDisconnect,
+                onClick = onDisconnect,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.home_disconnect))
             }
         } else {
             Button(
-                onClick = { onRequestConsent(viewModel::onConsentGranted) },
+                onClick = onConnect,
                 enabled = state.canConnect,
                 modifier = Modifier.fillMaxWidth(),
             ) {

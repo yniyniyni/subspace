@@ -27,7 +27,7 @@ import art.yniyniyni.subspace.core.model.VlessOutbound
 // A parcel is a flat wire format; the parameter count is the field count, and
 // grouping them into sub-objects would mean more Parcelable plumbing for a class
 // that M3 deletes. The constructor is never called by hand — use [from].
-internal class ProfileParcel(
+public class ProfileParcel(
     val id: String,
     val name: String,
     val address: String,

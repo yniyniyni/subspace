@@ -17,7 +17,7 @@ import art.yniyniyni.subspace.core.model.failure
  * dangerous in storage: this parcel never outlives a single bind, so reordering
  * an enum cannot corrupt anything persisted.
  */
-internal data class ConnectionStateParcel(
+public data class ConnectionStateParcel(
     val kind: Int,
     val stage: Int,
     val sinceEpochMillis: Long,

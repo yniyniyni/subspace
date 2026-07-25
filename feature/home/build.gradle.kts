@@ -14,6 +14,7 @@ dependencies {
     // For ShareLinkConverter: accepting a raw Xray config means asking the core
     // to interpret it rather than writing a second interpretation here.
     implementation(project(":core:xray"))
+    implementation(project(":service"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)

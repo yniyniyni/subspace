@@ -35,6 +35,19 @@ extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtensi
     }
 }
 
+// defaultConfig above names an instrumentation runner. Without these
+// dependencies that setting is inert — androidTest source does not compile at
+// all, so a module can look instrumented-test-ready and have no way to run one.
+// ARCHITECTURE.md §11 puts repositories and Room on instrumented tests, so every
+// Android library module needs this, not just the one that discovered it.
+val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
+
+dependencies {
+    add("androidTestImplementation", libs.findLibrary("junit").get())
+    add("androidTestImplementation", libs.findLibrary("androidx-test-runner").get())
+    add("androidTestImplementation", libs.findLibrary("androidx-test-ext-junit").get())
+}
+
 // ktlint and detekt are both applied uniformly to every real module
 // (including :app) from the root build.gradle.kts subprojects{} block, not
 // here — see that file for why. But "applied" is not "enforced": on Android

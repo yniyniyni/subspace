@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Enforces the ARCHITECTURE.md §12 bans that detekt cannot enforce here:
 #
 #   - no runBlocking outside tests
@@ -22,13 +23,22 @@
 #
 # See config/detekt/detekt.yml for the corresponding note.
 set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
 
 found=0
 
-# Strip line comments, block-comment bodies, and string literals before
-# matching, so a `!!` inside a message string or a comment is not a violation.
+# Strip string literals, THEN line comments, THEN block-comment bodies,
+# before matching, so a `!!` inside a message string or a comment is not a
+# violation. Order matters: stripping line comments first (the previous
+# order) truncates the rest of the line at the first `//` it finds — and a
+# `//` inside a string literal (a URL, most obviously) is not a comment.
+# `val u = "https://example.com"; val v: String? = null; val w = v!!` would
+# have its `!!` silently hidden behind the "comment" that starts at the `//`
+# inside the string. Stripping strings first removes that `//` along with
+# the rest of the string contents before the comment-stripping pass ever
+# runs, so a same-line `!!` after a URL-bearing string is still caught.
 strip_noise() {
-    sed -e 's|//.*$||' -e 's|^[[:space:]]*\*.*$||' -e 's|"[^"]*"||g' "$1"
+    sed -e 's|"[^"]*"||g' -e 's|//.*$||' -e 's|^[[:space:]]*\*.*$||' "$1"
 }
 
 while IFS= read -r file; do
@@ -41,13 +51,18 @@ while IFS= read -r file; do
         found=1
     fi
 done < <(
-    find app core feature service \
-        -name '*.kt' \
-        -not -path '*/build/*' \
-        -not -path '*/test/*' \
-        -not -path '*/androidTest/*' \
-        -not -path '*/testFixtures/*' \
-        2>/dev/null
+    # git ls-files, not `find app core feature service`: a hardcoded
+    # directory allowlist silently exempts any new top-level module (a file
+    # at bg/src/main/kotlin/Bad.kt with a runBlocking and a `!!` used to
+    # pass this script simply because "bg" was never in the list). Deriving
+    # the file set from the repo covers new modules by default. --others
+    # --exclude-standard also catches new, not-yet-`git add`ed files during
+    # local development. build/ is already git-ignored so it never appears
+    # here; test/androidTest/testFixtures source sets are real, tracked
+    # source and are excluded explicitly below since the runBlocking ban is
+    # production-only.
+    git ls-files --cached --others --exclude-standard -- '*.kt' \
+        | grep -vE '(^|/)(test|androidTest|testFixtures)/'
 )
 
 if [ "$found" -ne 0 ]; then

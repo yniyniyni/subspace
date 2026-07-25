@@ -2,11 +2,20 @@ build:
   maxIssues: 0
 
 style:
-  ForbiddenMethodCall:
-    active: true
-    methods:
-      - reason: 'ARCHITECTURE.md §12: no runBlocking outside tests'
-        value: 'kotlinx.coroutines.runBlocking'
+  # ForbiddenMethodCall is deliberately NOT used to ban runBlocking here.
+  # That rule's bytecode calls getResolvedCall(), which needs type
+  # resolution (a BindingContext). The plain `detekt` task that `check`
+  # actually runs analyzes with an empty BindingContext, so the rule
+  # early-returns and never fires — silently. detekt's type-resolution
+  # tasks (detektMain / detektDebug) only exist for source sets the Kotlin
+  # Gradle Plugin's compilation model can see; this project's Android
+  # modules use AGP's built-in Kotlin support instead of the standalone
+  # org.jetbrains.kotlin.android plugin, so no such task is ever registered
+  # for :app, :service, :core:data, :core:xray, or any :feature:* module —
+  # exactly the modules where this ban matters most. Wiring detektMain in
+  # would only cover :core:model and :core:parser, leaving the rule inert
+  # everywhere else. See scripts/check-forbidden.sh for the real
+  # enforcement of ARCHITECTURE.md §12.
   MaxLineLength:
     active: true
     maxLineLength: 120

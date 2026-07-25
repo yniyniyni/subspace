@@ -19,11 +19,6 @@ dependencies {
     add("testImplementation", libs.findLibrary("kotlinx-coroutines-test").get())
 }
 
-apply(plugin = "org.jlleitschuh.gradle.ktlint")
-apply(plugin = "io.gitlab.arturbosch.detekt")
-
-extensions.configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
-    config.setFrom(rootProject.files("config/detekt/detekt.yml"))
-    buildUponDefaultConfig = true
-    parallel = true
-}
+// ktlint + detekt are applied uniformly to every real module (including
+// :app) from the root build.gradle.kts subprojects{} block, not here — see
+// that file for why.

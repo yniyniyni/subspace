@@ -25,7 +25,27 @@ internal fun parseSocksLink(
         when {
             credentials == null -> null
             credentials.contains(':') -> credentials
-            else -> decodeBase64Tolerant(credentials)?.takeIf { it.contains(':') }
+            else -> {
+                val decoded =
+                    decodeBase64Tolerant(credentials)
+                        ?: return LinkResult.Bad(
+                            parseFailure(
+                                index,
+                                ParseFailureReason.MalformedBase64,
+                                "socks credentials are not valid base64",
+                            ),
+                        )
+                if (!decoded.contains(':')) {
+                    return LinkResult.Bad(
+                        parseFailure(
+                            index,
+                            ParseFailureReason.MissingCredential,
+                            "socks credentials must contain a separator",
+                        ),
+                    )
+                }
+                decoded
+            }
         }
     val username = pair?.substringBefore(':')?.takeIf { it.isNotEmpty() }
     val password = pair?.substringAfter(':')?.takeIf { it.isNotEmpty() }
@@ -38,9 +58,16 @@ internal fun parseSocksLink(
         )
     return LinkResult.Ok(
         Profile(
-            id = profileId("socks", uri.host, uri.port, username.orEmpty()),
+            id = profileId("socks", uri.host, uri.port, credentialMaterial(username, password)),
             name = uri.fragment.ifBlank { uri.host },
             outbound = outbound,
         ),
     )
 }
+
+private fun credentialMaterial(
+    username: String?,
+    password: String?,
+): String = "${identityComponent(username)}|${identityComponent(password)}"
+
+private fun identityComponent(value: String?): String = value?.let { "${it.length}:$it" } ?: "-1:"

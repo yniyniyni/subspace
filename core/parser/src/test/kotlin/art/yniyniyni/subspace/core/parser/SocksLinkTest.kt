@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.SocksOutbound
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 import java.util.Base64
@@ -64,6 +65,47 @@ class SocksLinkTest {
 
         out.username shouldBe null
         out.password shouldBe "secret"
+    }
+
+    @Test
+    fun `rejects undecodable encoded credentials`() {
+        val result = parseSocksLink("socks://%%%@host.example:1080", 4) as LinkResult.Bad
+
+        result.failure.reason shouldBe ParseFailureReason.MalformedBase64
+        result.failure.detail shouldNotContain "%%%"
+    }
+
+    @Test
+    fun `rejects decoded credentials without a separator`() {
+        val encoded = Base64.getEncoder().encodeToString("alice".toByteArray())
+        val result = parseSocksLink("socks://$encoded@host.example:1080", 4) as LinkResult.Bad
+
+        result.failure.reason shouldBe ParseFailureReason.MissingCredential
+        result.failure.detail shouldNotContain encoded
+    }
+
+    @Test
+    fun `profile id includes password`() {
+        val first = parseSocksLink("socks://alice:first@host.example:1080", 0) as LinkResult.Ok
+        val second = parseSocksLink("socks://alice:second@host.example:1080", 0) as LinkResult.Ok
+
+        first.profile.id shouldNotBe second.profile.id
+    }
+
+    @Test
+    fun `password only identity differs from anonymous identity`() {
+        val passwordOnly = parseSocksLink("socks://:secret@host.example:1080", 0) as LinkResult.Ok
+        val anonymous = parseSocksLink("socks://host.example:1080", 0) as LinkResult.Ok
+
+        passwordOnly.profile.id shouldNotBe anonymous.profile.id
+    }
+
+    @Test
+    fun `identical profiles have stable identity`() {
+        val first = parseSocksLink("socks://alice:secret@host.example:1080#One", 0) as LinkResult.Ok
+        val second = parseSocksLink("socks://alice:secret@host.example:1080#Two", 0) as LinkResult.Ok
+
+        first.profile.id shouldBe second.profile.id
     }
 
     @Test

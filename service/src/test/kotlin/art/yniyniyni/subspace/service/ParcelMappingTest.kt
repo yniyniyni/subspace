@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.model.VmessOutbound
 import art.yniyniyni.subspace.core.model.failure
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
@@ -71,6 +72,30 @@ class ParcelMappingTest {
     }
 
     @Test
+    fun `profile round trip preserves a non-zero vmess alterId`() {
+        // The field's own KDoc: "non-zero means VMessAEAD is off". A legacy
+        // server that needs this is exactly the case a silent 0-rewrite would
+        // break with no exception and no log — wrong config, silent auth
+        // failure. Pin it explicitly rather than relying on the vless-shaped
+        // fixture above to catch a regression here.
+        val vmess =
+            VmessOutbound(
+                address = "example.com",
+                port = 8443,
+                uuid = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab",
+                alterId = 1,
+                security = "auto",
+                stream = StreamSettings(network = "tcp", security = Security.None),
+            )
+        val vmessProfile = profile.copy(outbound = vmess)
+
+        val roundTripped = ProfileParcel.from(vmessProfile).toProfile()
+
+        roundTripped shouldBe vmessProfile
+        (roundTripped.outbound as VmessOutbound).alterId shouldBe 1
+    }
+
+    @Test
     fun `an unknown protocol degrades to vless instead of throwing`() {
         // Mirrors ConnectionStateParcel's unknown-kind handling: a discriminant
         // the receiving process cannot name must not take it down.
@@ -83,6 +108,7 @@ class ParcelMappingTest {
                 port = 443,
                 uuid = "some-uuid",
                 credential2 = "",
+                alterId = 0,
                 flow = null,
                 network = "tcp",
                 securityKind = ProfileParcel.SECURITY_NONE,

@@ -24,8 +24,11 @@ import art.yniyniyni.subspace.core.model.VmessOutbound
  * [ConnectionStateParcel]'s `kind` — an int, not a class name, so adding a
  * protocol is a deliberate change on both sides. [uuid] is the generic
  * credential slot: VMess keeps a UUID there, Trojan and Shadowsocks put their
- * password there, and SOCKS puts its username. [credential2] holds Shadowsocks'
- * method and SOCKS' password.
+ * password there, and SOCKS puts its username. [credential2] is occupied by
+ * **three** different protocols, not two — VMess's `security` cipher string
+ * (`auto`, `aes-128-gcm`, …), Shadowsocks' method, and SOCKS' password. Do not
+ * assume it is idle for VMess. [alterId] carries only VMess's legacy AlterID
+ * and is `0` — meaningless, not "unset" — for every other protocol.
  *
  * §5.6: this parcel carries the UUID, password, and REALITY key in the clear.
  * That is acceptable — it travels only over a same-UID binder to our own `:bg`
@@ -46,6 +49,7 @@ public class ProfileParcel(
     val port: Int,
     val uuid: String,
     val credential2: String,
+    val alterId: Int,
     val flow: String?,
     val network: String,
     val securityKind: Int,
@@ -64,6 +68,7 @@ public class ProfileParcel(
         port = parcel.readInt(),
         uuid = parcel.readString().orEmpty(),
         credential2 = parcel.readString().orEmpty(),
+        alterId = parcel.readInt(),
         flow = parcel.readString(),
         network = parcel.readString().orEmpty(),
         securityKind = parcel.readInt(),
@@ -86,6 +91,7 @@ public class ProfileParcel(
         dest.writeInt(port)
         dest.writeString(uuid)
         dest.writeString(credential2)
+        dest.writeInt(alterId)
         dest.writeString(flow)
         dest.writeString(network)
         dest.writeInt(securityKind)
@@ -123,7 +129,7 @@ public class ProfileParcel(
                     address = address,
                     port = port,
                     uuid = uuid,
-                    alterId = 0,
+                    alterId = alterId,
                     security = credential2,
                     stream = stream,
                 )
@@ -222,6 +228,7 @@ public class ProfileParcel(
                 port = out.port,
                 uuid = fields.uuid,
                 credential2 = fields.credential2,
+                alterId = fields.alterId,
                 flow = fields.flow,
                 network = fields.stream?.network.orEmpty(),
                 securityKind = kind,
@@ -242,27 +249,32 @@ public class ProfileParcel(
         private fun fieldsFor(out: Outbound): OutboundFields =
             when (out) {
                 is VlessOutbound ->
-                    OutboundFields(PROTOCOL_VLESS, out.uuid, "", out.flow, out.stream)
+                    OutboundFields(PROTOCOL_VLESS, out.uuid, "", 0, out.flow, out.stream)
 
                 is VmessOutbound ->
-                    OutboundFields(PROTOCOL_VMESS, out.uuid, out.security, null, out.stream)
+                    OutboundFields(PROTOCOL_VMESS, out.uuid, out.security, out.alterId, null, out.stream)
 
                 is TrojanOutbound ->
-                    OutboundFields(PROTOCOL_TROJAN, out.password, "", null, out.stream)
+                    OutboundFields(PROTOCOL_TROJAN, out.password, "", 0, null, out.stream)
 
                 is ShadowsocksOutbound ->
-                    OutboundFields(PROTOCOL_SHADOWSOCKS, out.password, out.method, null, null)
+                    OutboundFields(PROTOCOL_SHADOWSOCKS, out.password, out.method, 0, null, null)
 
                 is SocksOutbound ->
-                    OutboundFields(PROTOCOL_SOCKS, out.username.orEmpty(), out.password.orEmpty(), null, null)
+                    OutboundFields(PROTOCOL_SOCKS, out.username.orEmpty(), out.password.orEmpty(), 0, null, null)
             }
     }
 
-    /** The flat fields [fieldsFor] extracts from one [Outbound], before security is folded in. */
+    /**
+     * The flat fields [fieldsFor] extracts from one [Outbound], before security
+     * is folded in. [alterId] is meaningful only for [VmessOutbound] — every
+     * other protocol passes `0`, which [outbound] never reads back for them.
+     */
     private data class OutboundFields(
         val protocol: Int,
         val uuid: String,
         val credential2: String,
+        val alterId: Int,
         val flow: String?,
         val stream: StreamSettings?,
     )

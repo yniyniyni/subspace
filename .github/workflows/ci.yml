@@ -12,7 +12,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # submodules: recursive is required, not optional. hev-socks5-tunnel is
+      # a submodule (see .gitmodules) and :service's ndk-build compiles its
+      # sources directly. Without this the checkout leaves third_party/
+      # hev-socks5-tunnel empty and the native build fails — or worse, trips
+      # the Android.mk guard that exists to catch exactly this.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-java@v4
         with:
@@ -46,6 +53,14 @@ jobs:
           packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'
 
       - uses: gradle/actions/setup-gradle@v4
+
+      # The libXray AAR is ~95 MB and gitignored (§10.7), so a fresh clone
+      # does not have it and :core:xray cannot resolve its dependency. This
+      # script is the committed, reproducible way to obtain it, and it
+      # verifies a pinned SHA-256 — so a compromised or swapped release
+      # artifact fails the build rather than shipping.
+      - name: Fetch pinned native artifacts (libXray)
+        run: ./scripts/fetch-native.sh
 
       - name: Verify module boundaries, format, static analysis, licence headers
         run: ./gradlew checkAll

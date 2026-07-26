@@ -12,7 +12,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # submodules: recursive is required, not optional. hev-socks5-tunnel is
+      # a submodule (see .gitmodules) and :service's ndk-build compiles its
+      # sources directly. Without this the checkout leaves third_party/
+      # hev-socks5-tunnel empty and the native build fails — or worse, trips
+      # the Android.mk guard that exists to catch exactly this.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-java@v4
         with:
@@ -20,18 +27,40 @@ jobs:
           java-version: '17'
 
       # compileSdk is 37 (see app/build.gradle.kts and the note in
-      # subspace.android.library). ubuntu-latest (Ubuntu 24.04, verified
-      # 2026-07-25) already ships platforms;android-37 and
-      # build-tools;37.0.0, but this step installs them explicitly so CI
-      # does not silently depend on whatever the runner image happens to
-      # ship in a given month. It is a fast no-op when the packages are
-      # already present.
+      # subspace.android.library).
+      #
+      # The package is `platforms;android-37.0`, NOT `platforms;android-37`.
+      # Google's repository2-3.xml ships android-36, android-36.1,
+      # android-37.0, android-37.1 and android-37.2-beta1 — minor-versioned
+      # platforms began at 36.1, and there has never been a bare android-37.
+      # Asking for one fails the whole job in ~20s with a single
+      # "Failed to find package" line buried under the licence text.
+      #
+      # This is easy to miss locally: Android Studio creates a
+      # platforms/android-37 SYMLINK pointing at android-37.0, so a dev
+      # machine resolves the non-existent name happily and CI does not.
+      # An earlier version of this file claimed the runner "already ships
+      # platforms;android-37, verified 2026-07-25". It does not, and never
+      # could have — the claim was never actually checked against the
+      # repository manifest. §10.5: a claim about upstream without a source
+      # is a guess.
+      #
+      # Licences are accepted here, so AGP's own SDK auto-download can fill
+      # any remaining gap rather than failing the build.
       - name: Install Android SDK platform 37
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+          packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'
 
       - uses: gradle/actions/setup-gradle@v4
+
+      # The libXray AAR is ~95 MB and gitignored (§10.7), so a fresh clone
+      # does not have it and :core:xray cannot resolve its dependency. This
+      # script is the committed, reproducible way to obtain it, and it
+      # verifies a pinned SHA-256 — so a compromised or swapped release
+      # artifact fails the build rather than shipping.
+      - name: Fetch pinned native artifacts (libXray)
+        run: ./scripts/fetch-native.sh
 
       - name: Verify module boundaries, format, static analysis, licence headers
         run: ./gradlew checkAll

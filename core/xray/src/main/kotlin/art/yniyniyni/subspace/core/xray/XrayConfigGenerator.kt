@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.xray
 
-import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.VlessOutbound
 
 /** Runtime settings that shape the config but do not belong to a stored profile. */
 public data class TunnelSettings(
@@ -37,7 +37,7 @@ public data class TunnelSettings(
  */
 public object XrayConfigGenerator {
     public fun generate(
-        profile: Profile,
+        outbound: VlessOutbound,
         settings: TunnelSettings,
     ): String {
         val sb = StringBuilder()
@@ -62,7 +62,7 @@ public object XrayConfigGenerator {
 
         appendDns(sb, settings)
         appendInbounds(sb, settings)
-        appendOutbounds(sb, profile)
+        appendOutbounds(sb, outbound)
 
         sb.appendLine("""  "routing": {""")
         sb.appendLine("""    "domainStrategy": "IPIfNonMatch",""")
@@ -117,9 +117,8 @@ public object XrayConfigGenerator {
 
     private fun appendOutbounds(
         sb: StringBuilder,
-        profile: Profile,
+        out: VlessOutbound,
     ) {
-        val out = profile.outbound
         sb.appendLine("""  "outbounds": [""")
         sb.appendLine("""    {""")
         sb.appendLine("""      "tag": "proxy",""")
@@ -143,7 +142,7 @@ public object XrayConfigGenerator {
         sb.appendLine("""          }""")
         sb.appendLine("""        ]""")
         sb.appendLine("""      },""")
-        appendStreamSettings(sb, profile)
+        appendStreamSettings(sb, out)
         sb.appendLine("""    },""")
         sb.appendLine("""    { "tag": "direct", "protocol": "freedom" },""")
         sb.appendLine("""    { "tag": "block", "protocol": "blackhole" }""")
@@ -152,9 +151,9 @@ public object XrayConfigGenerator {
 
     private fun appendStreamSettings(
         sb: StringBuilder,
-        profile: Profile,
+        out: VlessOutbound,
     ) {
-        val stream = profile.outbound.stream
+        val stream = out.stream
         sb.appendLine("""      "streamSettings": {""")
         sb.appendLine("""        "network": "${stream.network}",""")
         when (val security = stream.security) {

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.home
 
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.Test
@@ -23,14 +24,15 @@ class VlessLinkParserTest {
         val profile = VlessLinkParser.parse(realityLink)
         profile.shouldNotBeNull()
 
+        val outbound = profile.outbound as VlessOutbound
         profile.name shouldBe "My Server"
-        profile.outbound.address shouldBe "example.com"
-        profile.outbound.port shouldBe 443
-        profile.outbound.uuid shouldBe "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
-        profile.outbound.flow shouldBe "xtls-rprx-vision"
-        profile.outbound.stream.network shouldBe "tcp"
+        outbound.address shouldBe "example.com"
+        outbound.port shouldBe 443
+        outbound.uuid shouldBe "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
+        outbound.flow shouldBe "xtls-rprx-vision"
+        outbound.stream.network shouldBe "tcp"
 
-        val reality = profile.outbound.stream.security as Security.Reality
+        val reality = outbound.stream.security as Security.Reality
         reality.serverName shouldBe "www.microsoft.com"
         reality.publicKey shouldBe "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
         reality.shortId shouldBe "0123abcd"
@@ -42,7 +44,7 @@ class VlessLinkParserTest {
     @Test
     fun `parses a tls link`() {
         val link = "vless://uuid-here@example.com:443?security=tls&sni=example.com&fp=firefox#T"
-        val security = VlessLinkParser.parse(link)?.outbound?.stream?.security
+        val security = (VlessLinkParser.parse(link)?.outbound as? VlessOutbound)?.stream?.security
         (security as Security.Tls).fingerprint shouldBe "firefox"
     }
 
@@ -55,7 +57,7 @@ class VlessLinkParserTest {
     @Test
     fun `defaults the network to tcp when absent`() {
         val link = "vless://uuid-here@example.com:443?security=none#X"
-        VlessLinkParser.parse(link)?.outbound?.stream?.network shouldBe "tcp"
+        (VlessLinkParser.parse(link)?.outbound as? VlessOutbound)?.stream?.network shouldBe "tcp"
     }
 
     @Test
@@ -63,7 +65,7 @@ class VlessLinkParserTest {
         // §7: real subscriptions carry duplicate keys. Whatever we do must be a
         // decision, not an accident of map construction.
         val link = "vless://uuid-here@example.com:443?security=tls&sni=first.com&sni=second.com#X"
-        val tls = VlessLinkParser.parse(link)?.outbound?.stream?.security as Security.Tls
+        val tls = (VlessLinkParser.parse(link)?.outbound as? VlessOutbound)?.stream?.security as Security.Tls
         tls.serverName shouldBe "second.com"
     }
 
@@ -97,6 +99,6 @@ class VlessLinkParserTest {
     @Test
     fun `treats an unknown security value as none`() {
         val link = "vless://uuid-here@example.com:443?security=quantum#X"
-        VlessLinkParser.parse(link)?.outbound?.stream?.security shouldBe Security.None
+        (VlessLinkParser.parse(link)?.outbound as? VlessOutbound)?.stream?.security shouldBe Security.None
     }
 }

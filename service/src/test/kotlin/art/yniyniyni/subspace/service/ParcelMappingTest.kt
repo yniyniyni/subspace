@@ -11,6 +11,7 @@ import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.failure
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.Test
 
 /**
@@ -51,7 +52,7 @@ class ParcelMappingTest {
     fun `profile round trip preserves a null flow`() {
         // flow is nullable and writeString/readString round-trips null, unlike
         // most other fields which default to empty. Worth pinning.
-        val noFlow = profile.copy(outbound = profile.outbound.copy(flow = null))
+        val noFlow = profile.copy(outbound = outbound.copy(flow = null))
         ProfileParcel.from(noFlow).toProfile() shouldBe noFlow
     }
 
@@ -67,6 +68,36 @@ class ParcelMappingTest {
         val tls = profile.copy(outbound = outbound.copy(stream = tlsStream))
 
         ProfileParcel.from(tls).toProfile() shouldBe tls
+    }
+
+    @Test
+    fun `an unknown protocol degrades to vless instead of throwing`() {
+        // Mirrors ConnectionStateParcel's unknown-kind handling: a discriminant
+        // the receiving process cannot name must not take it down.
+        val parcel =
+            ProfileParcel(
+                protocol = 99,
+                id = "p1",
+                name = "Test",
+                address = "example.com",
+                port = 443,
+                uuid = "some-uuid",
+                credential2 = "",
+                flow = null,
+                network = "tcp",
+                securityKind = ProfileParcel.SECURITY_NONE,
+                serverName = "",
+                publicKey = "",
+                shortId = "",
+                fingerprint = "",
+                spiderX = "",
+                allowInsecure = false,
+            )
+
+        val out = parcel.toProfile().outbound
+        out.shouldBeInstanceOf<VlessOutbound>()
+        out.address shouldBe "example.com"
+        out.port shouldBe 443
     }
 
     @Test

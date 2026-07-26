@@ -2,7 +2,6 @@
 package art.yniyniyni.subspace.core.xray
 
 import androidx.test.platform.app.InstrumentationRegistry
-import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
@@ -44,8 +43,6 @@ class XrayControllerTest {
             stream = StreamSettings(network = "tcp", security = reality),
         )
 
-    private fun realityProfile() = Profile(id = "instr-1", name = "Instrumented", outbound = outbound)
-
     @Test
     fun allocatesARealFreePort() =
         runTest {
@@ -77,7 +74,7 @@ class XrayControllerTest {
                     dnsServer = "1.1.1.1",
                     enableSniffing = true,
                 )
-            val json = XrayConfigGenerator.generate(realityProfile(), settings)
+            val json = XrayConfigGenerator.generate(outbound, settings)
             val configFile = File(cacheDir, "instr-valid.json").apply { writeText(json) }
 
             controller.validate(configFile)

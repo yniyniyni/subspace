@@ -13,6 +13,7 @@ import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
+import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.failure
 import art.yniyniyni.subspace.core.xray.SocketProtector
 import art.yniyniyni.subspace.core.xray.TunnelSettings
@@ -205,10 +206,15 @@ class TunnelService : VpnService() {
             }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
+        val outbound =
+            profile.outbound as? VlessOutbound ?: run {
+                publishIfCurrent(gen, failure(FailureReason.ConfigGenerationFailed, "protocol not supported yet"))
+                return null
+            }
         val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true)
         val file =
             try {
-                writeConfig(XrayConfigGenerator.generate(profile, settings))
+                writeConfig(XrayConfigGenerator.generate(outbound, settings))
             } catch (e: java.io.IOException) {
                 return failStart(gen, FailureReason.ConfigGenerationFailed, e)
             }

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  # All branches, not just main: pushing a branch is itself the first proof
+  # this workflow runs at all on GitHub infrastructure — it has never
+  # executed there before. Narrow this back to branches: [main] only once
+  # that is no longer in doubt.
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify module boundaries, format, static analysis, licence headers
+        run: ./gradlew checkAll
+
+      # `build` (assemble + check), not `assembleDebug`: the release variant
+      # is where R8/minification runs, and assembleDebug never exercises
+      # that path. A missing proguard-rules.pro sat green through seven
+      # task reviews for exactly this reason — every prior verification
+      # used checkAll or assembleDebug, never `build`.
+      - name: Build (assemble + check, including the release/R8 path)
+        run: ./gradlew build
+
+      - name: Unit tests
+        run: ./gradlew test

@@ -19,6 +19,8 @@ license.
 | [libXray](https://github.com/XTLS/libXray) | v26.7.11 | MIT | Attribution only. |
 | [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | 2.16.0 (git submodule, `third_party/`) | MIT | Attribution only. Compiled from source into `libtun2socks.so`. One file, `src/hev-jni.c`, is excluded — it registers JNI natives against upstream's own app class and aborts any other process that loads it. See `service/src/main/jni/Android.mk`. Its vendored dependencies (yaml, lwip, hev-task-system) are built unmodified. |
 | [ZXing](https://github.com/zxing/zxing) | see version catalog | Apache-2.0 | Attribution + NOTICE. Replaces ML Kit, which is proprietary and disqualifies the app from F-Droid and IzzyOnDroid. |
+| [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) | 1.9.0 | Apache-2.0 | Attribution only. JSON for `vmess://` bodies and raw Xray configs. `:core:parser` is pure JVM, so Android's `org.json` is unavailable there. |
+| [kaml](https://github.com/charleskorn/kaml) | 0.83.0 | Apache-2.0 | Attribution only. Clash YAML. Sits on snakeyaml-engine (YAML 1.2), which does not instantiate arbitrary types by default — chosen over snakeyaml 1.x for that reason, since subscription content is attacker-controllable and snakeyaml's default `Constructor` is the CVE-2022-1471 gadget surface. |
 
 Bundled `geoip.dat` / `geosite.dat` originate from
 [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community)

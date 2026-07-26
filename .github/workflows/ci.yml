@@ -19,6 +19,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # compileSdk is 37 (see app/build.gradle.kts and the note in
+      # subspace.android.library). ubuntu-latest (Ubuntu 24.04, verified
+      # 2026-07-25) already ships platforms;android-37 and
+      # build-tools;37.0.0, but this step installs them explicitly so CI
+      # does not silently depend on whatever the runner image happens to
+      # ship in a given month. It is a fast no-op when the packages are
+      # already present.
+      - name: Install Android SDK platform 37
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37 build-tools;37.0.0'
+
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Verify module boundaries, format, static analysis, licence headers

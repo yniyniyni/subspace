@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- §14.1: VPN apps are an enumerated criterion for systemExempted. A
+         non-qualifying type throws ForegroundServiceTypeNotAllowedException at
+         runtime, not at build time. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- §3: :bg isolates the Go runtime's heap and keeps a native crash in
+             tun2socks from taking the UI with it.
+
+             tools:ignore="ForegroundServicePermission" — lint asserts that
+             systemExempted additionally requires SCHEDULE_EXACT_ALARM or
+             USE_EXACT_ALARM. That encodes only the *alarm* branch of the type's
+             qualifying criteria; the platform documentation lists "VPN apps
+             (configured using Settings > Network & Internet > VPN)" as a
+             separate branch, which lint cannot check statically because it is a
+             runtime condition. Adding an exact-alarm permission to silence this
+             would request a sensitive capability we do not use. Other VPN
+             projects (Brave, Orbot) suppress it the same way.
+             https://developer.android.com/develop/background-work/services/fgs/service-types -->
+        <service
+            android:name=".TunnelService"
+            android:process=":bg"
+            android:exported="false"
+            android:foregroundServiceType="systemExempted"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            tools:ignore="ForegroundServicePermission">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

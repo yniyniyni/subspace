@@ -440,23 +440,53 @@ about. Source: Android developer docs, "Foreground service types" and
 If the app is ever published on Google Play, this type must additionally be
 declared and justified in Play Console under Policy → App content.
 
+**Android lint will flag this and it is wrong.** `ForegroundServicePermission`
+asserts that `systemExempted` also requires `SCHEDULE_EXACT_ALARM` or
+`USE_EXACT_ALARM`. That encodes only the *alarm* branch of the type's qualifying
+criteria; the VPN branch is a runtime condition lint cannot see. Suppress it with
+`tools:ignore="ForegroundServicePermission"` on the `<service>` element, as Brave
+and Orbot do. Do **not** silence it by requesting an exact-alarm permission the
+app does not use.
+
 ### 14.2 libXray vs AndroidLibXrayLite — RESOLVED
 
 **`XTLS/libXray`, pinned to v26.7.11.** Two reasons, in order:
 
 1. **Licensing.** libXray is MIT. AndroidLibXrayLite is LGPL-3.0. For an
    AGPL-3.0 project the MIT dependency is unambiguously cleaner.
-2. **It ships what §5.1 and §5.2 need as first-class API.** libXray exposes a
-   controller for the socket-protect problem, plus `SetDNS`/`ResetDNS` to force
-   the Go resolver onto the VPN's DNS server and protect the DNS socket. It
-   also exposes `getFreePorts`, which satisfies §10.6 without hand-rolling
-   port allocation.
+2. **It ships the §5.1 socket-protect hook as first-class API**, and
+   `getFreePorts`, which satisfies §10.6 without hand-rolling port allocation.
 
-Relevant exported surface: `getFreePorts`, `convertShareLinksToXrayJson`,
-`convertXrayJsonToShareLinks`, `countGeoData`, `ping`, `testXray`, `runXray`,
-`runXrayFromJson`, `stopXray`, `xrayVersion`, `getXrayState`.
+**Correction, 2026-07-26.** An earlier revision of this section also cited
+`SetDNS`/`ResetDNS` as a reason. **Those do not exist in v26.7.11** — there is
+not one DNS reference in the shipped Go source. The decision stands on its other
+two grounds, but do not go looking for that API. §5.2 is satisfied by
+`VpnService.Builder.addDnsServer()` plus the `dns` block in the generated config,
+and there is no third lever.
+
+The real API surface is a single JSON entry point, not the object-oriented form
+that earlier drafts of this document and the M1 plan assumed:
+
+```java
+String  LibXray.invoke(String requestJson)          // every operation
+void    LibXray.registerDialerController(DialerController)   // §5.1
+void    LibXray.registerListenerController(DialerController)
+void    LibXray.registerProcessFinder(ProcessFinder)         // per-app, M5
+
+interface DialerController { boolean protectFd(long fd); }
+```
+
+Methods dispatched through `invoke`: `getFreePorts`,
+`convertShareLinksToXrayJson`, `convertXrayJsonToShareLinks`, `countGeoData`,
+`ping`, `testXray`, `runXray`, `runXrayFromJson`, `stopXray`, `xrayVersion`,
+`getXrayState`.
 
 Note `testXray` — use it to satisfy the "validate before starting" rule in §6.
+It takes a **file path**, not a config string, so the generated config must be
+written to disk before it can be validated.
+
+**Full verbatim signatures, and every place reality differed from the plan, are
+in `docs/agent/research/libxray-api.md`. Read it before writing `:core:xray`.**
 
 **Do not mix the two libraries.** They export different symbols and both
 initialise a Go runtime.

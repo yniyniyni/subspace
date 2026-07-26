@@ -1,0 +1,53 @@
+build:
+  maxIssues: 0
+
+style:
+  # ForbiddenMethodCall is deliberately NOT used to ban runBlocking here.
+  # That rule's bytecode calls getResolvedCall(), which needs type
+  # resolution (a BindingContext). The plain `detekt` task that `check`
+  # actually runs analyzes with an empty BindingContext, so the rule
+  # early-returns and never fires — silently. detekt's type-resolution
+  # tasks (detektMain / detektDebug) only exist for source sets the Kotlin
+  # Gradle Plugin's compilation model can see; this project's Android
+  # modules use AGP's built-in Kotlin support instead of the standalone
+  # org.jetbrains.kotlin.android plugin, so no such task is ever registered
+  # for :app, :service, :core:data, :core:xray, or any :feature:* module —
+  # exactly the modules where this ban matters most. Wiring detektMain in
+  # would only cover :core:model and :core:parser, leaving the rule inert
+  # everywhere else. See scripts/check-forbidden.sh for the real
+  # enforcement of ARCHITECTURE.md §12.
+  MaxLineLength:
+    active: true
+    maxLineLength: 120
+
+naming:
+  # @Composable functions are PascalCase by Jetpack Compose convention (they
+  # stand in for a widget/element, not an action) and every Compose style
+  # guide including Google's own conflicts with detekt's default
+  # [a-z][a-zA-Z0-9]* function-naming pattern on this basis. Excluding
+  # @Composable-annotated functions is the standard fix, not a loosening of
+  # the rule for anything else.
+  FunctionNaming:
+    active: true
+    ignoreAnnotated: ["Composable"]
+
+potential-bugs:
+  # Left active because it DOES fire on :core:model and :core:parser, whose
+  # detektMain task check depends on. It does NOT fire on the Android modules,
+  # for the same type-resolution reason described above — so the §12 "no !!"
+  # ban is enforced for every module by scripts/check-forbidden.sh, and this
+  # entry is a second line of defence on the two JVM modules rather than the
+  # primary one. Do not delete check-forbidden.sh on the assumption that
+  # detekt has this covered; on :app and :service it does not.
+  UnsafeCallOnNullableType:
+    active: true
+
+coroutines:
+  GlobalCoroutineUsage:
+    active: true
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: true
+  SwallowedException:
+    active: true

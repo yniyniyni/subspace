@@ -17,7 +17,7 @@ license.
 |---|---|---|---|
 | [Xray-core](https://github.com/XTLS/Xray-core) | v26.7.11 | MPL-2.0 | File-level copyleft. GPL/AGPL-compatible. Consumed as a binary through libXray; not modified. |
 | [libXray](https://github.com/XTLS/libXray) | v26.7.11 | MIT | Attribution only. |
-| [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | v2.16.0 | MIT | Attribution only. |
+| [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | 2.16.0 (git submodule, `third_party/`) | MIT | Attribution only. Compiled from source into `libtun2socks.so`. One file, `src/hev-jni.c`, is excluded — it registers JNI natives against upstream's own app class and aborts any other process that loads it. See `service/src/main/jni/Android.mk`. Its vendored dependencies (yaml, lwip, hev-task-system) are built unmodified. |
 | [ZXing](https://github.com/zxing/zxing) | see version catalog | Apache-2.0 | Attribution + NOTICE. Replaces ML Kit, which is proprietary and disqualifies the app from F-Droid and IzzyOnDroid. |
 
 Bundled `geoip.dat` / `geosite.dat` originate from
@@ -25,6 +25,18 @@ Bundled `geoip.dat` / `geosite.dat` originate from
 (MIT) and [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat)
 (GPL-3.0 for the build tooling; the emitted `.dat` files are data). Record the
 exact source and release tag in the assets README when they are first added.
+
+---
+
+## Build tooling
+
+| Component | Version pin | License | Obligation |
+|---|---|---|---|
+| Gradle Wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`) | Gradle 9.6.0 | Apache-2.0 | Attribution + NOTICE. Vendored so a clone builds without a pre-installed Gradle. Not modified. |
+| [detekt-formatting](https://github.com/detekt/detekt) | see version catalog (matches `detekt`) | Apache-2.0 | Attribution only. Wraps ktlint's rules as detekt rules; added because ktlint-gradle's own per-source-set check tasks never register on Android modules under AGP 9 (see `build.gradle.kts` and `subspace.android.library.gradle.kts` for why) — this is the actual enforcement of formatting on `:app`, `:service`, `:core:data`, `:core:xray`, and every `:feature:*` module. Justification per ARCHITECTURE.md §10.7. |
+
+M1 vendors an AAR (libXray) and a native library (hev-socks5-tunnel); this
+section is the precedent for how those get recorded.
 
 ---
 

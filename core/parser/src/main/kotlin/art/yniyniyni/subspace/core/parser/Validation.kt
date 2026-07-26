@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.parser
 
+import java.util.Base64
+
 private val UUID_SHAPE =
     Regex("""^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$""")
 
 /** REALITY public keys are X25519: 32 bytes, base64url, unpadded — 43 chars. */
 private const val REALITY_KEY_LENGTH = 43
+private const val REALITY_KEY_BYTES = 32
 private const val MAX_PORT = 65_535
 private const val INVALID_UUID_MESSAGE = "id is not a well-formed UUID"
 private val BASE64URL_SHAPE = Regex("""^[A-Za-z0-9_-]+$""")
@@ -34,6 +37,7 @@ internal fun validateRealityPublicKey(pbk: String): String? =
         pbk.length != REALITY_KEY_LENGTH ->
             "publicKey (pbk) must be $REALITY_KEY_LENGTH characters, got ${pbk.length}"
         !BASE64URL_SHAPE.matches(pbk) -> "publicKey (pbk) must be unpadded base64url"
+        !isCanonicalRealityPublicKey(pbk) -> "publicKey (pbk) must be canonical base64url"
         else -> null
     }
 
@@ -41,3 +45,10 @@ internal fun validateShadowsocksMethod(method: String): String? =
     if (method in SHADOWSOCKS_METHODS) null else "unsupported Shadowsocks method"
 
 private fun invalidPortMessage(port: Int): String = "port must be 1..$MAX_PORT, got $port"
+
+private fun isCanonicalRealityPublicKey(pbk: String): Boolean =
+    runCatching {
+        val decoded = Base64.getUrlDecoder().decode(pbk)
+        decoded.size == REALITY_KEY_BYTES &&
+            Base64.getUrlEncoder().withoutPadding().encodeToString(decoded) == pbk
+    }.getOrDefault(false)

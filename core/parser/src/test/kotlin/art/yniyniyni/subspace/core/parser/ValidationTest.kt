@@ -38,6 +38,14 @@ class ValidationTest {
     }
 
     @Test
+    fun `rejects a non canonical reality key with non zero pad bits`() {
+        val input = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh9"
+        val message = validateRealityPublicKey(input)
+        assertTrue(message != null)
+        assertFalse(message.orEmpty().contains(input))
+    }
+
+    @Test
     fun `rejects a truncated reality key`() {
         val input = "AAECAwQF"
         val message = validateRealityPublicKey(input)

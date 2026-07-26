@@ -35,6 +35,16 @@ class VmessLinkTest {
     }
 
     @Test
+    fun `accepts uppercase vmess scheme`() {
+        val json = """{"add":"host.example","port":443,"id":"$VMESS_UUID"}"""
+        val link = vmessLink(json).replaceFirst("vmess://", "VMESS://")
+
+        val result = parseVmessLink(link, 0) as LinkResult.Ok
+
+        (result.profile.outbound as VmessOutbound).address shouldBe "host.example"
+    }
+
+    @Test
     fun `accepts numeric port and aid`() {
         val json =
             """{"v":2,"ps":"N","add":"host.example","port":443,"id":"$VMESS_UUID","aid":3}"""

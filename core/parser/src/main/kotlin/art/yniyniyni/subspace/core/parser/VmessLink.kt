@@ -15,7 +15,14 @@ internal fun parseVmessLink(
     raw: String,
     index: Int,
 ): LinkResult {
-    val body = raw.trim().removePrefix("vmess://")
+    val trimmed = raw.trim()
+    val normalized =
+        if (trimmed.startsWith("vmess://", ignoreCase = true)) {
+            "vmess://${trimmed.substring("vmess://".length)}"
+        } else {
+            trimmed
+        }
+    val body = normalized.removePrefix("vmess://")
     val decoded =
         decodeBase64Tolerant(body)
             ?: return LinkResult.Bad(

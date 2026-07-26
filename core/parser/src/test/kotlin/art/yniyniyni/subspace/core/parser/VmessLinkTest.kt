@@ -126,4 +126,53 @@ class VmessLinkTest {
             parseVmessLink("vmess://\u0000\u0001not-json", -1)
         }
     }
+
+    @Test
+    fun `required fields accept strings only`() {
+        val missingAddress =
+            parseVmessLink(vmessLink("""{"add":null,"port":443,"id":"$VMESS_UUID"}"""), 0)
+        val booleanAddress =
+            parseVmessLink(vmessLink("""{"add":true,"port":443,"id":"$VMESS_UUID"}"""), 0)
+        val numericId =
+            parseVmessLink(vmessLink("""{"add":"host.example","port":443,"id":123}"""), 0)
+
+        (missingAddress as LinkResult.Bad).failure.reason shouldBe ParseFailureReason.MalformedUri
+        (booleanAddress as LinkResult.Bad).failure.reason shouldBe ParseFailureReason.MalformedUri
+        (numericId as LinkResult.Bad).failure.reason shouldBe ParseFailureReason.MissingCredential
+    }
+
+    @Test
+    fun `malformed optional string fields use safe defaults`() {
+        val json =
+            """{"add":"host.example","port":443,"id":"$VMESS_UUID","ps":true,"net":123,""" +
+                """"scy":null,"tls":true,"sni":false,"host":123,"fp":null}"""
+        val result = parseVmessLink(vmessLink(json), 0)
+
+        val outbound = (result as LinkResult.Ok).profile.outbound as VmessOutbound
+        result.profile.name shouldBe "host.example"
+        outbound.stream.network shouldBe "tcp"
+        outbound.security shouldBe "auto"
+        outbound.stream.security shouldBe Security.None
+    }
+
+    @Test
+    fun `present invalid alter id is malformed json`() {
+        val invalidValues = listOf("\"not-a-number\"", "true", "null", "1.5", "2147483648")
+
+        invalidValues.forEach { value ->
+            val json = """{"add":"host.example","port":443,"id":"$VMESS_UUID","aid":$value}"""
+            val result = parseVmessLink(vmessLink(json), 0)
+
+            val failure = (result as LinkResult.Bad).failure
+            failure.reason shouldBe ParseFailureReason.MalformedJson
+            failure.detail shouldBe "vmess alterId is not a number"
+        }
+    }
+
+    @Test
+    fun `blank alter id defaults to zero`() {
+        val out = okOutbound("""{"add":"host.example","port":443,"id":"$VMESS_UUID","aid":" "}""")
+
+        out.alterId shouldBe 0
+    }
 }

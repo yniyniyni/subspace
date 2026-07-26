@@ -33,7 +33,7 @@ internal fun parseVmessLink(
         return LinkResult.Bad(parseFailure(index, ParseFailureReason.MalformedUri, "vmess address is missing"))
     }
 
-    val port = obj.stringOrNull("port")?.toIntOrNull()
+    val port = obj.integerOrStringIntOrNull("port")
     if (port == null) {
         return LinkResult.Bad(parseFailure(index, ParseFailureReason.InvalidPort, "vmess port is not a number"))
     }
@@ -64,12 +64,26 @@ internal fun parseVmessLink(
             network = obj.nonBlankString("net") ?: "tcp",
             security = security,
         )
+    val alterId =
+        if (!obj.containsKey("aid")) {
+            0
+        } else {
+            val primitive = obj["aid"] as? JsonPrimitive
+            val value = primitive?.content.orEmpty()
+            when {
+                primitive == null -> null
+                primitive.isString && value.isBlank() -> 0
+                else -> value.toLongOrNull()?.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
+            } ?: return LinkResult.Bad(
+                parseFailure(index, ParseFailureReason.MalformedJson, "vmess alterId is not a number"),
+            )
+        }
     val outbound =
         VmessOutbound(
             address = address,
             port = port,
             uuid = uuid,
-            alterId = obj.stringOrNull("aid")?.toIntOrNull() ?: 0,
+            alterId = alterId,
             security = obj.nonBlankString("scy") ?: "auto",
             stream = stream,
         )
@@ -92,8 +106,14 @@ private fun parseJsonObject(text: String): JsonObject? {
 
 /** Reads JSON strings and numeric primitives without accepting nested values. */
 private fun JsonObject.stringOrNull(key: String): String? {
+    val primitive = this[key] as? JsonPrimitive
+    val value = primitive?.content
+    return if (primitive?.isString == true) value?.takeIf { it.isNotEmpty() } else null
+}
+
+private fun JsonObject.integerOrStringIntOrNull(key: String): Int? {
     val primitive = this[key] as? JsonPrimitive ?: return null
-    return primitive.content.takeIf { it.isNotEmpty() }
+    return primitive.content.toIntOrNull()
 }
 
 private fun JsonObject.nonBlankString(key: String): String? {

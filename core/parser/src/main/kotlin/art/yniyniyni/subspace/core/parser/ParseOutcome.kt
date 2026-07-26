@@ -30,8 +30,19 @@ public operator fun ParseOutcome.plus(other: ParseOutcome): ParseOutcome =
  * redacted, and redacting at construction rather than at the log call means no
  * code path can produce an unredacted instance and no reviewer has to check
  * every call site. Same rule M1 applied to `failure()` in `:core:model`.
+ *
+ * The constructor is genuinely `private` — not just a style note above it — so
+ * `ParseFailure(index, reason, rawInput)` does not compile outside this class,
+ * from any file, in or out of this module. [ConsistentCopyVisibility] closes the
+ * matching hole in the generated `copy()`: on Kotlin 2.4, a data class with a
+ * private constructor still gets a *public* `copy()` unless this annotation is
+ * present, which would otherwise let `existingFailure.copy(detail = rawInput)`
+ * rebuild an unredacted instance without ever calling [parseFailure]. Both were
+ * verified empirically with a throwaway check compiled from a separate file —
+ * see the Task 3 fix report.
  */
-public data class ParseFailure(
+@ConsistentCopyVisibility
+public data class ParseFailure private constructor(
     /**
      * Entry index, 0-based. Lets a user say "entry 143 failed" without pasting
      * entry 143 anywhere (§5.6).
@@ -40,7 +51,20 @@ public data class ParseFailure(
     val reason: ParseFailureReason,
     /** Redacted. See [parseFailure]. */
     val detail: String,
-)
+) {
+    internal companion object {
+        // Only reachable from parseFailure() below, which is the sole public
+        // entry point. Internal (not private) because a private constructor is
+        // scoped to this class body, and the class body is the only place that
+        // can see it — this companion function is how parseFailure(), a
+        // top-level function in the same file but not the same class, reaches it.
+        internal fun redacted(
+            index: Int,
+            reason: ParseFailureReason,
+            detail: String,
+        ): ParseFailure = ParseFailure(index, reason, redact(detail))
+    }
+}
 
 /**
  * The only way to build a [ParseFailure].
@@ -54,7 +78,7 @@ public fun parseFailure(
     index: Int,
     reason: ParseFailureReason,
     detail: String,
-): ParseFailure = ParseFailure(index, reason, redact(detail))
+): ParseFailure = ParseFailure.redacted(index, reason, detail)
 
 /**
  * Why one entry failed.

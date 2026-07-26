@@ -34,4 +34,15 @@ class ParseOutcomeTest {
         val b = ParseOutcome.EMPTY
         (a + b).failures.size shouldBe 1
     }
+
+    // No runtime test pins "ParseFailure's constructor and copy() are private"
+    // — that guarantee is enforced by the compiler, not at runtime, and this
+    // module has no kotlin-reflect dependency to introspect visibility with
+    // (it's on the test *runtime* classpath transitively via kotest, but not
+    // the compile classpath — adding it as a real dependency for one test
+    // would be the exact kind of speculative addition ARCHITECTURE.md §10.7
+    // rules out). The guarantee was instead verified empirically with a
+    // throwaway file compiled from outside this class and deleted before
+    // commit. See the Task 3 fix report for the two compiler errors it
+    // produced.
 }

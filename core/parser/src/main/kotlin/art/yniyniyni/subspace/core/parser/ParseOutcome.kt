@@ -4,6 +4,19 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.redact
 
+private const val PROFILE_ID_RADIX = 16
+private const val PROFILE_ID_WIDTH = 8
+
+internal sealed interface LinkResult {
+    data class Ok(
+        val profile: Profile,
+    ) : LinkResult
+
+    data class Bad(
+        val failure: ParseFailure,
+    ) : LinkResult
+}
+
 /**
  * The result of parsing anything.
  *
@@ -22,6 +35,20 @@ public data class ParseOutcome(
 
 public operator fun ParseOutcome.plus(other: ParseOutcome): ParseOutcome =
     ParseOutcome(profiles + other.profiles, failures + other.failures)
+
+internal fun profileId(
+    discriminant: String,
+    address: String,
+    port: Int,
+    credential: String,
+): String {
+    val material = "$discriminant|$address|$port|$credential"
+    return material
+        .hashCode()
+        .toUInt()
+        .toString(PROFILE_ID_RADIX)
+        .padStart(PROFILE_ID_WIDTH, '0')
+}
 
 /**
  * One entry that could not be parsed.

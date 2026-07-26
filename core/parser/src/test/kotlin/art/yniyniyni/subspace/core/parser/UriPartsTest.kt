@@ -97,7 +97,7 @@ class UriPartsTest {
 
     @Test
     fun `arbitrary malformed input never throws`() {
-        val inputs = listOf("", "x", "vless://", "vless://@", "vless://h:", "vless://[\\u0000")
+        val inputs = listOf("", "x", "vless://", "vless://@", "vless://h:", "vless://[\u0000")
         inputs.forEach { parseUri(it) }
     }
 }

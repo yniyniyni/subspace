@@ -39,7 +39,8 @@ internal fun parseVlessLink(
             else -> Security.None
         }
 
-    val stream = StreamSettings(network = uri.query["type"] ?: "tcp", security = security)
+    val network = uri.query["type"]?.takeIf { it.isNotBlank() } ?: "tcp"
+    val stream = StreamSettings(network = network, security = security)
     val outbound =
         VlessOutbound(
             address = uri.host,
@@ -57,16 +58,16 @@ private fun buildReality(
     uri: UriParts,
     pbk: String,
 ): Security.Reality {
-    val serverName = uri.query["sni"] ?: uri.host
+    val serverName = uri.query["sni"]?.takeIf { it.isNotBlank() } ?: uri.host
     val shortId = uri.query["sid"].orEmpty()
-    val fingerprint = uri.query["fp"] ?: "chrome"
-    val spiderX = uri.query["spx"] ?: "/"
+    val fingerprint = uri.query["fp"]?.takeIf { it.isNotBlank() } ?: "chrome"
+    val spiderX = uri.query["spx"]?.takeIf { it.isNotBlank() } ?: "/"
     return Security.Reality(serverName, pbk, shortId, fingerprint, spiderX)
 }
 
 private fun buildTls(uri: UriParts): Security.Tls {
-    val serverName = uri.query["sni"] ?: uri.host
-    val fingerprint = uri.query["fp"] ?: "chrome"
+    val serverName = uri.query["sni"]?.takeIf { it.isNotBlank() } ?: uri.host
+    val fingerprint = uri.query["fp"]?.takeIf { it.isNotBlank() } ?: "chrome"
     val allowInsecure = uri.query["allowInsecure"] == "1"
     return Security.Tls(serverName, fingerprint, allowInsecure)
 }

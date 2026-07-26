@@ -48,6 +48,20 @@ class VlessLinkTest {
     }
 
     @Test
+    fun `blank query values use reality defaults`() {
+        val link = "vless://$UUID@host.example:443?type=&security=reality&sni=&pbk=$PBK&fp=&spx=&flow="
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+        val security = out.stream.security as Security.Reality
+
+        out.stream.network shouldBe "tcp"
+        security.serverName shouldBe "host.example"
+        security.fingerprint shouldBe "chrome"
+        security.spiderX shouldBe "/"
+        out.flow shouldBe null
+    }
+
+    @Test
     fun `rejects a truncated reality key naming publicKey`() {
         val link = "vless://$UUID@host.example:443?security=reality&pbk=AAEC"
         val result = parseVlessLink(link, 7) as LinkResult.Bad
@@ -82,6 +96,16 @@ class VlessLinkTest {
         security.serverName shouldBe "host.example"
         security.fingerprint shouldBe "chrome"
         security.allowInsecure shouldBe true
+    }
+
+    @Test
+    fun `blank tls values use safe defaults`() {
+        val link = "vless://$UUID@host.example:443?security=tls&sni=&fp="
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val security = (result.profile.outbound as VlessOutbound).stream.security as Security.Tls
+
+        security.serverName shouldBe "host.example"
+        security.fingerprint shouldBe "chrome"
     }
 
     @Test

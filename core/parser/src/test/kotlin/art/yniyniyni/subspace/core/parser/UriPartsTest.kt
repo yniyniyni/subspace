@@ -30,6 +30,20 @@ class UriPartsTest {
     }
 
     @Test
+    fun `preserves literal plus in userinfo and query`() {
+        val u = parseUri("trojan://pass+word@h.example:443?key=one+two")
+        u?.userInfo shouldBe "pass+word"
+        u?.query shouldBe mapOf("key" to "one+two")
+    }
+
+    @Test
+    fun `decodes encoded plus and spaces without changing invalid escapes`() {
+        percentDecode("literal+%2B%20") shouldBe "literal++ "
+        percentDecode("%ZZ") shouldBe "%ZZ"
+        parseUri("trojan://pw@h.example:443#Tokyo+%2B%20%231")?.fragment shouldBe "Tokyo++ #1"
+    }
+
+    @Test
     fun `survives an invalid percent escape in the fragment`() {
         parseUri("trojan://pw@h.example:443#bad%ZZname")?.fragment shouldBe "bad%ZZname"
     }

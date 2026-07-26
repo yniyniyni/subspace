@@ -119,7 +119,7 @@ private fun parseQuery(rawQuery: String): Map<String, String> =
 @Suppress("TooGenericExceptionCaught", "SwallowedException")
 internal fun percentDecode(value: String): String =
     try {
-        URLDecoder.decode(value, Charsets.UTF_8.name())
+        URLDecoder.decode(value.replace("+", "%2B"), Charsets.UTF_8.name())
     } catch (_: IllegalArgumentException) {
         value
     }

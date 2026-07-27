@@ -50,7 +50,7 @@ Do not add these without explicit instruction:
 | UI | Jetpack Compose + Material 3 | No XML layouts. No Fragments. |
 | Architecture | MVI, unidirectional data flow | One `State` data class per screen |
 | DI | Hilt | |
-| Persistence | Room (profiles, subscriptions) + DataStore Preferences (settings) | |
+| Persistence | Room — profiles, groups, subscriptions **and settings** | No DataStore; see §3. |
 | Async | Coroutines + Flow | No RxJava, no callbacks in new code |
 | Proxy core | `XTLS/libXray` as an AAR, pinned v26.7.11 | MIT. Prebuilt AAR from the release; see §14. |
 | TUN → SOCKS | `hev-socks5-tunnel` via JNI | C library |
@@ -139,6 +139,7 @@ compile error.
 :core:model             Pure Kotlin data classes. No Android imports.
 :core:data              Room, DataStore, repositories
 :core:parser            Subscription and share-link parsing. Pure, heavily tested.
+:core:ui                Design system: theme, tokens, shared Compose components
 :core:xray              Config JSON generation, libXray lifecycle wrapper
 :feature:home           Connect button, active profile, traffic counters
 :feature:profiles       Profile list, editor, subscription management
@@ -153,6 +154,10 @@ Rules:
   are unit-testable on the JVM and that is the point.
 - `:feature:*` modules never depend on each other.
 - `:service` depends on `:core:*` but never on `:feature:*`.
+- `:core:ui` depends on `:core:model` only. `:feature:*` may depend on it;
+  `:service` and `:core:parser` may not. It exists because `:feature:*` modules
+  cannot depend on each other and `:app` sits downstream of them, so shared UI
+  has nowhere else to live.
 
 ---
 
@@ -217,6 +222,42 @@ redacts too.
 
 The user's stored profile is **not** an Xray config. `:core:xray` generates
 the JSON at connect time.
+
+### Two profile kinds, and what each stores
+
+Storage follows provenance. Share links, base64 lists and Clash YAML have a
+**bounded, known** field set, so they are stored typed (`kind = TYPED`): typing
+them is cheap and it is what keeps a hallucinated Xray key (§10.5) from ever
+reaching a config, because a key absent from `Outbound` cannot be written.
+
+A hand-written `config.json` is **unbounded**. It is stored byte-for-byte
+(`kind = RAW_JSON`), alongside typed columns extracted from it for display,
+search and identity. Extraction alone would be lossy — `XrayJson.kt` pulls out
+the VLESS outbound and discards ws path and headers, gRPC service names,
+Finalmask blocks, and anything else the model has no field for. That loss is
+permanent once the pasted text is gone; storing the bytes makes it reversible.
+
+### Passthrough execution is deferred, and that is not an oversight
+
+§A.2 lists raw JSON profiles in passthrough mode — the config runs as written,
+app-level routing rules not applied. **That is not implemented.** A `RAW_JSON`
+profile connects through the same typed projection as every other kind, so its
+unmodelled fields do not reach the core. Any UI marker on such a profile must
+say so; "raw" alone promises behaviour that does not exist yet.
+
+The obstacle is concrete rather than incidental. A user's config carries its own
+`inbounds`, and the tunnel needs a SOCKS inbound on a port allocated at connect
+time — §10.6 forbids a literal. Adopting the config's port collides with other
+proxy apps; injecting ours means rewriting `routing` to reference it, which is
+no longer "as written"; taking only its `outbounds` is barely passthrough at
+all. Whichever is chosen is a **second tunnel code path**, and §10.1 means it
+earns its own §11 device checklist rather than a green build.
+
+When it does land it is per-kind, not a migration: `TYPED` profiles generate
+from the typed form permanently, and only `RAW_JSON` switches. The typed columns
+stay either way — they are what the UI filters and sorts on — and the typed
+projection remains the fallback when `testXray` rejects the stored JSON,
+provided that fallback is a visible state and not a silent downgrade.
 
 Shape:
 
@@ -302,9 +343,16 @@ profiles appear, and every one of them fails at connect time with
 `ProtocolNotSupported`. Clash's three working cells are exactly the three the
 tunnel cannot use.
 
-Filling in the missing cells is M3. `CapabilityMatrixTest` in `:core:parser`
-pins every cell of this table, so it fails if one changes without this table
-changing with it.
+**M3 fills two of the six gaps, not all of them:** Clash `vless` and `socks5`.
+That is the whole of the user-visible problem — VLESS is the one protocol
+`:core:xray` can emit, and it is the one cell Clash lacks. Raw Xray JSON's four
+missing cells wait, because filling them would produce profiles that parse and
+then fail at connect with `ProtocolNotSupported`; they belong with the milestone
+that makes those protocols connectable, and each of those needs its own device
+verification (§10.1).
+
+`CapabilityMatrixTest` in `:core:parser` pins every cell of this table, so it
+fails if one changes without this table changing with it.
 
 Requirements:
 

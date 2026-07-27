@@ -126,12 +126,11 @@ public class ProfileParcel(
      * this parcel and it is never persisted. This is defensive, and cheap
      * because of it.
      */
-    fun toProfile(): Profile? {
-        val security = security() ?: return null
-        val stream = StreamSettings(network = network, security = security)
-        val out = outbound(stream) ?: return null
-        return Profile(id = id, name = name, outbound = out)
-    }
+    fun toProfile(): Profile? =
+        security()
+            ?.let { StreamSettings(network = network, security = it) }
+            ?.let { outbound(it) }
+            ?.let { Profile(id = id, name = name, outbound = it) }
 
     /** Rebuilds the right [Outbound] from [protocol], or null if it names none. */
     private fun outbound(stream: StreamSettings): Outbound? =

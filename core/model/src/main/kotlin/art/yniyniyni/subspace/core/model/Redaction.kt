@@ -54,11 +54,14 @@ private val LABELLED_HOST_PATTERN =
  * server genuinely named `is` would leak the string "is", which discloses
  * nothing.
  */
-private val NON_HOST_WORDS: Set<String> =
-    (
-        "is was are were has have had must not no cannot and or of in to for the a an " +
-            "entry entries missing invalid unknown unreachable refused failed name names"
-    ).split(" ").toSet()
+private const val NON_HOST_WORD_LIST =
+    "is was are were has have had must not no cannot and or of in to for the a an " +
+        "entry entries missing invalid unknown unreachable refused failed name names"
+
+private val NON_HOST_WORDS: Set<String> = NON_HOST_WORD_LIST.split(" ").toSet()
+
+/** The trailing `(\S+)` of [LABELLED_HOST_PATTERN] — the candidate destination. */
+private const val LABELLED_TOKEN_GROUP = 4
 
 /**
  * Removes anything that could identify a server or authenticate to it.
@@ -97,11 +100,10 @@ public fun redact(message: String): String =
         .replace(HOSTNAME_PATTERN, SENTINEL)
         .replace(BASE64_BLOB_PATTERN, SENTINEL)
         .replace(LABELLED_HOST_PATTERN) { match ->
-            val (label, network, gap, token) = match.destructured
-            if (token.contains(SENTINEL) || token.lowercase().trim(',', '.', ':', ';') in NON_HOST_WORDS) {
-                match.value
-            } else {
-                label + network + gap + SENTINEL
-            }
-        }
-        .replace(SENTINEL, REDACTED)
+            val token = match.groupValues[LABELLED_TOKEN_GROUP]
+            val alreadyRedacted = token.contains(SENTINEL)
+            val notAHost = token.lowercase().trim(',', '.', ':', ';') in NON_HOST_WORDS
+            // The token is the final group, so dropping its length leaves the
+            // label, Go's optional network word, and the whitespace between.
+            if (alreadyRedacted || notAHost) match.value else match.value.dropLast(token.length) + SENTINEL
+        }.replace(SENTINEL, REDACTED)

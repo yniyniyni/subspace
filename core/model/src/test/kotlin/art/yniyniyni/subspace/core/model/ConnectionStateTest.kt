@@ -4,6 +4,8 @@ package art.yniyniyni.subspace.core.model
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
+import java.lang.reflect.Member
+import java.lang.reflect.Modifier
 
 class ConnectionStateTest {
     @Test
@@ -53,15 +55,18 @@ class ConnectionStateTest {
         // the private one. It is unnameable from Kotlin source, so it closes
         // nothing and asserting on it would only assert the compiler's
         // internals.
-        type.declaredConstructors
-            .filterNot { it.isSynthetic }
-            .none { java.lang.reflect.Modifier.isPublic(it.modifiers) } shouldBe true
+        val publicConstructors = type.declaredConstructors.filterNot { it.isSynthetic }.filter { it.isPublic() }
+        val publicCopies =
+            type.declaredMethods
+                .filter { it.name.startsWith("copy") }
+                .filterNot { it.isSynthetic }
+                .filter { it.isPublic() }
 
-        type.declaredMethods
-            .filter { it.name.startsWith("copy") }
-            .filterNot { it.isSynthetic }
-            .none { java.lang.reflect.Modifier.isPublic(it.modifiers) } shouldBe true
+        publicConstructors.isEmpty() shouldBe true
+        publicCopies.isEmpty() shouldBe true
     }
+
+    private fun Member.isPublic(): Boolean = Modifier.isPublic(modifiers)
 
     @Test
     fun `every startup stage is distinct`() {

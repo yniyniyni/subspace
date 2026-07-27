@@ -3,6 +3,11 @@ package art.yniyniyni.subspace.core.xray
 
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
+import art.yniyniyni.subspace.core.model.SocksOutbound
+import art.yniyniyni.subspace.core.model.TrojanOutbound
+import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.model.VmessOutbound
 
 /** Runtime settings that shape the config but do not belong to a stored profile. */
 public data class TunnelSettings(
@@ -12,6 +17,20 @@ public data class TunnelSettings(
     val dnsServer: String,
     val enableSniffing: Boolean,
 )
+
+/**
+ * The outcome of generating a config.
+ *
+ * A sealed result rather than a nullable String: "unsupported protocol" and
+ * "generation failed" are different things to a user, and §10.4 says the
+ * message is the only diagnostic they can hand back — §5.6 forbids logging
+ * the config that would otherwise explain it.
+ */
+public sealed interface ConfigResult {
+    public data class Ok(val json: String) : ConfigResult
+
+    public data class Unsupported(val protocol: String) : ConfigResult
+}
 
 /**
  * Generates the Xray config JSON at connect time.
@@ -36,8 +55,29 @@ public data class TunnelSettings(
  * can be silently ignored or reject the entire config.
  */
 public object XrayConfigGenerator {
+    /**
+     * Dispatches on the profile's protocol.
+     *
+     * `:core:xray` currently emits only VLESS. The `when` below is exhaustive
+     * over the sealed [art.yniyniyni.subspace.core.model.Outbound] with no
+     * `else` — adding a sixth protocol to the model is a compile error here
+     * until this generator is taught to emit it, rather than a silent
+     * fallthrough to a config that connects to nothing.
+     */
     public fun generate(
         profile: Profile,
+        settings: TunnelSettings,
+    ): ConfigResult =
+        when (val outbound = profile.outbound) {
+            is VlessOutbound -> ConfigResult.Ok(generateVless(outbound, settings))
+            is VmessOutbound -> ConfigResult.Unsupported("VMess")
+            is TrojanOutbound -> ConfigResult.Unsupported("Trojan")
+            is ShadowsocksOutbound -> ConfigResult.Unsupported("Shadowsocks")
+            is SocksOutbound -> ConfigResult.Unsupported("SOCKS")
+        }
+
+    private fun generateVless(
+        outbound: VlessOutbound,
         settings: TunnelSettings,
     ): String {
         val sb = StringBuilder()
@@ -62,7 +102,7 @@ public object XrayConfigGenerator {
 
         appendDns(sb, settings)
         appendInbounds(sb, settings)
-        appendOutbounds(sb, profile)
+        appendOutbounds(sb, outbound)
 
         sb.appendLine("""  "routing": {""")
         sb.appendLine("""    "domainStrategy": "IPIfNonMatch",""")
@@ -117,9 +157,8 @@ public object XrayConfigGenerator {
 
     private fun appendOutbounds(
         sb: StringBuilder,
-        profile: Profile,
+        out: VlessOutbound,
     ) {
-        val out = profile.outbound
         sb.appendLine("""  "outbounds": [""")
         sb.appendLine("""    {""")
         sb.appendLine("""      "tag": "proxy",""")
@@ -143,7 +182,7 @@ public object XrayConfigGenerator {
         sb.appendLine("""          }""")
         sb.appendLine("""        ]""")
         sb.appendLine("""      },""")
-        appendStreamSettings(sb, profile)
+        appendStreamSettings(sb, out)
         sb.appendLine("""    },""")
         sb.appendLine("""    { "tag": "direct", "protocol": "freedom" },""")
         sb.appendLine("""    { "tag": "block", "protocol": "blackhole" }""")
@@ -152,9 +191,9 @@ public object XrayConfigGenerator {
 
     private fun appendStreamSettings(
         sb: StringBuilder,
-        profile: Profile,
+        out: VlessOutbound,
     ) {
-        val stream = profile.outbound.stream
+        val stream = out.stream
         sb.appendLine("""      "streamSettings": {""")
         sb.appendLine("""        "network": "${stream.network}",""")
         when (val security = stream.security) {

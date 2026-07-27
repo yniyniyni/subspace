@@ -3,7 +3,7 @@
      §5.6: no string here may interpolate a server address, uuid, or key. -->
 <resources>
     <string name="home_title">Subspace</string>
-    <string name="home_input_label">vless:// link or Xray JSON config</string>
+    <string name="home_input_label">Share link, subscription, Clash YAML, or Xray JSON</string>
     <string name="home_connect">Connect</string>
     <string name="home_disconnect">Disconnect</string>
 
@@ -26,7 +26,8 @@
     <string name="failure_tun_establish">Could not create the tunnel interface</string>
     <string name="failure_tunnel_start">The tunnel failed to start</string>
     <string name="failure_revoked">VPN permission was revoked</string>
+    <string name="failure_protocol_not_supported">This protocol is not supported yet</string>
+    <string name="failure_profile_decode">This profile could not be read</string>
 
-    <string name="error_unparseable">Not a vless:// link or a usable Xray config</string>
-    <string name="error_no_server_in_json">That config contains no server we can use</string>
+    <string name="error_unparseable">Could not parse this as a link, subscription, or config</string>
 </resources>

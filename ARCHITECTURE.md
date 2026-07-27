@@ -271,12 +271,40 @@ assuming a bug in this codebase, and check the Xray-core issue tracker.
 
 ## 7. Subscription and share-link parsing
 
-`:core:parser` handles:
+`:core:parser` handles four container shapes:
 
 - Base64-encoded newline-separated lists
 - `vless://`, `vmess://` (base64 JSON body), `trojan://`, `ss://`, `socks://`
 - Clash / Clash.Meta YAML
 - Raw Xray JSON
+
+### What actually parses, per container
+
+Five protocols across four containers reads as twenty combinations. It is
+fourteen. The gaps are not bugs — nobody has written those branches — but they
+are load-bearing enough that guessing from the list above will mislead you:
+
+| | share link | base64 list | Clash YAML | raw Xray JSON |
+|---|---|---|---|---|
+| vless | ✓ | ✓ | ✗ | ✓ |
+| vmess | ✓ | ✓ | ✓ | ✗ |
+| trojan | ✓ | ✓ | ✓ | ✗ |
+| ss | ✓ | ✓ | ✓ | ✗ |
+| socks | ✓ | ✓ | ✗ | ✗ |
+
+The base64 column can never differ from the share-link column: a blob is
+decoded and re-fed through detection, which lands on the link-list path.
+
+**The practical consequence: a user pasting a Clash config gets zero
+*connectable* servers.** VLESS is the only protocol `:core:xray` can emit a
+config for, and VLESS is the one cell Clash lacks — so the import succeeds,
+profiles appear, and every one of them fails at connect time with
+`ProtocolNotSupported`. Clash's three working cells are exactly the three the
+tunnel cannot use.
+
+Filling in the missing cells is M3. `CapabilityMatrixTest` in `:core:parser`
+pins every cell of this table, so it fails if one changes without this table
+changing with it.
 
 Requirements:
 
@@ -289,6 +317,24 @@ Requirements:
   string as a fixture.
 - This module is the one place where near-100% unit coverage is achievable
   and expected.
+
+### Second-opinion fallback — groundwork, not yet wired
+
+`ShareLinkFallback` in `:core:xray` retries **failed lines only** through
+libXray's `convertShareLinksToXrayJson` and reparses the resulting Xray JSON.
+It lives there rather than in `:core:parser` because it needs the AAR, and §4
+requires the parser to stay pure JVM so its tests run without a device.
+
+**Nothing calls it.** It has no production caller anywhere outside
+`:core:xray`'s own tests, so no recovery of unparseable lines happens today —
+a line `:core:parser` cannot read is simply a failure the user sees. Do not
+reason about the parser's behaviour as though this were in the path.
+
+Two things must happen before it is wired to a caller, and both are recorded on
+`retry`'s KDoc: it currently **drops `reparsed.failures` on partial recovery**,
+so a line expanding into several servers, most of them unreadable, is reported
+as a clean success (a §10.4 violation); and its index-mapping guards mean it
+declines to do anything at all for three of the four container shapes.
 
 ---
 

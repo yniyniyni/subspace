@@ -11,11 +11,14 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
-    // For ShareLinkConverter: accepting a raw Xray config means asking the core
-    // to interpret it rather than writing a second interpretation here.
-    implementation(project(":core:xray"))
+    implementation(project(":core:parser"))
     implementation(project(":service"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+    // subspace.android.library already wires junit + kotest-assertions for unit
+    // tests, but not this: HomeViewModel drives its state through
+    // viewModelScope, which needs a Main dispatcher. Without it, exercising
+    // onConsentGranted in a JVM unit test throws before it does anything.
+    testImplementation(libs.kotlinx.coroutines.test)
 }

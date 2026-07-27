@@ -4,6 +4,8 @@ package art.yniyniyni.subspace.core.model
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
+import java.lang.reflect.Member
+import java.lang.reflect.Modifier
 
 class ConnectionStateTest {
     @Test
@@ -30,6 +32,41 @@ class ConnectionStateTest {
         val once = failure(FailureReason.CoreStartFailed, "dial tcp 203.0.113.44:443 refused")
         failure(once.reason, once.detail).detail shouldBe once.detail
     }
+
+    /**
+     * The redaction in [failure] is only worth anything if it cannot be walked
+     * around. A public constructor or a public generated `copy()` would let
+     * `ConnectionState.Failed(reason, raw)` or
+     * `existing.copy(detail = raw)` produce an unredacted instance without ever
+     * calling [failure] — and [ConnectionState.Failed.detail] comes from
+     * `XrayException`, which quotes the config back (§5.6).
+     *
+     * Asserted by reflection rather than by a commented-out line, because the
+     * thing being checked is precisely that the alternative does not compile,
+     * and a test that does not compile is not a test.
+     */
+    @Test
+    fun `Failed cannot be constructed or copied around redaction`() {
+        val type = ConnectionState.Failed::class.java
+
+        // Synthetic members are excluded because they are exactly what makes
+        // this work: Kotlin emits a public ACC_SYNTHETIC constructor taking a
+        // DefaultConstructorMarker as the bridge the companion uses to reach
+        // the private one. It is unnameable from Kotlin source, so it closes
+        // nothing and asserting on it would only assert the compiler's
+        // internals.
+        val publicConstructors = type.declaredConstructors.filterNot { it.isSynthetic }.filter { it.isPublic() }
+        val publicCopies =
+            type.declaredMethods
+                .filter { it.name.startsWith("copy") }
+                .filterNot { it.isSynthetic }
+                .filter { it.isPublic() }
+
+        publicConstructors.isEmpty() shouldBe true
+        publicCopies.isEmpty() shouldBe true
+    }
+
+    private fun Member.isPublic(): Boolean = Modifier.isPublic(modifiers)
 
     @Test
     fun `every startup stage is distinct`() {

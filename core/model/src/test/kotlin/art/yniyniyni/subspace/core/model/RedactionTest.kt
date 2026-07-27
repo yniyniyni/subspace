@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.model
 
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
@@ -61,5 +63,78 @@ class RedactionTest {
         val out = redact("failed to parse $link")
         out shouldNotContain "70cc48c5"
         out shouldNotContain "example.com"
+    }
+
+    /**
+     * M2 made IPv6 a first-class parse target, so an IPv6 server address is now
+     * something that genuinely reaches a diagnostic — `TunnelService`'s failure
+     * path passes `XrayException.message`, whose own KDoc warns the core quotes
+     * the config back.
+     */
+    @Test
+    fun `strips ipv6 literals`() {
+        redact("failed to dial 2001:db8::1 port 443") shouldNotContain "2001:db8::1"
+        redact("dial tcp [fd00:1:2:3::1]:443 refused") shouldNotContain "fd00"
+        redact("listener on ::1 closed") shouldNotContain "::1"
+        redact("peer 2001:0db8:85a3:0000:0000:8a2e:0370:7334 gone") shouldNotContain "8a2e"
+    }
+
+    /**
+     * A single-label host matches no shape-based pattern — there is nothing
+     * about `vpnserver` that distinguishes it from an ordinary word — so
+     * position is the only signal left.
+     */
+    @Test
+    fun `strips single-label hosts named by a destination word`() {
+        redact("host vpnserver unreachable") shouldNotContain "vpnserver"
+        redact("dial tcp vpnserver:443 refused") shouldNotContain "vpnserver"
+        redact("server intranet refused the connection") shouldNotContain "intranet"
+    }
+
+    /**
+     * The other half of the contract, and the reason the label rule runs last
+     * and consults a stop-word set: §10.4 makes this redacted string the only
+     * diagnostic a user can hand back, so redaction that eats the message is
+     * not a safer trade — it is a different failure.
+     */
+    @Test
+    fun `leaves diagnostics that carry no secret intact`() {
+        val harmless =
+            listOf(
+                "link is not a usable URI",
+                "port must be 1..65535, got 70000",
+                "publicKey must be 43 characters, got 12",
+                "vless address is missing",
+                "vmess address is missing",
+                "proxy has no server",
+                "input contains no server entries",
+                "entry is not a share link",
+                "proxy type is not supported",
+                "vless outbound has no users",
+            )
+        harmless.forEach { message ->
+            withClue(message) { redact(message) shouldBe message }
+        }
+    }
+
+    @Test
+    fun `keeps the port when the address beside it is redacted`() {
+        // The label rule must not swallow "dial tcp <address>:443" whole — the
+        // port is the diagnostic. It runs after the shape-based patterns for
+        // exactly this reason.
+        redact("failed to dial 2001:db8::1 port 443") shouldContain "443"
+        redact("dial tcp 203.0.113.44:443 refused") shouldBe "dial tcp <redacted>:443 refused"
+    }
+
+    @Test
+    fun `is idempotent for the ipv6 and labelled-host rules too`() {
+        listOf(
+            "failed to dial 2001:db8::1 port 443",
+            "host vpnserver unreachable",
+            "dial tcp 203.0.113.44:443 refused",
+        ).forEach { message ->
+            val once = redact(message)
+            withClue(message) { redact(once) shouldBe once }
+        }
     }
 }

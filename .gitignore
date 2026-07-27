@@ -23,6 +23,10 @@ captures/
 local.properties
 .cxx/
 release/
+# Kotlin Gradle Plugin's build-session/incremental-compilation cache, written
+# at the repo root since Kotlin 1.8.20 regardless of which module is built.
+# Pure build scratch, same category as .gradle/ and build/ above.
+.kotlin/
 
 # ─── IDE ────────────────────────────────────────────────────────────────────
 .idea/*

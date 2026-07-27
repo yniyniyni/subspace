@@ -14,6 +14,7 @@ import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
+import art.yniyniyni.subspace.core.xray.ConfigResult
 import art.yniyniyni.subspace.core.xray.SocketProtector
 import art.yniyniyni.subspace.core.xray.TunnelSettings
 import art.yniyniyni.subspace.core.xray.XrayConfigGenerator
@@ -206,9 +207,24 @@ class TunnelService : VpnService() {
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
         val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true)
+        // §10.4/failStart's cleanup applies here too, not just to the try/catch
+        // below: an early return that only published a state (skipping
+        // stopForeground/stopSelf/controller = null) would leave a stuck
+        // "Connecting" notification, same as every other branch in this function.
+        val json =
+            when (val config = XrayConfigGenerator.generate(profile, settings)) {
+                is ConfigResult.Unsupported ->
+                    return failStart(
+                        gen,
+                        FailureReason.ProtocolNotSupported,
+                        IllegalArgumentException("${config.protocol} is not supported yet"),
+                    )
+
+                is ConfigResult.Ok -> config.json
+            }
         val file =
             try {
-                writeConfig(XrayConfigGenerator.generate(profile, settings))
+                writeConfig(json)
             } catch (e: java.io.IOException) {
                 return failStart(gen, FailureReason.ConfigGenerationFailed, e)
             }
@@ -462,7 +478,24 @@ class TunnelService : VpnService() {
     private val binder =
         object : ITunnelService.Stub() {
             override fun connect(profile: ProfileParcel) {
-                startTunnel(profile.toProfile())
+                // §10.4: fail loudly and specifically. A parcel carrying a
+                // discriminant this process cannot name decodes to null rather
+                // than to a plausible default — see ProfileParcel.toProfile.
+                // Connecting on a guess would dial the wrong protocol, or drop
+                // REALITY and go out in the clear, at a real address.
+                val decoded = profile.toProfile()
+                if (decoded == null) {
+                    Log.e(TAG, "connect refused: profile parcel carries an unknown discriminant")
+                    publish(
+                        failure(
+                            FailureReason.ProfileDecodeFailed,
+                            "profile could not be decoded",
+                        ),
+                    )
+                    stopSelf()
+                    return
+                }
+                startTunnel(decoded)
             }
 
             override fun disconnect() {

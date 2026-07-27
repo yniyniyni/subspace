@@ -44,8 +44,6 @@ class XrayControllerTest {
             stream = StreamSettings(network = "tcp", security = reality),
         )
 
-    private fun realityProfile() = Profile(id = "instr-1", name = "Instrumented", outbound = outbound)
-
     @Test
     fun allocatesARealFreePort() =
         runTest {
@@ -77,8 +75,10 @@ class XrayControllerTest {
                     dnsServer = "1.1.1.1",
                     enableSniffing = true,
                 )
-            val json = XrayConfigGenerator.generate(realityProfile(), settings)
-            val configFile = File(cacheDir, "instr-valid.json").apply { writeText(json) }
+            val profile = Profile(id = "id", name = "n", outbound = outbound)
+            val result = XrayConfigGenerator.generate(profile, settings)
+            check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            val configFile = File(cacheDir, "instr-valid.json").apply { writeText(result.json) }
 
             controller.validate(configFile)
             configFile.delete()

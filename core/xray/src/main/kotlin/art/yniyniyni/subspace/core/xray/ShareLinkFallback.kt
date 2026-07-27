@@ -79,6 +79,28 @@ public object ShareLinkFallback {
     public fun retry(
         originalText: String,
         outcome: ParseOutcome,
+    ): ParseOutcome = retry(originalText, outcome, ::convertOrNull)
+
+    /**
+     * Test seam. [convert] defaults to [convertOrNull] — the real libXray
+     * call — through the public two-argument [retry] above.
+     *
+     * `:core:xray`'s JVM unit tests cannot exercise the real libXray call at
+     * all (`org.json.JSONObject` is an unmocked Android stub outside
+     * `androidTest`), and asserting on [retry]'s *return value* cannot tell
+     * the two guards below apart from each other: both a container-shaped
+     * input and a plain "://"-free line produce an unchanged outcome for
+     * different reasons. Taking the converter as a parameter lets a JVM test
+     * substitute a spy and assert on whether it was *called*, which is the
+     * only way to prove which guard is actually doing the suppressing.
+     * Internal, not public: [SubscriptionParser.parse] stays the only public
+     * API of `:core:parser`, and the two-argument [retry] stays the only
+     * public entry point here.
+     */
+    internal fun retry(
+        originalText: String,
+        outcome: ParseOutcome,
+        convert: (String) -> String?,
     ): ParseOutcome {
         // Second condition: see "The index-mapping limitation" above. A
         // container-shaped input's failure indices are never line numbers, so
@@ -93,7 +115,7 @@ public object ShareLinkFallback {
 
         outcome.failures.forEach { failure ->
             val line = lines.getOrNull(failure.index)
-            val json = if (line != null && looksLikeShareLink(line)) convertOrNull(line) else null
+            val json = if (line != null && looksLikeShareLink(line)) convert(line) else null
             val reparsed = if (json == null) null else SubscriptionParser.parse(json)
 
             if (reparsed != null && reparsed.profiles.isNotEmpty()) {

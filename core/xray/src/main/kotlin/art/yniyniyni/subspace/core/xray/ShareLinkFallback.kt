@@ -75,6 +75,15 @@ public object ShareLinkFallback {
      * @param outcome that parser's result.
      * @return an outcome where any line the core could read has become a
      *   profile. Lines neither could read keep their original failure.
+     *
+     * **Known gap: `reparsed.failures` are dropped on partial recovery.** When
+     * the reparse of libXray's JSON yields *some* profiles, only those profiles
+     * are kept — any failures it reported alongside them are discarded, and the
+     * original failure is dropped too because the entry counts as recovered. A
+     * line that expands into several servers, most of them unreadable, is
+     * therefore reported as a clean success. That is a §10.4 violation waiting
+     * to happen and **must be closed before this object is wired to a caller**;
+     * it is tolerable only because nothing calls [retry] today.
      */
     public fun retry(
         originalText: String,
@@ -168,20 +177,41 @@ public object ShareLinkFallback {
      * can quote the config. Nothing from this path reaches a log unredacted,
      * and the exception itself is swallowed — a failed second opinion is not an
      * error, it is the expected outcome for genuinely malformed input.
+     *
+     * The `JSONObject` construction is **inside** the `try` deliberately.
+     * `org.json.JSONObject` is an Android platform class, and on the JVM unit
+     * test classpath it is the unimplemented stub that throws — leaving it
+     * outside meant a throw from the one line that is guaranteed not to be a
+     * libXray failure escaped the guard entirely.
+     *
+     * [LinkageError] is caught alongside [Exception] because
+     * [LibXrayInvoke.call] reaches a gomobile JNI binding. If the AAR is
+     * missing from a build variant, or its native library fails to load, the
+     * JVM raises `UnsatisfiedLinkError` or `NoClassDefFoundError` — both
+     * `Error`, not `Exception`, so both would sail through a
+     * `catch (Exception)` and out through [retry], breaking §7's never-throw
+     * promise on this path for the whole subscription.
+     *
+     * Deliberately **not** `Throwable`: that would also swallow
+     * `OutOfMemoryError`, `StackOverflowError`, and coroutine cancellation —
+     * conditions this object cannot honestly report as "the core could not read
+     * this link", and §10.4 warns that a broadly-caught failure here is the
+     * worst possible outcome.
      */
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
-    private fun convertOrNull(line: String): String? {
-        // Request field is `text`, per docs/agent/research/libxray-api.md:77
-        // (`convertShareLinksToXrayJson | ConvertShareLinksToXrayJsonRequest |
-        // text | xray JSON`). LibXrayInvoke.call already unwraps the response's
-        // `data` envelope (see its KDoc and XrayController's other call sites),
-        // so what it returns here already *is* the xray JSON — no further
-        // unwrap. Failure arrives as a thrown XrayException, not a null return.
-        val payload = JSONObject().put("text", line)
-        return try {
+    private fun convertOrNull(line: String): String? =
+        try {
+            // Request field is `text`, per docs/agent/research/libxray-api.md:77
+            // (`convertShareLinksToXrayJson | ConvertShareLinksToXrayJsonRequest |
+            // text | xray JSON`). LibXrayInvoke.call already unwraps the response's
+            // `data` envelope (see its KDoc and XrayController's other call sites),
+            // so what it returns here already *is* the xray JSON — no further
+            // unwrap. Failure arrives as a thrown XrayException, not a null return.
+            val payload = JSONObject().put("text", line)
             LibXrayInvoke.call("convertShareLinksToXrayJson", payload)?.toString()?.takeIf { it.isNotEmpty() }
         } catch (e: Exception) {
             null
+        } catch (e: LinkageError) {
+            null
         }
-    }
 }

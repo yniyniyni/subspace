@@ -12,6 +12,9 @@ private const val MAX_IPV4_TAIL_COUNT = 1
 private const val MAX_HEXTET_LENGTH = 4
 private const val IPV4_OCTET_COUNT = 4
 private const val MAX_IPV4_OCTET = 255
+private const val PERCENT_ESCAPE_LENGTH = 3
+private const val FIRST_ESCAPED_HEX_OFFSET = 1
+private const val SECOND_ESCAPED_HEX_OFFSET = 2
 
 /** Parses SIP002 and legacy `ss://` share links without throwing. */
 @Suppress("ReturnCount")
@@ -123,18 +126,32 @@ private fun parseAuthority(authority: String): SsAuthorityParts? {
     return SsAuthorityParts(host, port)
 }
 
-private fun isValidHostToken(host: String): Boolean =
-    host.isNotEmpty() &&
-        host.none { character ->
-            character == '/' ||
-                character == '?' ||
-                character == '#' ||
-                character == '@' ||
-                character == '[' ||
-                character == ']' ||
-                character.isWhitespace() ||
-                character.isISOControl()
+@Suppress("ReturnCount")
+private fun isValidHostToken(host: String): Boolean {
+    if (host.isEmpty()) return false
+    var position = 0
+    while (position < host.length) {
+        val character = host[position]
+        if (character == '%') {
+            if (position + PERCENT_ESCAPE_LENGTH > host.length ||
+                !isHexDigit(host[position + FIRST_ESCAPED_HEX_OFFSET]) ||
+                !isHexDigit(host[position + SECOND_ESCAPED_HEX_OFFSET])
+            ) {
+                return false
+            }
+            position += PERCENT_ESCAPE_LENGTH
+        } else if (character.isLetterOrDigit() || character in "-._~!$&'()*+,;=") {
+            position++
+        } else {
+            return false
         }
+    }
+    return true
+}
+
+private fun isHexDigit(character: Char): Boolean =
+    character in '0'..'9' ||
+        character.lowercaseChar() in 'a'..'f'
 
 private fun parsePortText(text: String): Int? {
     val value = text.toLongOrNull() ?: return null

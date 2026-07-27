@@ -130,6 +130,15 @@ class ShadowsocksLinkTest {
     }
 
     @Test
+    fun `accepts reg name characters and percent escapes in hostname`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val result =
+            parseShadowsocksLink("ss://$credentials@host-._~!\$&'()*+,;=%2Eexample:8388", 0) as LinkResult.Ok
+
+        (result.profile.outbound as ShadowsocksOutbound).address shouldBe "host-._~!\$&'()*+,;=%2Eexample"
+    }
+
+    @Test
     fun `rejects hostile non bracketed host tokens`() {
         val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
         val authorities =
@@ -140,6 +149,10 @@ class ShadowsocksLinkTest {
                 "host name:8388",
                 "host\tname:8388",
                 "host\u0000name:8388",
+                "host\\name:8388",
+                "host|name:8388",
+                "host<name>:8388",
+                "host%2:8388",
             )
 
         authorities.forEach { authority ->

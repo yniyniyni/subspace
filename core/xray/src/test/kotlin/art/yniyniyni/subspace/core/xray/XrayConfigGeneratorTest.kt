@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.xray
 
+import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
+import art.yniyniyni.subspace.core.model.SocksOutbound
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.model.VmessOutbound
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -134,6 +139,16 @@ class XrayConfigGeneratorTest {
         generateJson(outbound, settings) shouldBe golden.trimEnd()
     }
 
+    /**
+     * Asserting the payload, not just the type.
+     *
+     * `ConfigResult.Unsupported.protocol` is rendered straight to the user by
+     * `HomeScreen`. The guarantee that it is a fixed literal rather than, say,
+     * `outbound.address` — which would be a §5.6 leak into the UI — rested on
+     * source inspection alone while this asserted only the type. It is also the
+     * one place a copy-paste between the four branches would go unnoticed:
+     * every wrong answer is still an `Unsupported`.
+     */
     @Test
     fun `refuses a non-vless outbound rather than emitting a broken config`() {
         val stream = StreamSettings(network = "tcp", security = Security.None)
@@ -143,5 +158,31 @@ class XrayConfigGeneratorTest {
         val result = XrayConfigGenerator.generate(profile, settings)
 
         result.shouldBeInstanceOf<ConfigResult.Unsupported>()
+        result.protocol shouldBe "Trojan"
+    }
+
+    @Test
+    fun `names every unsupported protocol exactly, and never the address`() {
+        val stream = StreamSettings(network = "tcp", security = Security.None)
+        val secretAddress = "host.example"
+        val unsupported =
+            listOf<Pair<Outbound, String>>(
+                VmessOutbound(secretAddress, 443, "u", 0, "auto", stream) to "VMess",
+                TrojanOutbound(secretAddress, 443, "pw", stream) to "Trojan",
+                ShadowsocksOutbound(secretAddress, 8388, "aes-256-gcm", "pw") to "Shadowsocks",
+                SocksOutbound(secretAddress, 1080, "user", "pw") to "SOCKS",
+            )
+
+        unsupported.forEach { (outbound, expected) ->
+            withClue(expected) {
+                val profile = Profile(id = "id", name = "n", outbound = outbound)
+                val result = XrayConfigGenerator.generate(profile, settings)
+
+                result.shouldBeInstanceOf<ConfigResult.Unsupported>()
+                result.protocol shouldBe expected
+                // §5.6: this string reaches the UI. It must be a fixed literal.
+                result.protocol shouldNotContain secretAddress
+            }
+        }
     }
 }

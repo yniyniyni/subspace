@@ -80,6 +80,44 @@ class ShadowsocksLinkTest {
     }
 
     @Test
+    fun `parses bracketed IPv6 authority and removes brackets from host`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val result =
+            parseShadowsocksLink("ss://$credentials@[2001:db8::1]:8388", 0) as LinkResult.Ok
+        val outbound = result.profile.outbound as ShadowsocksOutbound
+
+        outbound.address shouldBe "2001:db8::1"
+        outbound.port shouldBe 8388
+    }
+
+    @Test
+    fun `rejects unbracketed IPv6 authority`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+
+        val result =
+            parseShadowsocksLink("ss://$credentials@2001:db8::1:8388", 0) as LinkResult.Bad
+
+        result.failure.reason shouldBe ParseFailureReason.MalformedBase64
+    }
+
+    @Test
+    fun `rejects malformed multi colon authority`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val authorities =
+            listOf(
+                "host:8388:999",
+                "[2001:db8::1:8388",
+                "[2001:db8::1]",
+                "[2001:db8::1]:8388:999",
+            )
+
+        authorities.forEach { authority ->
+            val result = parseShadowsocksLink("ss://$credentials@$authority", 0) as LinkResult.Bad
+            result.failure.reason shouldBe ParseFailureReason.MalformedBase64
+        }
+    }
+
+    @Test
     fun `decodes percent encoded fragment and falls back to host`() {
         val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
         val named = parseShadowsocksLink("ss://$credentials@host.example:8388#Paris%20VPN", 0) as LinkResult.Ok

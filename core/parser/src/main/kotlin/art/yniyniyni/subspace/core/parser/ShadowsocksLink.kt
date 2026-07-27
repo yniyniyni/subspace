@@ -9,14 +9,7 @@ import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 internal fun parseShadowsocksLink(
     raw: String,
     index: Int,
-): LinkResult =
-    runCatching {
-        parseShadowsocksLinkSafely(raw, index)
-    }.getOrElse {
-        LinkResult.Bad(
-            parseFailure(index, ParseFailureReason.MalformedBase64, "ss body is malformed"),
-        )
-    }
+): LinkResult = parseShadowsocksLinkSafely(raw, index)
 
 @Suppress("ReturnCount")
 private fun parseShadowsocksLinkSafely(
@@ -63,6 +56,11 @@ private data class SsParts(
     val port: Int,
 )
 
+private data class SsAuthorityParts(
+    val host: String,
+    val port: Int,
+)
+
 /** `<base64(method:password)>@host:port` */
 @Suppress("ReturnCount")
 private fun parseSip002(body: String): SsParts? {
@@ -90,12 +88,33 @@ private fun parseCredentialsAndAuthority(
     if (credentialSeparator < 0) return null
     val method = credentials.substring(0, credentialSeparator)
     val password = credentials.substring(credentialSeparator + 1)
-    val authoritySeparator = authority.lastIndexOf(':')
-    if (authoritySeparator <= 0) return null
-    val host = authority.substring(0, authoritySeparator)
+    val parsedAuthority = parseAuthority(authority) ?: return null
+    return SsParts(method, password, parsedAuthority.host, parsedAuthority.port)
+}
+
+/** Mirrors [parseUri]'s bracket rule: IPv6 literals must be `[host]:port`. */
+@Suppress("ReturnCount")
+private fun parseAuthority(authority: String): SsAuthorityParts? {
+    if (authority.startsWith('[')) {
+        val close = authority.indexOf(']')
+        if (close <= 1) return null
+        val suffix = authority.substring(close + 1)
+        if (!suffix.startsWith(':') || suffix.length == 1) return null
+        val port = parsePortText(suffix.substring(1)) ?: return null
+        return SsAuthorityParts(authority.substring(1, close), port)
+    }
+    if (authority.contains('[') || authority.contains(']')) return null
+    if (authority.count { it == ':' } != 1) return null
+    val separator = authority.indexOf(':')
+    val host = authority.substring(0, separator)
     if (host.isEmpty()) return null
-    val port = authority.substring(authoritySeparator + 1).toIntOrNull() ?: Int.MIN_VALUE
-    return SsParts(method, password, host, port)
+    val port = parsePortText(authority.substring(separator + 1)) ?: return null
+    return SsAuthorityParts(host, port)
+}
+
+private fun parsePortText(text: String): Int? {
+    val value = text.toLongOrNull() ?: return null
+    return if (value in Int.MIN_VALUE..Int.MAX_VALUE) value.toInt() else Int.MIN_VALUE
 }
 
 private fun identityMaterial(

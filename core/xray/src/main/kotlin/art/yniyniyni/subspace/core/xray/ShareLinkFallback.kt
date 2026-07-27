@@ -47,19 +47,27 @@ import org.json.JSONObject
  * converts into a profile that has nothing to do with the entry that actually
  * failed. That would be a correctness bug, not a missed recovery.
  *
- * This is guarded structurally rather than by re-deriving which path fired:
- * every real share link requires a `scheme://` prefix (§6 lists the five
- * schemes this project supports), and base64 — standard or URL-safe alphabet —
- * never contains a `:` character, so no fragment of an encoded blob can ever
- * contain `://`. Requiring the candidate text to contain `://` before calling
- * libXray is therefore always safe: it can never suppress a genuine,
- * correctly-indexed share link (which always has `://`), and it can never let
- * a misindexed base64 fragment reach libXray. The residual case — a
- * misindexed line of Clash YAML or raw JSON that *itself* happens to contain
- * `://` (an unrelated URL field, for instance) — is not fully closed by this
- * guard; it is accepted as out of scope here because §7's container-shape
- * failures do not carry line numbers by design, and recovering them would
- * need a richer [ParseFailure] than `:core:parser` currently exposes.
+ * Two guards close this, and both are needed:
+ *
+ * 1. [retry] skips line-based recovery **entirely** when [originalText] itself
+ *    is container-shaped — starts with `{` (raw Xray JSON) or contains a
+ *    `proxies:` line (Clash YAML) — using the same detection order
+ *    `SubscriptionParser` uses, so indices are never even looked up against
+ *    text they cannot describe. This is what closes the case a line-based
+ *    guard alone cannot: a pretty-printed, multi-line JSON or YAML document
+ *    where the line that happens to sit at the failure's numeric offset
+ *    contains an unrelated `://` (an `sni`, a `providers:` URL, a comment).
+ * 2. For the remaining case — [originalText] was not container-shaped at the
+ *    top level but decoded from base64 into something that *is* (or into
+ *    another link list, indexed against the decoded text rather than
+ *    [originalText]) — the per-line guard below still applies: no candidate
+ *    line reaches libXray unless it contains `://`. Every real share link
+ *    this project supports (§7: `vless`, `vmess`, `trojan`, `ss`, `socks`)
+ *    requires a `scheme://` prefix, and base64 — standard or URL-safe
+ *    alphabet — never contains a `:` character, so no fragment of an encoded
+ *    blob can ever satisfy it. That guard can never suppress a genuine,
+ *    correctly-indexed share link, and can never let a misindexed base64
+ *    fragment through.
  */
 public object ShareLinkFallback {
     /**
@@ -72,7 +80,11 @@ public object ShareLinkFallback {
         originalText: String,
         outcome: ParseOutcome,
     ): ParseOutcome {
-        if (outcome.failures.isEmpty()) return outcome
+        // Second condition: see "The index-mapping limitation" above. A
+        // container-shaped input's failure indices are never line numbers, so
+        // there is nothing safe to look up — return the outcome unchanged
+        // rather than guess.
+        if (outcome.failures.isEmpty() || isContainerShaped(originalText)) return outcome
 
         val lines = originalText.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
 
@@ -95,15 +107,39 @@ public object ShareLinkFallback {
     }
 
     /**
-     * Every share link this project supports (§6: `vless`, `vmess`, `trojan`,
+     * Every share link this project supports (§7: `vless`, `vmess`, `trojan`,
      * `ss`, `socks`) has a `scheme://` prefix, and base64 — standard or
      * URL-safe alphabet — never contains `:`. So this both filters out
-     * hopeless input (saving a JNI call) and is the correctness guard
-     * documented on the class: it is the only thing standing between a
-     * misindexed base64 fragment and a JNI call that might, for all we know
-     * about libXray's internals, do something with it.
+     * hopeless input (saving a JNI call) and is the second correctness guard
+     * documented on the class: it is what stands between a misindexed base64
+     * fragment and a JNI call that might, for all we know about libXray's
+     * internals, do something with it.
      */
     private fun looksLikeShareLink(candidate: String): Boolean = candidate.contains("://")
+
+    /**
+     * Mirrors the detection `SubscriptionParser.parse` uses internally (raw
+     * Xray JSON starts with `{`; Clash YAML has a `proxies:` line) to decide
+     * whether [ParseFailure.index] can possibly be a line number of the text
+     * being tested.
+     *
+     * Duplicated rather than shared: the real check
+     * (`looksLikeClash`/`text.startsWith("{")` in `:core:parser`'s
+     * `SubscriptionParser.kt`) is `internal` to that module and not visible
+     * here, and neither widening `:core:parser`'s public API nor pulling this
+     * module's Android dependency into it (§4 requires `:core:parser` stay
+     * pure JVM) is acceptable just to share one predicate. **This must move in
+     * lockstep with `SubscriptionParser`'s detection** — if that changes,
+     * update this to match, or the container-shape skip below silently stops
+     * covering an input shape it used to.
+     */
+    private fun isContainerShaped(text: String): Boolean {
+        val trimmed = text.trim()
+        return trimmed.startsWith("{") || looksLikeClashYaml(trimmed)
+    }
+
+    private fun looksLikeClashYaml(text: String): Boolean =
+        text.lineSequence().any { it.trimEnd() == "proxies:" || it.startsWith("proxies:") }
 
     /**
      * §5.6: `ShareLinkConverter`'s own KDoc warns that the core's error message

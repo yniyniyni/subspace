@@ -64,6 +64,7 @@ class LinkListTest {
         val outcome = parseLinkList(text)
 
         outcome.profiles.size shouldBe 2
+        outcome.profiles.map { it.outbound.address } shouldBe listOf("ss.example", "socks.example")
         outcome.failures.map { it.index } shouldBe listOf(1, 3)
     }
 }

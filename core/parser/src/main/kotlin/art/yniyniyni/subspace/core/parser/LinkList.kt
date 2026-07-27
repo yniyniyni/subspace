@@ -7,17 +7,20 @@ import art.yniyniyni.subspace.core.model.Profile
 internal fun parseLinkList(text: String): ParseOutcome {
     val profiles = mutableListOf<Profile>()
     val failures = mutableListOf<ParseFailure>()
+    var entryIndex = 0
 
-    text
-        .split('\n')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .forEachIndexed { index, entry ->
-            when (val result = parseShareLink(entry, index)) {
-                is LinkResult.Ok -> profiles += result.profile
-                is LinkResult.Bad -> failures += result.failure
-            }
+    for (line in text.lineSequence()) {
+        val entry = line.trim()
+        if (entry.isEmpty()) {
+            continue
         }
+
+        when (val result = parseShareLink(entry, entryIndex)) {
+            is LinkResult.Ok -> profiles += result.profile
+            is LinkResult.Bad -> failures += result.failure
+        }
+        entryIndex++
+    }
 
     return if (profiles.isEmpty() && failures.isEmpty()) {
         ParseOutcome.EMPTY

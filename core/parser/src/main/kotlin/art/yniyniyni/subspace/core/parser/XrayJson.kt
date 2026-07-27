@@ -45,9 +45,11 @@ internal fun parseXrayJson(text: String): ParseOutcome {
                             parseFailure(index, ParseFailureReason.UnknownScheme, "outbound protocol is not supported")
 
                     "vless" ->
-                        when (val result = parseVlessOutbound(outbound, index)) {
-                            is LinkResult.Ok -> profiles += result.profile
-                            is LinkResult.Bad -> failures += result.failure
+                        parseVlessOutbound(outbound, index).forEach { result ->
+                            when (result) {
+                                is LinkResult.Ok -> profiles += result.profile
+                                is LinkResult.Bad -> failures += result.failure
+                            }
                         }
 
                     else ->
@@ -69,72 +71,126 @@ internal fun parseXrayJson(text: String): ParseOutcome {
 private fun parseVlessOutbound(
     outbound: JsonObject,
     index: Int,
-): LinkResult {
+): List<LinkResult> {
     val settings = outbound["settings"] as? JsonObject
     val vnext =
-        (settings?.get("vnext") as? JsonArray)?.firstOrNull() as? JsonObject
-            ?: return bad(index, ParseFailureReason.MalformedJson, "vless outbound has no vnext")
+        settings?.get("vnext") as? JsonArray
+            ?: return listOf(bad(index, ParseFailureReason.MalformedJson, "vless outbound has no vnext"))
+    if (vnext.isEmpty()) {
+        return listOf(bad(index, ParseFailureReason.MalformedJson, "vless outbound has no vnext"))
+    }
 
-    val address =
-        vnext.stringValue("address")?.takeIf { it.isNotBlank() }
-            ?: return bad(index, ParseFailureReason.MalformedJson, "vless address is missing")
-    val port =
-        vnext.portValue("port")
-            ?: return bad(index, ParseFailureReason.InvalidPort, "vless port is not a number")
-    validatePort(port)?.let { return bad(index, ParseFailureReason.InvalidPort, it) }
-
-    val user =
-        (vnext["users"] as? JsonArray)?.firstOrNull() as? JsonObject
-            ?: return bad(index, ParseFailureReason.MissingCredential, "vless outbound has no user")
-    val uuid =
-        user.stringValue("id")
-            ?: return bad(index, ParseFailureReason.MissingCredential, "vless UUID is missing")
-    validateUuid(uuid)?.let { return bad(index, ParseFailureReason.MissingCredential, it) }
-
-    val streamSettings = outbound["streamSettings"] as? JsonObject
-    val network = streamSettings?.stringValue("network")?.takeIf { it.isNotBlank() } ?: "tcp"
-    val security =
-        parseSecurity(streamSettings, address)
-            ?: return bad(index, ParseFailureReason.InvalidRealityKey, "reality public key is invalid")
-    val flow = user.stringValue("flow")?.takeIf { it.isNotBlank() }
-    val stream = StreamSettings(network = network, security = security)
-    val vless = VlessOutbound(address, port, uuid, flow, stream)
-    val name = outbound.stringValue("tag")?.takeIf { it.isNotBlank() } ?: address
-    return LinkResult.Ok(Profile(profileId("vless", address, port, uuid), name, vless))
+    return vnext.flatMap { destination ->
+        val vnextObject =
+            destination as? JsonObject
+                ?: return@flatMap listOf(
+                    bad(index, ParseFailureReason.MalformedJson, "vless destination is not an object"),
+                )
+        parseVlessDestination(outbound, vnextObject, index)
+    }
 }
 
 @Suppress("ReturnCount")
+private fun parseVlessDestination(
+    outbound: JsonObject,
+    vnext: JsonObject,
+    index: Int,
+): List<LinkResult> {
+    val address =
+        vnext.stringValue("address")?.takeIf { it.isNotBlank() }
+            ?: return listOf(bad(index, ParseFailureReason.MalformedJson, "vless address is missing"))
+    val port =
+        vnext.portValue("port")
+            ?: return listOf(bad(index, ParseFailureReason.InvalidPort, "vless port is not a number"))
+    validatePort(port)?.let { return listOf(bad(index, ParseFailureReason.InvalidPort, it)) }
+
+    val users =
+        vnext["users"] as? JsonArray
+            ?: return listOf(bad(index, ParseFailureReason.MissingCredential, "vless outbound has no users"))
+    if (users.isEmpty()) {
+        return listOf(bad(index, ParseFailureReason.MissingCredential, "vless outbound has no users"))
+    }
+
+    val streamSettings = outbound["streamSettings"] as? JsonObject
+    val network = streamSettings?.stringValue("network")?.takeIf { it.isNotBlank() } ?: "tcp"
+    val name = outbound.stringValue("tag")?.takeIf { it.isNotBlank() } ?: address
+    return when (val parsedSecurity = parseSecurity(streamSettings, address)) {
+        is SecurityParse.Bad -> users.map { bad(index, parsedSecurity.reason, parsedSecurity.detail) }
+        is SecurityParse.Ok ->
+            users.map { userElement ->
+                val user =
+                    userElement as? JsonObject
+                        ?: return@map bad(index, ParseFailureReason.MissingCredential, "vless user is not an object")
+                val uuid =
+                    user.stringValue("id")
+                        ?: return@map bad(index, ParseFailureReason.MissingCredential, "vless UUID is missing")
+                validateUuid(uuid)?.let { return@map bad(index, ParseFailureReason.MissingCredential, it) }
+                val flow = user.stringValue("flow")?.takeIf { it.isNotBlank() }
+                val stream = StreamSettings(network = network, security = parsedSecurity.security)
+                val vless = VlessOutbound(address, port, uuid, flow, stream)
+                LinkResult.Ok(Profile(profileId("vless", address, port, uuid), name, vless))
+            }
+    }
+}
+
+@Suppress("CyclomaticComplexMethod", "ReturnCount")
 private fun parseSecurity(
     streamSettings: JsonObject?,
     address: String,
-): Security? {
-    return when (streamSettings?.stringValue("security")) {
+): SecurityParse {
+    val securityElement = streamSettings?.get("security")
+    if (securityElement == null || securityElement == JsonNull) {
+        return SecurityParse.Ok(Security.None)
+    }
+    if (securityElement !is JsonPrimitive || !securityElement.isString) {
+        return SecurityParse.Bad(ParseFailureReason.MalformedJson, "stream security is malformed")
+    }
+
+    return when (securityElement.content) {
         "reality" -> {
             val reality = streamSettings["realitySettings"] as? JsonObject
             val publicKey =
                 reality?.stringValue("publicKey")
-                    ?: return null
-            validateRealityPublicKey(publicKey)?.let { return null }
-            Security.Reality(
-                serverName = reality.stringValue("serverName")?.takeIf { it.isNotBlank() } ?: address,
-                publicKey = publicKey,
-                shortId = reality.stringValue("shortId").orEmpty(),
-                fingerprint = reality.stringValue("fingerprint")?.takeIf { it.isNotBlank() } ?: "chrome",
-                spiderX = reality.stringValue("spiderX")?.takeIf { it.isNotBlank() } ?: "/",
+                    ?: return SecurityParse.Bad(ParseFailureReason.InvalidRealityKey, "reality public key is invalid")
+            validateRealityPublicKey(publicKey)?.let {
+                return SecurityParse.Bad(ParseFailureReason.InvalidRealityKey, "reality public key is invalid")
+            }
+            SecurityParse.Ok(
+                Security.Reality(
+                    serverName = reality.stringValue("serverName")?.takeIf { it.isNotBlank() } ?: address,
+                    publicKey = publicKey,
+                    shortId = reality.stringValue("shortId").orEmpty(),
+                    fingerprint = reality.stringValue("fingerprint")?.takeIf { it.isNotBlank() } ?: "chrome",
+                    spiderX = reality.stringValue("spiderX")?.takeIf { it.isNotBlank() } ?: "/",
+                ),
             )
         }
 
         "tls" -> {
             val tls = streamSettings["tlsSettings"] as? JsonObject
-            Security.Tls(
-                serverName = tls?.stringValue("serverName")?.takeIf { it.isNotBlank() } ?: address,
-                fingerprint = tls?.stringValue("fingerprint")?.takeIf { it.isNotBlank() } ?: "chrome",
-                allowInsecure = tls?.booleanValue("allowInsecure") == true,
+            SecurityParse.Ok(
+                Security.Tls(
+                    serverName = tls?.stringValue("serverName")?.takeIf { it.isNotBlank() } ?: address,
+                    fingerprint = tls?.stringValue("fingerprint")?.takeIf { it.isNotBlank() } ?: "chrome",
+                    allowInsecure = tls?.booleanValue("allowInsecure") == true,
+                ),
             )
         }
 
-        else -> Security.None
+        "none" -> SecurityParse.Ok(Security.None)
+        else -> SecurityParse.Bad(ParseFailureReason.MalformedJson, "stream security is malformed")
     }
+}
+
+private sealed interface SecurityParse {
+    data class Ok(
+        val security: Security,
+    ) : SecurityParse
+
+    data class Bad(
+        val reason: ParseFailureReason,
+        val detail: String,
+    ) : SecurityParse
 }
 
 private fun bad(

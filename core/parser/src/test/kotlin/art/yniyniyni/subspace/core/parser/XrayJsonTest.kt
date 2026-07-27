@@ -9,6 +9,8 @@ import org.junit.Test
 
 private const val XJ_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
 private const val XJ_PBK = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+private const val SECOND_UUID = "70cc48c5-b2f4-4a1e-9f3d-1123456789ab"
+private const val THIRD_UUID = "70cc48c5-b2f4-4a1e-9f3d-2123456789ab"
 
 class XrayJsonTest {
     @Test
@@ -103,6 +105,72 @@ class XrayJsonTest {
         val tls = (outcome.profiles[1].outbound as VlessOutbound).stream
         tls.network shouldBe "tcp"
         tls.security shouldBe Security.Tls("tls.example", "chrome", false)
+    }
+
+    @Test
+    fun `unsupported or non-string security is a typed malformed failure`() {
+        listOf("\"bogus\"", "true", "123", "{}").forEach { security ->
+            val json =
+                validOutbound("security.example", security = "none")
+                    .replace("\"security\":\"none\"", "\"security\":$security")
+            val failure = parseXrayJson("{\"outbounds\":[$json]}").failures.single()
+
+            failure.index shouldBe 0
+            failure.reason shouldBe ParseFailureReason.MalformedJson
+            failure.detail shouldNotContain "bogus"
+        }
+    }
+
+    @Test
+    fun `parses every vnext destination and every user in order`() {
+        val json =
+            vlessOutboundJson(
+                vnext(
+                    "first.example",
+                    user(XJ_UUID, "xtls-rprx-vision") + "," + user(SECOND_UUID),
+                ) + "," + vnext("second.example", user(THIRD_UUID)),
+            )
+        val outcome = parseXrayJson("{\"outbounds\":[$json]}")
+
+        outcome.profiles.map { (it.outbound as VlessOutbound).address } shouldBe
+            listOf("first.example", "first.example", "second.example")
+        outcome.profiles.map { (it.outbound as VlessOutbound).uuid } shouldBe
+            listOf(XJ_UUID, SECOND_UUID, THIRD_UUID)
+        outcome.failures shouldBe emptyList()
+    }
+
+    @Test
+    fun `recovers after a bad vnext entry and reports its outbound index`() {
+        val json =
+            vlessOutboundJson(
+                vnext("before.example", user(XJ_UUID)) +
+                    ", {\"port\":443,\"users\":[${user(SECOND_UUID)}]}," +
+                    vnext("after.example", user(THIRD_UUID)),
+            )
+        val outcome = parseXrayJson("{\"outbounds\":[$json]}")
+
+        outcome.profiles.map { (it.outbound as VlessOutbound).address } shouldBe
+            listOf("before.example", "after.example")
+        outcome.failures.map { it.index } shouldBe listOf(0)
+        outcome.failures.single().reason shouldBe ParseFailureReason.MalformedJson
+    }
+
+    @Test
+    fun `missing or empty vnext and users are typed failures`() {
+        val missingVnext = "{\"protocol\":\"vless\",\"settings\":{}}"
+        val emptyVnext = "{\"protocol\":\"vless\",\"settings\":{\"vnext\":[]}}"
+        val missingUsers =
+            vlessOutboundJson("{\"address\":\"missing-users.example\",\"port\":443}")
+        val outcome = parseXrayJson("{\"outbounds\":[$missingVnext,$emptyVnext,$missingUsers]}")
+
+        outcome.profiles shouldBe emptyList()
+        outcome.failures.map { it.index } shouldBe listOf(0, 1, 2)
+        outcome.failures.map { it.reason } shouldBe
+            listOf(
+                ParseFailureReason.MalformedJson,
+                ParseFailureReason.MalformedJson,
+                ParseFailureReason.MissingCredential,
+            )
     }
 
     @Test
@@ -201,6 +269,22 @@ class XrayJsonTest {
                 if (input.isNotBlank()) failure.detail shouldNotContain input
             }
         }
+    }
+
+    private fun vlessOutboundJson(vnextEntries: String): String =
+        """{"protocol":"vless","settings":{"vnext":[$vnextEntries]},"streamSettings":{"security":"none"}}"""
+
+    private fun vnext(
+        address: String,
+        users: String,
+    ): String = """{"address":"$address","port":443,"users":[$users]}"""
+
+    private fun user(
+        uuid: String,
+        flow: String? = null,
+    ): String {
+        val flowField = flow?.let { ",\"flow\":\"$it\"" }.orEmpty()
+        return """{"id":"$uuid"$flowField}"""
     }
 
     @Suppress("LongParameterList")

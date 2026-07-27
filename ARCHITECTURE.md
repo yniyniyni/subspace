@@ -281,7 +281,7 @@ assuming a bug in this codebase, and check the Xray-core issue tracker.
 ### What actually parses, per container
 
 Five protocols across four containers reads as twenty combinations. It is
-eleven. The gaps are not bugs — nobody has written those branches — but they
+fourteen. The gaps are not bugs — nobody has written those branches — but they
 are load-bearing enough that guessing from the list above will mislead you:
 
 | | share link | base64 list | Clash YAML | raw Xray JSON |

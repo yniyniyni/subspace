@@ -12,7 +12,7 @@ private const val MATRIX_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
  * The protocol × container support matrix, as a test rather than a claim.
  *
  * ARCHITECTURE.md §7 lists five link protocols and four container shapes, which
- * reads as twenty working combinations. It is eleven. The gaps are not bugs —
+ * reads as twenty working combinations. It is fourteen. The gaps are not bugs —
  * nobody has written those branches — but §7 stated the capability
  * unqualified, so the table there and this test exist to keep the real shape
  * visible and to fail if a cell silently changes.

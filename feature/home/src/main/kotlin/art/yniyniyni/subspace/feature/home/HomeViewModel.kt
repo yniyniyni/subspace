@@ -7,6 +7,7 @@ import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.parser.SubscriptionParser
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** What the screen renders. */
@@ -88,8 +90,18 @@ internal class HomeViewModel @Inject constructor(
      *   when it has one (§5.6: already redacted, safe to surface — §10.4,
      *   it is the only diagnostic a user can hand back).
      */
-    private fun parseInput(raw: String): Profile? {
-        val outcome = SubscriptionParser.parse(raw)
+    private suspend fun parseInput(raw: String): Profile? {
+        // §5.3: the connect button must stay responsive. `viewModelScope` runs
+        // on Dispatchers.Main.immediate, so parsing here directly would do the
+        // whole pass on the UI thread — a SHA-256 plus regex validation per
+        // entry, and a YAML document parse per Clash entry, across a
+        // subscription that is routinely hundreds of entries long.
+        //
+        // Default, not IO: this is pure CPU work with no blocking call in it.
+        // IO's pool is sized for threads parked on syscalls, and putting
+        // compute there both misprices the thread and competes with the real
+        // blocking work §5.3 names (subscription fetch, libXray start/stop).
+        val outcome = withContext(Dispatchers.Default) { SubscriptionParser.parse(raw) }
         val profile = outcome.profiles.firstOrNull()
         if (profile == null) {
             inputError.value = R.string.error_unparseable

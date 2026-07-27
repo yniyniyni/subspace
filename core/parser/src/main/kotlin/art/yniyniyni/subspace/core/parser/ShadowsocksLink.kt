@@ -57,7 +57,7 @@ private fun parseShadowsocksLinkSafely(
     }
 
     val outbound = ShadowsocksOutbound(parts.host, parts.port, parts.method, parts.password)
-    val credential = identityMaterial(parts.method, parts.password)
+    val credential = shadowsocksIdentityMaterial(parts.method, parts.password)
     val id = profileId("ss", parts.host, parts.port, credential)
     return LinkResult.Ok(Profile(id, name.ifBlank { parts.host }, outbound))
 }
@@ -213,7 +213,16 @@ private fun isValidIpv4Tail(value: String): Boolean {
     return hasExpectedOctetCount && hasValidOctets
 }
 
-private fun identityMaterial(
+/**
+ * Length-prefixed so `method|password` cannot be split two ways — the profile
+ * id is a hash of it, and two different servers hashing alike would silently
+ * merge into one profile.
+ *
+ * Internal rather than private because ClashYaml builds Shadowsocks profiles
+ * too, and the same server expressed as an `ss://` link and as a Clash entry
+ * must land on the same id.
+ */
+internal fun shadowsocksIdentityMaterial(
     method: String,
     password: String,
 ): String = "${method.length}:$method|${password.length}:$password"

@@ -31,6 +31,38 @@ class ConnectionStateTest {
         failure(once.reason, once.detail).detail shouldBe once.detail
     }
 
+    /**
+     * The redaction in [failure] is only worth anything if it cannot be walked
+     * around. A public constructor or a public generated `copy()` would let
+     * `ConnectionState.Failed(reason, raw)` or
+     * `existing.copy(detail = raw)` produce an unredacted instance without ever
+     * calling [failure] — and [ConnectionState.Failed.detail] comes from
+     * `XrayException`, which quotes the config back (§5.6).
+     *
+     * Asserted by reflection rather than by a commented-out line, because the
+     * thing being checked is precisely that the alternative does not compile,
+     * and a test that does not compile is not a test.
+     */
+    @Test
+    fun `Failed cannot be constructed or copied around redaction`() {
+        val type = ConnectionState.Failed::class.java
+
+        // Synthetic members are excluded because they are exactly what makes
+        // this work: Kotlin emits a public ACC_SYNTHETIC constructor taking a
+        // DefaultConstructorMarker as the bridge the companion uses to reach
+        // the private one. It is unnameable from Kotlin source, so it closes
+        // nothing and asserting on it would only assert the compiler's
+        // internals.
+        type.declaredConstructors
+            .filterNot { it.isSynthetic }
+            .none { java.lang.reflect.Modifier.isPublic(it.modifiers) } shouldBe true
+
+        type.declaredMethods
+            .filter { it.name.startsWith("copy") }
+            .filterNot { it.isSynthetic }
+            .none { java.lang.reflect.Modifier.isPublic(it.modifiers) } shouldBe true
+    }
+
     @Test
     fun `every startup stage is distinct`() {
         // The stage is the only diagnostic available when §5.6 forbids logging

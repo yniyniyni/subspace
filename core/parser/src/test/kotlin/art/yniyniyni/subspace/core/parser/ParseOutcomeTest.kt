@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.parser
 
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
@@ -33,6 +34,22 @@ class ParseOutcomeTest {
         val a = ParseOutcome(profiles = emptyList(), failures = listOf(failure))
         val b = ParseOutcome.EMPTY
         (a + b).failures.size shouldBe 1
+    }
+
+    @Test
+    fun `profile ids distinguish credentials with colliding string hashes`() {
+        val first = profileId("socks", "host.example", 1080, "Aa")
+        val second = profileId("socks", "host.example", 1080, "BB")
+
+        first shouldNotBe second
+    }
+
+    @Test
+    fun `profile ids are stable for identical input`() {
+        val first = profileId("socks", "host.example", 1080, "secret")
+        val second = profileId("socks", "host.example", 1080, "secret")
+
+        first shouldBe second
     }
 
     // No runtime test pins "ParseFailure's constructor and copy() are private"

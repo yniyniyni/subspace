@@ -3,9 +3,10 @@ package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.redact
+import java.security.MessageDigest
 
-private const val PROFILE_ID_RADIX = 16
-private const val PROFILE_ID_WIDTH = 8
+private const val BYTE_MASK = 0xff
+private const val HEX_RADIX = 16
 
 internal sealed interface LinkResult {
     data class Ok(
@@ -36,6 +37,7 @@ public data class ParseOutcome(
 public operator fun ParseOutcome.plus(other: ParseOutcome): ParseOutcome =
     ParseOutcome(profiles + other.profiles, failures + other.failures)
 
+/** Builds a deterministic lowercase SHA-256 ID from the protocol identity material. */
 internal fun profileId(
     discriminant: String,
     address: String,
@@ -43,11 +45,10 @@ internal fun profileId(
     credential: String,
 ): String {
     val material = "$discriminant|$address|$port|$credential"
-    return material
-        .hashCode()
-        .toUInt()
-        .toString(PROFILE_ID_RADIX)
-        .padStart(PROFILE_ID_WIDTH, '0')
+    val digest = MessageDigest.getInstance("SHA-256").digest(material.toByteArray(Charsets.UTF_8))
+    return digest.joinToString(separator = "") { byte ->
+        (byte.toInt() and BYTE_MASK).toString(HEX_RADIX).padStart(2, '0')
+    }
 }
 
 /**

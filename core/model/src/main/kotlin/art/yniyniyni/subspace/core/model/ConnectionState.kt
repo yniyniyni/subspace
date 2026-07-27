@@ -56,6 +56,15 @@ public enum class FailureReason {
     TunEstablishFailed,
     TunnelStartFailed,
     Revoked,
+
+    /**
+     * The profile parsed cleanly but names a protocol `:core:xray` cannot emit
+     * yet. M2 added five protocols to the model; the generator still writes only
+     * VLESS. Distinct from ConfigGenerationFailed because the user can act on it
+     * — pick a different server — and a generic config error would send them
+     * looking for a bug that is not there.
+     */
+    ProtocolNotSupported,
 }
 
 /**

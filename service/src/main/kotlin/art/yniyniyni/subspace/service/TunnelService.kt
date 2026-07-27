@@ -13,8 +13,8 @@ import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
-import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.failure
+import art.yniyniyni.subspace.core.xray.ConfigResult
 import art.yniyniyni.subspace.core.xray.SocketProtector
 import art.yniyniyni.subspace.core.xray.TunnelSettings
 import art.yniyniyni.subspace.core.xray.XrayConfigGenerator
@@ -206,15 +206,25 @@ class TunnelService : VpnService() {
             }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
-        val outbound =
-            profile.outbound as? VlessOutbound ?: run {
-                publishIfCurrent(gen, failure(FailureReason.ConfigGenerationFailed, "protocol not supported yet"))
-                return null
-            }
         val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true)
+        // §10.4/failStart's cleanup applies here too, not just to the try/catch
+        // below: an early return that only published a state (skipping
+        // stopForeground/stopSelf/controller = null) would leave a stuck
+        // "Connecting" notification, same as every other branch in this function.
+        val json =
+            when (val config = XrayConfigGenerator.generate(profile, settings)) {
+                is ConfigResult.Unsupported ->
+                    return failStart(
+                        gen,
+                        FailureReason.ProtocolNotSupported,
+                        IllegalArgumentException("${config.protocol} is not supported yet"),
+                    )
+
+                is ConfigResult.Ok -> config.json
+            }
         val file =
             try {
-                writeConfig(XrayConfigGenerator.generate(outbound, settings))
+                writeConfig(json)
             } catch (e: java.io.IOException) {
                 return failStart(gen, FailureReason.ConfigGenerationFailed, e)
             }

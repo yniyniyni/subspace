@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.xray
 
 import androidx.test.platform.app.InstrumentationRegistry
+import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
@@ -74,8 +75,10 @@ class XrayControllerTest {
                     dnsServer = "1.1.1.1",
                     enableSniffing = true,
                 )
-            val json = XrayConfigGenerator.generate(outbound, settings)
-            val configFile = File(cacheDir, "instr-valid.json").apply { writeText(json) }
+            val profile = Profile(id = "id", name = "n", outbound = outbound)
+            val result = XrayConfigGenerator.generate(profile, settings)
+            check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            val configFile = File(cacheDir, "instr-valid.json").apply { writeText(result.json) }
 
             controller.validate(configFile)
             configFile.delete()

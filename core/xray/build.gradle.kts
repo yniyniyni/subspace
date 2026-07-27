@@ -21,7 +21,11 @@ if (!libXrayAar.exists()) {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:parser"))
     implementation(group = "", name = "libxray", ext = "aar")
     // §5.3: every libXray call is slow and runs on Dispatchers.IO.
     implementation(libs.kotlinx.coroutines.core)
+    // ShareLinkFallbackTest uses kotest matchers; the convention plugin only
+    // wires kotest-assertions into testImplementation, not androidTestImplementation.
+    androidTestImplementation(libs.kotest.assertions)
 }

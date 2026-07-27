@@ -290,6 +290,12 @@ Requirements:
 - This module is the one place where near-100% unit coverage is achievable
   and expected.
 
+A second opinion is available for lines `:core:parser` cannot read:
+`ShareLinkFallback` in `:core:xray` retries **failed lines only** through
+libXray's `convertShareLinksToXrayJson` and reparses the resulting Xray JSON.
+It lives there rather than in `:core:parser` because it needs the AAR, and §4
+requires the parser to stay pure JVM so its tests run without a device.
+
 ---
 
 ## 8. Per-app proxy

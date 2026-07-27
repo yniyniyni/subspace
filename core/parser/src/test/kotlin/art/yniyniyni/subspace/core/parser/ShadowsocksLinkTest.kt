@@ -109,6 +109,9 @@ class ShadowsocksLinkTest {
                 "[2001:db8::1:8388",
                 "[2001:db8::1]",
                 "[2001:db8::1]:8388:999",
+                "[hostname]:8388",
+                "[2001:db8]:8388",
+                "[2001:db8::zz]:8388",
             )
 
         authorities.forEach { authority ->

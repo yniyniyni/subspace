@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+@file:Suppress("TooManyFunctions")
+
 package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
+
+private const val IPV6_GROUP_COUNT = 8
+private const val IPV4_TAIL_GROUP_COUNT = 2
+private const val MAX_HEXTET_LENGTH = 4
+private const val IPV4_OCTET_COUNT = 4
+private const val MAX_IPV4_OCTET = 255
 
 /** Parses SIP002 and legacy `ss://` share links without throwing. */
 @Suppress("ReturnCount")
@@ -98,10 +106,12 @@ private fun parseAuthority(authority: String): SsAuthorityParts? {
     if (authority.startsWith('[')) {
         val close = authority.indexOf(']')
         if (close <= 1) return null
+        val host = authority.substring(1, close)
+        if (!isValidIpv6Literal(host)) return null
         val suffix = authority.substring(close + 1)
         if (!suffix.startsWith(':') || suffix.length == 1) return null
         val port = parsePortText(suffix.substring(1)) ?: return null
-        return SsAuthorityParts(authority.substring(1, close), port)
+        return SsAuthorityParts(host, port)
     }
     if (authority.contains('[') || authority.contains(']')) return null
     if (authority.count { it == ':' } != 1) return null
@@ -115,6 +125,51 @@ private fun parseAuthority(authority: String): SsAuthorityParts? {
 private fun parsePortText(text: String): Int? {
     val value = text.toLongOrNull() ?: return null
     return if (value in Int.MIN_VALUE..Int.MAX_VALUE) value.toInt() else Int.MIN_VALUE
+}
+
+@Suppress("CyclomaticComplexMethod", "ReturnCount")
+private fun isValidIpv6Literal(value: String): Boolean {
+    if (value.isEmpty() || value.contains('%')) return false
+    val compression = value.indexOf("::")
+    if (compression >= 0 && value.indexOf("::", compression + 2) >= 0) return false
+
+    val groups =
+        if (compression >= 0) {
+            val left = value.substring(0, compression)
+            val right = value.substring(compression + 2)
+            val leftGroups = if (left.isEmpty()) emptyList() else left.split(':', limit = Int.MAX_VALUE)
+            val rightGroups = if (right.isEmpty()) emptyList() else right.split(':', limit = Int.MAX_VALUE)
+            leftGroups + rightGroups
+        } else {
+            value.split(':', limit = Int.MAX_VALUE)
+        }
+    if (groups.isEmpty() && compression < 0) return false
+    if (groups.any { it.contains('.') } && groups.lastOrNull()?.contains('.') != true) return false
+
+    val groupCount = groups.sumOf { if (it.contains('.')) IPV4_TAIL_GROUP_COUNT else 1 }
+    return if (compression >= 0) {
+        groupCount < IPV6_GROUP_COUNT && groups.all(::isValidIpv6Group)
+    } else {
+        groupCount == IPV6_GROUP_COUNT && groups.all(::isValidIpv6Group)
+    }
+}
+
+private fun isValidIpv6Group(group: String): Boolean {
+    if (group.contains('.')) return isValidIpv4Tail(group)
+    return group.length in 1..MAX_HEXTET_LENGTH &&
+        group.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }
+}
+
+private fun isValidIpv4Tail(value: String): Boolean {
+    val octets = value.split('.', limit = Int.MAX_VALUE)
+    val hasExpectedOctetCount = octets.size == IPV4_OCTET_COUNT
+    val hasValidOctets =
+        octets.all { octet ->
+            octet.isNotEmpty() &&
+                octet.all { it in '0'..'9' } &&
+                octet.toIntOrNull()?.let { it in 0..MAX_IPV4_OCTET } == true
+        }
+    return hasExpectedOctetCount && hasValidOctets
 }
 
 private fun identityMaterial(

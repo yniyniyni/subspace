@@ -112,12 +112,52 @@ class ShadowsocksLinkTest {
                 "[hostname]:8388",
                 "[2001:db8]:8388",
                 "[2001:db8::zz]:8388",
+                "[1.2.3.4:5.6.7.8::]:8388",
             )
 
         authorities.forEach { authority ->
             val result = parseShadowsocksLink("ss://$credentials@$authority", 0) as LinkResult.Bad
             result.failure.reason shouldBe ParseFailureReason.MalformedBase64
         }
+    }
+
+    @Test
+    fun `accepts a Unicode non bracketed hostname`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val result = parseShadowsocksLink("ss://$credentials@сервер.example:8388", 0) as LinkResult.Ok
+
+        (result.profile.outbound as ShadowsocksOutbound).address shouldBe "сервер.example"
+    }
+
+    @Test
+    fun `rejects hostile non bracketed host tokens`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val authorities =
+            listOf(
+                "host/name:8388",
+                "host?name:8388",
+                "host#name:8388",
+                "host name:8388",
+                "host\tname:8388",
+                "host\u0000name:8388",
+            )
+
+        authorities.forEach { authority ->
+            val result = parseShadowsocksLink("ss://$credentials@$authority", 0) as LinkResult.Bad
+            result.failure.reason shouldBe ParseFailureReason.MalformedBase64
+        }
+    }
+
+    @Test
+    fun `accepts a final IPv4 tail in bracketed IPv6`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+
+        val result =
+            parseShadowsocksLink("ss://$credentials@[::ffff:192.0.2.1]:8388", 0) as LinkResult.Ok
+
+        val outbound = result.profile.outbound as ShadowsocksOutbound
+        outbound.address shouldBe "::ffff:192.0.2.1"
+        outbound.port shouldBe 8388
     }
 
     @Test
@@ -164,10 +204,22 @@ class ShadowsocksLinkTest {
     @Test
     fun `arbitrary malformed input never throws and is redacted`() {
         shouldNotThrowAny {
-            val result = parseShadowsocksLink("ss://not-base64@\u0000:99999#https://secret.example/x", 8)
-            result.shouldBeInstanceOf<LinkResult.Bad>()
-            result.failure.reason shouldBe ParseFailureReason.MalformedBase64
-            result.failure.detail shouldNotContain "secret.example"
+            val malformed =
+                listOf(
+                    "ss://not-base64@\u0000:99999#https://secret.example/x",
+                    "ss://not-base64@[2001:db8::zz]:8388",
+                    "ss://not-base64@[2001:db8::1:8388",
+                    "ss://not-base64@secret.example:999999999999",
+                    "ss://method:credential@secret.example:8388",
+                    "ss://method/credential?secret@secret.example:8388",
+                )
+
+            malformed.forEach { input ->
+                val result = parseShadowsocksLink(input, 8)
+                result.shouldBeInstanceOf<LinkResult.Bad>()
+                result.failure.detail shouldNotContain "secret.example"
+                result.failure.detail shouldNotContain "credential"
+            }
         }
     }
 }

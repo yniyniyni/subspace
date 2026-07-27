@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 
 private const val IPV6_GROUP_COUNT = 8
 private const val IPV4_TAIL_GROUP_COUNT = 2
+private const val MAX_IPV4_TAIL_COUNT = 1
 private const val MAX_HEXTET_LENGTH = 4
 private const val IPV4_OCTET_COUNT = 4
 private const val MAX_IPV4_OCTET = 255
@@ -117,10 +118,23 @@ private fun parseAuthority(authority: String): SsAuthorityParts? {
     if (authority.count { it == ':' } != 1) return null
     val separator = authority.indexOf(':')
     val host = authority.substring(0, separator)
-    if (host.isEmpty()) return null
+    if (!isValidHostToken(host)) return null
     val port = parsePortText(authority.substring(separator + 1)) ?: return null
     return SsAuthorityParts(host, port)
 }
+
+private fun isValidHostToken(host: String): Boolean =
+    host.isNotEmpty() &&
+        host.none { character ->
+            character == '/' ||
+                character == '?' ||
+                character == '#' ||
+                character == '@' ||
+                character == '[' ||
+                character == ']' ||
+                character.isWhitespace() ||
+                character.isISOControl()
+        }
 
 private fun parsePortText(text: String): Int? {
     val value = text.toLongOrNull() ?: return null
@@ -144,7 +158,12 @@ private fun isValidIpv6Literal(value: String): Boolean {
             value.split(':', limit = Int.MAX_VALUE)
         }
     if (groups.isEmpty() && compression < 0) return false
-    if (groups.any { it.contains('.') } && groups.lastOrNull()?.contains('.') != true) return false
+    val ipv4GroupCount = groups.count { it.contains('.') }
+    if (ipv4GroupCount > MAX_IPV4_TAIL_COUNT ||
+        (ipv4GroupCount == MAX_IPV4_TAIL_COUNT && groups.lastOrNull()?.contains('.') != true)
+    ) {
+        return false
+    }
 
     val groupCount = groups.sumOf { if (it.contains('.')) IPV4_TAIL_GROUP_COUNT else 1 }
     return if (compression >= 0) {

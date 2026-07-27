@@ -29,6 +29,12 @@ internal fun parseXrayJson(text: String): ParseOutcome {
             )
 
     val outbounds = root["outbounds"] as? JsonArray ?: return ParseOutcome.EMPTY
+    // The root label, not an outbound field. `tag` is a routing identifier that
+    // exporters set to "proxy" essentially always, so it makes a poor name;
+    // `remarks` is where a client writes the share link's `#fragment` back out.
+    // A config with several vless outbounds therefore names them all alike —
+    // acceptable because profile identity is content-derived, not name-derived.
+    val remarks = root.stringValue("remarks")?.takeIf { it.isNotBlank() }
     val profiles = mutableListOf<Profile>()
     val failures = mutableListOf<ParseFailure>()
 
@@ -45,7 +51,7 @@ internal fun parseXrayJson(text: String): ParseOutcome {
                             parseFailure(index, ParseFailureReason.UnknownScheme, "outbound protocol is not supported")
 
                     "vless" ->
-                        parseVlessOutbound(outbound, index).forEach { result ->
+                        parseVlessOutbound(outbound, index, remarks).forEach { result ->
                             when (result) {
                                 is LinkResult.Ok -> profiles += result.profile
                                 is LinkResult.Bad -> failures += result.failure
@@ -71,6 +77,7 @@ internal fun parseXrayJson(text: String): ParseOutcome {
 private fun parseVlessOutbound(
     outbound: JsonObject,
     index: Int,
+    remarks: String?,
 ): List<LinkResult> {
     val settings = outbound["settings"] as? JsonObject
     val vnext =
@@ -86,7 +93,7 @@ private fun parseVlessOutbound(
                 ?: return@flatMap listOf(
                     bad(index, ParseFailureReason.MalformedJson, "vless destination is not an object"),
                 )
-        parseVlessDestination(outbound, vnextObject, index)
+        parseVlessDestination(outbound, vnextObject, index, remarks)
     }
 }
 
@@ -95,6 +102,7 @@ private fun parseVlessDestination(
     outbound: JsonObject,
     vnext: JsonObject,
     index: Int,
+    remarks: String?,
 ): List<LinkResult> {
     val address =
         vnext.stringValue("address")?.takeIf { it.isNotBlank() }
@@ -113,7 +121,7 @@ private fun parseVlessDestination(
 
     val streamSettings = outbound["streamSettings"] as? JsonObject
     val network = streamSettings?.stringValue("network")?.takeIf { it.isNotBlank() } ?: "tcp"
-    val name = outbound.stringValue("tag")?.takeIf { it.isNotBlank() } ?: address
+    val name = remarks ?: outbound.stringValue("tag")?.takeIf { it.isNotBlank() } ?: address
     return when (val parsedSecurity = parseSecurity(streamSettings, address)) {
         is SecurityParse.Bad -> users.map { bad(index, parsedSecurity.reason, parsedSecurity.detail) }
         is SecurityParse.Ok ->

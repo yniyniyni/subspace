@@ -182,6 +182,45 @@ class XrayJsonTest {
         (profile.outbound as VlessOutbound).flow shouldBe null
     }
 
+    /**
+     * `tag` is a routing identifier, not a label: exporters emit `"proxy"` for
+     * it essentially always, so trusting it names every raw config "proxy". The
+     * human-facing label lives in the root `remarks`, which is where the share
+     * link's `#fragment` ends up when a client writes a config out.
+     */
+    @Test
+    fun `root remarks names the profile instead of the outbound tag`() {
+        val json = realityConfig.replace("\"outbounds\"", "\"remarks\":\"Helsinki\",\"outbounds\"")
+        parseXrayJson(json).profiles.single().name shouldBe "Helsinki"
+    }
+
+    @Test
+    fun `blank or non-string remarks falls back to the tag`() {
+        val blank = realityConfig.replace("\"outbounds\"", "\"remarks\":\" \",\"outbounds\"")
+        val number = realityConfig.replace("\"outbounds\"", "\"remarks\":7,\"outbounds\"")
+
+        parseXrayJson(blank).profiles.single().name shouldBe "proxy"
+        parseXrayJson(number).profiles.single().name shouldBe "proxy"
+    }
+
+    /**
+     * The shape a desktop client actually exports: `remarks` carrying non-ASCII
+     * text, `\/` escapes throughout, `mux`/`dns`/`routing`/`inbounds` around the
+     * part we read, and the proxy outbound tagged `proxy`.
+     */
+    @Test
+    fun `parses an exported client config with remarks and escaped solidi`() {
+        val outcome = parseXrayJson(exportedClientConfig)
+        outcome.failures shouldBe emptyList()
+        val profile = outcome.profiles.single()
+
+        profile.name shouldBe "🇫🇮 Helsinki"
+        val out = profile.outbound as VlessOutbound
+        out.address shouldBe "host.example"
+        out.flow shouldBe "xtls-rprx-vision"
+        (out.stream.security as Security.Reality).fingerprint shouldBe "firefox"
+    }
+
     @Test
     fun `null and boolean required primitives fail without coercion`() {
         val addressNull = validOutbound("ignored").replace("\"address\":\"ignored\"", "\"address\":null")
@@ -332,6 +371,56 @@ class XrayJsonTest {
             { "tag": "direct", "protocol": "freedom" },
             { "tag": "block", "protocol": "blackhole" }
           ]
+        }
+        """.trimIndent()
+
+    private val exportedClientConfig =
+        """
+        {
+          "dns" : { "queryStrategy" : "UseIP", "servers" : [ "https:\/\/8.8.8.8\/dns-query" ] },
+          "inbounds" : [
+            { "listen" : "127.0.0.1", "port" : 10808, "protocol" : "socks", "tag" : "socks" }
+          ],
+          "log" : { "access" : "\/var\/log\/Xray\/access.log", "loglevel" : "Info" },
+          "outbounds" : [
+            {
+              "mux" : { "concurrency" : -1, "enabled" : false },
+              "protocol" : "vless",
+              "settings" : {
+                "vnext" : [
+                  {
+                    "address" : "host.example",
+                    "port" : 443,
+                    "users" : [
+                      { "encryption" : "none", "flow" : "xtls-rprx-vision",
+                        "id" : "$XJ_UUID", "level" : 8 }
+                    ]
+                  }
+                ]
+              },
+              "streamSettings" : {
+                "network" : "tcp",
+                "realitySettings" : {
+                  "allowInsecure" : false, "fingerprint" : "firefox",
+                  "publicKey" : "$XJ_PBK", "serverName" : "storage.example",
+                  "shortId" : "b0c58c398abb6842", "show" : false
+                },
+                "security" : "reality",
+                "tcpSettings" : { "header" : { "type" : "none" } }
+              },
+              "tag" : "proxy"
+            },
+            { "protocol" : "freedom", "settings" : { "domainStrategy" : "UseIP" }, "tag" : "direct" },
+            { "protocol" : "blackhole", "settings" : { "response" : { "type" : "http" } }, "tag" : "block" }
+          ],
+          "remarks" : "🇫🇮 Helsinki",
+          "routing" : {
+            "domainStrategy" : "IPIfNonMatch",
+            "rules" : [
+              { "network" : "udp", "outboundTag" : "block", "port" : "443", "type" : "field" },
+              { "domain" : [ "geosite:category-ru" ], "outboundTag" : "direct", "type" : "field" }
+            ]
+          }
         }
         """.trimIndent()
 }

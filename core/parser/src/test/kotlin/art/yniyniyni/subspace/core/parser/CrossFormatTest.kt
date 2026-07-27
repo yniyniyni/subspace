@@ -35,6 +35,16 @@ class CrossFormatTest {
         fromBlob.outbound shouldBe fromLink.outbound
     }
 
+    /**
+     * Full outbound equality, not a field-by-field subset.
+     *
+     * The subset version asserted address, port and password while both
+     * fixtures also set `sni` — so a transport or security field dropped on one
+     * path only was exactly what this test was meant to catch and exactly what
+     * it could not see. Comparing the whole outbound also means a field added
+     * to the model in a later milestone is covered here the day it lands,
+     * rather than the day someone remembers to extend the list.
+     */
     @Test
     fun `link and clash agree on the outbound`() {
         val fromLink =
@@ -50,9 +60,7 @@ class CrossFormatTest {
                 .single()
                 .outbound as TrojanOutbound
 
-        fromClash.address shouldBe fromLink.address
-        fromClash.port shouldBe fromLink.port
-        fromClash.password shouldBe fromLink.password
+        fromClash shouldBe fromLink
     }
 
     @Test

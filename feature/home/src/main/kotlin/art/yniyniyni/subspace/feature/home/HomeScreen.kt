@@ -167,4 +167,5 @@ private fun FailureReason.labelRes(): Int =
         FailureReason.TunnelStartFailed -> R.string.failure_tunnel_start
         FailureReason.Revoked -> R.string.failure_revoked
         FailureReason.ProtocolNotSupported -> R.string.failure_protocol_not_supported
+        FailureReason.ProfileDecodeFailed -> R.string.failure_profile_decode
     }

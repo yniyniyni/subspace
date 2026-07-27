@@ -108,22 +108,43 @@ public class ProfileParcel(
     /** Deliberately prints no field values — see the §5.6 note on the class. */
     override fun toString(): String = "ProfileParcel(id=$id)"
 
-    fun toProfile(): Profile {
-        val stream = StreamSettings(network = network, security = security())
-        val out = outbound(stream)
+    /**
+     * Rebuilds the [Profile], or `null` if this parcel carries a discriminant
+     * this process cannot name.
+     *
+     * Nullable rather than degrading to a default. [ConnectionStateParcel]'s
+     * unknown `kind` degrades to `Disconnected` because the worst case there is
+     * a UI showing a state that is merely wrong. Here the worst case is a
+     * *tunnel*: an unknown security kind read as [Security.None] silently
+     * strips REALITY and produces a connection in the clear that looks to the
+     * user exactly like a dead server, and an unknown protocol read as VLESS
+     * dials the wrong protocol at a real address. §10.4's rule applies —
+     * fail loudly and specifically rather than connect to something the user
+     * did not choose.
+     *
+     * Both branches are currently unreachable: the same APK writes and reads
+     * this parcel and it is never persisted. This is defensive, and cheap
+     * because of it.
+     */
+    fun toProfile(): Profile? {
+        val security = security() ?: return null
+        val stream = StreamSettings(network = network, security = security)
+        val out = outbound(stream) ?: return null
         return Profile(id = id, name = name, outbound = out)
     }
 
-    /**
-     * Rebuilds the right [Outbound] from [protocol].
-     *
-     * An unknown discriminant degrades to a VLESS outbound built from whatever
-     * is present rather than throwing: this class sits on an IPC boundary, and
-     * a value the receiving process cannot name must not take it down — the
-     * same rule [ConnectionStateParcel.toState] already follows for `kind`.
-     */
-    private fun outbound(stream: StreamSettings): Outbound =
+    /** Rebuilds the right [Outbound] from [protocol], or null if it names none. */
+    private fun outbound(stream: StreamSettings): Outbound? =
         when (protocol) {
+            PROTOCOL_VLESS ->
+                VlessOutbound(
+                    address = address,
+                    port = port,
+                    uuid = uuid,
+                    flow = flow,
+                    stream = stream,
+                )
+
             PROTOCOL_VMESS ->
                 VmessOutbound(
                     address = address,
@@ -158,18 +179,14 @@ public class ProfileParcel(
                     password = credential2.ifEmpty { null },
                 )
 
-            else ->
-                VlessOutbound(
-                    address = address,
-                    port = port,
-                    uuid = uuid,
-                    flow = flow,
-                    stream = stream,
-                )
+            else -> null
         }
 
-    private fun security(): Security =
+    /** Rebuilds the [Security], or null if [securityKind] names none. */
+    private fun security(): Security? =
         when (securityKind) {
+            SECURITY_NONE -> Security.None
+
             SECURITY_REALITY ->
                 Security.Reality(
                     serverName = serverName,
@@ -186,7 +203,7 @@ public class ProfileParcel(
                     allowInsecure = allowInsecure,
                 )
 
-            else -> Security.None
+            else -> null
         }
 
     companion object {

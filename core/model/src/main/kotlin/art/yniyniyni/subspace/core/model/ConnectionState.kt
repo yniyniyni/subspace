@@ -95,6 +95,18 @@ public enum class FailureReason {
      * looking for a bug that is not there.
      */
     ProtocolNotSupported,
+
+    /**
+     * The service was handed a profile it could not decode — a protocol or
+     * security discriminant it has no name for.
+     *
+     * Distinct from [ProtocolNotSupported], which means the profile decoded
+     * fine and names a protocol the generator cannot emit yet. This one means
+     * the bytes themselves were unreadable, so nothing is known about the
+     * server at all. Refusing is the point: guessing a default would connect
+     * to something other than what the user chose.
+     */
+    ProfileDecodeFailed,
 }
 
 /**

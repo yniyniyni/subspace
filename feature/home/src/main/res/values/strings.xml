@@ -27,6 +27,7 @@
     <string name="failure_tunnel_start">The tunnel failed to start</string>
     <string name="failure_revoked">VPN permission was revoked</string>
     <string name="failure_protocol_not_supported">This protocol is not supported yet</string>
+    <string name="failure_profile_decode">This profile could not be read</string>
 
     <string name="error_unparseable">Could not parse this as a link, subscription, or config</string>
 </resources>

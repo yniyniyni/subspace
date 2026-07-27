@@ -478,7 +478,24 @@ class TunnelService : VpnService() {
     private val binder =
         object : ITunnelService.Stub() {
             override fun connect(profile: ProfileParcel) {
-                startTunnel(profile.toProfile())
+                // §10.4: fail loudly and specifically. A parcel carrying a
+                // discriminant this process cannot name decodes to null rather
+                // than to a plausible default — see ProfileParcel.toProfile.
+                // Connecting on a guess would dial the wrong protocol, or drop
+                // REALITY and go out in the clear, at a real address.
+                val decoded = profile.toProfile()
+                if (decoded == null) {
+                    Log.e(TAG, "connect refused: profile parcel carries an unknown discriminant")
+                    publish(
+                        failure(
+                            FailureReason.ProfileDecodeFailed,
+                            "profile could not be decoded",
+                        ),
+                    )
+                    stopSelf()
+                    return
+                }
+                startTunnel(decoded)
             }
 
             override fun disconnect() {

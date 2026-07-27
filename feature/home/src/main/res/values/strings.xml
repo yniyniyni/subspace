@@ -3,7 +3,7 @@
      §5.6: no string here may interpolate a server address, uuid, or key. -->
 <resources>
     <string name="home_title">Subspace</string>
-    <string name="home_input_label">vless:// link or Xray JSON config</string>
+    <string name="home_input_label">Share link, subscription, Clash YAML, or Xray JSON</string>
     <string name="home_connect">Connect</string>
     <string name="home_disconnect">Disconnect</string>
 

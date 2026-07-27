@@ -158,7 +158,7 @@ private fun isHexDigit(character: Char): Boolean =
 private fun parsePortText(text: String): Int? {
     if (text.isEmpty() || text.any { it !in '0'..'9' }) return null
     val value = text.toLongOrNull() ?: return null
-    return if (value in Int.MIN_VALUE..Int.MAX_VALUE) value.toInt() else Int.MIN_VALUE
+    return if (value in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) value.toInt() else Int.MIN_VALUE
 }
 
 @Suppress("CyclomaticComplexMethod", "ReturnCount")

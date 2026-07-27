@@ -59,6 +59,28 @@ class NeverThrowsTest {
         }
     }
 
+    /**
+     * The other half of §7's promise, over the same corpus: an outcome must
+     * always *say something*.
+     *
+     * `HomeViewModel` renders the generic "could not parse" message plus the
+     * first failure's detail. With both lists empty the user gets the generic
+     * message and no reason at all — §10.4's point being that the redacted
+     * detail is the only diagnostic they can hand back. Not throwing while
+     * returning nothing is a quieter version of the same failure.
+     */
+    @Test
+    fun `never returns both an empty profile list and an empty failure list`() {
+        nasty.forEach { input ->
+            withClue("input: ${input.take(32)}") {
+                val outcome = SubscriptionParser.parse(input)
+                if (outcome.profiles.isEmpty()) {
+                    outcome.failures.isEmpty() shouldBe false
+                }
+            }
+        }
+    }
+
     @Test
     fun `never throws on random bytes`() {
         // Fixed seed: a fuzz test that cannot be reproduced is a flake

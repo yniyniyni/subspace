@@ -124,5 +124,12 @@ public enum class ParseFailureReason {
     MalformedBase64,
     MalformedJson,
     MalformedYaml,
+
+    /**
+     * Nothing to take from the input: either it was blank, or it was a
+     * well-formed container that held no server entries — `{}`, an `outbounds`
+     * array with nothing supported in it, or a Clash file whose `proxies:` is
+     * absent, null or empty. See the invariant on [SubscriptionParser.parse].
+     */
     EmptyInput,
 }

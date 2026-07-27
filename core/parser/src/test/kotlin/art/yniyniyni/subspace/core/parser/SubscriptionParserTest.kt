@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.parser
 
+import io.kotest.assertions.withClue
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.Test
 import java.util.Base64
@@ -125,5 +128,40 @@ class SubscriptionParserTest {
     fun `a plain multi-line link list is still parsed as links`() {
         val list = "vless://$SUB_UUID@a.example:443\ntrojan://pw@b.example:443"
         SubscriptionParser.parse(list).profiles.size shouldBe 2
+    }
+
+    /**
+     * §10.4: the redacted failure detail is the only diagnostic a user can hand
+     * back, and `HomeViewModel` shows the generic "could not parse" message with
+     * *no* detail when `failures` is empty. Every container shape below is
+     * recognised, well-formed, and simply holds nothing — the individual format
+     * parsers are each locally right to return no failure, so the invariant is
+     * enforced once in [SubscriptionParser.parse] instead.
+     */
+    @Test
+    fun `a container that yields nothing still reports a failure`() {
+        val emptyContainers =
+            listOf(
+                "{}",
+                """{"foo":1}""",
+                """{"outbounds":[]}""",
+                "proxies:",
+                "proxies: null",
+                "proxies: []",
+            )
+
+        emptyContainers.forEach { input ->
+            withClue("input: $input") {
+                val outcome = SubscriptionParser.parse(input)
+                outcome.profiles.shouldBeEmpty()
+                outcome.failures.shouldNotBeEmpty()
+            }
+        }
+    }
+
+    @Test
+    fun `an empty container names the reason rather than saying nothing`() {
+        val outcome = SubscriptionParser.parse("{}")
+        outcome.failures.single().reason shouldBe ParseFailureReason.EmptyInput
     }
 }

@@ -21,8 +21,36 @@ public object SubscriptionParser {
     /**
      * @return profiles and failures together. 197 profiles and 3 failures is a
      *   normal outcome, not an error state.
+     *
+     * **Invariant: `profiles.isEmpty()` implies `failures.isNotEmpty()`.** An
+     * outcome always says something. §10.4: the redacted failure detail is the
+     * only diagnostic a user can hand back, and the UI shows the generic
+     * "could not parse" message with no reason at all when there is no failure
+     * to draw one from.
+     *
+     * Enforced here rather than in each format parser. `{}`, `{"foo":1}`, and a
+     * Clash file whose `proxies:` is absent, null or empty are each a
+     * well-formed container holding nothing, and each format parser is locally
+     * right to report no failure for them — nothing *failed*. It is only at
+     * this level, where the whole call must produce an answer, that the empty
+     * result becomes something to report. One place, so a fifth container shape
+     * inherits the invariant for free.
      */
-    public fun parse(raw: String): ParseOutcome = parse(raw, depth = 0)
+    public fun parse(raw: String): ParseOutcome {
+        val outcome = parse(raw, depth = 0)
+        if (outcome.profiles.isNotEmpty() || outcome.failures.isNotEmpty()) return outcome
+
+        // EmptyInput rather than a new constant: from the caller's side this is
+        // the same answer as a blank paste — the input yielded no entries — and
+        // the detail carries what distinguishes them. Deliberately says nothing
+        // about *which* container it was: that is already ambiguous here (the
+        // input may have been base64 that decoded into one), and guessing would
+        // point the user at the wrong format (§10.4).
+        return ParseOutcome(
+            emptyList(),
+            listOf(parseFailure(0, ParseFailureReason.EmptyInput, "input contains no server entries")),
+        )
+    }
 
     /**
      * @param depth 0 on the original call, 1 once a base64 decode has already

@@ -12,6 +12,7 @@ private const val MAX_IPV4_TAIL_COUNT = 1
 private const val MAX_HEXTET_LENGTH = 4
 private const val IPV4_OCTET_COUNT = 4
 private const val MAX_IPV4_OCTET = 255
+private const val MAX_IPV4_OCTET_DIGIT_COUNT = 3
 private const val PERCENT_ESCAPE_LENGTH = 3
 private const val FIRST_ESCAPED_HEX_OFFSET = 1
 private const val SECOND_ESCAPED_HEX_OFFSET = 2
@@ -153,7 +154,9 @@ private fun isHexDigit(character: Char): Boolean =
     character in '0'..'9' ||
         character.lowercaseChar() in 'a'..'f'
 
+@Suppress("ReturnCount")
 private fun parsePortText(text: String): Int? {
+    if (text.isEmpty() || text.any { it !in '0'..'9' }) return null
     val value = text.toLongOrNull() ?: return null
     return if (value in Int.MIN_VALUE..Int.MAX_VALUE) value.toInt() else Int.MIN_VALUE
 }
@@ -202,6 +205,8 @@ private fun isValidIpv4Tail(value: String): Boolean {
     val hasValidOctets =
         octets.all { octet ->
             octet.isNotEmpty() &&
+                octet.length <= MAX_IPV4_OCTET_DIGIT_COUNT &&
+                (octet.length == 1 || octet.first() != '0') &&
                 octet.all { it in '0'..'9' } &&
                 octet.toIntOrNull()?.let { it in 0..MAX_IPV4_OCTET } == true
         }

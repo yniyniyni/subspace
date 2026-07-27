@@ -80,6 +80,24 @@ class ShadowsocksLinkTest {
     }
 
     @Test
+    fun `rejects non decimal port text`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val authorities =
+            listOf(
+                "host.example:+8388",
+                "host.example:-1",
+                "host.example: 8388",
+                "host.example:8388 #name",
+                "host.example:",
+            )
+
+        authorities.forEach { authority ->
+            val result = parseShadowsocksLink("ss://$credentials@$authority", 0) as LinkResult.Bad
+            result.failure.reason shouldBe ParseFailureReason.MalformedBase64
+        }
+    }
+
+    @Test
     fun `parses bracketed IPv6 authority and removes brackets from host`() {
         val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
         val result =
@@ -171,6 +189,31 @@ class ShadowsocksLinkTest {
         val outbound = result.profile.outbound as ShadowsocksOutbound
         outbound.address shouldBe "::ffff:192.0.2.1"
         outbound.port shouldBe 8388
+    }
+
+    @Test
+    fun `rejects non canonical IPv4 tails`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val authorities =
+            listOf(
+                "[::ffff:001.002.003.004]:8388",
+                "[::ffff:00.2.3.4]:8388",
+                "[::ffff:0.02.3.4]:8388",
+            )
+
+        authorities.forEach { authority ->
+            val result = parseShadowsocksLink("ss://$credentials@$authority", 0) as LinkResult.Bad
+            result.failure.reason shouldBe ParseFailureReason.MalformedBase64
+        }
+    }
+
+    @Test
+    fun `accepts zero IPv4 tail octets`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val result =
+            parseShadowsocksLink("ss://$credentials@[::ffff:0.0.0.0]:8388", 0) as LinkResult.Ok
+
+        (result.profile.outbound as ShadowsocksOutbound).address shouldBe "::ffff:0.0.0.0"
     }
 
     @Test

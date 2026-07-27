@@ -16,4 +16,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+    // subspace.android.library already wires junit + kotest-assertions for unit
+    // tests, but not this: HomeViewModel drives its state through
+    // viewModelScope, which needs a Main dispatcher. Without it, exercising
+    // onConsentGranted in a JVM unit test throws before it does anything.
+    testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -69,4 +69,61 @@ class SubscriptionParserTest {
         outcome.failures.size shouldBe 1
         outcome.failures[0].reason shouldBe ParseFailureReason.EmptyInput
     }
+
+    /**
+     * The decode succeeds, so the fallback is not "this is not valid base64"
+     * (that would be a lie) — it is "this decoded fine but is not links",
+     * which the re-entered parse discovers by actually trying the decoded
+     * text as a link list.
+     */
+    @Test
+    fun `a base64 blob that decodes to non-link text reports unknown scheme`() {
+        val plain = "This is just some ordinary text, not a link or a config of any kind"
+        val blob = Base64.getEncoder().encodeToString(plain.toByteArray())
+        val outcome = SubscriptionParser.parse(blob)
+        outcome.profiles.size shouldBe 0
+        outcome.failures.size shouldBe 1
+        outcome.failures[0].reason shouldBe ParseFailureReason.UnknownScheme
+    }
+
+    @Test
+    fun `a corrupt base64 blob reports MalformedBase64, not UnknownScheme`() {
+        val corrupt = "%%%invalidBase64DataThatWontDecode%%%"
+        val outcome = SubscriptionParser.parse(corrupt)
+        outcome.profiles.size shouldBe 0
+        outcome.failures.size shouldBe 1
+        outcome.failures[0].reason shouldBe ParseFailureReason.MalformedBase64
+    }
+
+    @Test
+    fun `a base64 blob that decodes to clash yaml is parsed via re-entry`() {
+        val yaml =
+            """
+            proxies:
+              - name: "T"
+                type: trojan
+                server: a.example
+                port: 443
+                password: pw
+            """.trimIndent()
+        val blob = Base64.getEncoder().encodeToString(yaml.toByteArray())
+        SubscriptionParser.parse(blob).profiles.size shouldBe 1
+    }
+
+    @Test
+    fun `a base64 blob that decodes to raw xray json is parsed via re-entry`() {
+        val json =
+            """
+            {"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[
+            {"address":"a.example","port":443,"users":[{"id":"$SUB_UUID"}]}]}}]}
+            """.trimIndent()
+        val blob = Base64.getEncoder().encodeToString(json.toByteArray())
+        SubscriptionParser.parse(blob).profiles.size shouldBe 1
+    }
+
+    @Test
+    fun `a plain multi-line link list is still parsed as links`() {
+        val list = "vless://$SUB_UUID@a.example:443\ntrojan://pw@b.example:443"
+        SubscriptionParser.parse(list).profiles.size shouldBe 2
+    }
 }

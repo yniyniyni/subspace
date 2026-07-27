@@ -27,6 +27,5 @@
     <string name="failure_tunnel_start">The tunnel failed to start</string>
     <string name="failure_revoked">VPN permission was revoked</string>
 
-    <string name="error_unparseable">Not a vless:// link or a usable Xray config</string>
-    <string name="error_no_server_in_json">That config contains no server we can use</string>
+    <string name="error_unparseable">Could not parse this as a link, subscription, or config</string>
 </resources>

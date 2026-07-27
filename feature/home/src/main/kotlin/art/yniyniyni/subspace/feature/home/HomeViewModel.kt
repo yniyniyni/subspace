@@ -5,10 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.Profile
-import art.yniyniyni.subspace.core.xray.ShareLinkConverter
-import art.yniyniyni.subspace.core.xray.XrayException
+import art.yniyniyni.subspace.core.parser.SubscriptionParser
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -16,7 +14,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** What the screen renders. */
@@ -25,6 +22,11 @@ internal data class HomeState(
     val connection: ConnectionState = ConnectionState.Disconnected,
     /** Null when there is nothing to complain about. A string resource id. */
     val inputError: Int? = null,
+    /**
+     * Redacted detail from [SubscriptionParser] (§5.6), shown alongside
+     * [inputError] when the parser has more to say than the generic message.
+     */
+    val inputErrorDetail: String? = null,
     val busy: Boolean = false,
 ) {
     val canConnect: Boolean
@@ -42,6 +44,7 @@ internal class HomeViewModel @Inject constructor(
 ) : ViewModel() {
     private val input = MutableStateFlow("")
     private val inputError = MutableStateFlow<Int?>(null)
+    private val inputErrorDetail = MutableStateFlow<String?>(null)
     private val busy = MutableStateFlow(false)
 
     private val _state = MutableStateFlow(HomeState())
@@ -51,8 +54,20 @@ internal class HomeViewModel @Inject constructor(
         // §5.5: the connection half of this state comes from the service and
         // is only ever mirrored here. The text field is the only part the UI
         // actually owns.
-        combine(input, tunnel.state, inputError, busy) { text, conn, error, working ->
-            HomeState(input = text, connection = conn, inputError = error, busy = working)
+        combine(
+            input,
+            tunnel.state,
+            inputError,
+            inputErrorDetail,
+            busy,
+        ) { text, conn, error, detail, working ->
+            HomeState(
+                input = text,
+                connection = conn,
+                inputError = error,
+                inputErrorDetail = detail,
+                busy = working,
+            )
         }.onEach { _state.value = it }
             .launchIn(viewModelScope)
     }
@@ -60,53 +75,28 @@ internal class HomeViewModel @Inject constructor(
     fun onInputChanged(value: String) {
         input.value = value
         inputError.value = null
+        inputErrorDetail.value = null
     }
 
     /**
-     * Turns whatever was pasted into a [Profile].
-     *
-     * Accepts a `vless://` link, or a raw Xray config — the latter converted
-     * by the core itself (see [ShareLinkConverter]), because a config the
-     * core already understands is a better source of truth than a second
-     * parser of ours.
+     * Turns whatever was pasted into a [Profile] via [SubscriptionParser] —
+     * the single entry point for `:core:parser`, which handles link,
+     * base64, Clash YAML, and raw Xray JSON detection itself (§7).
      *
      * @return null if nothing usable came out; [inputError] then holds the
-     *   reason.
+     *   generic reason and [inputErrorDetail] the parser's redacted detail,
+     *   when it has one (§5.6: already redacted, safe to surface — §10.4,
+     *   it is the only diagnostic a user can hand back).
      */
-    @Suppress("ReturnCount")
-    private suspend fun parseInput(raw: String): Profile? {
-        val text = raw.trim()
-
-        VlessLinkParser.parse(text)?.let { return it }
-
-        if (!text.startsWith("{")) {
-            inputError.value = R.string.error_unparseable
-            return null
-        }
-
-        // §5.3: conversion goes through the Go runtime and is not instant.
-        val links = withContext(Dispatchers.IO) { convertOrEmpty(text) }
-
-        val profile = links.firstNotNullOfOrNull { VlessLinkParser.parse(it) }
+    private fun parseInput(raw: String): Profile? {
+        val outcome = SubscriptionParser.parse(raw)
+        val profile = outcome.profiles.firstOrNull()
         if (profile == null) {
-            inputError.value = R.string.error_no_server_in_json
+            inputError.value = R.string.error_unparseable
+            inputErrorDetail.value = outcome.failures.firstOrNull()?.detail
         }
         return profile
     }
-
-    /**
-     * §5.6: the core's error message quotes the config back, so it must not
-     * reach the UI or a log. The exception is deliberately discarded here rather
-     * than propagated — [parseInput] turns an empty result into a generic
-     * message, and the detail dies at this boundary.
-     */
-    @Suppress("SwallowedException")
-    private fun convertOrEmpty(xrayJson: String): List<String> =
-        try {
-            ShareLinkConverter.xrayJsonToShareLinks(xrayJson)
-        } catch (e: XrayException) {
-            emptyList()
-        }
 
     /**
      * Called once VPN consent has been granted.

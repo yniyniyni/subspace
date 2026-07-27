@@ -90,6 +90,16 @@ internal fun HomeScreenContent(
             )
         }
 
+        // §10.4: the parser's detail is the only diagnostic a user can hand
+        // back, and it is already redacted (§5.6) — safe to show as-is.
+        state.inputErrorDetail?.let { detail ->
+            Text(
+                text = detail,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         // The stage is shown, not just "Connecting". §10.4: when the start
         // sequence fails, this is the only diagnostic a user can hand back —
         // §5.6 forbids logging the config that would otherwise explain it.

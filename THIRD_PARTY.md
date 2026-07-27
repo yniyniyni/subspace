@@ -20,13 +20,36 @@ license.
 | [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | 2.16.0 (git submodule, `third_party/`) | MIT | Attribution only. Compiled from source into `libtun2socks.so`. One file, `src/hev-jni.c`, is excluded — it registers JNI natives against upstream's own app class and aborts any other process that loads it. See `service/src/main/jni/Android.mk`. Its vendored dependencies (yaml, lwip, hev-task-system) are built unmodified. |
 | [ZXing](https://github.com/zxing/zxing) | see version catalog | Apache-2.0 | Attribution + NOTICE. Replaces ML Kit, which is proprietary and disqualifies the app from F-Droid and IzzyOnDroid. |
 | [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) | 1.9.0 | Apache-2.0 | Attribution only. JSON for `vmess://` bodies and raw Xray configs. `:core:parser` is pure JVM, so Android's `org.json` is unavailable there. |
-| [kaml](https://github.com/charleskorn/kaml) | 0.83.0 | Apache-2.0 | Attribution only. Clash YAML. Sits on [`it.krzeminski:snakeyaml-engine-kmp`](https://github.com/krzema12/snakeyaml-engine-kmp) 3.1.1, a Kotlin Multiplatform port of snakeyaml-engine (YAML 1.2) maintained by a separate party from upstream snakeyaml — confirmed via `:core:parser:dependencies` on the `runtimeClasspath` configuration, not assumed. Neither snakeyaml-engine nor this port instantiates arbitrary types by default — chosen over snakeyaml 1.x for that reason, since subscription content is attacker-controllable and snakeyaml's default `Constructor` is the CVE-2022-1471 gadget surface. |
+| [kaml](https://github.com/charleskorn/kaml) | 0.83.0 | Apache-2.0 | Attribution only. Clash YAML. Neither snakeyaml-engine nor the KMP port below instantiates arbitrary types by default — chosen over snakeyaml 1.x for that reason, since subscription content is attacker-controllable and snakeyaml's default `Constructor` is the CVE-2022-1471 gadget surface. |
+| [snakeyaml-engine-kmp](https://github.com/krzema12/snakeyaml-engine-kmp) (`it.krzeminski:snakeyaml-engine-kmp`) | 3.1.1 | Apache-2.0 | Attribution only. **Transitive, via kaml** — the YAML 1.2 engine that actually parses Clash configs. A Kotlin Multiplatform port maintained by a separate party from upstream snakeyaml, so it is its own supply-chain question, not a detail of kaml's. |
+| [Okio](https://github.com/square/okio) (`com.squareup.okio:okio`) | 3.14.0 (resolved; kaml's chain declares 3.10.2) | Apache-2.0 | Attribution only. **Transitive, via kaml → snakeyaml-engine-kmp.** I/O primitives for the YAML reader. |
+| [UrlEncoder](https://github.com/ethauvin/urlencoder) (`net.thauvin.erik.urlencoder:urlencoder-lib`) | 1.6.0 | Apache-2.0 | Attribution only. **Transitive, via kaml → snakeyaml-engine-kmp.** Not used directly by this project; recorded because it ships in the APK. |
 
 Bundled `geoip.dat` / `geosite.dat` originate from
 [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community)
 (MIT) and [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat)
 (GPL-3.0 for the build tooling; the emitted `.dat` files are data). Record the
 exact source and release tag in the assets README when they are first added.
+
+All versions above are the **resolved** coordinates from
+`./gradlew :core:parser:dependencies --configuration runtimeClasspath`, and each
+licence is the one declared in that artifact's own POM — neither is transcribed
+from a project README.
+
+---
+
+## Test dependencies
+
+Not shipped in the APK, so no distribution obligation attaches. Recorded because
+ARCHITECTURE.md §10.7 makes every dependency a supply-chain question regardless
+of which source set it lands in.
+
+| Component | Version pin | License | Obligation |
+|---|---|---|---|
+| [JUnit 4](https://github.com/junit-team/junit4) | 4.13.2 | EPL-1.0 | Test-only. Not distributed, so the EPL's reciprocity does not reach the shipped app. |
+| [kotest-assertions-core](https://github.com/kotest/kotest) | 5.9.1 | Apache-2.0 | Test-only. Assertions in every module's unit tests, and in `:core:xray`'s `androidTest` — wired there explicitly because the convention plugin only adds it to `testImplementation`. Assertions only; the kotest *runner* is deliberately not used, so tests stay plain JUnit 4. |
+| [kotlinx.coroutines-test](https://github.com/Kotlin/kotlinx.coroutines) | 1.10.2 | Apache-2.0 | Test-only. Supplies the Main dispatcher `viewModelScope` needs off-device. |
+| [androidx.test](https://developer.android.com/jetpack/androidx/releases/test) runner + ext-junit | 1.7.0 / 1.3.0 | Apache-2.0 | Test-only. Instrumented tests, which are the only place libXray and tun2socks can actually run (§11). |
 
 ---
 

@@ -12,11 +12,14 @@ dependencies {
 
 kover {
     reports {
-        verify {
-            rule {
-                // ARCHITECTURE.md §7: near-100% expected.
-                // 90 is the failing floor, not the target.
-                minBound(90)
+        total {
+            verify {
+                onCheck = true
+                rule {
+                    // ARCHITECTURE.md §7: near-100% expected.
+                    // 90 is the failing floor, not the target.
+                    minBound(90)
+                }
             }
         }
     }

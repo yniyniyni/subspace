@@ -4,7 +4,6 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
 private const val UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
@@ -118,13 +117,12 @@ class VlessLinkTest {
     }
 
     @Test
-    fun `failure detail never echoes link or credential`() {
+    fun `invalid reality key reports only its field and length`() {
         val link = "vless://$UUID@host.example:443?security=reality&pbk=AAEC"
         val result = parseVlessLink(link, 0) as LinkResult.Bad
 
-        result.failure.detail shouldNotContain link
-        result.failure.detail shouldNotContain UUID
-        result.failure.detail shouldNotContain "AAEC"
+        result.failure.detail shouldBe
+            FailureDetail.Length(DetailField.PublicKey, expected = 43, actual = 4)
     }
 
     @Test

@@ -9,8 +9,8 @@ private val UUID_SHAPE =
 /** REALITY public keys are X25519: 32 bytes, base64url, unpadded — 43 chars. */
 private const val REALITY_KEY_LENGTH = 43
 private const val REALITY_KEY_BYTES = 32
+private const val MIN_PORT = 1
 private const val MAX_PORT = 65_535
-private const val INVALID_UUID_MESSAGE = "id is not a well-formed UUID"
 private val BASE64URL_SHAPE = Regex("""^[A-Za-z0-9_-]+$""")
 
 internal val SHADOWSOCKS_METHODS: Set<String> =
@@ -27,24 +27,32 @@ internal val SHADOWSOCKS_METHODS: Set<String> =
         "plain",
     )
 
-internal fun validatePort(port: Int): String? = if (port in 1..MAX_PORT) null else invalidPortMessage(port)
+internal fun validatePort(port: Int): FailureDetail? =
+    if (port in MIN_PORT..MAX_PORT) {
+        null
+    } else {
+        FailureDetail.Range(DetailField.Port, MIN_PORT, MAX_PORT, port)
+    }
 
-internal fun validateUuid(uuid: String): String? = if (UUID_SHAPE.matches(uuid)) null else INVALID_UUID_MESSAGE
-
-internal fun validateRealityPublicKey(pbk: String): String? =
+internal fun validateUuid(uuid: String): FailureDetail? =
     when {
-        pbk.isEmpty() -> "publicKey (pbk) is missing"
+        uuid.isEmpty() -> FailureDetail.Missing(DetailField.Uuid)
+        UUID_SHAPE.matches(uuid) -> null
+        else -> FailureDetail.Malformed(DetailField.Uuid)
+    }
+
+internal fun validateRealityPublicKey(pbk: String): FailureDetail? =
+    when {
+        pbk.isEmpty() -> FailureDetail.Missing(DetailField.PublicKey)
         pbk.length != REALITY_KEY_LENGTH ->
-            "publicKey (pbk) must be $REALITY_KEY_LENGTH characters, got ${pbk.length}"
-        !BASE64URL_SHAPE.matches(pbk) -> "publicKey (pbk) must be unpadded base64url"
-        !isCanonicalRealityPublicKey(pbk) -> "publicKey (pbk) must be canonical base64url"
+            FailureDetail.Length(DetailField.PublicKey, REALITY_KEY_LENGTH, pbk.length)
+        !BASE64URL_SHAPE.matches(pbk) -> FailureDetail.Malformed(DetailField.PublicKey)
+        !isCanonicalRealityPublicKey(pbk) -> FailureDetail.Malformed(DetailField.PublicKey)
         else -> null
     }
 
-internal fun validateShadowsocksMethod(method: String): String? =
-    if (method in SHADOWSOCKS_METHODS) null else "unsupported Shadowsocks method"
-
-private fun invalidPortMessage(port: Int): String = "port must be 1..$MAX_PORT, got $port"
+internal fun validateShadowsocksMethod(method: String): FailureDetail? =
+    if (method in SHADOWSOCKS_METHODS) null else FailureDetail.Unsupported(DetailField.Method)
 
 private fun isCanonicalRealityPublicKey(pbk: String): Boolean =
     runCatching {

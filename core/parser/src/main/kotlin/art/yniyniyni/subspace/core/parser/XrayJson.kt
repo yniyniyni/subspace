@@ -13,7 +13,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /** Extracts supported server profiles from a complete raw Xray JSON object. */
-@Suppress("CyclomaticComplexMethod", "ReturnCount")
+@Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
 internal fun parseXrayJson(text: String): ParseOutcome {
     val root =
         try {
@@ -25,7 +25,13 @@ internal fun parseXrayJson(text: String): ParseOutcome {
         }
             ?: return ParseOutcome(
                 emptyList(),
-                listOf(parseFailure(0, ParseFailureReason.MalformedJson, "config is not a JSON object")),
+                listOf(
+                    parseFailure(
+                        0,
+                        ParseFailureReason.MalformedJson,
+                        FailureDetail.Malformed(DetailField.JsonBody),
+                    ),
+                ),
             )
 
     val outbounds = root["outbounds"] as? JsonArray ?: return ParseOutcome.EMPTY
@@ -48,7 +54,11 @@ internal fun parseXrayJson(text: String): ParseOutcome {
 
                     null ->
                         failures +=
-                            parseFailure(index, ParseFailureReason.UnknownScheme, "outbound protocol is not supported")
+                            parseFailure(
+                                index,
+                                ParseFailureReason.UnknownScheme,
+                                FailureDetail.Unsupported(DetailField.Scheme),
+                            )
 
                     "vless" ->
                         parseVlessOutbound(outbound, index, remarks).forEach { result ->
@@ -60,13 +70,21 @@ internal fun parseXrayJson(text: String): ParseOutcome {
 
                     else ->
                         failures +=
-                            parseFailure(index, ParseFailureReason.UnknownScheme, "outbound protocol is not supported")
+                            parseFailure(
+                                index,
+                                ParseFailureReason.UnknownScheme,
+                                FailureDetail.Unsupported(DetailField.Scheme),
+                            )
                 }
             }
 
             else ->
                 failures +=
-                    parseFailure(index, ParseFailureReason.UnknownScheme, "outbound protocol is not supported")
+                    parseFailure(
+                        index,
+                        ParseFailureReason.UnknownScheme,
+                        FailureDetail.Unsupported(DetailField.Scheme),
+                    )
         }
     }
 
@@ -82,16 +100,20 @@ private fun parseVlessOutbound(
     val settings = outbound["settings"] as? JsonObject
     val vnext =
         settings?.get("vnext") as? JsonArray
-            ?: return listOf(bad(index, ParseFailureReason.MalformedJson, "vless outbound has no vnext"))
+            ?: return listOf(
+                bad(index, ParseFailureReason.MalformedJson, FailureDetail.Malformed(DetailField.JsonBody)),
+            )
     if (vnext.isEmpty()) {
-        return listOf(bad(index, ParseFailureReason.MalformedJson, "vless outbound has no vnext"))
+        return listOf(
+            bad(index, ParseFailureReason.MalformedJson, FailureDetail.Malformed(DetailField.JsonBody)),
+        )
     }
 
     return vnext.flatMap { destination ->
         val vnextObject =
             destination as? JsonObject
                 ?: return@flatMap listOf(
-                    bad(index, ParseFailureReason.MalformedJson, "vless destination is not an object"),
+                    bad(index, ParseFailureReason.MalformedJson, FailureDetail.Malformed(DetailField.JsonBody)),
                 )
         parseVlessDestination(outbound, vnextObject, index, remarks)
     }
@@ -106,17 +128,25 @@ private fun parseVlessDestination(
 ): List<LinkResult> {
     val address =
         vnext.stringValue("address")?.takeIf { it.isNotBlank() }
-            ?: return listOf(bad(index, ParseFailureReason.MalformedJson, "vless address is missing"))
+            ?: return listOf(
+                bad(index, ParseFailureReason.MalformedJson, FailureDetail.Missing(DetailField.Address)),
+            )
     val port =
         vnext.portValue("port")
-            ?: return listOf(bad(index, ParseFailureReason.InvalidPort, "vless port is not a number"))
+            ?: return listOf(
+                bad(index, ParseFailureReason.InvalidPort, FailureDetail.Malformed(DetailField.Port)),
+            )
     validatePort(port)?.let { return listOf(bad(index, ParseFailureReason.InvalidPort, it)) }
 
     val users =
         vnext["users"] as? JsonArray
-            ?: return listOf(bad(index, ParseFailureReason.MissingCredential, "vless outbound has no users"))
+            ?: return listOf(
+                bad(index, ParseFailureReason.MissingCredential, FailureDetail.Missing(DetailField.Credential)),
+            )
     if (users.isEmpty()) {
-        return listOf(bad(index, ParseFailureReason.MissingCredential, "vless outbound has no users"))
+        return listOf(
+            bad(index, ParseFailureReason.MissingCredential, FailureDetail.Missing(DetailField.Credential)),
+        )
     }
 
     val streamSettings = outbound["streamSettings"] as? JsonObject
@@ -133,10 +163,18 @@ private fun parseVlessDestination(
             users.map { userElement ->
                 val user =
                     userElement as? JsonObject
-                        ?: return@map bad(index, ParseFailureReason.MissingCredential, "vless user is not an object")
+                        ?: return@map bad(
+                            index,
+                            ParseFailureReason.MissingCredential,
+                            FailureDetail.Malformed(DetailField.Credential),
+                        )
                 val uuid =
                     user.stringValue("id")
-                        ?: return@map bad(index, ParseFailureReason.MissingCredential, "vless UUID is missing")
+                        ?: return@map bad(
+                            index,
+                            ParseFailureReason.MissingCredential,
+                            FailureDetail.Missing(DetailField.Uuid),
+                        )
                 validateUuid(uuid)?.let { return@map bad(index, ParseFailureReason.MissingCredential, it) }
                 val flow = user.stringValue("flow")?.takeIf { it.isNotBlank() }
                 val stream = StreamSettings(network = network, security = parsedSecurity.security)
@@ -156,7 +194,10 @@ private fun parseSecurity(
         return SecurityParse.Ok(Security.None)
     }
     if (securityElement !is JsonPrimitive || !securityElement.isString) {
-        return SecurityParse.Bad(ParseFailureReason.MalformedJson, "stream security is malformed")
+        return SecurityParse.Bad(
+            ParseFailureReason.MalformedJson,
+            FailureDetail.Malformed(DetailField.Security),
+        )
     }
 
     return when (securityElement.content) {
@@ -164,9 +205,12 @@ private fun parseSecurity(
             val reality = streamSettings["realitySettings"] as? JsonObject
             val publicKey =
                 reality?.stringValue("publicKey")
-                    ?: return SecurityParse.Bad(ParseFailureReason.InvalidRealityKey, "reality public key is invalid")
+                    ?: return SecurityParse.Bad(
+                        ParseFailureReason.InvalidRealityKey,
+                        FailureDetail.Missing(DetailField.PublicKey),
+                    )
             validateRealityPublicKey(publicKey)?.let {
-                return SecurityParse.Bad(ParseFailureReason.InvalidRealityKey, "reality public key is invalid")
+                return SecurityParse.Bad(ParseFailureReason.InvalidRealityKey, it)
             }
             SecurityParse.Ok(
                 Security.Reality(
@@ -191,7 +235,11 @@ private fun parseSecurity(
         }
 
         "none" -> SecurityParse.Ok(Security.None)
-        else -> SecurityParse.Bad(ParseFailureReason.MalformedJson, "stream security is malformed")
+        else ->
+            SecurityParse.Bad(
+                ParseFailureReason.MalformedJson,
+                FailureDetail.Unsupported(DetailField.Security),
+            )
     }
 }
 
@@ -202,14 +250,14 @@ private sealed interface SecurityParse {
 
     data class Bad(
         val reason: ParseFailureReason,
-        val detail: String,
+        val detail: FailureDetail,
     ) : SecurityParse
 }
 
 private fun bad(
     index: Int,
     reason: ParseFailureReason,
-    detail: String,
+    detail: FailureDetail,
 ): LinkResult.Bad = LinkResult.Bad(parseFailure(index, reason, detail))
 
 private fun JsonObject.stringValue(key: String): String? =

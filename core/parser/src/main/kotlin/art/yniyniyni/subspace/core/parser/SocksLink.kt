@@ -13,7 +13,11 @@ internal fun parseSocksLink(
     val uri =
         parseUri(raw)
             ?: return LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.MalformedUri, "link is not a usable URI"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedUri,
+                    FailureDetail.Malformed(DetailField.Uri),
+                ),
             )
 
     validatePort(uri.port)?.let {
@@ -32,7 +36,7 @@ internal fun parseSocksLink(
                             parseFailure(
                                 index,
                                 ParseFailureReason.MalformedBase64,
-                                "socks credentials are not valid base64",
+                                FailureDetail.Malformed(DetailField.Base64Body),
                             ),
                         )
                 if (!decoded.contains(':')) {
@@ -40,7 +44,7 @@ internal fun parseSocksLink(
                         parseFailure(
                             index,
                             ParseFailureReason.MissingCredential,
-                            "socks credentials must contain a separator",
+                            FailureDetail.Malformed(DetailField.Credential),
                         ),
                     )
                 }

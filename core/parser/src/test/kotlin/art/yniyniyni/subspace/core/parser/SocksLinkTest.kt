@@ -4,7 +4,6 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.SocksOutbound
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
-import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 import java.util.Base64
 
@@ -72,7 +71,7 @@ class SocksLinkTest {
         val result = parseSocksLink("socks://%%%@host.example:1080", 4) as LinkResult.Bad
 
         result.failure.reason shouldBe ParseFailureReason.MalformedBase64
-        result.failure.detail shouldNotContain "%%%"
+        result.failure.detail shouldBe FailureDetail.Malformed(DetailField.Base64Body)
     }
 
     @Test
@@ -81,7 +80,7 @@ class SocksLinkTest {
         val result = parseSocksLink("socks://$encoded@host.example:1080", 4) as LinkResult.Bad
 
         result.failure.reason shouldBe ParseFailureReason.MissingCredential
-        result.failure.detail shouldNotContain encoded
+        result.failure.detail shouldBe FailureDetail.Malformed(DetailField.Credential)
     }
 
     @Test
@@ -119,10 +118,7 @@ class SocksLinkTest {
         listOf("", "x", "socks://", "socks://host:", "socks://[\u0000")
             .forEach { raw ->
                 val result = parseSocksLink(raw, 3) as LinkResult.Bad
-                if (raw.isNotEmpty()) {
-                    result.failure.detail shouldNotContain raw
-                }
-                result.failure.detail shouldNotContain "secret"
+                result.failure.detail shouldBe FailureDetail.Malformed(DetailField.Uri)
             }
     }
 }

@@ -10,7 +10,11 @@ internal fun parseShareLink(
     val schemeEnd = text.indexOf("://")
     if (schemeEnd <= 0) {
         return LinkResult.Bad(
-            parseFailure(index, ParseFailureReason.UnknownScheme, "entry is not a share link"),
+            parseFailure(
+                index,
+                ParseFailureReason.UnknownScheme,
+                FailureDetail.Malformed(DetailField.Scheme),
+            ),
         )
     }
 
@@ -22,7 +26,11 @@ internal fun parseShareLink(
         "socks", "socks5" -> parseSocksLink(text, index)
         else ->
             LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.UnknownScheme, "unsupported protocol"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.UnknownScheme,
+                    FailureDetail.Unsupported(DetailField.Scheme),
+                ),
             )
     }
 }

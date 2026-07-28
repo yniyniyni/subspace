@@ -3,8 +3,11 @@ package art.yniyniyni.subspace.feature.home
 
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.parser.DetailField
+import art.yniyniyni.subspace.core.parser.FailureDetail
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
+import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,11 +23,9 @@ import org.junit.Test
 
 /**
  * Covers only what Task 15 added to [HomeViewModel]: routing input through
- * [art.yniyniyni.subspace.core.parser.SubscriptionParser], surfacing its
- * redacted failure detail alongside the existing string-resource error, and
- * clearing both together on edit. Connect/disconnect wiring, the busy flag,
- * and the combine of [TunnelConnection.state] predate this task and stay
- * out of scope here.
+ * [art.yniyniyni.subspace.core.parser.SubscriptionParser], preserving its
+ * typed failure detail alongside the existing string-resource error, and
+ * clearing both together on edit. Detail rendering belongs to M3's import UI.
  *
  * `viewModelScope` needs a Main dispatcher to run at all outside Android, hence
  * [UnconfinedTestDispatcher].
@@ -60,7 +61,7 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `garbage input populates both inputError and inputErrorDetail`() =
+    fun `garbage input populates a generic error and typed detail`() =
         runTest {
             val viewModel = HomeViewModel(FakeTunnelConnection())
 
@@ -69,7 +70,7 @@ class HomeViewModelTest {
 
             val state = viewModel.state.first { !it.busy && it.inputError != null }
             state.inputError.shouldNotBeNull()
-            state.inputErrorDetail.shouldNotBeNull()
+            state.inputErrorDetail shouldBe FailureDetail.Malformed(DetailField.Scheme)
         }
 
     @Test

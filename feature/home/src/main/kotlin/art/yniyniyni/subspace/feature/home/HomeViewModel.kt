@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.parser.FailureDetail
 import art.yniyniyni.subspace.core.parser.SubscriptionParser
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -25,10 +26,10 @@ internal data class HomeState(
     /** Null when there is nothing to complain about. A string resource id. */
     val inputError: Int? = null,
     /**
-     * Redacted detail from [SubscriptionParser] (§5.6), shown alongside
-     * [inputError] when the parser has more to say than the generic message.
+     * Typed detail from [SubscriptionParser]. M3's import UI renders it from
+     * localized resources; this temporary M1 screen shows [inputError] only.
      */
-    val inputErrorDetail: String? = null,
+    val inputErrorDetail: FailureDetail? = null,
     val busy: Boolean = false,
 ) {
     val canConnect: Boolean
@@ -46,7 +47,7 @@ internal class HomeViewModel @Inject constructor(
 ) : ViewModel() {
     private val input = MutableStateFlow("")
     private val inputError = MutableStateFlow<Int?>(null)
-    private val inputErrorDetail = MutableStateFlow<String?>(null)
+    private val inputErrorDetail = MutableStateFlow<FailureDetail?>(null)
     private val busy = MutableStateFlow(false)
 
     private val _state = MutableStateFlow(HomeState())
@@ -86,9 +87,8 @@ internal class HomeViewModel @Inject constructor(
      * base64, Clash YAML, and raw Xray JSON detection itself (§7).
      *
      * @return null if nothing usable came out; [inputError] then holds the
-     *   generic reason and [inputErrorDetail] the parser's redacted detail,
-     *   when it has one (§5.6: already redacted, safe to surface — §10.4,
-     *   it is the only diagnostic a user can hand back).
+     *   generic reason and [inputErrorDetail] the parser's typed detail, when
+     *   it has one. The detail has no free-text channel (§5.6).
      */
     private suspend fun parseInput(raw: String): Profile? {
         // §5.3: the connect button must stay responsive. `viewModelScope` runs

@@ -45,7 +45,12 @@ import com.charleskorn.kaml.YamlScalar
 internal fun parseClashYaml(text: String): ParseOutcome {
     val root = parseYamlMap(text)
     if (root == null) {
-        val failure = parseFailure(0, ParseFailureReason.MalformedYaml, "config is not a YAML mapping")
+        val failure =
+            parseFailure(
+                0,
+                ParseFailureReason.MalformedYaml,
+                FailureDetail.Malformed(DetailField.YamlBody),
+            )
         return ParseOutcome(emptyList(), listOf(failure))
     }
 
@@ -56,7 +61,12 @@ internal fun parseClashYaml(text: String): ParseOutcome {
     if (proxiesNode is YamlNull) return ParseOutcome.EMPTY
     val proxies = proxiesNode as? YamlList
     if (proxies == null) {
-        val failure = parseFailure(0, ParseFailureReason.MalformedYaml, "proxies is not a list")
+        val failure =
+            parseFailure(
+                0,
+                ParseFailureReason.MalformedYaml,
+                FailureDetail.Malformed(DetailField.YamlBody),
+            )
         return ParseOutcome(emptyList(), listOf(failure))
     }
 
@@ -66,7 +76,12 @@ internal fun parseClashYaml(text: String): ParseOutcome {
     proxies.items.forEachIndexed { index, item ->
         val proxy = item as? YamlMap
         if (proxy == null) {
-            failures += parseFailure(index, ParseFailureReason.MalformedYaml, "proxy entry is not a mapping")
+            failures +=
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Malformed(DetailField.YamlBody),
+                )
             return@forEachIndexed
         }
         when (val result = proxyToProfile(proxy, index)) {
@@ -109,11 +124,11 @@ private fun proxyToProfile(
 ): LinkResult {
     val server = proxy.text("server")
     if (server == null) {
-        return bad(index, ParseFailureReason.MalformedYaml, "proxy has no server")
+        return bad(index, ParseFailureReason.MalformedYaml, FailureDetail.Missing(DetailField.Address))
     }
     val port =
         proxy.text("port")?.toIntOrNull()
-            ?: return bad(index, ParseFailureReason.InvalidPort, "proxy port is not a number")
+            ?: return bad(index, ParseFailureReason.InvalidPort, FailureDetail.Malformed(DetailField.Port))
     validatePort(port)?.let { return bad(index, ParseFailureReason.InvalidPort, it) }
 
     val name = proxy.text("name") ?: server
@@ -125,7 +140,7 @@ private fun proxyToProfile(
         "vmess" -> vmess(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         "trojan" -> trojan(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         "ss" -> shadowsocks(proxy, index, server, port, name)
-        else -> bad(index, ParseFailureReason.UnknownScheme, "proxy type is not supported")
+        else -> bad(index, ParseFailureReason.UnknownScheme, FailureDetail.Unsupported(DetailField.Scheme))
     }
 }
 
@@ -152,7 +167,13 @@ private fun vmess(
     common: ClashCommon,
 ): LinkResult {
     val index = common.index
-    val uuid = proxy.text("uuid") ?: return bad(index, ParseFailureReason.MissingCredential, "vmess UUID is missing")
+    val uuid =
+        proxy.text("uuid")
+            ?: return bad(
+                index,
+                ParseFailureReason.MissingCredential,
+                FailureDetail.Missing(DetailField.Uuid),
+            )
     validateUuid(uuid)?.let { return bad(index, ParseFailureReason.MissingCredential, it) }
 
     // Task 8's ruling, restated for this container: a present but unreadable
@@ -163,7 +184,11 @@ private fun vmess(
             0
         } else {
             (alterIdNode as? YamlScalar)?.content?.toIntOrNull()
-                ?: return bad(index, ParseFailureReason.MalformedYaml, "vmess alterId is not a number")
+                ?: return bad(
+                    index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Malformed(DetailField.AlterId),
+                )
         }
 
     val security = if (proxy.text("tls") == "true") tls(common) else Security.None
@@ -180,7 +205,11 @@ private fun trojan(
 ): LinkResult {
     val password =
         proxy.text("password")
-            ?: return bad(common.index, ParseFailureReason.MissingCredential, "trojan password is missing")
+            ?: return bad(
+                common.index,
+                ParseFailureReason.MissingCredential,
+                FailureDetail.Missing(DetailField.Password),
+            )
 
     // Trojan is TLS-only by definition — see TrojanLink.kt.
     val stream = StreamSettings(network = common.network, security = tls(common))
@@ -201,7 +230,8 @@ private fun shadowsocks(
     val method = proxy.text("cipher").orEmpty()
     validateShadowsocksMethod(method)?.let { return bad(index, ParseFailureReason.UnsupportedMethod, it) }
     val password =
-        proxy.text("password") ?: return bad(index, ParseFailureReason.MissingCredential, "ss password is missing")
+        proxy.text("password")
+            ?: return bad(index, ParseFailureReason.MissingCredential, FailureDetail.Missing(DetailField.Password))
 
     val outbound = ShadowsocksOutbound(server, port, method, password)
     // Same identity material as ShadowsocksLink, so one server imported from a
@@ -220,7 +250,7 @@ private fun tls(common: ClashCommon): Security.Tls =
 private fun bad(
     index: Int,
     reason: ParseFailureReason,
-    detail: String,
+    detail: FailureDetail,
 ): LinkResult = LinkResult.Bad(parseFailure(index, reason, detail))
 
 private fun YamlMap.node(key: String): YamlNode? = entries.entries.firstOrNull { it.key.content == key }?.value

@@ -458,9 +458,7 @@ class ClashYamlTest {
                 password: hunter2
             """.trimIndent()
         val detail = parseClashYaml(yaml).failures.single().detail
-        detail.contains("secret.example.com") shouldBe false
-        detail.contains("hunter2") shouldBe false
-        detail.contains("70000") shouldBe true
+        detail shouldBe FailureDetail.Range(DetailField.Port, 1, 65_535, 70_000)
     }
 
     /**

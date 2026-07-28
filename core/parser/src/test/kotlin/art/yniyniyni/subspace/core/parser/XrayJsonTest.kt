@@ -4,7 +4,6 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
 private const val XJ_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
@@ -108,8 +107,13 @@ class XrayJsonTest {
     }
 
     @Test
-    fun `unsupported or non-string security is a typed malformed failure`() {
-        listOf("\"bogus\"", "true", "123", "{}").forEach { security ->
+    fun `unsupported and non-string security have distinct typed details`() {
+        mapOf(
+            "\"bogus\"" to FailureDetail.Unsupported(DetailField.Security),
+            "true" to FailureDetail.Malformed(DetailField.Security),
+            "123" to FailureDetail.Malformed(DetailField.Security),
+            "{}" to FailureDetail.Malformed(DetailField.Security),
+        ).forEach { (security, expectedDetail) ->
             val json =
                 validOutbound("security.example", security = "none")
                     .replace("\"security\":\"none\"", "\"security\":$security")
@@ -117,7 +121,7 @@ class XrayJsonTest {
 
             failure.index shouldBe 0
             failure.reason shouldBe ParseFailureReason.MalformedJson
-            failure.detail shouldNotContain "bogus"
+            failure.detail shouldBe expectedDetail
         }
     }
 
@@ -252,12 +256,12 @@ class XrayJsonTest {
     }
 
     @Test
-    fun `unsupported protocol is a typed redacted failure`() {
+    fun `unsupported protocol is a typed closed-vocabulary failure`() {
         val outcome = parseXrayJson("{\"outbounds\":[{\"protocol\":\"wireguard\"}]}")
         outcome.profiles shouldBe emptyList()
         outcome.failures.size shouldBe 1
         outcome.failures[0].reason shouldBe ParseFailureReason.UnknownScheme
-        outcome.failures[0].detail shouldNotContain "wireguard"
+        outcome.failures[0].detail shouldBe FailureDetail.Unsupported(DetailField.Scheme)
     }
 
     @Test
@@ -303,10 +307,7 @@ class XrayJsonTest {
             )
 
         corpus.forEach { input ->
-            val outcome = parseXrayJson(input)
-            outcome.failures.forEach { failure ->
-                if (input.isNotBlank()) failure.detail shouldNotContain input
-            }
+            parseXrayJson(input)
         }
     }
 

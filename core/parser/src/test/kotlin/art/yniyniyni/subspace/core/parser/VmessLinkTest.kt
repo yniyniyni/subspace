@@ -67,7 +67,7 @@ class VmessLinkTest {
 
         result.failure.reason shouldBe ParseFailureReason.MalformedBase64
         result.failure.index shouldBe 3
-        result.failure.detail shouldBe "vmess body is not base64"
+        result.failure.detail shouldBe FailureDetail.Malformed(DetailField.Base64Body)
     }
 
     @Test
@@ -175,7 +175,7 @@ class VmessLinkTest {
 
             val failure = (result as LinkResult.Bad).failure
             failure.reason shouldBe ParseFailureReason.MalformedJson
-            failure.detail shouldBe "vmess alterId is not a number"
+            failure.detail shouldBe FailureDetail.Malformed(DetailField.AlterId)
         }
     }
 

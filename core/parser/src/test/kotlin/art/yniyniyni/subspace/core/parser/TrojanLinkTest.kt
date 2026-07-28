@@ -4,7 +4,6 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
 class TrojanLinkTest {
@@ -74,10 +73,7 @@ class TrojanLinkTest {
         listOf("", "x", "trojan://", "trojan://@", "trojan://secret@host:", "trojan://[\u0000")
             .forEach { raw ->
                 val result = parseTrojanLink(raw, 3) as LinkResult.Bad
-                if (raw.isNotEmpty()) {
-                    result.failure.detail shouldNotContain raw
-                }
-                result.failure.detail shouldNotContain "secret"
+                result.failure.detail shouldBe FailureDetail.Malformed(DetailField.Uri)
             }
     }
 }

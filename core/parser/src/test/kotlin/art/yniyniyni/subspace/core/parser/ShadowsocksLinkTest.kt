@@ -5,7 +5,6 @@ import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
-import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.Test
 import java.util.Base64
@@ -258,7 +257,7 @@ class ShadowsocksLinkTest {
     }
 
     @Test
-    fun `arbitrary malformed input never throws and is redacted`() {
+    fun `arbitrary malformed input never throws and reports a typed container detail`() {
         shouldNotThrowAny {
             val malformed =
                 listOf(
@@ -273,8 +272,7 @@ class ShadowsocksLinkTest {
             malformed.forEach { input ->
                 val result = parseShadowsocksLink(input, 8)
                 result.shouldBeInstanceOf<LinkResult.Bad>()
-                result.failure.detail shouldNotContain "secret.example"
-                result.failure.detail shouldNotContain "credential"
+                result.failure.detail shouldBe FailureDetail.Malformed(DetailField.Base64Body)
             }
         }
     }

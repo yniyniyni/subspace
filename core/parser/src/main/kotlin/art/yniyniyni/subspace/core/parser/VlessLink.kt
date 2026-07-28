@@ -15,7 +15,11 @@ internal fun parseVlessLink(
     val uri =
         parseUri(raw)
             ?: return LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.MalformedUri, "link is not a usable URI"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedUri,
+                    FailureDetail.Malformed(DetailField.Uri),
+                ),
             )
 
     validatePort(uri.port)?.let {

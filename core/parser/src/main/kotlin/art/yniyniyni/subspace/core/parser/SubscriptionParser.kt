@@ -48,7 +48,7 @@ public object SubscriptionParser {
         // point the user at the wrong format (§10.4).
         return ParseOutcome(
             emptyList(),
-            listOf(parseFailure(0, ParseFailureReason.EmptyInput, "input contains no server entries")),
+            listOf(parseFailure(0, ParseFailureReason.EmptyInput, FailureDetail.None)),
         )
     }
 
@@ -67,7 +67,7 @@ public object SubscriptionParser {
         if (text.isEmpty()) {
             return ParseOutcome(
                 emptyList(),
-                listOf(parseFailure(0, ParseFailureReason.EmptyInput, "nothing to parse")),
+                listOf(parseFailure(0, ParseFailureReason.EmptyInput, FailureDetail.None)),
             )
         }
 
@@ -96,7 +96,7 @@ public object SubscriptionParser {
                                 parseFailure(
                                     0,
                                     ParseFailureReason.MalformedBase64,
-                                    "input looks like a base64 subscription but did not decode",
+                                    FailureDetail.Malformed(DetailField.Base64Body),
                                 ),
                             ),
                         )

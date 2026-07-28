@@ -121,7 +121,12 @@ private fun parseVlessDestination(
 
     val streamSettings = outbound["streamSettings"] as? JsonObject
     val network = streamSettings?.stringValue("network")?.takeIf { it.isNotBlank() } ?: "tcp"
-    val name = remarks ?: outbound.stringValue("tag")?.takeIf { it.isNotBlank() } ?: address
+    val name =
+        if (remarks != null) {
+            remarks
+        } else {
+            outbound.stringValue("tag")?.takeIf { it.isNotBlank() } ?: address
+        }
     return when (val parsedSecurity = parseSecurity(streamSettings, address)) {
         is SecurityParse.Bad -> users.map { bad(index, parsedSecurity.reason, parsedSecurity.detail) }
         is SecurityParse.Ok ->

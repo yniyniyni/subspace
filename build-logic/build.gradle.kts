@@ -15,4 +15,5 @@ dependencies {
     compileOnly(libs.plugin.hilt.gradle)
     compileOnly(libs.plugin.ktlint.gradle)
     compileOnly(libs.plugin.detekt.gradle)
+    compileOnly(libs.plugin.kover.gradle)
 }

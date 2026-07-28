@@ -59,6 +59,7 @@ of which source set it lands in.
 |---|---|---|---|
 | Gradle Wrapper (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`) | Gradle 9.6.0 | Apache-2.0 | Attribution + NOTICE. Vendored so a clone builds without a pre-installed Gradle. Not modified. |
 | [detekt-formatting](https://github.com/detekt/detekt) | see version catalog (matches `detekt`) | Apache-2.0 | Attribution only. Wraps ktlint's rules as detekt rules; added because ktlint-gradle's own per-source-set check tasks never register on Android modules under AGP 9 (see `build.gradle.kts` and `subspace.android.library.gradle.kts` for why) — this is the actual enforcement of formatting on `:app`, `:service`, `:core:data`, `:core:xray`, and every `:feature:*` module. Justification per ARCHITECTURE.md §10.7. |
+| [kotlinx-kover](https://github.com/Kotlin/kotlinx-kover) | 0.9.8 | Apache-2.0 | Build-time-only JVM line-coverage measurement; not shipped in the APK. ARCHITECTURE.md §7 and the roadmap set a near-100% coverage exit criterion for `:core:parser`; without coverage tooling, that criterion was unfalsifiable. Justification per ARCHITECTURE.md §10.7. |
 
 M1 vendors an AAR (libXray) and a native library (hev-socks5-tunnel); this
 section is the precedent for how those get recorded.

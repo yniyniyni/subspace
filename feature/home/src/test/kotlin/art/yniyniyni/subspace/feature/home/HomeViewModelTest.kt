@@ -25,7 +25,8 @@ import org.junit.Test
  * Covers only what Task 15 added to [HomeViewModel]: routing input through
  * [art.yniyniyni.subspace.core.parser.SubscriptionParser], preserving its
  * typed failure detail alongside the existing string-resource error, and
- * clearing both together on edit. Detail rendering belongs to M3's import UI.
+ * clearing both together on edit. [FailureDetailDisplayTest] covers the
+ * feature-local resource mapping used to render that detail.
  *
  * `viewModelScope` needs a Main dispatcher to run at all outside Android, hence
  * [UnconfinedTestDispatcher].

@@ -13,7 +13,7 @@ import org.junit.Test
  * prose at all. These tests pin the typed meanings and structurally verify
  * there is no String field through which config text could travel.
  */
-class FailureRedactionTest {
+class FailureDetailShapeTest {
     private val secretHost = "secret.example.com"
     private val secretUuid = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
 

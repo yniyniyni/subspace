@@ -30,4 +30,27 @@
     <string name="failure_profile_decode">This profile could not be read</string>
 
     <string name="error_unparseable">Could not parse this as a link, subscription, or config</string>
+    <string name="error_detail_length">%1$s must have length %2$d (actual: %3$d)</string>
+    <string name="error_detail_range">%1$s must be from %2$d to %3$d (actual: %4$d)</string>
+    <string name="error_detail_missing">%1$s is missing</string>
+    <string name="error_detail_unsupported">%1$s is not supported</string>
+    <string name="error_detail_malformed">%1$s is malformed</string>
+
+    <string name="error_detail_field_scheme">Scheme</string>
+    <string name="error_detail_field_uri">URI</string>
+    <string name="error_detail_field_address">Address</string>
+    <string name="error_detail_field_port">Port</string>
+    <string name="error_detail_field_uuid">UUID</string>
+    <string name="error_detail_field_password">Password</string>
+    <string name="error_detail_field_method">Method</string>
+    <string name="error_detail_field_public_key">Public key</string>
+    <string name="error_detail_field_short_id">Short ID</string>
+    <string name="error_detail_field_fingerprint">Fingerprint</string>
+    <string name="error_detail_field_network">Network</string>
+    <string name="error_detail_field_security">Security</string>
+    <string name="error_detail_field_base64_body">Base64 body</string>
+    <string name="error_detail_field_json_body">JSON body</string>
+    <string name="error_detail_field_yaml_body">YAML body</string>
+    <string name="error_detail_field_credential">Credential</string>
+    <string name="error_detail_field_alter_id">Alter ID</string>
 </resources>

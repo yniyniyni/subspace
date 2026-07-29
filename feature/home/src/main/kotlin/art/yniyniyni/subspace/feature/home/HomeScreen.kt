@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.StartupStage
+import art.yniyniyni.subspace.core.parser.FailureDetail
 
 /**
  * M1's whole UI: paste a server, connect, watch the state.
@@ -90,6 +91,8 @@ internal fun HomeScreenContent(
             )
         }
 
+        state.inputErrorDetail?.let { ParserFailureDetail(it) }
+
         // The stage is shown, not just "Connecting". §10.4: when the start
         // sequence fails, this is the only diagnostic a user can hand back —
         // §5.6 forbids logging the config that would otherwise explain it.
@@ -125,6 +128,31 @@ internal fun HomeScreenContent(
             }
         }
     }
+}
+
+@Composable
+private fun ParserFailureDetail(detail: FailureDetail) {
+    val display = detail.toDisplay() ?: return
+    val field = stringResource(display.fieldRes)
+    val text =
+        when (display) {
+            is FailureDetailDisplay.Field -> stringResource(display.messageRes, field)
+            is FailureDetailDisplay.Length ->
+                stringResource(R.string.error_detail_length, field, display.expected, display.actual)
+            is FailureDetailDisplay.Range ->
+                stringResource(
+                    R.string.error_detail_range,
+                    field,
+                    display.min,
+                    display.max,
+                    display.actual,
+                )
+        }
+    Text(
+        text = text,
+        color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 private fun ConnectionState.labelRes(): Int =

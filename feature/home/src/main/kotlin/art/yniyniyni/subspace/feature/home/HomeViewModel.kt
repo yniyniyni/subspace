@@ -26,8 +26,8 @@ internal data class HomeState(
     /** Null when there is nothing to complain about. A string resource id. */
     val inputError: Int? = null,
     /**
-     * Typed detail from [SubscriptionParser]. M3's import UI renders it from
-     * localized resources; this temporary M1 screen shows [inputError] only.
+     * Typed detail from [SubscriptionParser]. The UI renders it from localized
+     * resources without introducing a parser-side prose channel.
      */
     val inputErrorDetail: FailureDetail? = null,
     val busy: Boolean = false,

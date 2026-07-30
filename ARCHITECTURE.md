@@ -322,7 +322,7 @@ assuming a bug in this codebase, and check the Xray-core issue tracker.
 ### What actually parses, per container
 
 Five protocols across four containers reads as twenty combinations. It is
-fifteen. The gaps are not bugs — nobody has written those branches — but they
+sixteen. The gaps are not bugs — nobody has written those branches — but they
 are load-bearing enough that guessing from the list above will mislead you:
 
 | | share link | base64 list | Clash YAML | raw Xray JSON |
@@ -331,7 +331,7 @@ are load-bearing enough that guessing from the list above will mislead you:
 | vmess | ✓ | ✓ | ✓ | ✗ |
 | trojan | ✓ | ✓ | ✓ | ✗ |
 | ss | ✓ | ✓ | ✓ | ✗ |
-| socks | ✓ | ✓ | ✗ | ✗ |
+| socks | ✓ | ✓ | ✓ | ✗ |
 
 The base64 column can never differ from the share-link column: a blob is
 decoded and re-fed through detection, which lands on the link-list path.
@@ -344,11 +344,15 @@ and `ws-opts` map into `StreamSettings`, so a Clash entry with `type: vless`
 now parses into a working profile the same way a `vless://` link does.
 
 **M3 fills two of the six gaps that remained, not all of them:** Clash
-`vless` and `socks5`. Raw Xray JSON's four missing cells wait, because
-filling them would produce profiles that parse and then fail at connect with
-`ProtocolNotSupported`; they belong with the milestone that makes those
-protocols connectable, and each of those needs its own device verification
-(§10.1).
+`vless` and `socks5`. The Clash column is now complete — every protocol Clash
+can express, this parser can turn into a profile. Raw Xray JSON's four
+missing cells wait, because filling them would produce profiles that parse
+and then fail at connect with `ProtocolNotSupported`; they belong with the
+milestone that makes those protocols connectable, and each of those needs its
+own device verification (§10.1). SOCKS itself stays in the same position it
+was already in: `:core:xray` cannot emit a SOCKS outbound, so a Clash
+`socks5` entry parses into a profile that is visibly not-connectable in the
+UI, exactly like a `socks://` share link.
 
 `CapabilityMatrixTest` in `:core:parser` pins every cell of this table, so it
 fails if one changes without this table changing with it.

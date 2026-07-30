@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
+import art.yniyniyni.subspace.core.model.SocksOutbound
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import art.yniyniyni.subspace.core.model.VlessOutbound
@@ -27,13 +28,13 @@ import com.charleskorn.kaml.YamlScalar
  * content arrives over the network and is attacker-controlled, and the classic
  * YAML RCE (CVE-2022-1471) is exactly a type-instantiation gadget.
  *
- * Only `vmess`, `trojan`, `ss` and `vless` entries become profiles. Everything
- * else — `hysteria`, `wireguard`, `socks5`, proxy providers — is reported as an
- * unsupported type rather than skipped, so a subscription that yields nothing
- * says why. `ws-opts` and `grpc-opts` feed `TransportOptions` (see
- * `ClashTransport.kt`) for `vless` only; the other three protocols still
- * carry [StreamSettings]'s transport name alone, the limitation carried from
- * Task 8 and unchanged by this task.
+ * Only `vmess`, `trojan`, `ss`, `vless` and `socks5` entries become profiles.
+ * Everything else — `hysteria`, `wireguard`, proxy providers — is reported as
+ * an unsupported type rather than skipped, so a subscription that yields
+ * nothing says why. `ws-opts` and `grpc-opts` feed `TransportOptions` (see
+ * `ClashTransport.kt`) for `vless` only; the other protocols still carry
+ * [StreamSettings]'s transport name alone (SOCKS has no transport surface at
+ * all), a limitation this file's history predates and does not change.
  *
  * Every node read goes through `node`/`text` in `ClashYamlNode.kt` and a safe
  * cast rather than kaml's `YamlMap.get<T>` — see that file for why.
@@ -138,6 +139,7 @@ private fun proxyToProfile(
         "trojan" -> trojan(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         "ss" -> shadowsocks(proxy, index, server, port, name)
         "vless" -> vless(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
+        "socks5" -> socks5(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         else -> bad(index, ParseFailureReason.UnknownScheme, FailureDetail.Unsupported(DetailField.Scheme))
     }
 }
@@ -252,6 +254,23 @@ private fun vless(
         )
     val outbound = VlessOutbound(common.server, common.port, uuid, proxy.text("flow"), stream)
     val id = profileId("vless", common.server, common.port, uuid)
+    return LinkResult.Ok(Profile(id, common.name, outbound))
+}
+
+/**
+ * SOCKS has no TLS story and no transport surface — no `stream`, unlike every
+ * other branch here. The credential material mirrors `SocksLink.kt`'s
+ * `credentialMaterial(username, password)` exactly, so a server imported both
+ * as a `socks://` link and as a Clash `socks5` entry lands on one profile.
+ */
+private fun socks5(
+    proxy: YamlMap,
+    common: ClashCommon,
+): LinkResult {
+    val username = proxy.text("username")
+    val password = proxy.text("password")
+    val outbound = SocksOutbound(common.server, common.port, username, password)
+    val id = profileId("socks", common.server, common.port, credentialMaterial(username, password))
     return LinkResult.Ok(Profile(id, common.name, outbound))
 }
 

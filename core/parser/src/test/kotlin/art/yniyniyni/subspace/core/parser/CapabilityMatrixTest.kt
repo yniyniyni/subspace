@@ -12,7 +12,7 @@ private const val MATRIX_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
  * The protocol × container support matrix, as a test rather than a claim.
  *
  * ARCHITECTURE.md §7 lists five link protocols and four container shapes, which
- * reads as twenty working combinations. It is fifteen. The remaining gaps are
+ * reads as twenty working combinations. It is sixteen. The remaining gaps are
  * not bugs — nobody has written those branches — but §7 stated the capability
  * unqualified, so the table there and this test exist to keep the real shape
  * visible and to fail if a cell silently changes.
@@ -20,7 +20,8 @@ private const val MATRIX_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
  * Clash/`vless` used to be the cell that mattered most: VLESS is the only
  * protocol `:core:xray` can actually emit a config for, and it was the one
  * cell Clash lacked, so a Clash import produced profiles that all failed at
- * connect. M3 fills that cell — see the matrix in §7.
+ * connect. M3 fills that cell, and fills Clash/`socks5` alongside it, closing
+ * out the Clash column entirely — see the matrix in §7.
  *
  * Each cell asserts only whether a profile comes out, because that is exactly
  * what the §7 table claims. Field-level correctness for the cells that do work
@@ -87,8 +88,8 @@ class CapabilityMatrixTest {
     }
 
     @Test
-    fun `clash yaml supports vmess, trojan, ss and vless`() {
-        val supported = setOf("vmess", "trojan", "ss", "vless")
+    fun `clash yaml supports vmess, trojan, ss, vless and socks5`() {
+        val supported = setOf("vmess", "trojan", "ss", "vless", "socks")
         clash.forEach { (protocol, yaml) ->
             withClue("clash $protocol") { yieldsProfile(yaml) shouldBe (protocol in supported) }
         }

@@ -180,12 +180,24 @@ class RedactionTest {
      * The other half of the four above. §10.4 makes this string the only
      * diagnostic a user can hand back, so "the host is gone" is half a test —
      * these pin what is *left*, which is what makes the failure debuggable.
+     *
+     * The `lookup` case's expectation changed when `BARE_HOST_PREFIX_PATTERN`
+     * moved to a token-boundary anchor (see that pattern's KDoc in
+     * `Redaction.kt`): the rule now claims `vpnserver:` directly, ahead of
+     * `LABELLED_HOST_PATTERN`, and because it preserves what follows the
+     * matched token, the colon that was genuinely part of the Go error chain
+     * — `lookup <host>:` — now survives instead of being swallowed with the
+     * host. "dial tcp: lookup <redacted>:
+     * no such host" is at least as readable as the old "dial tcp: lookup
+     * <redacted> no such host": it keeps the shape of Go's own error chaining
+     * intact, which is the whole point of pinning these strings rather than
+     * just asserting the host is gone.
      */
     @Test
     fun `keeps the Go diagnostic readable around the redacted host`() {
         val cases =
             mapOf(
-                "dial tcp: lookup vpnserver: no such host" to "dial tcp: lookup <redacted> no such host",
+                "dial tcp: lookup vpnserver: no such host" to "dial tcp: lookup <redacted>: no such host",
                 """{"address":"vpnserver","port":443}""" to """{"address":"<redacted>","port":443}""",
                 "address=vpnserver port=443" to "address=<redacted> port=443",
                 "vpnserver: connection refused" to "<redacted>: connection refused",
@@ -207,5 +219,28 @@ class RedactionTest {
             val once = redact(message)
             withClue(message) { redact(once) shouldBe once }
         }
+    }
+
+    /**
+     * The four shapes above are what the Go core returns *by itself*. In
+     * production none of them reach `redact()` unwrapped:
+     * `LibXrayInvoke.call` throws `XrayException("libXray $method failed:
+     * ${response.optString("error")}")`, and `TunnelService.failStart` passes
+     * `cause.message` straight into `ConnectionState.failure()`. So the real
+     * call path always hands `redact()` a string that already carries the
+     * `"libXray <method> failed: "` prefix.
+     *
+     * A code review proved by execution that a `^`-anchored bare-host-prefix
+     * pattern only ever looks at literal index 0 of the string, so this
+     * prefix defeats it — the one shape of the four that relies on being
+     * first is exactly the one shape production never hands it first.
+     */
+    @Test
+    fun `Go error shapes do not leak the host once wrapped by libXray's own prefix`() {
+        val prefix = "libXray InvokeTun failed: "
+        redact(prefix + "dial tcp: lookup vpnserver: no such host") shouldNotContain "vpnserver"
+        redact(prefix + """{"address":"vpnserver","port":443}""") shouldNotContain "vpnserver"
+        redact(prefix + "address=vpnserver port=443") shouldNotContain "vpnserver"
+        redact(prefix + "vpnserver: connection refused") shouldNotContain "vpnserver"
     }
 }

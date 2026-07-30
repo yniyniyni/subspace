@@ -73,18 +73,32 @@ private const val KEYED_VALUE_GROUP = 2
 /**
  * Go's error chaining puts the innermost context first: `vpnserver: connection
  * refused` is what a bare dial failure looks like, and there is no label in
- * front of it to key on. Position is again the only signal — first token of the
- * message, followed by a colon and a space.
+ * front of it to key on. Position is again the only signal — a token at the
+ * start of a "word: word" run, followed by a colon and a space.
  *
- * Anchored, so it sees one token per message and cannot walk into
- * `dial tcp: lookup <host>: no such host`, where the colon belongs to Go's
- * network word rather than to a host.
+ * Anchored to a token boundary (`(?<!\S)`, "not preceded by a non-whitespace
+ * character") rather than to the literal start of the string. A code review
+ * proved by execution that the original `^`-anchor never fires on the one call
+ * path that matters: every `XrayException` this codebase throws is built as
+ * `"libXray $method failed: ${'$'}{response.optString("error")}"` (see
+ * `LibXrayInvoke.call` in `:core:xray`), so the Go text this rule exists for is
+ * *never* the whole message in production — it is always preceded by that
+ * fixed prefix, which `^` cannot see past. A token boundary sees `vpnserver:`
+ * no matter what came before it, at the cost of also matching every other
+ * `word:`-followed-by-space run in the string, not only the first.
+ *
+ * That breadth is why every such token is still filtered by [NON_HOST_WORDS]
+ * rather than trusted on position alone: in `dial tcp: lookup vpnserver: no
+ * such host`, `tcp:` sits at exactly the same shape as `vpnserver:` and is
+ * only left alone because `tcp` is a recognised non-host word. A server
+ * genuinely named `tcp` would leak — the same fail-safe trade this file makes
+ * everywhere else.
  *
  * Guarded by [NON_HOST_WORDS] because the same position holds a package name in
  * `json: cannot unmarshal ...`. As everywhere here, the guard fails safe: a
  * server genuinely named `json` leaks the string "json".
  */
-private val BARE_HOST_PREFIX_PATTERN = Regex("""^(\S+):(?=\s)""")
+private val BARE_HOST_PREFIX_PATTERN = Regex("""(?<!\S)(\S+):(?=\s)""")
 
 /** The candidate group of [BARE_HOST_PREFIX_PATTERN] — the leading token. */
 private const val BARE_TOKEN_GROUP = 1

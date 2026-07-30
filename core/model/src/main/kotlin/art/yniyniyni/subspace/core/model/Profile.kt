@@ -78,6 +78,12 @@ public data class StreamSettings(
     /** Xray transport: `tcp`, `ws`, `grpc`, … M1 exercises `tcp`. */
     val network: String,
     val security: Security,
+    /**
+     * Options belonging to [network]. Defaulted so every existing construction
+     * site stays valid — M2's parsers set only `network` and `security`, and
+     * they are correct to, since the formats they read carried nothing more.
+     */
+    val transport: TransportOptions = TransportOptions.None,
 )
 
 public sealed interface Security {

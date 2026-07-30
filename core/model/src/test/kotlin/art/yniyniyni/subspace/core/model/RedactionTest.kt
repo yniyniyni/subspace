@@ -137,4 +137,75 @@ class RedactionTest {
             withClue(message) { redact(once) shouldBe once }
         }
     }
+
+    /**
+     * The four shapes `docs/agent/research/2026-07-27-m2-residuals-for-m3.md` §2
+     * demonstrated by execution, not by reading. All four come out of Go, and
+     * `TunnelService` passes `XrayException.message` straight into `failure()`.
+     *
+     * None of them are reachable from `:core:parser` any more — its diagnostics
+     * are a closed vocabulary as of Task 2 — which is precisely why they need
+     * pinning here: nothing else in the tree would notice their return.
+     */
+    @Test
+    fun `Go resolver errors do not leak the host`() {
+        redact("dial tcp: lookup vpnserver: no such host") shouldNotContain "vpnserver"
+    }
+
+    @Test
+    fun `Go JSON echoes do not leak the address`() {
+        redact("""{"address":"vpnserver","port":443}""") shouldNotContain "vpnserver"
+    }
+
+    @Test
+    fun `key=value diagnostics do not leak the address`() {
+        redact("address=vpnserver port=443") shouldNotContain "vpnserver"
+    }
+
+    @Test
+    fun `bare host prefixes do not leak the host`() {
+        redact("vpnserver: connection refused") shouldNotContain "vpnserver"
+    }
+
+    /**
+     * Residual §2 also recorded the opposite failure: `IPV6_PATTERN` matches any
+     * colon run, so a clock time was being destroyed to protect nothing.
+     */
+    @Test
+    fun `a timestamp is not mistaken for an IPv6 address`() {
+        redact("started at 12:34:56") shouldContain "12:34:56"
+    }
+
+    /**
+     * The other half of the four above. §10.4 makes this string the only
+     * diagnostic a user can hand back, so "the host is gone" is half a test —
+     * these pin what is *left*, which is what makes the failure debuggable.
+     */
+    @Test
+    fun `keeps the Go diagnostic readable around the redacted host`() {
+        val cases =
+            mapOf(
+                "dial tcp: lookup vpnserver: no such host" to "dial tcp: lookup <redacted> no such host",
+                """{"address":"vpnserver","port":443}""" to """{"address":"<redacted>","port":443}""",
+                "address=vpnserver port=443" to "address=<redacted> port=443",
+                "vpnserver: connection refused" to "<redacted>: connection refused",
+            )
+        cases.forEach { (input, expected) ->
+            withClue(input) { redact(input) shouldBe expected }
+        }
+    }
+
+    @Test
+    fun `is idempotent for the Go error shapes too`() {
+        listOf(
+            "dial tcp: lookup vpnserver: no such host",
+            """{"address":"vpnserver","port":443}""",
+            "address=vpnserver port=443",
+            "vpnserver: connection refused",
+            "started at 12:34:56",
+        ).forEach { message ->
+            val once = redact(message)
+            withClue(message) { redact(once) shouldBe once }
+        }
+    }
 }

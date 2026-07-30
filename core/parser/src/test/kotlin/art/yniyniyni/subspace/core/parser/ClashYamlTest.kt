@@ -3,7 +3,9 @@ package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.TrojanOutbound
+import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
 import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.assertions.withClue
@@ -501,5 +503,95 @@ class ClashYamlTest {
                 shouldNotThrowAny { parseClashYaml(input) }
             }
         }
+    }
+
+    @Test
+    fun `vless with reality-opts and ws-opts parses`() {
+        val yaml =
+            """
+            proxies:
+              - name: Frankfurt
+                type: vless
+                server: 198.51.100.7
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000001
+                flow: xtls-rprx-vision
+                network: ws
+                servername: www.example.com
+                reality-opts:
+                  public-key: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                  short-id: 0123abcd
+                ws-opts:
+                  path: /ray
+                  headers:
+                    Host: cdn.example.com
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.failures shouldBe emptyList()
+        outcome.profiles.size shouldBe 1
+
+        val profile = outcome.profiles.first()
+        profile.name shouldBe "Frankfurt"
+
+        val outbound = profile.outbound as VlessOutbound
+        outbound.address shouldBe "198.51.100.7"
+        outbound.port shouldBe 443
+        outbound.uuid shouldBe "8f2c4a1e-0000-4000-8000-000000000001"
+        outbound.flow shouldBe "xtls-rprx-vision"
+        outbound.stream.network shouldBe "ws"
+
+        val reality = outbound.stream.security as Security.Reality
+        reality.serverName shouldBe "www.example.com"
+        reality.shortId shouldBe "0123abcd"
+
+        val ws = outbound.stream.transport as TransportOptions.WebSocket
+        ws.path shouldBe "/ray"
+        ws.headers["Host"] shouldBe "cdn.example.com"
+    }
+
+    @Test
+    fun `vless without reality-opts falls back to tls`() {
+        val yaml =
+            """
+            proxies:
+              - name: Plain
+                type: vless
+                server: 198.51.100.8
+                port: 8443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000002
+                tls: true
+                servername: plain.example.com
+            """.trimIndent()
+
+        val outbound = parseClashYaml(yaml).profiles.single().outbound as VlessOutbound
+
+        (outbound.stream.security as Security.Tls).serverName shouldBe "plain.example.com"
+        outbound.stream.transport shouldBe TransportOptions.None
+    }
+
+    @Test
+    fun `vless missing uuid fails with a structured detail and does not lose its neighbours`() {
+        val yaml =
+            """
+            proxies:
+              - name: Broken
+                type: vless
+                server: 198.51.100.9
+                port: 443
+              - name: Fine
+                type: vless
+                server: 198.51.100.10
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000003
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        // §7: one bad entry must not lose the other.
+        outcome.profiles.size shouldBe 1
+        outcome.failures.single().reason shouldBe ParseFailureReason.MissingCredential
+        outcome.failures.single().detail shouldBe FailureDetail.Missing(DetailField.Uuid)
     }
 }

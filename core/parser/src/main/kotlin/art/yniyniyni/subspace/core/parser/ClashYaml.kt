@@ -6,11 +6,11 @@ import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.TrojanOutbound
+import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlList
 import com.charleskorn.kaml.YamlMap
-import com.charleskorn.kaml.YamlNode
 import com.charleskorn.kaml.YamlNull
 import com.charleskorn.kaml.YamlScalar
 
@@ -27,19 +27,16 @@ import com.charleskorn.kaml.YamlScalar
  * content arrives over the network and is attacker-controlled, and the classic
  * YAML RCE (CVE-2022-1471) is exactly a type-instantiation gadget.
  *
- * Only `vmess`, `trojan` and `ss` entries become profiles. Everything else —
- * `vless`, `hysteria`, `wireguard`, proxy providers — is reported as an
+ * Only `vmess`, `trojan`, `ss` and `vless` entries become profiles. Everything
+ * else — `hysteria`, `wireguard`, `socks5`, proxy providers — is reported as an
  * unsupported type rather than skipped, so a subscription that yields nothing
- * says why. `ws-opts` and `grpc-opts` are read no further than `network`:
- * [StreamSettings] models the transport name only, the limitation carried from
- * Task 8, and widening it is a model change rather than a parser one.
+ * says why. `ws-opts` and `grpc-opts` feed `TransportOptions` (see
+ * `ClashTransport.kt`) for `vless` only; the other three protocols still
+ * carry [StreamSettings]'s transport name alone, the limitation carried from
+ * Task 8 and unchanged by this task.
  *
- * Every node read goes through [node] and a safe cast rather than kaml's
- * `YamlMap.get<T>`: that function throws `IncorrectTypeException` when the key
- * is present with a different node type, so `proxies: notalist` would throw
- * straight through §7's never-throw rule. Verified against kaml 0.83.0 by
- * disassembling `YamlMap.get` — the reified cast is followed by an explicit
- * `athrow`, not a null return.
+ * Every node read goes through `node`/`text` in `ClashYamlNode.kt` and a safe
+ * cast rather than kaml's `YamlMap.get<T>` — see that file for why.
  */
 @Suppress("ReturnCount")
 internal fun parseClashYaml(text: String): ParseOutcome {
@@ -140,6 +137,7 @@ private fun proxyToProfile(
         "vmess" -> vmess(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         "trojan" -> trojan(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         "ss" -> shadowsocks(proxy, index, server, port, name)
+        "vless" -> vless(proxy, ClashCommon(index, server, port, name, sni, allowInsecure, network))
         else -> bad(index, ParseFailureReason.UnknownScheme, FailureDetail.Unsupported(DetailField.Scheme))
     }
 }
@@ -219,6 +217,40 @@ private fun trojan(
 }
 
 @Suppress("ReturnCount")
+private fun vless(
+    proxy: YamlMap,
+    common: ClashCommon,
+): LinkResult {
+    val uuid =
+        proxy.text("uuid")
+            ?: return bad(common.index, ParseFailureReason.MissingCredential, FailureDetail.Missing(DetailField.Uuid))
+
+    val reality = proxy.node("reality-opts") as? YamlMap
+    val security =
+        if (reality != null) {
+            Security.Reality(
+                serverName = common.sni,
+                publicKey = reality.text("public-key").orEmpty(),
+                shortId = reality.text("short-id").orEmpty(),
+                fingerprint = proxy.text("client-fingerprint") ?: "chrome",
+                spiderX = "",
+            )
+        } else {
+            tls(common)
+        }
+
+    val stream =
+        StreamSettings(
+            network = common.network,
+            security = security,
+            transport = transportOptions(proxy, common.network),
+        )
+    val outbound = VlessOutbound(common.server, common.port, uuid, proxy.text("flow"), stream)
+    val id = profileId("vless", common.server, common.port, uuid)
+    return LinkResult.Ok(Profile(id, common.name, outbound))
+}
+
+@Suppress("ReturnCount")
 private fun shadowsocks(
     proxy: YamlMap,
     index: Int,
@@ -252,14 +284,3 @@ private fun bad(
     reason: ParseFailureReason,
     detail: FailureDetail,
 ): LinkResult = LinkResult.Bad(parseFailure(index, reason, detail))
-
-private fun YamlMap.node(key: String): YamlNode? = entries.entries.firstOrNull { it.key.content == key }?.value
-
-/**
- * Reads a scalar whether YAML typed it as a string, number, or boolean.
- *
- * A key holding a map or a list reads as absent rather than as an error: the
- * caller's own missing-field failure is a better diagnostic than "wrong node
- * type", and it keeps every read on the non-throwing path.
- */
-private fun YamlMap.text(key: String): String? = (node(key) as? YamlScalar)?.content?.takeIf { it.isNotBlank() }

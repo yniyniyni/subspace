@@ -12,15 +12,15 @@ private const val MATRIX_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
  * The protocol × container support matrix, as a test rather than a claim.
  *
  * ARCHITECTURE.md §7 lists five link protocols and four container shapes, which
- * reads as twenty working combinations. It is fourteen. The gaps are not bugs —
- * nobody has written those branches — but §7 stated the capability
+ * reads as twenty working combinations. It is fifteen. The remaining gaps are
+ * not bugs — nobody has written those branches — but §7 stated the capability
  * unqualified, so the table there and this test exist to keep the real shape
  * visible and to fail if a cell silently changes.
  *
- * The consequence worth remembering: **Clash cannot express VLESS here, and
- * VLESS is the only protocol `:core:xray` can actually emit a config for.** A
- * user pasting a Clash config therefore imports profiles and can connect with
- * none of them. See the matrix in §7.
+ * Clash/`vless` used to be the cell that mattered most: VLESS is the only
+ * protocol `:core:xray` can actually emit a config for, and it was the one
+ * cell Clash lacked, so a Clash import produced profiles that all failed at
+ * connect. M3 fills that cell — see the matrix in §7.
  *
  * Each cell asserts only whether a profile comes out, because that is exactly
  * what the §7 table claims. Field-level correctness for the cells that do work
@@ -87,8 +87,8 @@ class CapabilityMatrixTest {
     }
 
     @Test
-    fun `clash yaml supports vmess, trojan and ss only`() {
-        val supported = setOf("vmess", "trojan", "ss")
+    fun `clash yaml supports vmess, trojan, ss and vless`() {
+        val supported = setOf("vmess", "trojan", "ss", "vless")
         clash.forEach { (protocol, yaml) ->
             withClue("clash $protocol") { yieldsProfile(yaml) shouldBe (protocol in supported) }
         }
@@ -102,20 +102,16 @@ class CapabilityMatrixTest {
     }
 
     /**
-     * The cell that decides whether a Clash import is usable at all. If this
-     * ever starts failing because Clash gained VLESS, §7's "zero connectable
-     * servers" note must be deleted in the same commit.
+     * The cell that used to decide whether a Clash import was usable at all.
+     * M3 fills it: Clash `vless` now yields a connectable profile, so the
+     * inverse of the assertion this test used to make is the one worth
+     * pinning going forward.
      */
     @Test
-    fun `clash cannot express the one protocol the tunnel can use`() {
+    fun `clash can now express the one protocol the tunnel can use`() {
         val clashVless = clash.getValue("vless")
 
-        yieldsProfile(clashVless) shouldBe false
-        SubscriptionParser.parse(clashVless).failures.shouldNotBeEmptyAndNameTheScheme()
-    }
-
-    private fun List<ParseFailure>.shouldNotBeEmptyAndNameTheScheme() {
-        isEmpty() shouldBe false
-        single().reason shouldBe ParseFailureReason.UnknownScheme
+        yieldsProfile(clashVless) shouldBe true
+        SubscriptionParser.parse(clashVless).failures shouldBe emptyList()
     }
 }

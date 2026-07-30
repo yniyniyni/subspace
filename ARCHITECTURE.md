@@ -322,12 +322,12 @@ assuming a bug in this codebase, and check the Xray-core issue tracker.
 ### What actually parses, per container
 
 Five protocols across four containers reads as twenty combinations. It is
-fourteen. The gaps are not bugs — nobody has written those branches — but they
+fifteen. The gaps are not bugs — nobody has written those branches — but they
 are load-bearing enough that guessing from the list above will mislead you:
 
 | | share link | base64 list | Clash YAML | raw Xray JSON |
 |---|---|---|---|---|
-| vless | ✓ | ✓ | ✗ | ✓ |
+| vless | ✓ | ✓ | ✓ | ✓ |
 | vmess | ✓ | ✓ | ✓ | ✗ |
 | trojan | ✓ | ✓ | ✓ | ✗ |
 | ss | ✓ | ✓ | ✓ | ✗ |
@@ -336,16 +336,15 @@ are load-bearing enough that guessing from the list above will mislead you:
 The base64 column can never differ from the share-link column: a blob is
 decoded and re-fed through detection, which lands on the link-list path.
 
-**The practical consequence: a user pasting a Clash config gets zero
-*connectable* servers.** VLESS is the only protocol `:core:xray` can emit a
-config for, and VLESS is the one cell Clash lacks — so the import succeeds,
-profiles appear, and every one of them fails at connect time with
-`ProtocolNotSupported`. Clash's three working cells are exactly the three the
-tunnel cannot use.
+**A user pasting a Clash config now gets connectable servers.** VLESS is the
+only protocol `:core:xray` can emit a config for, and it used to be the one
+cell Clash lacked — every Clash import produced profiles that all failed at
+connect time with `ProtocolNotSupported`. That gap is closed: `reality-opts`
+and `ws-opts` map into `StreamSettings`, so a Clash entry with `type: vless`
+now parses into a working profile the same way a `vless://` link does.
 
-**M3 fills two of the six gaps, not all of them:** Clash `vless` and `socks5`.
-That is the whole of the user-visible problem — VLESS is the one protocol
-`:core:xray` can emit, and it is the one cell Clash lacks. Raw Xray JSON's four
+**M3 fills two of the six gaps that remained, not all of them:** Clash
+`vless` (done, this task) and `socks5` (still open). Raw Xray JSON's four
 missing cells wait, because filling them would produce profiles that parse and
 then fail at connect with `ProtocolNotSupported`; they belong with the milestone
 that makes those protocols connectable, and each of those needs its own device

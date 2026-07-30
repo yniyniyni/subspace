@@ -519,7 +519,7 @@ class ClashYamlTest {
                 network: ws
                 servername: www.example.com
                 reality-opts:
-                  public-key: BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+                  public-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
                   short-id: 0123abcd
                 ws-opts:
                   path: /ray
@@ -593,5 +593,110 @@ class ClashYamlTest {
         outcome.profiles.size shouldBe 1
         outcome.failures.single().reason shouldBe ParseFailureReason.MissingCredential
         outcome.failures.single().detail shouldBe FailureDetail.Missing(DetailField.Uuid)
+    }
+
+    /**
+     * Code review finding: the Clash `vless` path checked only presence of
+     * `uuid`, never its shape, unlike `VlessLink.kt`'s share-link path. Same
+     * `validateUuid` the vmess branch already uses.
+     */
+    @Test
+    fun `vless malformed uuid fails with a structured detail`() {
+        val yaml =
+            """
+            proxies:
+              - name: Broken
+                type: vless
+                server: 198.51.100.11
+                port: 443
+                uuid: not-a-uuid
+            """.trimIndent()
+
+        val failure = parseClashYaml(yaml).failures.single()
+        failure.reason shouldBe ParseFailureReason.MissingCredential
+        failure.detail shouldBe FailureDetail.Malformed(DetailField.Uuid)
+    }
+
+    /**
+     * Code review finding: `reality-opts.public-key` reached
+     * `Security.Reality.publicKey` via a bare `.orEmpty()`, unvalidated,
+     * where `VlessLink.kt`'s share-link path runs it through
+     * `validateRealityPublicKey`. A malformed key used to reach `:core:xray`
+     * and fail at connect instead of failing here with a typed detail.
+     */
+    @Test
+    fun `vless malformed reality public key fails with a structured detail`() {
+        val yaml =
+            """
+            proxies:
+              - name: Broken
+                type: vless
+                server: 198.51.100.12
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000004
+                reality-opts:
+                  public-key: AAEC
+                  short-id: 0123abcd
+            """.trimIndent()
+
+        val failure = parseClashYaml(yaml).failures.single()
+        failure.reason shouldBe ParseFailureReason.InvalidRealityKey
+        failure.detail shouldBe FailureDetail.Length(DetailField.PublicKey, expected = 43, actual = 4)
+    }
+
+    @Test
+    fun `vless with grpc-opts carries the service name`() {
+        val yaml =
+            """
+            proxies:
+              - name: Grpc
+                type: vless
+                server: 198.51.100.13
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000005
+                network: grpc
+                grpc-opts:
+                  grpc-service-name: ray-grpc
+            """.trimIndent()
+
+        val outbound = parseClashYaml(yaml).profiles.single().outbound as VlessOutbound
+        val grpc = outbound.stream.transport as TransportOptions.Grpc
+        grpc.serviceName shouldBe "ray-grpc"
+    }
+
+    @Test
+    fun `vless with grpc network but no grpc-opts has no transport options`() {
+        val yaml =
+            """
+            proxies:
+              - name: GrpcBare
+                type: vless
+                server: 198.51.100.14
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000006
+                network: grpc
+            """.trimIndent()
+
+        val outbound = parseClashYaml(yaml).profiles.single().outbound as VlessOutbound
+        outbound.stream.transport shouldBe TransportOptions.None
+    }
+
+    @Test
+    fun `vless with ws network but no ws-opts defaults path and headers`() {
+        val yaml =
+            """
+            proxies:
+              - name: WsBare
+                type: vless
+                server: 198.51.100.15
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000007
+                network: ws
+            """.trimIndent()
+
+        val outbound = parseClashYaml(yaml).profiles.single().outbound as VlessOutbound
+        val ws = outbound.stream.transport as TransportOptions.WebSocket
+        ws.path shouldBe "/"
+        ws.headers shouldBe emptyMap()
     }
 }

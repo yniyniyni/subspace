@@ -336,19 +336,19 @@ are load-bearing enough that guessing from the list above will mislead you:
 The base64 column can never differ from the share-link column: a blob is
 decoded and re-fed through detection, which lands on the link-list path.
 
-**A user pasting a Clash config now gets connectable servers.** VLESS is the
-only protocol `:core:xray` can emit a config for, and it used to be the one
-cell Clash lacked — every Clash import produced profiles that all failed at
+**A Clash config's `vless` entries are now connectable.** VLESS is the only
+protocol `:core:xray` can emit a config for, and it used to be the one cell
+Clash lacked — every Clash `vless` entry produced a profile that failed at
 connect time with `ProtocolNotSupported`. That gap is closed: `reality-opts`
 and `ws-opts` map into `StreamSettings`, so a Clash entry with `type: vless`
 now parses into a working profile the same way a `vless://` link does.
 
 **M3 fills two of the six gaps that remained, not all of them:** Clash
-`vless` (done, this task) and `socks5` (still open). Raw Xray JSON's four
-missing cells wait, because filling them would produce profiles that parse and
-then fail at connect with `ProtocolNotSupported`; they belong with the milestone
-that makes those protocols connectable, and each of those needs its own device
-verification (§10.1).
+`vless` and `socks5`. Raw Xray JSON's four missing cells wait, because
+filling them would produce profiles that parse and then fail at connect with
+`ProtocolNotSupported`; they belong with the milestone that makes those
+protocols connectable, and each of those needs its own device verification
+(§10.1).
 
 `CapabilityMatrixTest` in `:core:parser` pins every cell of this table, so it
 fails if one changes without this table changing with it.

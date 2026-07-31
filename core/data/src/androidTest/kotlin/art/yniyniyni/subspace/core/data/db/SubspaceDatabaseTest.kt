@@ -47,9 +47,12 @@ class SubspaceDatabaseTest {
             val groupId = db.profileDao().insertGroup(sampleGroup())
 
             db.profileDao().upsertProfile(sampleProfile(groupId, identityHash = "same"))
-            db.profileDao().upsertProfile(sampleProfile(groupId, identityHash = "same"))
+            db.profileDao().upsertProfile(sampleProfile(groupId, identityHash = "same", name = "Updated"))
 
             db.profileDao().profileCount() shouldBe 1
+            // Not just "one row" — the second upsert's data must actually have
+            // landed. A naive @Upsert can silently drop this write (fix round 1).
+            db.profileDao().findProfile(groupId, identityHash = "same")?.name shouldBe "Updated"
         }
 
     @Test
@@ -70,11 +73,12 @@ class SubspaceDatabaseTest {
     private fun sampleProfile(
         groupId: Long,
         identityHash: String,
+        name: String = "Test",
     ) = ProfileEntity(
         groupId = groupId,
         kind = "TYPED",
         identityHash = identityHash,
-        name = "Test",
+        name = name,
         protocol = "vless",
         address = "198.51.100.1",
         port = 443,

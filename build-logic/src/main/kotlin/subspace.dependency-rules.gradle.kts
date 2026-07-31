@@ -10,6 +10,9 @@
 //     feature beneath app — clearly forbids the inversion; a :core module
 //     pulling in a :feature module would make the dependency graph
 //     circular in spirit even where Gradle would still happily resolve it)
+//   - :service and :core:parser never depend on :core:ui (§4: :core:ui is
+//     Compose, for :feature:* and :app only)
+//   - :core:ui depends on :core:model only (§4)
 // The fourth rule ("zero Android dependencies for :core:model and :core:parser")
 // needs no check: those modules apply subspace.jvm, the plain Kotlin/JVM plugin,
 // so an Android import fails to compile. That is a stronger guarantee than a
@@ -90,6 +93,22 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
         if (path.startsWith(":core:")) {
             projectDeps.filter { it.startsWith(":feature:") }.forEach {
                 violations += "$path depends on $it — :core:* must never depend on :feature:* (§3/§4)"
+            }
+        }
+
+        // :core:ui is Compose. :service runs in :bg and has no UI; :core:parser is
+        // pure JVM by design so its tests run without a device (§4). Either taking a
+        // dependency on it would be a real regression, not a style question.
+        if (path == ":service" || path == ":core:parser") {
+            projectDeps.filter { it == ":core:ui" }.forEach {
+                violations += "$path depends on $it — :core:ui is for :feature:* and :app only (§4)"
+            }
+        }
+
+        // :core:ui itself may reach :core:model and nothing else.
+        if (path == ":core:ui") {
+            projectDeps.filter { it != ":core:model" }.forEach {
+                violations += "$path depends on $it — :core:ui may depend on :core:model only (§4)"
             }
         }
 

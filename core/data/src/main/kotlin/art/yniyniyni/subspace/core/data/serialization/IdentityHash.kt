@@ -15,8 +15,9 @@ private const val HEX_RADIX = 16
  * variants of one server differing solely in SNI or flow produce the same id
  * and collapse into one row at upsert.
  *
- * Determinism comes from kotlinx.serialization emitting properties in
- * declaration order, so the same outbound always encodes to the same bytes.
+ * Determinism comes from [Outbound.toJson] — see its doc for why declaration
+ * order alone is not the whole story, and how the one exception (a `Map`
+ * field) is canonicalised before it reaches the serializer.
  */
 internal fun identityHashOf(outbound: Outbound): String = sha256(outbound.toJson())
 

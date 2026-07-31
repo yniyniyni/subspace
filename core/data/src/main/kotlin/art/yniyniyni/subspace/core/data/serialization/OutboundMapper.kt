@@ -24,7 +24,12 @@ private val json = Json { encodeDefaults = true }
  *
  * Property order is kotlinx.serialization's declaration order, which is fixed
  * per type, so the same [Outbound] always encodes to the same bytes — that
- * determinism is what makes [identityHashOf] stable.
+ * determinism is what makes [identityHashOf] stable. The one field that
+ * declaration order does not cover is [TransportOptions.WebSocket.headers]:
+ * a `Map`'s serialized order follows its *iteration* order, so [toDto] sorts
+ * `headers` by key before it ever reaches the serializer, making the output
+ * independent of whichever `Map` implementation or insertion order a caller
+ * happened to build.
  */
 internal fun Outbound.toJson(): String = json.encodeToString(OutboundDto.serializer(), toDto())
 
@@ -196,7 +201,14 @@ private fun SecurityDto.toDomain(): Security =
 private fun TransportOptions.toDto(): TransportDto =
     when (this) {
         is TransportOptions.None -> TransportDto.None
-        is TransportOptions.WebSocket -> TransportDto.WebSocket(path = path, headers = headers)
+        // sorted by key: kotlinx.serialization writes a Map in its iteration
+        // order, not sorted or declaration order, so an unsorted map makes
+        // toJson() — and therefore identityHashOf — depend on the caller's
+        // map implementation and insertion order rather than the headers
+        // themselves. A HashMap-backed producer and a LinkedHashMap-backed
+        // producer of the exact same headers would otherwise hash two
+        // "identical" servers to different identities.
+        is TransportOptions.WebSocket -> TransportDto.WebSocket(path = path, headers = headers.toSortedMap())
         is TransportOptions.Grpc -> TransportDto.Grpc(serviceName = serviceName)
     }
 

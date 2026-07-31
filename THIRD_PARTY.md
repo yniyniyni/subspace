@@ -24,6 +24,7 @@ license.
 | [snakeyaml-engine-kmp](https://github.com/krzema12/snakeyaml-engine-kmp) (`it.krzeminski:snakeyaml-engine-kmp`) | 3.1.1 | Apache-2.0 | Attribution only. **Transitive, via kaml** — the YAML 1.2 engine that actually parses Clash configs. A Kotlin Multiplatform port maintained by a separate party from upstream snakeyaml, so it is its own supply-chain question, not a detail of kaml's. |
 | [Okio](https://github.com/square/okio) (`com.squareup.okio:okio`) | 3.14.0 (resolved; kaml's chain declares 3.10.2) | Apache-2.0 | Attribution only. **Transitive, via kaml → snakeyaml-engine-kmp.** I/O primitives for the YAML reader. |
 | [UrlEncoder](https://github.com/ethauvin/urlencoder) (`net.thauvin.erik.urlencoder:urlencoder-lib`) | 1.6.0 | Apache-2.0 | Attribution only. **Transitive, via kaml → snakeyaml-engine-kmp.** Not used directly by this project; recorded because it ships in the APK. |
+| [AndroidX Room](https://developer.android.com/jetpack/androidx/releases/room) | 2.8.4 | Apache-2.0 | All persistence — profiles, groups **and settings**. ARCHITECTURE.md §3 mandates it and rules out DataStore: Preferences DataStore is not multi-process safe, and this app runs `:main` and `:bg`. Room additionally offers `enableMultiInstanceInvalidation()`, which is the only mechanism that makes a `:bg` write visible to a `:main` query. Justification per ARCHITECTURE.md §10.7. |
 
 Bundled `geoip.dat` / `geosite.dat` originate from
 [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community)
@@ -50,6 +51,7 @@ of which source set it lands in.
 | [kotest-assertions-core](https://github.com/kotest/kotest) | 5.9.1 | Apache-2.0 | Test-only. Assertions in every module's unit tests, and in `:core:xray`'s `androidTest` — wired there explicitly because the convention plugin only adds it to `testImplementation`. Assertions only; the kotest *runner* is deliberately not used, so tests stay plain JUnit 4. |
 | [kotlinx.coroutines-test](https://github.com/Kotlin/kotlinx.coroutines) | 1.10.2 | Apache-2.0 | Test-only. Supplies the Main dispatcher `viewModelScope` needs off-device. |
 | [androidx.test](https://developer.android.com/jetpack/androidx/releases/test) runner + ext-junit | 1.7.0 / 1.3.0 | Apache-2.0 | Test-only. Instrumented tests, which are the only place libXray and tun2socks can actually run (§11). |
+| [Room Testing](https://developer.android.com/jetpack/androidx/releases/room) (`androidx.room:room-testing`) | 2.8.4 | Apache-2.0 | Test-only. `Room.inMemoryDatabaseBuilder`, used by `:core:data`'s instrumented `SubspaceDatabaseTest` so the schema, foreign keys and unique indices are proven against a real SQLite engine rather than mocked. |
 
 ---
 

@@ -4,18 +4,34 @@ package art.yniyniyni.subspace.core.data.db
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
+import kotlinx.coroutines.flow.Flow
 
 /**
  * Data access for [ProfileGroupEntity] and [ProfileEntity].
  *
- * This is the minimal surface Task 7's [SubspaceDatabaseTest] needs to
- * compile and pass — insert, upsert, cascade-delete a group, and count rows.
- * Task 8 adds the read/query surface the Servers screen and repositories
- * actually consume.
+ * Task 7's [SubspaceDatabaseTest] needed only insert, upsert, cascade-delete
+ * a group, and count rows. Task 8 adds the read/query surface the Servers
+ * screen and Task 9's repositories actually consume: observable lists, a
+ * single-row lookup, per-group deletion, and the two narrow `:bg` writes
+ * from spec D4 ([recordConnected], [recordError]).
  */
+@Suppress("TooManyFunctions") // A DAO's surface area is the width of its table's usage, not a code smell.
 @Dao
 internal interface ProfileDao {
+    /** Every group, in display order. Recomposes the Servers screen on write. */
+    @Query("SELECT * FROM profile_groups ORDER BY position, id")
+    fun observeGroups(): Flow<List<ProfileGroupEntity>>
+
+    /** Every profile across every group, in display order. */
+    @Query("SELECT * FROM profiles ORDER BY position, id")
+    fun observeProfiles(): Flow<List<ProfileEntity>>
+
+    /** A single profile by its primary key, or null if it no longer exists. */
+    @Query("SELECT * FROM profiles WHERE id = :id")
+    suspend fun profile(id: Long): ProfileEntity?
+
     /** Inserts a group, returning its generated row id. */
     @Insert
     suspend fun insertGroup(group: ProfileGroupEntity): Long
@@ -37,7 +53,17 @@ internal interface ProfileDao {
      * silently vanishes: no exception, no log, just data that never landed.
      * Looking the real row up by identity first and writing through its
      * actual id avoids that trap entirely.
+     *
+     * [Transaction]ed because this is read-then-write across two statements.
+     * Task 9's repository calls this concurrently during subscription
+     * import: without a transaction, two coroutines upserting the same
+     * (groupId, identityHash) can both see [findProfile] return null before
+     * either inserts, and the second insert then throws
+     * `SQLiteConstraintException` on the unique index — trading the old
+     * silent-drop bug for an unhandled crash. Wrapping both statements in one
+     * transaction serializes concurrent callers instead.
      */
+    @Transaction
     suspend fun upsertProfile(profile: ProfileEntity) {
         val existing = findProfile(profile.groupId, profile.identityHash)
         if (existing != null) {
@@ -70,7 +96,32 @@ internal interface ProfileDao {
     @Query("DELETE FROM profile_groups WHERE id = :groupId")
     suspend fun deleteGroup(groupId: Long)
 
+    /** Deletes a single profile by id. */
+    @Query("DELETE FROM profiles WHERE id = :id")
+    suspend fun deleteProfile(id: Long)
+
     /** Total profile row count across every group. */
     @Query("SELECT COUNT(*) FROM profiles")
     suspend fun profileCount(): Int
+
+    /**
+     * Records a successful connection and clears any prior error. The only
+     * write `:bg` performs on this table besides [recordError] — see spec D4.
+     */
+    @Query("UPDATE profiles SET lastConnectedAt = :at, lastError = NULL WHERE id = :id")
+    suspend fun recordConnected(
+        id: Long,
+        at: Long,
+    )
+
+    /**
+     * Records a connection failure. `error` must never contain config
+     * contents (ARCHITECTURE.md §5.6) — callers pass a category, not the
+     * underlying exception message.
+     */
+    @Query("UPDATE profiles SET lastError = :error WHERE id = :id")
+    suspend fun recordError(
+        id: Long,
+        error: String,
+    )
 }

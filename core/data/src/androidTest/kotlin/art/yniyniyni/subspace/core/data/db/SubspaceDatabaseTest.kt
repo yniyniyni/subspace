@@ -4,10 +4,20 @@ package art.yniyniyni.subspace.core.data.db
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+
+// Concurrent callers, not concurrent runs: enough parallel upserts on real
+// threads (Dispatchers.IO) to make a read-then-write race land inside a
+// single test invocation, given upsertProfile's read and write are two
+// separate suspend calls without @Transaction serializing them.
+private const val CONCURRENT_UPSERTS = 25
 
 class SubspaceDatabaseTest {
     private lateinit var db: SubspaceDatabase
@@ -65,6 +75,29 @@ class SubspaceDatabaseTest {
             db.profileDao().upsertProfile(sampleProfile(b, identityHash = "same"))
 
             db.profileDao().profileCount() shouldBe 2
+        }
+
+    // upsertProfile is a read (findProfile) then a write (insert or update),
+    // with no @Transaction the two coroutines can both observe "not found"
+    // before either writes, and the second insert then throws
+    // SQLiteConstraintException on the unique index instead of updating.
+    // @Transaction serializes concurrent callers at the same
+    // (groupId, identityHash) so exactly one row survives and nothing throws.
+    @Test
+    fun concurrentUpsertsOfTheSameIdentityProduceOneRowNotACrash() =
+        runTest {
+            val groupId = db.profileDao().insertGroup(sampleGroup())
+
+            coroutineScope {
+                (1..CONCURRENT_UPSERTS)
+                    .map {
+                        async(Dispatchers.IO) {
+                            db.profileDao().upsertProfile(sampleProfile(groupId, identityHash = "race"))
+                        }
+                    }.awaitAll()
+            }
+
+            db.profileDao().profileCount() shouldBe 1
         }
 
     private fun sampleGroup(name: String = "Local configs") =

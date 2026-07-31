@@ -97,6 +97,21 @@ class ParcelMappingTest {
         (roundTripped.outbound as VmessOutbound).alterId shouldBe 1
     }
 
+    @Test
+    fun `from carries the rowId it is given`() {
+        ProfileParcel.from(profile, rowId = 42L).rowId shouldBe 42L
+    }
+
+    @Test
+    fun `from defaults rowId to the unassigned sentinel when not given`() {
+        // §D4: TunnelClient.connect(Profile) has no Room row to resolve yet — that
+        // is Part 2's Home rewrite — so this default is what a connect sent today
+        // actually carries. UNASSIGNED_ROW_ID is 0, which Room's autoGenerate never
+        // assigns to a real row, so :bg's write-back is a guaranteed no-op rather
+        // than a collision.
+        ProfileParcel.from(profile).rowId shouldBe ProfileParcel.UNASSIGNED_ROW_ID
+    }
+
     /**
      * Builds a parcel with everything valid except the two discriminants, so a
      * failure can only come from the code under test.
@@ -104,8 +119,10 @@ class ParcelMappingTest {
     private fun parcelWith(
         protocol: Int,
         securityKind: Int,
+        rowId: Long = 1L,
     ) = ProfileParcel(
         protocol = protocol,
+        rowId = rowId,
         id = "p1",
         name = "Test",
         address = "example.com",

@@ -10,4 +10,13 @@
     <string name="connect_control_action_connect">Connect</string>
     <string name="connect_control_action_connecting">Connecting</string>
     <string name="connect_control_action_disconnect">Disconnect</string>
+
+    <!-- FloatingNavigationBar's own instrumented test uses these three as its
+         representative destinations. Real screens build their own NavItem
+         lists from their own feature module's strings (:core:ui cannot
+         depend on :feature:*), but these names match the app's actual three
+         top-level destinations, so a real caller may reuse them too. -->
+    <string name="nav_item_connect">Connect</string>
+    <string name="nav_item_servers">Servers</string>
+    <string name="nav_item_settings">Settings</string>
 </resources>

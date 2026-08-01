@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no
+     hardcoded UI text. §5.6: no string here may interpolate a server
+     address, uuid, or key. -->
+<resources>
+    <!-- ConnectControl's accessible label names the action a tap performs,
+         not the current connection state (a screen reader user needs to know
+         what tapping does, not what already happened) — see the KDoc on
+         ConnectControl.kt's actionDescription(). -->
+    <string name="connect_control_action_connect">Connect</string>
+    <string name="connect_control_action_connecting">Connecting</string>
+    <string name="connect_control_action_disconnect">Disconnect</string>
+</resources>

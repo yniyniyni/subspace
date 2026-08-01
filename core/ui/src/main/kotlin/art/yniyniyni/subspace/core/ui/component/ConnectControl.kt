@@ -83,27 +83,39 @@ enum class ConnectVisualState {
     Connected,
 }
 
-/** Container/content color pair for one [ConnectVisualState]. */
-private data class ConnectControlColors(val container: Color, val content: Color)
+/**
+ * Container/content color pair for one [ConnectVisualState]. `internal`, not
+ * `private`: [ConnectControlTest] pins the [ConnectVisualState.Connecting]
+ * mapping against `MaterialTheme.colorScheme` directly (fix round 1 —
+ * `secondaryContainer`/`onSecondaryContainer` drifted from the design token,
+ * see [colors] below), which needs to call [colors] from the androidTest
+ * source set.
+ */
+internal data class ConnectControlColors(val container: Color, val content: Color)
 
 @Composable
-private fun ConnectVisualState.colors(): ConnectControlColors {
+internal fun ConnectVisualState.colors(): ConnectControlColors {
     val scheme = MaterialTheme.colorScheme
     val subspaceColors = LocalSubspaceColors.current
     return when (this) {
-        // colors.css aliases --color-disconnected to on-surface-variant and
-        // --color-connecting to secondary (Task 13's handover notes), but
-        // neither token says which role is the fill and which is the
-        // content — colors.css only has the single alias, not a
-        // container/on-container pair the way --color-connected does. Rather
-        // than invent an unverified pairing, each state uses Material's own
-        // guaranteed-contrast tonal pair for the corresponding role
-        // (surfaceVariant/onSurfaceVariant, secondaryContainer/
-        // onSecondaryContainer) as the closest faithful reading.
+        // colors.css aliases --color-disconnected to on-surface-variant,
+        // which is already a content-shaped role with no obvious container
+        // of its own — colors.css has no --color-disconnected-container the
+        // way it has --color-connected-container. Falling back to Material's
+        // own guaranteed-contrast pair for that role (surfaceVariant /
+        // onSurfaceVariant) is the closest faithful reading available.
         ConnectVisualState.Disconnected ->
             ConnectControlColors(container = scheme.surfaceVariant, content = scheme.onSurfaceVariant)
+        // --color-connecting is --md-ref-secondary-40 (light) / secondary-80
+        // (dark) in colors.css — exactly Material's `secondary` role, not a
+        // separate token needing a fallback. secondaryContainer/
+        // onSecondaryContainer (tone 90/10 light, 30/90 dark — a materially
+        // lighter, pastel fill) was a drift from that token, not a faithful
+        // reading of it (fix round 1, flagged in code review): secondary
+        // pairs with its own already-defined guaranteed-contrast partner,
+        // onSecondary, so nothing here needs inventing.
         ConnectVisualState.Connecting ->
-            ConnectControlColors(container = scheme.secondaryContainer, content = scheme.onSecondaryContainer)
+            ConnectControlColors(container = scheme.secondary, content = scheme.onSecondary)
         // connected/onConnected, not connectedContainer/onConnected: Color.kt's
         // KDoc only verifies contrast for the (connected, onConnected) pair —
         // connectedContainer has no onConnectedContainer counterpart to pair

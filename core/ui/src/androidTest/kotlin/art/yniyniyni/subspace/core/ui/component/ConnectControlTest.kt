@@ -1,18 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The v2 rule (androidx.compose.ui.test.junit4.v2.createComposeRule) that this
-// module's compose-compiler suggests replacing this with produced
-// "IllegalStateException: No compose hierarchies found in the app" on every
-// assertion/interaction that ran after setContent, on this device
-// (Pixel 8, API 37) — confirmed by running both: v1 attaches content and
-// finds it every time, v2 did not once across five tests. v1 is not removed,
-// only deprecated in favor of v2's StandardTestDispatcher-based coroutine
-// semantics, which this file's synchronous, non-coroutine assertions do not
-// need. Suppressed rather than chasing an API that fails on real hardware.
-@file:Suppress("DEPRECATION")
-
 package art.yniyniyni.subspace.core.ui.component
 
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -79,5 +70,31 @@ class ConnectControlTest {
             SubspaceTheme { ConnectControl(state = ConnectVisualState.Connected, onClick = {}) }
         }
         composeRule.onNodeWithTag(CONNECT_HALO_TEST_TAG).assertExists()
+    }
+
+    // Fix round 1: --color-connecting is colors.css's alias for Material's own
+    // secondary role verbatim (Secondary40 light / Secondary80 dark, per
+    // Color.kt), not a case needing a fallback pairing the way Disconnected's
+    // on-surface-variant-with-no-container does. secondaryContainer/
+    // onSecondaryContainer drifted from that token (a materially lighter,
+    // pastel fill) and shipped in the first commit undetected — this pins the
+    // correct mapping so a future edit cannot silently drift again.
+    @Test
+    fun connectingUsesTheSecondaryRoleVerbatim() {
+        var actualContainer: Color? = null
+        var actualContent: Color? = null
+        var expectedContainer: Color? = null
+        var expectedContent: Color? = null
+        composeRule.setContent {
+            SubspaceTheme {
+                val colors = ConnectVisualState.Connecting.colors()
+                actualContainer = colors.container
+                actualContent = colors.content
+                expectedContainer = MaterialTheme.colorScheme.secondary
+                expectedContent = MaterialTheme.colorScheme.onSecondary
+            }
+        }
+        actualContainer shouldBe expectedContainer
+        actualContent shouldBe expectedContent
     }
 }

@@ -19,4 +19,8 @@
     <string name="nav_item_connect">Connect</string>
     <string name="nav_item_servers">Servers</string>
     <string name="nav_item_settings">Settings</string>
+
+    <!-- SubspaceBottomSheetTest's fixture title — no real caller exists yet
+         (Task 19), so this is test-only, unlike the nav_item_* strings above. -->
+    <string name="bottom_sheet_test_title">Sheet Title</string>
 </resources>

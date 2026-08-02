@@ -17,7 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
-import art.yniyniyni.subspace.feature.home.HomeScreen
+import art.yniyniyni.subspace.navigation.SubspaceNavHost
 import art.yniyniyni.subspace.service.TunnelClient
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    HomeScreen(
+                    SubspaceNavHost(
                         onRequestConsent = { onGranted ->
                             // A null intent means consent was already granted.
                             // Without consent establish() returns null and the

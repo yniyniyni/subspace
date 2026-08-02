@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no
+     hardcoded UI text. §5.6: no string here may interpolate a server
+     address, uuid, or key. -->
 <resources>
     <string name="app_name">Subspace</string>
+
+    <!-- SubspaceNavHost placeholders for the two pushed routes. Task 16 only
+         builds the navigation skeleton — Editor and QrScan get their real
+         screens from later tasks, which replace this content outright rather
+         than build on top of it. profileId is a local Room row id, not a
+         secret (§5.6 covers server addresses/uuids/keys, not row ids). -->
+    <string name="nav_editor_placeholder_title">Editor — profile #%1$d</string>
+    <string name="nav_qr_scan_placeholder_title">QR scan</string>
 </resources>

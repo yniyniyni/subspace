@@ -1,19 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.home
 
+import art.yniyniyni.subspace.core.data.ProfileKind
+import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
-import art.yniyniyni.subspace.core.parser.DetailField
-import art.yniyniyni.subspace.core.parser.FailureDetail
-import io.kotest.matchers.nulls.shouldBeNull
-import io.kotest.matchers.nulls.shouldNotBeNull
+import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.StartupStage
+import art.yniyniyni.subspace.core.model.StreamSettings
+import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -22,31 +28,100 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Covers only what Task 15 added to [HomeViewModel]: routing input through
- * [art.yniyniyni.subspace.core.parser.SubscriptionParser], preserving its
- * typed failure detail alongside the existing string-resource error, and
- * clearing both together on edit. [FailureDetailDisplayTest] covers the
- * feature-local resource mapping used to render that detail.
+ * Covers what Task 17 rewrote [HomeViewModel] to do: connect using the profile
+ * [art.yniyniyni.subspace.core.data.SettingsRepository.activeProfileId] names
+ * — never `ProfileRepository`'s first row, the retired M1 shortcut — and mirror
+ * [ConnectionState] from [TunnelConnection] verbatim rather than inferring it
+ * locally (§5.5).
  *
  * `viewModelScope` needs a Main dispatcher to run at all outside Android, hence
- * [UnconfinedTestDispatcher].
+ * [UnconfinedTestDispatcher]. Every source [HomeViewModel] combines
+ * ([TunnelConnection.state], [ActiveProfileSource.activeProfile],
+ * [ActiveProfileSource.hasAnyProfile]) is backed by a [MutableStateFlow] with a
+ * value already available at construction, so — unlike the M1 predecessor of
+ * this file, whose `parseInput` genuinely hopped to `Dispatchers.Default` and
+ * needed `state.first { predicate }` to await that hop — the combined
+ * [HomeState] here is available synchronously off `state.value` under this
+ * dispatcher, with no await needed except after [HomeViewModel.onConsentGranted]
+ * itself, which is asserted with `advanceUntilIdle()` per the brief.
  *
- * These tests **await** rather than read `state.value` straight after the call.
- * §5.3 requires the parse to happen off the main thread, so `parseInput` hops to
- * `Dispatchers.Default` and `onConsentGranted` returns before the result exists.
- * That hop is the fix, not an inconvenience — a version of this test that could
- * still read the result synchronously would be a test asserting the §5.3
- * regression is back. `runTest` bounds the wait in real time, so a parse that
- * never completes fails the test rather than hanging the build.
+ * Backtick test names keep the spaces the brief wrote them with: this file
+ * runs as a plain JVM unit test (`:feature:home:testDebugUnitTest`), never
+ * through D8/dexing, so the DEX 040 synthetic-class-name restriction that
+ * forces camelCase in this module's *instrumented* tests
+ * ([art.yniyniyni.subspace.core.ui.component.ConnectControlTest] et al.) does
+ * not apply here — this module's own pre-existing JVM tests already used
+ * backtick-with-spaces names successfully.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class HomeViewModelTest {
-    private val garbage = "this is not a link, not json, not yaml, and not base64 either!!"
+    private val defaultOutbound =
+        VlessOutbound(
+            address = "example.com",
+            port = 443,
+            uuid = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab",
+            flow = null,
+            stream = StreamSettings(network = "tcp", security = Security.None),
+        )
+
+    private fun storedProfile(
+        id: Long,
+        name: String,
+        outbound: Outbound? = defaultOutbound,
+    ): StoredProfile =
+        StoredProfile(
+            id = id,
+            groupId = 1L,
+            kind = ProfileKind.TYPED,
+            name = name,
+            protocol = "vless",
+            address = "example.com",
+            port = 443,
+            transport = "tcp",
+            outbound = outbound,
+            rawJson = null,
+            lastConnectedAt = null,
+            lastError = null,
+        )
+
+    /** Mirrors [art.yniyniyni.subspace.core.data.SettingsRepository]'s active-profile slice. */
+    private class FakeSettings {
+        private val _activeProfileId = MutableStateFlow<Long?>(null)
+        val activeProfileId: StateFlow<Long?> = _activeProfileId.asStateFlow()
+
+        fun setActiveProfile(id: Long?) {
+            _activeProfileId.value = id
+        }
+    }
+
+    private class FakeActiveProfileSource(
+        profiles: List<StoredProfile>,
+        activeProfileId: Flow<Long?>,
+    ) : ActiveProfileSource {
+        override val hasAnyProfile: Flow<Boolean> = MutableStateFlow(profiles.isNotEmpty())
+        override val activeProfile: Flow<StoredProfile?> =
+            activeProfileId.map { id -> profiles.firstOrNull { it.id == id } }
+    }
+
+    private data class ConnectAttempt(val profile: Profile, val rowId: Long)
 
     private class FakeTunnelConnection : TunnelConnection {
-        override val state: StateFlow<ConnectionState> = MutableStateFlow(ConnectionState.Disconnected)
+        private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
+        override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
-        override fun connect(profile: Profile) = Unit
+        var lastConnected: ConnectAttempt? = null
+            private set
+
+        fun emit(next: ConnectionState) {
+            _state.value = next
+        }
+
+        override fun connect(
+            profile: Profile,
+            rowId: Long,
+        ) {
+            lastConnected = ConnectAttempt(profile, rowId)
+        }
 
         override fun disconnect() = Unit
     }
@@ -62,35 +137,65 @@ class HomeViewModelTest {
     }
 
     @Test
-    fun `garbage input populates a generic error and typed detail`() =
+    fun `connecting uses the active profile, not the first row`() =
         runTest {
-            val viewModel = HomeViewModel(FakeTunnelConnection())
+            val settings = FakeSettings()
+            val firstProfile = storedProfile(id = 1L, name = "first")
+            val secondProfile = storedProfile(id = 2L, name = "second")
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(
+                    profiles = listOf(firstProfile, secondProfile),
+                    activeProfileId = settings.activeProfileId,
+                )
+            val viewModel = HomeViewModel(tunnel, profileSource)
 
-            viewModel.onInputChanged(garbage)
+            settings.setActiveProfile(secondProfile.id)
+
             viewModel.onConsentGranted()
+            advanceUntilIdle()
 
-            val state = viewModel.state.first { !it.busy && it.inputError != null }
-            state.inputError.shouldNotBeNull()
-            state.inputErrorDetail shouldBe FailureDetail.Malformed(DetailField.Scheme)
+            tunnel.lastConnected?.rowId shouldBe secondProfile.id
         }
 
     @Test
-    fun `a subsequent keystroke clears both inputError and inputErrorDetail`() =
+    fun `with no profile stored the control is disabled and points at import`() =
         runTest {
-            val viewModel = HomeViewModel(FakeTunnelConnection())
-            viewModel.onInputChanged(garbage)
-            viewModel.onConsentGranted()
-            // Wait for the failure to actually land before clearing it. Without
-            // this the keystroke can overtake the off-thread parse, which would
-            // then set the error *after* the clear and make the assertion below
-            // fail for a reason that has nothing to do with the behaviour under
-            // test.
-            viewModel.state.first { !it.busy && it.inputError != null }
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
 
-            viewModel.onInputChanged("something else entirely")
+            viewModel.state.value.hasAnyProfile shouldBe false
+            viewModel.state.value.canConnect shouldBe false
+        }
 
-            val state = viewModel.state.first { it.inputError == null }
-            state.inputError.shouldBeNull()
-            state.inputErrorDetail.shouldBeNull()
+    @Test
+    fun `connection state comes from the service, never from a local boolean`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+
+            tunnel.emit(ConnectionState.Connected(sinceEpochMillis = 1_000L, socksPort = 10808))
+
+            viewModel.state.value.connection shouldBe ConnectionState.Connected(1_000L, 10808)
+        }
+
+    @Test
+    fun `the connecting stage is surfaced verbatim`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+
+            tunnel.emit(ConnectionState.Connecting(StartupStage.ValidatingConfig))
+
+            viewModel.state.value.connection shouldBe ConnectionState.Connecting(StartupStage.ValidatingConfig)
         }
 }

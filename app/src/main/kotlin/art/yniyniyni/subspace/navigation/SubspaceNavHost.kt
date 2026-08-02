@@ -93,7 +93,16 @@ fun SubspaceNavHost(
 
     Box(modifier = modifier.fillMaxSize()) {
         NavHost(navController = navController, startDestination = startDestination) {
-            composable<Home> { HomeScreen(onRequestConsent = onRequestConsent) }
+            composable<Home> {
+                HomeScreen(
+                    onRequestConsent = onRequestConsent,
+                    onNavigateToServers = { navController.navigateToTopLevel(SERVERS_VALUE) },
+                    // 0L never resolves to a real Room row (autoGenerate never
+                    // assigns it), which is the create-new-profile signal
+                    // Editor's own KDoc reserves — see Routes.kt.
+                    onAddServer = { navController.navigate(Editor(profileId = 0L)) },
+                )
+            }
             composable<Servers> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_servers)) }
             composable<Settings> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_settings)) }
             composable<Editor> { entry ->

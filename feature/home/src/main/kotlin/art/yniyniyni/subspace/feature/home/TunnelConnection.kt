@@ -20,7 +20,15 @@ import kotlinx.coroutines.flow.StateFlow
 internal interface TunnelConnection {
     val state: StateFlow<ConnectionState>
 
-    fun connect(profile: Profile)
+    /**
+     * @param rowId the Room primary key of the profile being connected —
+     *   see [art.yniyniyni.subspace.service.TunnelClient.connect]'s KDoc for
+     *   why this is required rather than defaulted.
+     */
+    fun connect(
+        profile: Profile,
+        rowId: Long,
+    )
 
     fun disconnect()
 }

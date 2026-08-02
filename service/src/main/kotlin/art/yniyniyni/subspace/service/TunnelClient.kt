@@ -95,11 +95,21 @@ public class TunnelClient @Inject constructor(
      * unbind — which is the UI going to background — taking the tunnel with
      * it. `TunnelService` calls `startForeground` immediately on connect so
      * the start window the platform allows is never missed.
+     *
+     * @param rowId the Room primary key of the profile being connected.
+     *   Threaded straight into [ProfileParcel.from] rather than defaulted, so
+     *   a caller cannot forget it: [ProfileParcel]'s own KDoc explains why
+     *   [ProfileParcel.UNASSIGNED_ROW_ID] makes `:bg`'s connect-outcome
+     *   write-back (`ProfileRepository.recordConnected`/`recordError`) a
+     *   silent no-op — closing that gap is the point of this parameter.
      */
-    public fun connect(profile: Profile) {
+    public fun connect(
+        profile: Profile,
+        rowId: Long,
+    ) {
         context.startForegroundService(Intent(context, TunnelService::class.java))
         try {
-            service?.connect(ProfileParcel.from(profile))
+            service?.connect(ProfileParcel.from(profile, rowId))
         } catch (e: android.os.RemoteException) {
             Log.e(TAG, "connect failed: ${e.javaClass.simpleName}")
         }

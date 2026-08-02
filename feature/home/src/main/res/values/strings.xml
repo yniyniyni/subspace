@@ -3,9 +3,16 @@
      §5.6: no string here may interpolate a server address, uuid, or key. -->
 <resources>
     <string name="home_title">Subspace</string>
-    <string name="home_input_label">Share link, subscription, Clash YAML, or Xray JSON</string>
-    <string name="home_connect">Connect</string>
-    <string name="home_disconnect">Disconnect</string>
+
+    <string name="home_active_server_label">Active server</string>
+    <string name="home_active_server_change_description">Change active server</string>
+    <string name="home_choose_a_server">Choose a server</string>
+    <string name="home_no_servers_yet">No servers yet</string>
+    <string name="home_add_first_server">Add your first server</string>
+    <string name="home_add_server">Add server</string>
+    <!-- %1$s is a device-clock-derived elapsed-time string (DateUtils.formatElapsedTime),
+         e.g. "3:12" or "1:04:20" — not a server address, uuid, or key (§5.6). -->
+    <string name="home_connected_uptime">Connected for %1$s</string>
 
     <string name="state_disconnected">Disconnected</string>
     <string name="state_disconnecting">Disconnecting…</string>
@@ -29,7 +36,6 @@
     <string name="failure_protocol_not_supported">This protocol is not supported yet</string>
     <string name="failure_profile_decode">This profile could not be read</string>
 
-    <string name="error_unparseable">Could not parse this as a link, subscription, or config</string>
     <string name="error_detail_length">%1$s must have length %2$d (actual: %3$d)</string>
     <string name="error_detail_range">%1$s must be from %2$d to %3$d (actual: %4$d)</string>
     <string name="error_detail_missing">%1$s is missing</string>

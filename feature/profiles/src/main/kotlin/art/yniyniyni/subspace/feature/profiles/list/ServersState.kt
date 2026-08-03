@@ -3,8 +3,21 @@ package art.yniyniyni.subspace.feature.profiles.list
 
 import art.yniyniyni.subspace.core.data.ProfileKind
 
-/** The display label for "no protocol filter" — always [ServersState.availableProtocols]' first entry. */
-internal const val ALL_PROTOCOLS_LABEL = "All"
+/**
+ * The domain sentinel for "no protocol filter" — always [ServersState.availableProtocols]'
+ * first entry, and what [ServersState.protocolFilter] equals until the user
+ * picks a real protocol.
+ *
+ * Deliberately **not** the text shown on screen: fix round 1 found the
+ * previous version of this file rendering this constant's value directly in
+ * [ServersScreen]'s protocol chip, which bypassed `strings.xml` (§12) and
+ * meant the sentinel a translator's string could never diverge from the
+ * literal comparison value without breaking the filter. `ServersScreen`
+ * instead resolves this sentinel to `R.string.servers_protocol_filter_all`
+ * at render time — the same split [SortOrder]'s own `labelRes()` already
+ * drew between its enum values (compared directly) and what they display as.
+ */
+internal const val ALL_PROTOCOLS_SENTINEL = "All"
 
 /**
  * How [ServersScreen] orders each group's rows.
@@ -32,14 +45,14 @@ internal enum class SortOrder { Alphabetical, AsListed, LastUsed }
  * @property sort the selected ordering.
  * @property availableProtocols the protocol chips to render, derived from what
  *   is actually stored (never a hardcoded protocol list) and always led by
- *   [ALL_PROTOCOLS_LABEL].
+ *   [ALL_PROTOCOLS_SENTINEL].
  */
 internal data class ServersState(
     val groups: List<ServersGroup> = emptyList(),
     val query: String = "",
-    val protocolFilter: String = ALL_PROTOCOLS_LABEL,
+    val protocolFilter: String = ALL_PROTOCOLS_SENTINEL,
     val sort: SortOrder = SortOrder.AsListed,
-    val availableProtocols: List<String> = listOf(ALL_PROTOCOLS_LABEL),
+    val availableProtocols: List<String> = listOf(ALL_PROTOCOLS_SENTINEL),
 )
 
 /**

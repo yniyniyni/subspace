@@ -224,11 +224,29 @@ private fun ProtocolFilterRow(
         modifier = modifier.horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(FILTER_CHIP_GAP),
     ) {
-        available.forEach { label ->
-            FilterChip(selected = label == selected, onClick = { onSelected(label) }, label = { Text(label) })
+        available.forEach { value ->
+            FilterChip(
+                selected = value == selected,
+                onClick = { onSelected(value) },
+                label = { Text(value.protocolFilterChipLabel()) },
+            )
         }
     }
 }
+
+/**
+ * The text a protocol-filter chip shows for its domain [value].
+ *
+ * [ALL_PROTOCOLS_SENTINEL] is a comparison-only sentinel, never display text
+ * (see its own KDoc) — this resolves it to the real, translatable string.
+ * Every other [value] is already a real protocol name derived from what is
+ * stored (`ServersViewModel`'s `toProtocolDisplayName`), so it is shown as-is
+ * the same way a transport summary or a protocol badge is elsewhere on this
+ * screen — a technical identifier, not a sentence needing localisation.
+ */
+@Composable
+private fun String.protocolFilterChipLabel(): String =
+    if (this == ALL_PROTOCOLS_SENTINEL) stringResource(R.string.servers_protocol_filter_all) else this
 
 @Composable
 private fun SortControl(

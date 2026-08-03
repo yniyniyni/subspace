@@ -277,4 +277,19 @@ class ServersViewModelTest {
             viewModel.state.value.groups.flatMap { it.profiles }.map { it.name } shouldBe
                 listOf("Frankfurt", "Amsterdam", "Tokyo", "Berlin")
         }
+
+    // Fix round 1, finding 4: totalProfileCount backs the delete-confirmation
+    // dialog's cascading-delete warning (the brief's "states the count"), so
+    // an active search/filter must never make it report the filtered size —
+    // that would understate the blast radius of an irreversible delete.
+    @Test
+    fun `a group's total profile count stays the real size while a filter narrows what's shown`() =
+        runTest {
+            viewModel.onProtocolFilterChanged("Trojan")
+            advanceUntilIdle()
+
+            val visibleGroup = viewModel.state.value.groups.single()
+            visibleGroup.profiles.map { it.name } shouldBe listOf("Tokyo")
+            visibleGroup.totalProfileCount shouldBe group.profiles.size
+        }
 }

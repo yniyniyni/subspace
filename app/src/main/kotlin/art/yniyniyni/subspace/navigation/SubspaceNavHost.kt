@@ -28,6 +28,7 @@ import art.yniyniyni.subspace.R
 import art.yniyniyni.subspace.core.ui.component.FloatingNavigationBar
 import art.yniyniyni.subspace.core.ui.component.NavItem
 import art.yniyniyni.subspace.feature.home.HomeScreen
+import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
 
 private const val HOME_VALUE = "home"
@@ -48,12 +49,11 @@ private const val SETTINGS_VALUE = "settings"
  * they are on screen — they are single-purpose flows a user is pushed into
  * and pops back out of, not places they "switch" between.
  *
- * `Servers` and `Settings` render a minimal placeholder here — the real
- * `:feature:profiles` and `:feature:settings` screens do not exist yet
- * (M3's later tasks build them); this task's scope is the navigation
- * skeleton those tasks plug into, not the screens themselves. `Home` already
- * has a real screen ([HomeScreen], from `:feature:home`) and renders it
- * directly.
+ * `Settings` still renders a minimal placeholder — `:feature:settings` does
+ * not exist yet (a later M3 task builds it). `Home` ([HomeScreen], from
+ * `:feature:home`) and `Servers` ([ServersScreen], from `:feature:profiles`,
+ * wired in Task 18's fix round 1 after code review found it built, tested and
+ * unreachable) both render their real screens directly.
  *
  * Root layout is a plain [Box], not a [androidx.compose.material3.Scaffold].
  * [FloatingNavigationBar] already applies its own `navigationBars`
@@ -77,9 +77,11 @@ private const val SETTINGS_VALUE = "settings"
  *   the default.
  * @param startDestination overridable only for tests — production always
  *   starts at [Home]. Exists so an instrumented test can exercise pill
- *   visibility and single-top behaviour without going through [HomeScreen],
- *   which resolves its `ViewModel` through `hiltViewModel()` and therefore
- *   needs a Hilt-aware host to render at all.
+ *   visibility and single-top behaviour without going through [HomeScreen]
+ *   or [ServersScreen], both of which resolve a `ViewModel` through
+ *   `hiltViewModel()` and therefore need a Hilt-aware host to render at all
+ *   — [SubspaceNavHostTest] starts at [Settings] (still a placeholder) for
+ *   exactly this reason.
  */
 @Composable
 fun SubspaceNavHost(
@@ -103,7 +105,16 @@ fun SubspaceNavHost(
                     onAddServer = { navController.navigate(Editor(profileId = 0L)) },
                 )
             }
-            composable<Servers> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_servers)) }
+            composable<Servers> {
+                ServersScreen(
+                    // Same create-new-profile signal as Home's "Add server"
+                    // chip above — Editor carries no groupId yet (Routes.kt),
+                    // so a specific group's own "Add profile" overflow item
+                    // resolves to the same generic entry point until a later
+                    // task gives Editor somewhere more specific to go.
+                    onAddProfile = { navController.navigate(Editor(profileId = 0L)) },
+                )
+            }
             composable<Settings> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_settings)) }
             composable<Editor> { entry ->
                 val editor: Editor = entry.toRoute()

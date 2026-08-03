@@ -26,7 +26,7 @@ constructor(
     private val profileSource: ProfileSource,
 ) : ViewModel() {
     private val query = MutableStateFlow("")
-    private val protocolFilter = MutableStateFlow(ALL_PROTOCOLS_LABEL)
+    private val protocolFilter = MutableStateFlow(ALL_PROTOCOLS_SENTINEL)
     private val sort = MutableStateFlow(SortOrder.AsListed)
 
     private val _state = MutableStateFlow(ServersState())
@@ -144,7 +144,7 @@ private fun StoredProfile.toRow(activeProfileId: Long?): ServerRow =
     )
 
 private fun List<ProfileGroup>.availableProtocolLabels(): List<String> =
-    listOf(ALL_PROTOCOLS_LABEL) +
+    listOf(ALL_PROTOCOLS_SENTINEL) +
         flatMap { it.profiles }.map { it.protocol }.distinct().map { it.toProtocolDisplayName() }
 
 /**
@@ -166,4 +166,4 @@ private fun String.toProtocolDisplayName(): String =
  * variant of the stored value with no other characters, so lowercasing a
  * display label always recovers the raw protocol string the DAO stores.
  */
-private fun String.toRawProtocolOrNull(): String? = if (this == ALL_PROTOCOLS_LABEL) null else lowercase()
+private fun String.toRawProtocolOrNull(): String? = if (this == ALL_PROTOCOLS_SENTINEL) null else lowercase()

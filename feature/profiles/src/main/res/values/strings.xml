@@ -8,6 +8,11 @@
     <string name="servers_search_placeholder">Search servers</string>
     <string name="servers_search_clear_description">Clear search</string>
 
+    <!-- The "no protocol filter" chip. ServersState.ALL_PROTOCOLS_SENTINEL is
+         a domain sentinel compared in Kotlin, never rendered directly — this
+         is the text a user actually sees for it (fix round 1). -->
+    <string name="servers_protocol_filter_all">All</string>
+
     <!-- %1$s is the currently selected sort order's own label below. -->
     <string name="servers_sort_button">Sort: %1$s</string>
     <string name="servers_sort_alphabetical">A–Z</string>

@@ -88,9 +88,21 @@ internal constructor(
     // cover :bg, which per spec D4 never calls this method.
     private val defaultGroupMutex = Mutex()
 
-    /** Every group, in display order, each carrying its own profiles in display order. */
-    public fun observeGroups(): Flow<List<ProfileGroup>> =
-        combine(dao.observeGroups(), dao.observeProfiles()) { groups, profiles ->
+    /**
+     * Every group, in display order, each carrying its own profiles in display order.
+     *
+     * [query] and [protocol] filter the profiles inside each group — matched in SQL over
+     * [ProfileEntity]'s shadow columns via [ProfileDao.observeProfiles], not by deserializing
+     * every row in memory, per that entity's own KDoc. Groups themselves are never filtered
+     * out by this: a group with zero matches still appears, with an empty profile list — the
+     * Servers screen (Task 18) decides how to render that, not this layer. Defaults keep every
+     * existing caller (e.g. `:feature:home`'s `ActiveProfileSource`) unfiltered and unchanged.
+     */
+    public fun observeGroups(
+        query: String = "",
+        protocol: String? = null,
+    ): Flow<List<ProfileGroup>> =
+        combine(dao.observeGroups(), dao.observeProfiles(query, protocol)) { groups, profiles ->
             val profilesByGroup = profiles.groupBy { it.groupId }
             groups.map { group ->
                 ProfileGroup(

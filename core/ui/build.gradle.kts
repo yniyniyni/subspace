@@ -10,6 +10,10 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    // GroupCard's (Task 18) expand caret, overflow and search glyphs. Same
+    // -core-only artifact :feature:home and :app already carry — see
+    // THIRD_PARTY.md.
+    implementation(libs.compose.material.icons.core)
 
     // First Compose UI instrumented tests in the repo (ConnectControlTest).
     // subspace.android.library already wires testInstrumentationRunner and the

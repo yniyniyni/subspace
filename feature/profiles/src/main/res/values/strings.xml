@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- §12: strings live here from the first commit; no hardcoded UI text.
+     §5.6: no string here may interpolate a server address, uuid, or key —
+     only names (not secrets) and counts appear below. -->
+<resources>
+    <string name="servers_title">Servers</string>
+
+    <string name="servers_search_placeholder">Search servers</string>
+    <string name="servers_search_clear_description">Clear search</string>
+
+    <!-- %1$s is the currently selected sort order's own label below. -->
+    <string name="servers_sort_button">Sort: %1$s</string>
+    <string name="servers_sort_alphabetical">A–Z</string>
+    <string name="servers_sort_as_listed">As listed</string>
+    <string name="servers_sort_last_used">Recently used</string>
+
+    <string name="servers_empty_title">No servers yet</string>
+    <string name="servers_empty_body">Import a subscription or paste a config to add your first server.</string>
+    <string name="servers_empty_action">Add server</string>
+
+    <!-- RAW_JSON runs through the typed projection, not verbatim (§6) — "raw"
+         alone would promise passthrough execution this build does not have. -->
+    <string name="servers_compatibility_mode">Compatibility mode</string>
+    <!-- :core:xray only emits VLESS; every other protocol fails at connect
+         time with ProtocolNotSupported. -->
+    <string name="servers_not_connectable">Not supported by this build yet</string>
+
+    <!-- %1$s = server name, %2$s = protocol (e.g. "VLESS"), %3$s = transport
+         summary (e.g. "ws · tls · 443") — never an address, uuid, or key. -->
+    <string name="servers_row_description_select">Select %1$s as active server, %2$s, %3$s</string>
+    <string name="servers_row_description_active">%1$s, %2$s, %3$s, currently active</string>
+
+    <string name="servers_rename_group_title">Rename group</string>
+    <string name="servers_rename_group_confirm">Rename</string>
+    <string name="servers_dialog_cancel">Cancel</string>
+    <!-- %1$s = group name. -->
+    <string name="servers_delete_group_title">Delete “%1$s”?</string>
+    <string name="servers_delete_group_confirm">Delete</string>
+    <!-- %1$d = the group's real profile count. Warns before a cascading
+         delete: ProfileGroupEntity's FK removes every profile in the group
+         along with it. -->
+    <plurals name="servers_delete_group_message">
+        <item quantity="one">This removes %1$d server with it. This cannot be undone.</item>
+        <item quantity="other">This removes %1$d servers with it. This cannot be undone.</item>
+    </plurals>
+</resources>

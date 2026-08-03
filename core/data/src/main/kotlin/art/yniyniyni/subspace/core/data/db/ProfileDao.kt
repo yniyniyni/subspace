@@ -28,6 +28,33 @@ internal interface ProfileDao {
     @Query("SELECT * FROM profiles ORDER BY position, id")
     fun observeProfiles(): Flow<List<ProfileEntity>>
 
+    /**
+     * Every profile whose [ProfileEntity.name], [ProfileEntity.address] or
+     * [ProfileEntity.transport] contains [query] (case-insensitive) and whose
+     * [ProfileEntity.protocol] equals [protocol], in display order.
+     *
+     * Matched against the shadow columns, not the deserialized outbound —
+     * see [ProfileEntity]'s own KDoc for why those columns exist. A blank
+     * [query] and a `null` [protocol] both mean "no filter", so this is a
+     * strict superset of [observeProfiles]: the Servers screen (Task 18)
+     * calls it with real values, every other existing caller keeps calling
+     * the no-arg overload above unchanged.
+     */
+    @Query(
+        """
+        SELECT * FROM profiles
+        WHERE (:query = '' OR name LIKE '%' || :query || '%' COLLATE NOCASE
+            OR address LIKE '%' || :query || '%' COLLATE NOCASE
+            OR transport LIKE '%' || :query || '%' COLLATE NOCASE)
+          AND (:protocol IS NULL OR protocol = :protocol)
+        ORDER BY position, id
+        """,
+    )
+    fun observeProfiles(
+        query: String,
+        protocol: String?,
+    ): Flow<List<ProfileEntity>>
+
     /** A single profile by its primary key, or null if it no longer exists. */
     @Query("SELECT * FROM profiles WHERE id = :id")
     suspend fun profile(id: Long): ProfileEntity?

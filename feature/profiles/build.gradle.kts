@@ -35,6 +35,20 @@ dependencies {
     // :feature:home's build.gradle.kts documents.
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // Task 20 (QrScanScreen/QrAnalyzer): ZXing decodes the QR, CameraX feeds
+    // it frames. ARCHITECTURE.md §2/§14.7 — ZXing, not ML Kit, because ML
+    // Kit is proprietary and depends on Play Services, which would foreclose
+    // the IzzyOnDroid distribution path. zxing:core only, never
+    // zxing-android-embedded — that artifact ships its own CaptureActivity
+    // and theming, and this app is Compose-only. See THIRD_PARTY.md.
+    implementation(libs.zxing.core)
+    // AndroidX, not a Play-Services-backed camera API — no proprietary
+    // dependency, same reasoning as the ZXing choice above.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+
     // First Compose UI instrumented tests in this module (fix round 1,
     // finding 3 — ServersDialogsTest). Same additions core/ui/build.gradle.kts
     // documents in full: subspace.android.library/subspace.android.compose

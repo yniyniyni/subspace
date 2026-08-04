@@ -1,2 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest />
+<!-- Task 20 (QrScanScreen): CAMERA is requested at the point of use, not at
+     install/first-launch — see QrScanScreen.kt. android:required="false" on
+     the feature declaration keeps this app installable on a device with no
+     camera; QrScanScreen's own permission-denied state is what a camera-less
+     device actually sees. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+</manifest>

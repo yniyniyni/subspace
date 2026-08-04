@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.list
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
@@ -182,6 +183,19 @@ class ServersViewModelTest {
         override suspend fun deleteGroup(id: Long) {
             lastDeletedGroup = id
         }
+
+        // Not exercised by this ViewModel — ServersViewModel never imports or
+        // reads a single profile back. Real behaviour for these three is
+        // covered by ImportViewModelTest's own fake, which Task 19 added.
+        override suspend fun defaultGroupId(): Long = 1L
+
+        override suspend fun import(
+            profiles: List<Profile>,
+            groupId: Long,
+            rawJson: String?,
+        ) = Unit
+
+        override suspend fun profile(id: Long): StoredProfile? = null
     }
 
     private lateinit var source: FakeProfileSource

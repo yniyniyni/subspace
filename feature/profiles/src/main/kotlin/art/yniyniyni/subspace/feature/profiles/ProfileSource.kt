@@ -4,6 +4,8 @@ package art.yniyniyni.subspace.feature.profiles
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
+import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.model.Profile
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -48,6 +50,29 @@ internal interface ProfileSource {
 
     /** Deletes a group. `ON DELETE CASCADE` removes every profile in it with it. */
     suspend fun deleteGroup(id: Long)
+
+    /**
+     * The id of the *Local configs* group (spec D3), creating it on first call.
+     * Where [ImportViewModel][art.yniyniyni.subspace.feature.profiles.add.ImportViewModel]
+     * lands newly imported profiles — this screen has no group picker yet.
+     */
+    suspend fun defaultGroupId(): Long
+
+    /**
+     * Imports [profiles] into [groupId]; see [ProfileRepository.import] for what
+     * [rawJson] means (§6: non-null only for a hand-pasted config, stored byte-for-byte).
+     */
+    suspend fun import(
+        profiles: List<Profile>,
+        groupId: Long,
+        rawJson: String?,
+    )
+
+    /**
+     * A single profile by its row id, or `null` if it no longer exists. Lets a
+     * caller confirm what was actually persisted, e.g. after [import].
+     */
+    suspend fun profile(id: Long): StoredProfile?
 }
 
 @Singleton
@@ -72,4 +97,14 @@ constructor(
     ) = profileRepository.renameGroup(id, name)
 
     override suspend fun deleteGroup(id: Long) = profileRepository.deleteGroup(id)
+
+    override suspend fun defaultGroupId(): Long = profileRepository.defaultGroupId()
+
+    override suspend fun import(
+        profiles: List<Profile>,
+        groupId: Long,
+        rawJson: String?,
+    ) = profileRepository.import(profiles, groupId, rawJson)
+
+    override suspend fun profile(id: Long): StoredProfile? = profileRepository.profile(id)
 }

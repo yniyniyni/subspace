@@ -38,13 +38,14 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.feature.profiles.R
+import art.yniyniyni.subspace.feature.profiles.add.AddServerSheet
 
 private val CONTENT_HORIZONTAL_PADDING = 16.dp
 private val FILTER_CHIP_GAP = 8.dp
 
 /**
- * The Servers screen: pick which stored profile Home connects to, and manage
- * the groups that hold them.
+ * The Servers screen: pick which stored profile Home connects to, manage the
+ * groups that hold them, and — as of Task 19 — add new ones.
  *
  * Search and protocol filtering run in SQL over [art.yniyniyni.subspace.core.data.db.ProfileEntity]'s
  * shadow columns ([ServersViewModel]), not by deserializing every row in
@@ -52,19 +53,18 @@ private val FILTER_CHIP_GAP = 8.dp
  * a real latency measurement, and latency testing is M4, so it is absent
  * rather than backed by an invented number (ARCHITECTURE.md §10.1).
  *
- * @param onAddProfile invoked from the empty state and from a group's
- *   overflow menu — this screen has no import UI of its own yet (`:feature:profiles`'s
- *   editor and paste flow are a later task), so this is a navigation hook a
- *   future task wires up, the same shape as [art.yniyniyni.subspace.feature.home.HomeScreen]'s
- *   own `onAddServer`.
+ * The empty state and every group's overflow "Add profile" item open
+ * [AddServerSheet] in place, rather than navigating away — before this task
+ * this screen had no import UI of its own and forwarded to a placeholder
+ * `Editor` route; that hook is retired now that there is somewhere real to
+ * go. Both entry points resolve to the same sheet (no group-scoped import
+ * yet, same as the placeholder they replace).
  */
 @Composable
-fun ServersScreen(
-    onAddProfile: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+fun ServersScreen(modifier: Modifier = Modifier) {
     val viewModel: ServersViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var showAddSheet by rememberSaveable { mutableStateOf(false) }
 
     ServersScreenContent(
         state = state,
@@ -76,10 +76,12 @@ fun ServersScreen(
             onProfileSelected = viewModel::onProfileSelected,
             onRenameGroup = viewModel::onRenameGroup,
             onDeleteGroup = viewModel::onDeleteGroup,
-            onAddProfile = onAddProfile,
+            onAddProfile = { showAddSheet = true },
         ),
         modifier = modifier,
     )
+
+    AddServerSheet(open = showAddSheet, onDismiss = { showAddSheet = false })
 }
 
 /**

@@ -11,16 +11,28 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
+    // AddServerSheet (Task 19) is the first thing in this module to call
+    // SubscriptionParser — the same pure-JVM module :feature:home already
+    // depends on for the identical reason (§7).
+    implementation(project(":core:parser"))
     implementation(project(":core:ui"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+    // AddServerSheet's "Import from file" button (Task 19):
+    // rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()).
+    // Not recorded as a new THIRD_PARTY.md entry — :app already carries this
+    // artifact (MainActivity's VPN-consent launcher) and it is baseline
+    // Activity/Compose plumbing, not a new capability the way e.g. Compose UI
+    // Testing was when it first unlocked instrumented Compose tests.
+    implementation(libs.androidx.activity.compose)
     // The overflow menu's rename/delete icons and the group caret — same
     // artifact :feature:home and :app already carry, same -core-only choice.
     // See THIRD_PARTY.md.
     implementation(libs.compose.material.icons.core)
-    // ServersViewModel drives its state through viewModelScope, which needs a
-    // Main dispatcher — same gap :feature:home's build.gradle.kts documents.
+    // ServersViewModel and ImportViewModel drive their state through
+    // viewModelScope, which needs a Main dispatcher — same gap
+    // :feature:home's build.gradle.kts documents.
     testImplementation(libs.kotlinx.coroutines.test)
 
     // First Compose UI instrumented tests in this module (fix round 1,

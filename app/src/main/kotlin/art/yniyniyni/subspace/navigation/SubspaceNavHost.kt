@@ -106,14 +106,10 @@ fun SubspaceNavHost(
                 )
             }
             composable<Servers> {
-                ServersScreen(
-                    // Same create-new-profile signal as Home's "Add server"
-                    // chip above — Editor carries no groupId yet (Routes.kt),
-                    // so a specific group's own "Add profile" overflow item
-                    // resolves to the same generic entry point until a later
-                    // task gives Editor somewhere more specific to go.
-                    onAddProfile = { navController.navigate(Editor(profileId = 0L)) },
-                )
+                // Task 19: ServersScreen now owns its own add-server flow
+                // (AddServerSheet) rather than forwarding to the Editor
+                // placeholder — no onAddProfile hook to wire here any more.
+                ServersScreen()
             }
             composable<Settings> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_settings)) }
             composable<Editor> { entry ->

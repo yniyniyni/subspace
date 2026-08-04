@@ -48,4 +48,53 @@
         <item quantity="one">This removes %1$d server with it. This cannot be undone.</item>
         <item quantity="other">This removes %1$d servers with it. This cannot be undone.</item>
     </plurals>
+
+    <!-- Task 19: AddServerSheet. §5.6 applies here too — nothing below may
+         interpolate the pasted text or file content itself, only bounded
+         counts and field names. -->
+    <string name="import_sheet_title">Add server</string>
+    <string name="import_paste_label">Share link, subscription, Clash YAML, or Xray JSON</string>
+    <string name="import_button">Import</string>
+    <string name="import_from_file_button">Import from file</string>
+
+    <!-- %1$d = profiles actually stored, %2$d = total entries attempted
+         (imported + failed). ARCHITECTURE.md §7/§10.4: 197 of 200 is a normal,
+         successful outcome, not an error — this always states both halves. -->
+    <string name="import_result_summary">Imported %1$d of %2$d</string>
+    <string name="import_result_failures_hide">Hide failures</string>
+    <!-- %1$d = the failure count, shown on the collapsed toggle. -->
+    <plurals name="import_result_failures_show">
+        <item quantity="one">Show %1$d failure</item>
+        <item quantity="other">Show %1$d failures</item>
+    </plurals>
+
+    <!-- Each failure line: %1$d = ParseFailure.index + 1 (a human-facing
+         1-based entry number, never the entry's own text — §5.6). -->
+    <string name="import_failure_generic">Entry %1$d could not be read</string>
+    <!-- %2$s = field name below, %3$d = expected length, %4$d = actual length. -->
+    <string name="import_failure_length">Entry %1$d: %2$s must have length %3$d (actual: %4$d)</string>
+    <!-- %2$s = field name, %3$d = min, %4$d = max, %5$d = actual. -->
+    <string name="import_failure_range">Entry %1$d: %2$s must be from %3$d to %4$d (actual: %5$d)</string>
+    <!-- %2$s = field name. -->
+    <string name="import_failure_missing">Entry %1$d: %2$s is missing</string>
+    <string name="import_failure_unsupported">Entry %1$d: %2$s is not supported</string>
+    <string name="import_failure_malformed">Entry %1$d: %2$s is malformed</string>
+
+    <string name="import_detail_field_scheme">Scheme</string>
+    <string name="import_detail_field_uri">URI</string>
+    <string name="import_detail_field_address">Address</string>
+    <string name="import_detail_field_port">Port</string>
+    <string name="import_detail_field_uuid">UUID</string>
+    <string name="import_detail_field_password">Password</string>
+    <string name="import_detail_field_method">Method</string>
+    <string name="import_detail_field_public_key">Public key</string>
+    <string name="import_detail_field_short_id">Short ID</string>
+    <string name="import_detail_field_fingerprint">Fingerprint</string>
+    <string name="import_detail_field_network">Network</string>
+    <string name="import_detail_field_security">Security</string>
+    <string name="import_detail_field_base64_body">Base64 body</string>
+    <string name="import_detail_field_json_body">JSON body</string>
+    <string name="import_detail_field_yaml_body">YAML body</string>
+    <string name="import_detail_field_credential">Credential</string>
+    <string name="import_detail_field_alter_id">Alter ID</string>
 </resources>

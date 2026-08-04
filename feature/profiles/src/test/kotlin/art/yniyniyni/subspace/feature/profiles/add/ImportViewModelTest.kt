@@ -200,4 +200,81 @@ class ImportViewModelTest {
             viewModel.state.value.failures.size shouldBe 1
             viewModel.state.value.completed shouldBe true
         }
+
+    // Fix round 1, finding 3: `input` moved from AddServerSheet's own
+    // `rememberSaveable` into ImportState (see that class's own KDoc for why)
+    // so it can be driven and cleared here without Compose at all.
+
+    @Test
+    fun `typing into the paste field updates state input`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+
+            viewModel.onInputChanged("vless://pasted")
+
+            viewModel.state.value.input shouldBe "vless://pasted"
+        }
+
+    @Test
+    fun `a successful import clears the pasted input`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            val link = "vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one"
+            viewModel.onInputChanged(link)
+
+            viewModel.import(viewModel.state.value.input)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.input shouldBe ""
+        }
+
+    @Test
+    fun `a fully failed import keeps the pasted input so the user can fix it`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val brokenPaste = "not-a-link-at-all"
+            viewModel.onInputChanged(brokenPaste)
+
+            viewModel.import(viewModel.state.value.input)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.input shouldBe brokenPaste
+        }
+
+    // Fix round 1, finding 2: the file-read path (AddServerSheet.kt) reports
+    // a null/thrown read through these two ImportViewModel entry points
+    // rather than doing nothing or crashing the coroutine.
+
+    @Test
+    fun `reportFileReadFailure surfaces a visible failure and leaves busy false`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            viewModel.beginFileRead()
+
+            viewModel.reportFileReadFailure()
+
+            viewModel.state.value.fileReadFailed shouldBe true
+            viewModel.state.value.busy shouldBe false
+        }
+
+    @Test
+    fun `beginFileRead resets a stale completed result but keeps the pasted input`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            viewModel.import("vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+            viewModel.onInputChanged("kept across the file pick")
+
+            viewModel.beginFileRead()
+
+            viewModel.state.value.completed shouldBe false
+            viewModel.state.value.busy shouldBe true
+            viewModel.state.value.input shouldBe "kept across the file pick"
+        }
 }

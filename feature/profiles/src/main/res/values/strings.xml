@@ -56,6 +56,11 @@
     <string name="import_paste_label">Share link, subscription, Clash YAML, or Xray JSON</string>
     <string name="import_button">Import</string>
     <string name="import_from_file_button">Import from file</string>
+    <!-- Fix round 1, finding 2: shown when the picked file could not be read
+         at all (a stale/revoked URI, or an I/O error mid-read) — never the
+         underlying exception's own message, which can carry a path or
+         provider detail (§5.6). -->
+    <string name="import_file_read_failed">Could not read that file</string>
 
     <!-- %1$d = profiles actually stored, %2$d = total entries attempted
          (imported + failed). ARCHITECTURE.md §7/§10.4: 197 of 200 is a normal,

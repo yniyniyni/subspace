@@ -23,10 +23,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -38,11 +38,29 @@ import art.yniyniyni.subspace.feature.profiles.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 private val CONTENT_HORIZONTAL_PADDING = 16.dp
 private val CONTENT_BOTTOM_PADDING = 16.dp
 private val FIELD_GAP = 8.dp
 private const val PASTE_FIELD_MIN_LINES = 4
+
+/**
+ * Identifies the busy [CircularProgressIndicator] to instrumented tests —
+ * same pattern as `core/ui`'s `CONNECT_HALO_TEST_TAG`. Not part of
+ * [AddServerSheet]'s own API surface, only a seam [AddServerSheetContent]'s
+ * own tests use to assert the indicator's presence without matching on text.
+ */
+internal const val IMPORT_BUSY_TEST_TAG = "import-busy"
+
+/**
+ * Identifies the paste [OutlinedTextField] to instrumented tests. Its label
+ * text is not a reliable target for `performTextInput` (the label is its own
+ * semantics text node, not the editable one), so a tag is used the same way
+ * [GroupCardTest][art.yniyniyni.subspace.core.ui.component.GroupCardTest]'s
+ * own `contentTag` is.
+ */
+internal const val IMPORT_PASTE_FIELD_TEST_TAG = "import-paste-field"
 
 /**
  * The only place in the app that turns pasted or imported text into a stored
@@ -79,7 +97,6 @@ internal fun AddServerSheet(
 private fun AddServerSheetBody(modifier: Modifier = Modifier) {
     val viewModel: ImportViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var input by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -89,18 +106,68 @@ private fun AddServerSheetBody(modifier: Modifier = Modifier) {
     // — a file is config content exactly like a paste, so the read runs off
     // the main thread (§5.3) and nothing about its content is ever logged
     // (§5.6).
+    //
+    // Fix round 1, finding 2: some content providers return a null
+    // InputStream instead of throwing for a stale/revoked URI, and a real
+    // I/O error (permission revoked mid-flow, provider crash) throws
+    // IOException/SecurityException from anywhere in this chain. Both are
+    // caught here rather than left to crash the coroutine, and both resolve
+    // to the same `text == null` outcome ImportViewModel.reportFileReadFailure
+    // renders — neither branch reads the exception's own message (§5.6: an
+    // I/O exception can carry a path or provider detail).
     val openDocument =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
             scope.launch {
+                viewModel.beginFileRead()
                 val text =
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    try {
+                        withContext(Dispatchers.IO) {
+                            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        }
+                    } catch (ignored: IOException) {
+                        null
+                    } catch (ignored: SecurityException) {
+                        null
                     }
-                if (text != null) viewModel.import(text)
+                if (text != null) {
+                    viewModel.import(text)
+                } else {
+                    viewModel.reportFileReadFailure()
+                }
             }
         }
 
+    AddServerSheetContent(
+        state = state,
+        onInputChanged = viewModel::onInputChanged,
+        onImportClick = { viewModel.import(state.input) },
+        // "*/*": a subscription can be a share-link list, base64 blob, Clash
+        // YAML or raw Xray JSON (§7) — SubscriptionParser detects the shape
+        // itself, so this does not narrow by extension or MIME type the way
+        // a single-format picker would.
+        onImportFromFileClick = { openDocument.launch(arrayOf("*/*")) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * The stateless half — see [art.yniyniyni.subspace.feature.home.HomeScreenContent]'s
+ * KDoc for why this split exists. Everything [AddServerSheetBody] would
+ * otherwise own directly (paste text, the Import/Import-from-file buttons'
+ * enabled gating, the busy indicator, the failure list's expand/collapse) is
+ * driven from [state] and three callbacks here, so instrumented tests can
+ * exercise it with a plain [ImportState] and no-op lambdas instead of a real
+ * [ImportViewModel] behind Hilt.
+ */
+@Composable
+internal fun AddServerSheetContent(
+    state: ImportState,
+    onInputChanged: (String) -> Unit,
+    onImportClick: () -> Unit,
+    onImportFromFileClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier =
         modifier
@@ -109,34 +176,38 @@ private fun AddServerSheetBody(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(FIELD_GAP),
     ) {
         OutlinedTextField(
-            value = input,
-            onValueChange = { input = it },
+            value = state.input,
+            onValueChange = onInputChanged,
             label = { Text(stringResource(R.string.import_paste_label)) },
             minLines = PASTE_FIELD_MIN_LINES,
             enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag(IMPORT_PASTE_FIELD_TEST_TAG),
         )
 
         Button(
-            onClick = { viewModel.import(input) },
-            enabled = !state.busy && input.isNotBlank(),
+            onClick = onImportClick,
+            enabled = !state.busy && state.input.isNotBlank(),
         ) {
             Text(stringResource(R.string.import_button))
         }
 
         TextButton(
-            // "*/*": a subscription can be a share-link list, base64 blob,
-            // Clash YAML or raw Xray JSON (§7) — SubscriptionParser detects
-            // the shape itself, so this does not narrow by extension or MIME
-            // type the way a single-format picker would.
-            onClick = { openDocument.launch(arrayOf("*/*")) },
+            onClick = onImportFromFileClick,
             enabled = !state.busy,
         ) {
             Text(stringResource(R.string.import_from_file_button))
         }
 
         if (state.busy) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(modifier = Modifier.testTag(IMPORT_BUSY_TEST_TAG))
+        }
+
+        if (state.fileReadFailed) {
+            Text(
+                text = stringResource(R.string.import_file_read_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
         if (state.completed) {

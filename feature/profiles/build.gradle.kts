@@ -19,6 +19,18 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+    // Fix round 1 (Task 20 wiring): QrScanRoute takes a NavBackStackEntry
+    // directly (the Servers destination's own entry, resolved by :app —
+    // this module cannot reference :app's route types, §4) so the scanned
+    // result reaches the SAME ImportViewModel instance backing
+    // AddServerSheet rather than a fresh one. That type was already on this
+    // module's compile classpath transitively (via hilt-navigation-compose
+    // -> navigation-compose), but it is now imported directly in source, so
+    // it is declared explicitly rather than relied on implicitly. Same
+    // artifact/version :app already carries — no new THIRD_PARTY.md entry,
+    // matching how compose-ui/compose-material3/etc. are treated as
+    // baseline stack, not a new capability.
+    implementation(libs.androidx.navigation.compose)
     // AddServerSheet's "Import from file" button (Task 19):
     // rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()).
     // Not recorded as a new THIRD_PARTY.md entry — :app already carries this

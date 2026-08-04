@@ -76,11 +76,21 @@ internal const val IMPORT_PASTE_FIELD_TEST_TAG = "import-paste-field"
  * @param open whether the sheet is shown — see [SubspaceBottomSheet]'s own
  *   `open` for why closed means "not composed", not "composed but invisible".
  * @param onDismiss scrim tap, swipe down, or the drag handle's dismiss action.
+ * @param onScanQr the "Scan QR code" button (Task 20 fix round 1). The
+ *   caller (ultimately `SubspaceNavHost`'s `QrScan` composable, via
+ *   [art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute]) owns
+ *   navigation — this module has no `NavController` of its own — and is
+ *   responsible for feeding a scanned payload back into the *same*
+ *   [ImportViewModel] instance this sheet is backed by, not a fresh one, so
+ *   the scan result renders in this same sheet on return. See
+ *   [art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute]'s own KDoc for
+ *   why that hand-off does not go through `NavBackStackEntry.savedStateHandle`.
  */
 @Composable
 internal fun AddServerSheet(
     open: Boolean,
     onDismiss: () -> Unit,
+    onScanQr: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SubspaceBottomSheet(
@@ -89,12 +99,15 @@ internal fun AddServerSheet(
         onDismiss = onDismiss,
         modifier = modifier,
     ) {
-        AddServerSheetBody()
+        AddServerSheetBody(onScanQr = onScanQr)
     }
 }
 
 @Composable
-private fun AddServerSheetBody(modifier: Modifier = Modifier) {
+private fun AddServerSheetBody(
+    onScanQr: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val viewModel: ImportViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -140,32 +153,50 @@ private fun AddServerSheetBody(modifier: Modifier = Modifier) {
 
     AddServerSheetContent(
         state = state,
-        onInputChanged = viewModel::onInputChanged,
-        onImportClick = { viewModel.import(state.input) },
-        // "*/*": a subscription can be a share-link list, base64 blob, Clash
-        // YAML or raw Xray JSON (§7) — SubscriptionParser detects the shape
-        // itself, so this does not narrow by extension or MIME type the way
-        // a single-format picker would.
-        onImportFromFileClick = { openDocument.launch(arrayOf("*/*")) },
+        actions =
+        ImportActions(
+            onInputChanged = viewModel::onInputChanged,
+            onImportClick = { viewModel.import(state.input) },
+            // "*/*": a subscription can be a share-link list, base64 blob,
+            // Clash YAML or raw Xray JSON (§7) — SubscriptionParser detects
+            // the shape itself, so this does not narrow by extension or
+            // MIME type the way a single-format picker would.
+            onImportFromFileClick = { openDocument.launch(arrayOf("*/*")) },
+            // Fix round 1: just forwards to the caller — this composable
+            // has no NavController and does not know or care how scanning
+            // is presented, only that tapping it should start.
+            onScanClick = onScanQr,
+        ),
         modifier = modifier,
     )
 }
 
 /**
+ * [AddServerSheetContent]'s four callbacks, grouped for the same reason
+ * [art.yniyniyni.subspace.feature.profiles.list.ServersActions] is (both
+ * pre-date and post-date detekt's `LongParameterList` threshold — this one
+ * crossed it when Task 20 fix round 1 added [onScanClick]).
+ */
+internal data class ImportActions(
+    val onInputChanged: (String) -> Unit,
+    val onImportClick: () -> Unit,
+    val onImportFromFileClick: () -> Unit,
+    val onScanClick: () -> Unit,
+)
+
+/**
  * The stateless half — see [art.yniyniyni.subspace.feature.home.HomeScreenContent]'s
  * KDoc for why this split exists. Everything [AddServerSheetBody] would
- * otherwise own directly (paste text, the Import/Import-from-file buttons'
- * enabled gating, the busy indicator, the failure list's expand/collapse) is
- * driven from [state] and three callbacks here, so instrumented tests can
- * exercise it with a plain [ImportState] and no-op lambdas instead of a real
- * [ImportViewModel] behind Hilt.
+ * otherwise own directly (paste text, the Import/Import-from-file/Scan
+ * buttons' enabled gating, the busy indicator, the failure list's
+ * expand/collapse) is driven from [state] and [actions] here, so
+ * instrumented tests can exercise it with a plain [ImportState] and no-op
+ * lambdas instead of a real [ImportViewModel] behind Hilt.
  */
 @Composable
 internal fun AddServerSheetContent(
     state: ImportState,
-    onInputChanged: (String) -> Unit,
-    onImportClick: () -> Unit,
-    onImportFromFileClick: () -> Unit,
+    actions: ImportActions,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -177,7 +208,7 @@ internal fun AddServerSheetContent(
     ) {
         OutlinedTextField(
             value = state.input,
-            onValueChange = onInputChanged,
+            onValueChange = actions.onInputChanged,
             label = { Text(stringResource(R.string.import_paste_label)) },
             minLines = PASTE_FIELD_MIN_LINES,
             enabled = !state.busy,
@@ -185,17 +216,24 @@ internal fun AddServerSheetContent(
         )
 
         Button(
-            onClick = onImportClick,
+            onClick = actions.onImportClick,
             enabled = !state.busy && state.input.isNotBlank(),
         ) {
             Text(stringResource(R.string.import_button))
         }
 
         TextButton(
-            onClick = onImportFromFileClick,
+            onClick = actions.onImportFromFileClick,
             enabled = !state.busy,
         ) {
             Text(stringResource(R.string.import_from_file_button))
+        }
+
+        TextButton(
+            onClick = actions.onScanClick,
+            enabled = !state.busy,
+        ) {
+            Text(stringResource(R.string.import_scan_qr_button))
         }
 
         if (state.busy) {

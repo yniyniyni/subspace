@@ -59,9 +59,17 @@ private val FILTER_CHIP_GAP = 8.dp
  * `Editor` route; that hook is retired now that there is somewhere real to
  * go. Both entry points resolve to the same sheet (no group-scoped import
  * yet, same as the placeholder they replace).
+ *
+ * @param onScanQr forwarded to [AddServerSheet] verbatim (Task 20 fix round
+ *   1) — this screen has no `NavController` of its own, same reason
+ *   [art.yniyniyni.subspace.feature.home.HomeScreen] takes
+ *   `onRequestConsent` rather than owning navigation itself.
  */
 @Composable
-fun ServersScreen(modifier: Modifier = Modifier) {
+fun ServersScreen(
+    onScanQr: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val viewModel: ServersViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showAddSheet by rememberSaveable { mutableStateOf(false) }
@@ -81,7 +89,7 @@ fun ServersScreen(modifier: Modifier = Modifier) {
         modifier = modifier,
     )
 
-    AddServerSheet(open = showAddSheet, onDismiss = { showAddSheet = false })
+    AddServerSheet(open = showAddSheet, onDismiss = { showAddSheet = false }, onScanQr = onScanQr)
 }
 
 /**

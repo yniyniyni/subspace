@@ -5,11 +5,12 @@
 <resources>
     <string name="app_name">Subspace</string>
 
-    <!-- SubspaceNavHost placeholders for the two pushed routes. Task 16 only
-         builds the navigation skeleton — Editor and QrScan get their real
-         screens from later tasks, which replace this content outright rather
-         than build on top of it. profileId is a local Room row id, not a
-         secret (§5.6 covers server addresses/uuids/keys, not row ids). -->
+    <!-- SubspaceNavHost placeholder for the Editor route. Task 16 only
+         builds the navigation skeleton — Editor gets its real screen from a
+         later task, which replaces this content outright rather than build
+         on top of it. QrScan's own placeholder (Task 16) was replaced by
+         the real QrScanScreen in Task 20's fix round 1. profileId is a
+         local Room row id, not a secret (§5.6 covers server
+         addresses/uuids/keys, not row ids). -->
     <string name="nav_editor_placeholder_title">Editor — profile #%1$d</string>
-    <string name="nav_qr_scan_placeholder_title">QR scan</string>
 </resources>

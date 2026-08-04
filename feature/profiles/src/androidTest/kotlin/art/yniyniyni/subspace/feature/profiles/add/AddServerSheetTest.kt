@@ -30,10 +30,18 @@ import org.junit.Test
  * of [AddServerSheetBody] for exactly this reason (see its own KDoc) — with
  * a plain [ImportState] and recording lambdas. No Hilt-backed
  * [ImportViewModel] or [art.yniyniyni.subspace.feature.profiles.ProfileSource]
- * is needed to drive the paste field, the Import/Import-from-file buttons'
- * `enabled` gating, the busy indicator, the file-read-failure message, or
- * the failure list's expand/collapse — [AddServerSheetContent] is a pure
- * function of [ImportState] and three callbacks.
+ * is needed to drive the paste field, the Import/Import-from-file/Scan
+ * buttons' `enabled` gating, the busy indicator, the file-read-failure
+ * message, or the failure list's expand/collapse — [AddServerSheetContent]
+ * is a pure function of [ImportState] and four callbacks. Task 20 fix round
+ * 1 adds the "Scan QR code" button's three assertions (below, mirroring the
+ * file button's own) — this is deliberately as far as this file's coverage
+ * of the QR entry point goes: what happens after the tap (real navigation to
+ * `QrScan`, sharing the same [ImportViewModel] instance across the
+ * `NavBackStackEntry` boundary) needs a real `NavController` and Hilt, which
+ * this Hilt-free harness does not have — see `SubspaceNavHostTest`'s own
+ * file-level KDoc for that boundary and why it is not closed with a new
+ * `@HiltAndroidTest` harness in this round.
  *
  * v2 `createComposeRule` and camelCase names throughout — same DEX-040
  * constraint [art.yniyniyni.subspace.core.ui.component.GroupCardTest] and
@@ -49,14 +57,19 @@ class AddServerSheetTest {
         onInputChanged: (String) -> Unit = {},
         onImportClick: () -> Unit = {},
         onImportFromFileClick: () -> Unit = {},
+        onScanClick: () -> Unit = {},
     ) {
         composeRule.setContent {
             SubspaceTheme {
                 AddServerSheetContent(
                     state = state,
-                    onInputChanged = onInputChanged,
-                    onImportClick = onImportClick,
-                    onImportFromFileClick = onImportFromFileClick,
+                    actions =
+                    ImportActions(
+                        onInputChanged = onInputChanged,
+                        onImportClick = onImportClick,
+                        onImportFromFileClick = onImportFromFileClick,
+                        onScanClick = onScanClick,
+                    ),
                 )
             }
         }
@@ -128,6 +141,32 @@ class AddServerSheetTest {
         setContent(onImportFromFileClick = { clicked = true })
 
         composeRule.onNodeWithText("Import from file").performClick()
+
+        clicked shouldBe true
+    }
+
+    // Task 20 fix round 1: the "Scan QR code" button, mirroring the file
+    // button's own three assertions above (enabled with blank input, disabled
+    // while busy, tapping invokes its callback) — its gate is the identical
+    // `!state.busy` alone, never state.input.
+    @Test
+    fun scanQrButtonIsEnabledEvenWithBlankInput() {
+        setContent(state = ImportState(input = "", busy = false))
+        composeRule.onNodeWithText("Scan QR code").assertIsEnabled()
+    }
+
+    @Test
+    fun scanQrButtonIsDisabledWhileBusy() {
+        setContent(state = ImportState(busy = true))
+        composeRule.onNodeWithText("Scan QR code").assertIsNotEnabled()
+    }
+
+    @Test
+    fun tappingScanQrInvokesOnScanClick() {
+        var clicked = false
+        setContent(onScanClick = { clicked = true })
+
+        composeRule.onNodeWithText("Scan QR code").performClick()
 
         clicked shouldBe true
     }

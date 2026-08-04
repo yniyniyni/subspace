@@ -21,15 +21,32 @@ import org.junit.Test
 // throughout, matching every other androidTest in this repo.
 //
 // startDestination defaults to Settings, not the production Home, in every
-// test here. SubspaceNavHost wires Home to feature:home's real HomeScreen and
+// test here. SubspaceNavHost wires Home to feature:home's real HomeScreen,
 // (as of Task 18's fix round 1) Servers to feature:profiles' real
-// ServersScreen — both resolve a ViewModel through hiltViewModel(), which
-// needs a Hilt-aware host, and these tests are exercising routing/pill
-// behaviour, not either screen's own content. Settings is still this
+// ServersScreen, and (as of Task 20's fix round 1) QrScan to feature:profiles'
+// real QrScanRoute — all three resolve a ViewModel through hiltViewModel()
+// (QrScanRoute's own is scoped to the Servers back-stack entry specifically,
+// which additionally does not exist unless Servers has actually been
+// navigated to first), and these tests are exercising routing/pill
+// behaviour, not any individual screen's own content. Settings is still this
 // project's own placeholder (no Hilt yet), so starting there tests the exact
 // same NavHost wiring without pulling in infrastructure this task does not
 // otherwise need. See SubspaceNavHost's own KDoc on the startDestination
 // parameter.
+//
+// DISCLOSED GAP (Task 20 fix round 1): QrScan's own pill-hiding is NOT
+// separately exercised here for the reason above — this file stays
+// Hilt-free deliberately, and QrScan now needs Hilt. It shares the exact
+// same `else -> null` branch of SubspaceNavHost's private
+// `selectedTopLevelValue()` that theNavBarIsHiddenOnPushedRoutes below
+// already exercises via Editor (that branch is unmodified by the QrScan
+// wiring — Editor and QrScan were already both routed through it before this
+// fix round), so the mechanism is covered; QrScan's own reachability is
+// covered by the fix round's other, non-Hilt-free instrumented coverage
+// instead (AddServerSheetTest's Scan button assertions) plus manual device
+// verification. A true Hilt-aware instrumented test of this destination
+// would need this project's first `@HiltAndroidTest` harness, which does not
+// exist yet — noted here rather than built ad hoc for one destination.
 //
 // The "pill is visible" marker below checks "Connect" (Home's nav item), not
 // "Settings": Settings is the selected destination in every test here, and

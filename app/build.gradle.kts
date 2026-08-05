@@ -83,6 +83,13 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
+    // Same gap as the androidTest block below: :app doesn't go through
+    // subspace.android.library, so the plain JVM unit-test kit every other
+    // Android module gets from that convention plugin isn't present here
+    // either. ThemeResolutionTest is this module's first JVM unit test.
+    testImplementation(libs.junit)
+    testImplementation(libs.kotest.assertions)
+
     // :app builds android {} directly rather than through subspace.android.library
     // (see the kotlin {} block's comment above), so none of the androidTest kit
     // that convention plugin wires for every other Android module is present here

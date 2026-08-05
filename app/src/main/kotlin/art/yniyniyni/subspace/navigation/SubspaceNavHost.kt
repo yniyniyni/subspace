@@ -7,15 +7,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -31,6 +27,7 @@ import art.yniyniyni.subspace.feature.home.HomeScreen
 import art.yniyniyni.subspace.feature.profiles.editor.EditorScreen
 import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
+import art.yniyniyni.subspace.feature.settings.SettingsScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
 
 private const val HOME_VALUE = "home"
@@ -51,15 +48,20 @@ private const val SETTINGS_VALUE = "settings"
  * they are on screen — they are single-purpose flows a user is pushed into
  * and pops back out of, not places they "switch" between.
  *
- * `Settings` still renders a minimal placeholder — `:feature:settings` does
- * not exist yet (a later M3 task builds it). `Home` ([HomeScreen], from
- * `:feature:home`), `Servers` ([ServersScreen], from `:feature:profiles`,
- * wired in Task 18's fix round 1 after code review found it built, tested
- * and unreachable), `QrScan` ([QrScanRoute][art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute],
+ * Every destination renders its real screen directly: `Home` ([HomeScreen],
+ * from `:feature:home`), `Servers` ([ServersScreen], from
+ * `:feature:profiles`, wired in Task 18's fix round 1 after code review
+ * found it built, tested and unreachable), `QrScan`
+ * ([QrScanRoute][art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute],
  * from `:feature:profiles`, wired in Task 20's fix round 1 for the identical
- * reason) and `Editor` ([EditorScreen], from `:feature:profiles`, wired in
- * Task 21 — the same "no later task owns this" treatment) all render their
- * real screens directly.
+ * reason), `Editor` ([EditorScreen], from `:feature:profiles`, wired in
+ * Task 21 — the same "no later task owns this" treatment) and, as of Task
+ * 22, `Settings` ([SettingsScreen], from `:feature:settings`) — the same
+ * treatment again, and the last placeholder route this graph had. Every
+ * top-level and pushed destination now resolves a `ViewModel` through
+ * `hiltViewModel()`, which is why [SubspaceNavHostTest] can no longer drive
+ * the real [SubspaceNavHost] Hilt-free for any of them — see that file's own
+ * KDoc for what that means for its coverage.
  *
  * Root layout is a plain [Box], not a [androidx.compose.material3.Scaffold].
  * [FloatingNavigationBar] already applies its own `navigationBars`
@@ -82,14 +84,13 @@ private const val SETTINGS_VALUE = "settings"
  * @param navController overridable for tests; production callers should use
  *   the default.
  * @param startDestination overridable only for tests — production always
- *   starts at [Home]. Exists so an instrumented test can exercise pill
- *   visibility and single-top behaviour without going through [HomeScreen],
- *   [ServersScreen], [QrScan] or, as of Task 21, [Editor] — all four resolve
- *   a `ViewModel` through `hiltViewModel()` and therefore need a Hilt-aware
- *   host to render at all — [SubspaceNavHostTest] starts at [Settings]
- *   (still this project's own placeholder) for exactly this reason, and
- *   does not exercise [QrScan] or [Editor] specifically for the same one:
- *   see [SubspaceNavHostTest]'s own file-level KDoc.
+ *   starts at [Home]. As of Task 22 every destination in this graph resolves
+ *   a `ViewModel` through `hiltViewModel()` (Task 22 retired the last
+ *   Hilt-free one, [Settings]'s own placeholder), so this parameter no
+ *   longer buys [SubspaceNavHostTest] a way to render the real
+ *   [SubspaceNavHost] without a Hilt-aware host — see that file's own
+ *   file-level KDoc for how it now proves the same routing behaviour
+ *   against a small local graph instead.
  */
 @Composable
 fun SubspaceNavHost(
@@ -127,7 +128,15 @@ fun SubspaceNavHost(
                     onEditProfile = { id -> navController.navigate(Editor(profileId = id)) },
                 )
             }
-            composable<Settings> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_settings)) }
+            composable<Settings> {
+                // Task 22: SettingsScreen replaces the placeholder outright — the same
+                // "no later task owns this" treatment ServersScreen (Task 18 fix round 1),
+                // QrScanScreen (Task 20 fix round 1) and EditorScreen (Task 21) already got.
+                // This closes the last placeholder route in this graph — see PlaceholderScreen's
+                // own KDoc below and SubspaceNavHostTest's file-level KDoc for what that means
+                // for this file's own Hilt-free test harness.
+                SettingsScreen()
+            }
             composable<Editor> { entry ->
                 // Task 21: EditorScreen replaces the placeholder outright — the same
                 // "no later task owns this" treatment ServersScreen (Task 18 fix round 1)
@@ -188,7 +197,14 @@ internal fun NavDestination?.selectedTopLevelValue(): String? =
         else -> null
     }
 
-private fun topLevelNavItems(): List<NavItem> =
+/**
+ * `internal`, not `private`, for the same reason [selectedTopLevelValue] is:
+ * [SubspaceNavHostTest] builds a small local graph with real
+ * [FloatingNavigationBar] wiring (this list, [navigateToTopLevel] and
+ * [selectedTopLevelValue] together) rather than the real, now entirely
+ * Hilt-backed, [SubspaceNavHost] — see that file's own KDoc.
+ */
+internal fun topLevelNavItems(): List<NavItem> =
     listOf(
         NavItem(value = HOME_VALUE, labelRes = CoreUiR.string.nav_item_connect, icon = Icons.Default.Home),
         NavItem(
@@ -199,7 +215,11 @@ private fun topLevelNavItems(): List<NavItem> =
         NavItem(value = SETTINGS_VALUE, labelRes = CoreUiR.string.nav_item_settings, icon = Icons.Default.Settings),
     )
 
-private fun NavHostController.navigateToTopLevel(value: String) {
+/**
+ * `internal`, not `private` — see [topLevelNavItems]'s own KDoc for why
+ * [SubspaceNavHostTest] needs this exposed.
+ */
+internal fun NavHostController.navigateToTopLevel(value: String) {
     val route: Any =
         when (value) {
             HOME_VALUE -> Home
@@ -214,12 +234,5 @@ private fun NavHostController.navigateToTopLevel(value: String) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true
-    }
-}
-
-@Composable
-private fun PlaceholderScreen(title: String, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier.fillMaxSize()) {
-        Text(text = title, style = MaterialTheme.typography.headlineMedium)
     }
 }

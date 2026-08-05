@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.data
 
+import android.database.sqlite.SQLiteConstraintException
 import art.yniyniyni.subspace.core.data.db.ProfileDao
 import art.yniyniyni.subspace.core.data.db.ProfileEntity
 import art.yniyniyni.subspace.core.data.db.ProfileGroupEntity
@@ -208,13 +209,29 @@ internal constructor(
         }
     }
 
-    /** Moves a profile to a different group. A no-op if the profile no longer exists. */
+    /**
+     * Moves a profile to a different group. A no-op (returns `true`) if the profile no
+     * longer exists.
+     *
+     * @return `false` if [ProfileEntity]'s unique `(groupId, identityHash)` index (§4.2)
+     *   already holds an identical outbound in [toGroupId] — [ProfileDao.updateProfile]'s
+     *   default `ABORT` conflict strategy throws [SQLiteConstraintException] rather than
+     *   silently dropping the write, and that exception carries this table's column values
+     *   in its message, so it is caught and turned into a plain `false` here rather than
+     *   let propagate: nothing above `:core:data` may see a config value inside a
+     *   diagnostic (§5.6). `true` otherwise.
+     */
     public suspend fun move(
         profileId: Long,
         toGroupId: Long,
-    ) {
-        val existing = dao.profile(profileId) ?: return
-        dao.updateProfile(existing.copy(groupId = toGroupId))
+    ): Boolean {
+        val existing = dao.profile(profileId) ?: return true
+        return try {
+            dao.updateProfile(existing.copy(groupId = toGroupId))
+            true
+        } catch (ignored: SQLiteConstraintException) {
+            false
+        }
     }
 
     /** Renames a profile. A no-op if the profile no longer exists. */
@@ -224,6 +241,54 @@ internal constructor(
     ) {
         val existing = dao.profile(profileId) ?: return
         dao.updateProfile(existing.copy(name = name))
+    }
+
+    /**
+     * Rewrites a `TYPED` profile's name and whole [outbound] in place, recomputing every
+     * shadow column and [identityHashOf] from the new outbound — §6: identity covers the
+     * whole outbound, so a changed address, port, credential, transport or security is a
+     * changed identity, not merely a changed display value. A no-op if the profile no
+     * longer exists.
+     *
+     * Never call this for a `RAW_JSON` profile. Re-deriving stored bytes from a decoded
+     * [Outbound] is exactly the lossy round trip §6 exists to prevent — that profile's only
+     * editable field is its name, via [rename]. The editor (`:feature:profiles`) is
+     * responsible for routing to the right one of the two based on [StoredProfile.kind];
+     * this repository does not re-check it, the same trust boundary [import]'s [rawJson]
+     * parameter already relies on its caller for.
+     *
+     * @return `false` if the recomputed [identityHash] collides with another profile
+     *   already in this profile's group — [ProfileEntity]'s unique `(groupId,
+     *   identityHash)` index (§4.2) makes that a real possibility (editing a profile's
+     *   outbound until it matches a sibling's), and [ProfileDao.updateProfile]'s `ABORT`
+     *   conflict strategy throws [SQLiteConstraintException] rather than silently
+     *   dropping the write. That exception can quote this table's column values, so it is
+     *   caught here and turned into a plain `false` rather than let propagate past
+     *   `:core:data` (§5.6) — see [move] for the same treatment of the same index. `true`
+     *   otherwise, including the no-op case where the profile no longer exists.
+     */
+    public suspend fun update(
+        profileId: Long,
+        name: String,
+        outbound: Outbound,
+    ): Boolean {
+        val existing = dao.profile(profileId) ?: return true
+        return try {
+            dao.updateProfile(
+                existing.copy(
+                    name = name,
+                    protocol = outbound.protocolName(),
+                    address = outbound.address,
+                    port = outbound.port,
+                    transport = outbound.transportSummary(),
+                    outbound = outbound.toJson(),
+                    identityHash = identityHashOf(outbound),
+                ),
+            )
+            true
+        } catch (ignored: SQLiteConstraintException) {
+            false
+        }
     }
 
     /** Deletes a single profile. */

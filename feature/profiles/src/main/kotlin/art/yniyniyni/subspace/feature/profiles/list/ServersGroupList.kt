@@ -37,6 +37,8 @@ internal data class ServersGroupListActions(
     val onDelete: (ServersGroup) -> Unit,
     val onAddProfile: () -> Unit,
     val onProfileSelected: (Long) -> Unit,
+    /** Task 21: the row's edit icon — opens `Editor(profileId)`, distinct from [onProfileSelected]. */
+    val onProfileEdit: (Long) -> Unit,
 )
 
 /**
@@ -83,7 +85,11 @@ internal fun ServersGroupList(
                 ),
             ) {
                 group.profiles.forEach { row ->
-                    ServerRowItem(row = row, onSelect = { actions.onProfileSelected(row.id) })
+                    ServerRowItem(
+                        row = row,
+                        onSelect = { actions.onProfileSelected(row.id) },
+                        onEdit = { actions.onProfileEdit(row.id) },
+                    )
                 }
             }
         }

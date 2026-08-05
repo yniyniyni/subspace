@@ -19,8 +19,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,18 +46,30 @@ private val BADGE_PADDING_VERTICAL = 2.dp
 
 /**
  * One stored server. Renders a code tile (initials from [ServerRow.name]),
- * the name, protocol badge, transport, and an active check — deliberately no
- * ping value (M4) and no address, since an address is a secret (§5.6, see
- * [ServerRow]'s own KDoc for why this projection carries no address field to
- * begin with).
+ * the name, protocol badge, transport, an active check, and — as of Task 21
+ * — an edit button. Deliberately no ping value (M4) and no address, since an
+ * address is a secret (§5.6, see [ServerRow]'s own KDoc for why this
+ * projection carries no address field to begin with).
+ *
+ * @param onSelect the row body itself — sets this profile active (unchanged
+ *   since Task 18).
+ * @param onEdit the edit icon specifically — opens the profile editor
+ *   (`Editor(profileId)`, Task 21). A separate control from [onSelect] rather
+ *   than overloading the row tap: "make this the active server" and "change
+ *   its fields" are different actions a user reaches for independently, and
+ *   conflating them would make the editor reachable only by first switching
+ *   the active server, which is not what a user editing a REALITY key on a
+ *   server they are not currently using wants.
  */
 @Composable
 internal fun ServerRowItem(
     row: ServerRow,
     onSelect: () -> Unit,
+    onEdit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val description = row.contentDescription()
+    val editDescription = stringResource(R.string.servers_row_edit_description, row.name)
 
     Row(
         modifier =
@@ -89,6 +103,13 @@ internal fun ServerRowItem(
 
         if (row.isActive) {
             Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        }
+
+        IconButton(onClick = onEdit) {
+            Icon(
+                imageVector = Icons.Default.Edit,
+                contentDescription = editDescription,
+            )
         }
     }
 }

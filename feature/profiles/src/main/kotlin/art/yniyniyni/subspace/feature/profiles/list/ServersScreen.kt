@@ -64,10 +64,14 @@ private val FILTER_CHIP_GAP = 8.dp
  *   1) — this screen has no `NavController` of its own, same reason
  *   [art.yniyniyni.subspace.feature.home.HomeScreen] takes
  *   `onRequestConsent` rather than owning navigation itself.
+ * @param onEditProfile a row's edit icon (Task 21) — forwarded verbatim to
+ *   `SubspaceNavHost`, which navigates to `Editor(profileId)`. Same reason
+ *   [onScanQr] is a callback rather than this screen owning a `NavController`.
  */
 @Composable
 fun ServersScreen(
     onScanQr: () -> Unit,
+    onEditProfile: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: ServersViewModel = hiltViewModel()
@@ -85,6 +89,7 @@ fun ServersScreen(
             onRenameGroup = viewModel::onRenameGroup,
             onDeleteGroup = viewModel::onDeleteGroup,
             onAddProfile = { showAddSheet = true },
+            onProfileEdit = onEditProfile,
         ),
         modifier = modifier,
     )
@@ -93,7 +98,7 @@ fun ServersScreen(
 }
 
 /**
- * [ServersScreenContent]'s seven callbacks, grouped for the same reason
+ * [ServersScreenContent]'s eight callbacks, grouped for the same reason
  * [art.yniyniyni.subspace.feature.home.HomeActions] is.
  */
 internal data class ServersActions(
@@ -104,6 +109,7 @@ internal data class ServersActions(
     val onRenameGroup: (Long, String) -> Unit,
     val onDeleteGroup: (Long) -> Unit,
     val onAddProfile: () -> Unit,
+    val onProfileEdit: (Long) -> Unit,
 )
 
 /**
@@ -141,6 +147,7 @@ internal fun ServersScreenContent(
                 onDelete = { deleteTarget = it },
                 onAddProfile = actions.onAddProfile,
                 onProfileSelected = actions.onProfileSelected,
+                onProfileEdit = actions.onProfileEdit,
             ),
             modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )

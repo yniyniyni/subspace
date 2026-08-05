@@ -34,6 +34,9 @@
          summary (e.g. "ws · tls · 443") — never an address, uuid, or key. -->
     <string name="servers_row_description_select">Select %1$s as active server, %2$s, %3$s</string>
     <string name="servers_row_description_active">%1$s, %2$s, %3$s, currently active</string>
+    <!-- Task 21: the row's edit button, separate from the row tap itself
+         (which sets the profile active) — opens the profile editor. -->
+    <string name="servers_row_edit_description">Edit %1$s</string>
 
     <string name="servers_rename_group_title">Rename group</string>
     <string name="servers_rename_group_confirm">Rename</string>
@@ -122,4 +125,73 @@
         Camera access was denied. To scan a QR code, allow Camera for Subspace in system settings.
     </string>
     <string name="qr_scan_open_settings_button">Open settings</string>
+
+    <!-- Task 21: the profile editor. §5.6 applies here too — every string below
+         is a field LABEL or fixed vocabulary; the field VALUES (address, uuid,
+         password, keys) live only in EditorState and are never interpolated
+         into a resource string. -->
+    <string name="editor_back_description">Back</string>
+    <string name="editor_title">Edit server</string>
+    <string name="editor_loading_description">Loading server</string>
+    <string name="editor_not_found_title">Server not found</string>
+    <string name="editor_not_found_body">This server no longer exists or was never saved.</string>
+    <string name="editor_not_found_back_button">Go back</string>
+
+    <string name="editor_name_label">Name</string>
+    <string name="editor_group_label">Group</string>
+    <string name="editor_address_label">Address</string>
+    <string name="editor_port_label">Port</string>
+    <string name="editor_uuid_label">UUID</string>
+    <string name="editor_password_label">Password</string>
+    <string name="editor_username_label">Username (optional)</string>
+    <string name="editor_socks_password_label">Password (optional)</string>
+    <string name="editor_flow_label">Flow (optional)</string>
+    <string name="editor_alter_id_label">Alter ID</string>
+    <string name="editor_vmess_security_label">Encryption</string>
+    <string name="editor_method_label">Cipher</string>
+    <string name="editor_network_label">Network</string>
+    <string name="editor_security_label">Security</string>
+    <string name="editor_security_none">None</string>
+    <string name="editor_tls_server_name_label">Server name (SNI)</string>
+    <string name="editor_tls_fingerprint_label">Fingerprint</string>
+    <string name="editor_tls_allow_insecure_label">Allow insecure</string>
+    <string name="editor_reality_server_name_label">Server name (SNI)</string>
+    <string name="editor_reality_public_key_label">Public key</string>
+    <string name="editor_reality_short_id_label">Short ID</string>
+    <string name="editor_reality_fingerprint_label">Fingerprint</string>
+    <string name="editor_reality_spider_x_label">Spider X</string>
+    <string name="editor_ws_path_label">Path</string>
+    <string name="editor_grpc_service_name_label">Service name</string>
+
+    <string name="editor_save_button">Save</string>
+
+    <!-- ARCHITECTURE.md §6: passthrough execution (running a RAW_JSON profile's
+         own bytes instead of the typed projection) is not implemented. This
+         notice is the one place the editor says so out loud, so a user does
+         not read "read-only" as an unfinished feature rather than a deliberate
+         one — see EditorViewModel.kt's own KDoc for the full reasoning. -->
+    <string name="editor_raw_json_notice">
+        This server was added from a pasted config file. Subspace runs a parsed copy of it, not
+        the file itself, so editing the text here would show you something the app does not
+        actually use yet. Only the name can be changed — everything else is shown for reference.
+    </string>
+    <string name="editor_raw_json_label">Pasted config (read-only)</string>
+
+    <!-- Same closed-vocabulary shape as import_failure_* above, minus the
+         "Entry N" prefix — these are single-field validation errors on a form,
+         not a list of parsed entries. %1$s is the field name (below). -->
+    <string name="editor_error_length">%1$s must have length %2$d (actual: %3$d)</string>
+    <string name="editor_error_range">%1$s must be from %2$d to %3$d (actual: %4$d)</string>
+    <string name="editor_error_missing">%1$s is missing</string>
+    <string name="editor_error_unsupported">%1$s is not supported</string>
+    <string name="editor_error_malformed">%1$s is malformed</string>
+
+    <!-- Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (§4.2)
+         rejects a save whose edited outbound now matches a sibling profile in the same
+         group. §5.6: this string never names the address/UUID/whatever actually collided —
+         only that it did, and what the user can do about it. -->
+    <string name="editor_duplicate_identity">
+        A profile with these settings already exists in this group. Change a setting — the
+        address, port, or credential — or pick a different group, then save again.
+    </string>
 </resources>

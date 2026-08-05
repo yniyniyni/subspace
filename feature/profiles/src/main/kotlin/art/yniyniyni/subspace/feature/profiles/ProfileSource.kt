@@ -5,6 +5,7 @@ import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
@@ -70,9 +71,47 @@ internal interface ProfileSource {
 
     /**
      * A single profile by its row id, or `null` if it no longer exists. Lets a
-     * caller confirm what was actually persisted, e.g. after [import].
+     * caller confirm what was actually persisted, e.g. after [import], or —
+     * as of Task 21 — what [EditorViewModel][art.yniyniyni.subspace.feature.profiles.editor.EditorViewModel]
+     * loads for editing.
      */
     suspend fun profile(id: Long): StoredProfile?
+
+    /** Renames a profile. A no-op if it no longer exists. Task 21: the editor's only write for a RAW_JSON profile. */
+    suspend fun rename(
+        id: Long,
+        name: String,
+    )
+
+    /**
+     * Moves a profile to a different group. A no-op (returns `true`) if it no longer
+     * exists.
+     *
+     * @return `false` if [toGroupId] already holds a profile with an identical outbound —
+     *   see [ProfileRepository.move]'s KDoc. Task 21: the caller ([EditorViewModel][
+     *   art.yniyniyni.subspace.feature.profiles.editor.EditorViewModel]) reports this as a
+     *   diagnostic rather than letting the underlying `SQLiteConstraintException` crash the
+     *   app.
+     */
+    suspend fun move(
+        id: Long,
+        toGroupId: Long,
+    ): Boolean
+
+    /**
+     * Rewrites a TYPED profile's name and whole outbound in place — see
+     * [ProfileRepository.update]'s KDoc. Never called for a RAW_JSON profile;
+     * see [EditorViewModel][art.yniyniyni.subspace.feature.profiles.editor.EditorViewModel]'s
+     * `save` for the branch that enforces this.
+     *
+     * @return `false` if the edited outbound now collides with another profile already in
+     *   this profile's group — see [ProfileRepository.update]'s KDoc. `true` otherwise.
+     */
+    suspend fun update(
+        id: Long,
+        name: String,
+        outbound: Outbound,
+    ): Boolean
 }
 
 @Singleton
@@ -107,4 +146,20 @@ constructor(
     ) = profileRepository.import(profiles, groupId, rawJson)
 
     override suspend fun profile(id: Long): StoredProfile? = profileRepository.profile(id)
+
+    override suspend fun rename(
+        id: Long,
+        name: String,
+    ) = profileRepository.rename(id, name)
+
+    override suspend fun move(
+        id: Long,
+        toGroupId: Long,
+    ): Boolean = profileRepository.move(id, toGroupId)
+
+    override suspend fun update(
+        id: Long,
+        name: String,
+        outbound: Outbound,
+    ): Boolean = profileRepository.update(id, name, outbound)
 }

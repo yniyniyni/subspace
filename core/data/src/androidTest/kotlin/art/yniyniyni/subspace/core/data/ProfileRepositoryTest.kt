@@ -9,6 +9,7 @@ import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -137,6 +138,115 @@ class ProfileRepositoryTest {
             }
         }
     }
+
+    // Task 21: EditorViewModel.save() calls ProfileRepository.update() for a
+    // TYPED profile. StoredProfile (the type feature/profiles sees) exposes
+    // no identityHash field on purpose — it is a :core:data storage concern,
+    // not something a caller should read back and compare — so this is the
+    // one place §6's "a changed address is a changed identity" claim can
+    // actually be checked, against the real ProfileEntity column, not a
+    // fake's stand-in.
+    @Test
+    fun updatingATypedProfileRewritesItsIdentityHash() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            repository.import(listOf(sampleProfile(address = "198.51.100.1")), groupId)
+            val stored = repository.observeGroups().first().single().profiles.single()
+            val before = db.profileDao().profile(stored.id)!!.identityHash
+
+            repository.update(
+                stored.id,
+                stored.name,
+                VlessOutbound(
+                    address = "198.51.100.99",
+                    port = 443,
+                    uuid = "1e0f2a2e-6b2b-4b9a-9a3b-000000000000",
+                    flow = null,
+                    stream = StreamSettings(network = "tcp", security = Security.None),
+                ),
+            )
+
+            val after = db.profileDao().profile(stored.id)!!
+            after.identityHash shouldNotBe before
+            after.address shouldBe "198.51.100.99"
+        }
+
+    // A RAW_JSON profile's rename() must never touch its stored bytes —
+    // rename() only ever copies the `name` column, but this pins that
+    // guarantee against a regression that widens it, the same "leaves its
+    // bytes untouched" claim EditorViewModelTest makes against a fake.
+    @Test
+    fun renamingAProfileLeavesEveryOtherColumnUntouched() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            val rawJson = """{"outbounds":[{"protocol":"vless"}]}"""
+            repository.import(listOf(sampleProfile()), groupId, rawJson = rawJson)
+            val stored = repository.observeGroups().first().single().profiles.single()
+            val before = db.profileDao().profile(stored.id)!!
+
+            repository.rename(stored.id, "Renamed")
+
+            val after = db.profileDao().profile(stored.id)!!
+            after.name shouldBe "Renamed"
+            after.rawJson shouldBe rawJson
+            after.outbound shouldBe before.outbound
+            after.identityHash shouldBe before.identityHash
+        }
+
+    // Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (§4.2) makes
+    // ProfileDao.updateProfile's default ABORT conflict strategy throw
+    // SQLiteConstraintException when the recomputed identity collides with a sibling
+    // profile already in the group. Before this fix, ProfileRepository.update() let that
+    // exception propagate straight out of a suspend function called from
+    // EditorViewModel.save()'s viewModelScope.launch with no try/catch — an uncaught
+    // exception on that scope crashes the app (ARCHITECTURE.md §10.4). This test exercises
+    // the real Room constraint, not a fake standing in for it: the surest evidence the fix
+    // actually reaches the exception this class throws.
+    @Test
+    fun updatingATypedProfileIntoACollidingIdentityReturnsFalseInsteadOfThrowing() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            repository.import(
+                listOf(sampleProfile(address = "198.51.100.1"), sampleProfile(address = "198.51.100.2")),
+                groupId,
+            )
+            val profiles = repository.observeGroups().first().single().profiles
+            val first = profiles.first { it.address == "198.51.100.1" }
+            val second = profiles.first { it.address == "198.51.100.2" }
+
+            val succeeded =
+                repository.update(
+                    first.id,
+                    first.name,
+                    VlessOutbound(
+                        address = second.address,
+                        port = second.port,
+                        uuid = "1e0f2a2e-6b2b-4b9a-9a3b-000000000000",
+                        flow = null,
+                        stream = StreamSettings(network = "tcp", security = Security.None),
+                    ),
+                )
+
+            succeeded shouldBe false
+            db.profileDao().profile(first.id)!!.address shouldBe "198.51.100.1"
+        }
+
+    // Same index, the other write path: move() carries a profile's existing (unedited)
+    // identity into a new group that already holds an identical outbound.
+    @Test
+    fun movingATypedProfileIntoAGroupThatAlreadyHoldsItReturnsFalseInsteadOfThrowing() =
+        runTest {
+            val groupA = repository.defaultGroupId()
+            val groupB = repository.createGroup("Other")
+            repository.import(listOf(sampleProfile()), groupA)
+            repository.import(listOf(sampleProfile()), groupB)
+            val inGroupA = repository.observeGroups().first().first { it.id == groupA }.profiles.single()
+
+            val succeeded = repository.move(inGroupA.id, groupB)
+
+            succeeded shouldBe false
+            db.profileDao().profile(inGroupA.id)!!.groupId shouldBe groupA
+        }
 
     private fun sampleProfile(address: String = "198.51.100.1") =
         Profile(

@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.add
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import io.kotest.matchers.shouldBe
@@ -119,6 +120,24 @@ class ImportViewModelTest {
         }
 
         override suspend fun profile(id: Long): StoredProfile? = stored[id]
+
+        // Not exercised here — EditorViewModelTest (Task 21) owns real
+        // coverage of these three.
+        override suspend fun rename(
+            id: Long,
+            name: String,
+        ) = Unit
+
+        override suspend fun move(
+            id: Long,
+            toGroupId: Long,
+        ) = true
+
+        override suspend fun update(
+            id: Long,
+            name: String,
+            outbound: Outbound,
+        ) = true
     }
 
     @Before

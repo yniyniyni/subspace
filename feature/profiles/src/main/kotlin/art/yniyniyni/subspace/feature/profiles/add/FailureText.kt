@@ -66,8 +66,14 @@ internal fun failureText(failure: ParseFailure): String {
     }
 }
 
+/**
+ * Internal (not `private`) since Task 21: the profile editor's own field-level error text
+ * ([art.yniyniyni.subspace.feature.profiles.editor.editorErrorText]) resolves the same field
+ * name vocabulary, and duplicating this exhaustive `when` a second time in the same module
+ * would be exactly the kind of drift [failureText]'s own KDoc warns against.
+ */
 @Suppress("CyclomaticComplexMethod")
-private fun DetailField.labelRes(): Int =
+internal fun DetailField.labelRes(): Int =
     when (this) {
         DetailField.Scheme -> R.string.import_detail_field_scheme
         DetailField.Uri -> R.string.import_detail_field_uri

@@ -25,10 +25,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import art.yniyniyni.subspace.R
 import art.yniyniyni.subspace.core.ui.component.FloatingNavigationBar
 import art.yniyniyni.subspace.core.ui.component.NavItem
 import art.yniyniyni.subspace.feature.home.HomeScreen
+import art.yniyniyni.subspace.feature.profiles.editor.EditorScreen
 import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
@@ -51,14 +51,15 @@ private const val SETTINGS_VALUE = "settings"
  * they are on screen — they are single-purpose flows a user is pushed into
  * and pops back out of, not places they "switch" between.
  *
- * `Settings` and `Editor` still render a minimal placeholder —
- * `:feature:settings` and the profile editor do not exist yet (later M3
- * tasks build them). `Home` ([HomeScreen], from `:feature:home`), `Servers`
- * ([ServersScreen], from `:feature:profiles`, wired in Task 18's fix round 1
- * after code review found it built, tested and unreachable) and `QrScan`
- * ([QrScanRoute][art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute],
+ * `Settings` still renders a minimal placeholder — `:feature:settings` does
+ * not exist yet (a later M3 task builds it). `Home` ([HomeScreen], from
+ * `:feature:home`), `Servers` ([ServersScreen], from `:feature:profiles`,
+ * wired in Task 18's fix round 1 after code review found it built, tested
+ * and unreachable), `QrScan` ([QrScanRoute][art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute],
  * from `:feature:profiles`, wired in Task 20's fix round 1 for the identical
- * reason) all render their real screens directly.
+ * reason) and `Editor` ([EditorScreen], from `:feature:profiles`, wired in
+ * Task 21 — the same "no later task owns this" treatment) all render their
+ * real screens directly.
  *
  * Root layout is a plain [Box], not a [androidx.compose.material3.Scaffold].
  * [FloatingNavigationBar] already applies its own `navigationBars`
@@ -83,11 +84,11 @@ private const val SETTINGS_VALUE = "settings"
  * @param startDestination overridable only for tests — production always
  *   starts at [Home]. Exists so an instrumented test can exercise pill
  *   visibility and single-top behaviour without going through [HomeScreen],
- *   [ServersScreen] or [QrScan] (as of Task 20's fix round 1), all three of
- *   which resolve a `ViewModel` through `hiltViewModel()` and therefore need
- *   a Hilt-aware host to render at all — [SubspaceNavHostTest] starts at
- *   [Settings] (still a placeholder, same as [Editor]) for exactly this
- *   reason, and does not exercise [QrScan] specifically for the same one:
+ *   [ServersScreen], [QrScan] or, as of Task 21, [Editor] — all four resolve
+ *   a `ViewModel` through `hiltViewModel()` and therefore need a Hilt-aware
+ *   host to render at all — [SubspaceNavHostTest] starts at [Settings]
+ *   (still this project's own placeholder) for exactly this reason, and
+ *   does not exercise [QrScan] or [Editor] specifically for the same one:
  *   see [SubspaceNavHostTest]'s own file-level KDoc.
  */
 @Composable
@@ -117,13 +118,22 @@ fun SubspaceNavHost(
                 // (AddServerSheet) rather than forwarding to the Editor
                 // placeholder — no onAddProfile hook to wire here any more.
                 // Task 20 fix round 1: AddServerSheet's "Scan QR code"
-                // button navigates here, to QrScan.
-                ServersScreen(onScanQr = { navController.navigate(QrScan) })
+                // button navigates here, to QrScan. Task 21: a row's edit
+                // icon navigates to Editor(profileId) for that real row —
+                // the only reachable path to an *existing* profile's editor;
+                // Home's "Add server" chip below still passes profileId = 0.
+                ServersScreen(
+                    onScanQr = { navController.navigate(QrScan) },
+                    onEditProfile = { id -> navController.navigate(Editor(profileId = id)) },
+                )
             }
             composable<Settings> { PlaceholderScreen(stringResource(CoreUiR.string.nav_item_settings)) }
             composable<Editor> { entry ->
+                // Task 21: EditorScreen replaces the placeholder outright — the same
+                // "no later task owns this" treatment ServersScreen (Task 18 fix round 1)
+                // and QrScanScreen (Task 20 fix round 1) already got.
                 val editor: Editor = entry.toRoute()
-                PlaceholderScreen(stringResource(R.string.nav_editor_placeholder_title, editor.profileId))
+                EditorScreen(profileId = editor.profileId, onDone = { navController.popBackStack() })
             }
             composable<QrScan> { entry ->
                 // Task 20 fix round 1: QrScanScreen was built, tested and
@@ -160,8 +170,16 @@ fun SubspaceNavHost(
     }
 }
 
-/** `null` for [Editor] and [QrScan] (and for no current destination yet) — the pill's cue to hide. */
-private fun NavDestination?.selectedTopLevelValue(): String? =
+/**
+ * `null` for [Editor] and [QrScan] (and for no current destination yet) — the pill's cue to
+ * hide.
+ *
+ * `internal`, not `private`, since Task 21: [SubspaceNavHostTest] exercises this mapping
+ * directly against a small local graph rather than through [SubspaceNavHost] itself — see
+ * that test's own KDoc for why [Editor] becoming a real, Hilt-backed screen in this task
+ * closed off the previous route to this same proof.
+ */
+internal fun NavDestination?.selectedTopLevelValue(): String? =
     when {
         this == null -> null
         hasRoute<Home>() -> HOME_VALUE

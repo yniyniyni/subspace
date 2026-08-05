@@ -8,9 +8,12 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.Rule
 import org.junit.Test
 
@@ -34,19 +37,25 @@ import org.junit.Test
 // otherwise need. See SubspaceNavHost's own KDoc on the startDestination
 // parameter.
 //
-// DISCLOSED GAP (Task 20 fix round 1): QrScan's own pill-hiding is NOT
-// separately exercised here for the reason above — this file stays
-// Hilt-free deliberately, and QrScan now needs Hilt. It shares the exact
-// same `else -> null` branch of SubspaceNavHost's private
-// `selectedTopLevelValue()` that theNavBarIsHiddenOnPushedRoutes below
-// already exercises via Editor (that branch is unmodified by the QrScan
-// wiring — Editor and QrScan were already both routed through it before this
-// fix round), so the mechanism is covered; QrScan's own reachability is
-// covered by the fix round's other, non-Hilt-free instrumented coverage
-// instead (AddServerSheetTest's Scan button assertions) plus manual device
-// verification. A true Hilt-aware instrumented test of this destination
-// would need this project's first `@HiltAndroidTest` harness, which does not
-// exist yet — noted here rather than built ad hoc for one destination.
+// DISCLOSED GAP, WIDENED IN TASK 21: QrScan's own pill-hiding was already not
+// separately exercised here (Task 20 fix round 1) because this file stays
+// Hilt-free deliberately and QrScan needs Hilt. That gap previously leaned on
+// Editor for proof of the shared `else -> null` branch of SubspaceNavHost's
+// `selectedTopLevelValue()`, because Editor was still a Hilt-free placeholder.
+// Task 21 replaces that placeholder with the real, Hilt-backed EditorScreen —
+// closing the LAST pushed (non-top-level) route this file could navigate to
+// without crashing. `selectedTopLevelValueIsNullOnlyForPushedRoutes` below no
+// longer drives the real SubspaceNavHost() to prove this; it exercises `selectedTopLevelValue()`
+// (now `internal`, not `private`, for exactly this reason) directly against a
+// small local NavHost built from the same five route types with trivial,
+// Hilt-free bodies. That is a real, non-fabricated proof of the actual mapping
+// function — the one thing that decides whether the pill shows or hides — but
+// it is not an end-to-end proof that SubspaceNavHost's own `if (selected !=
+// null) FloatingNavigationBar(...)` gating (an unmodified one-line condition)
+// wires that mapping correctly against the real screens. A true Hilt-aware
+// instrumented test of the full graph would need this project's first
+// `@HiltAndroidTest` harness, which does not exist yet — noted here rather
+// than built ad hoc for one test, same call Task 20's fix round 1 already made.
 //
 // The "pill is visible" marker below checks "Connect" (Home's nav item), not
 // "Settings": Settings is the selected destination in every test here, and
@@ -60,8 +69,16 @@ class SubspaceNavHostTest {
 
     private lateinit var navController: NavHostController
 
+    /**
+     * The pill exists (and is interactable) while [SubspaceNavHost] sits on a real, running
+     * top-level destination. The original version of this test additionally proved the pill
+     * *hides* by pushing [Editor] on top and back — [Editor] became a real, Hilt-backed screen
+     * in Task 21, which this Hilt-free harness cannot compose (see the file-level KDoc); that
+     * half of the proof moved to [selectedTopLevelValueIsNullOnlyForPushedRoutes] below, against
+     * a small local graph instead of the full [SubspaceNavHost].
+     */
     @Test
-    fun theNavBarIsHiddenOnPushedRoutes() {
+    fun theNavBarIsVisibleOnATopLevelDestination() {
         composeRule.setContent {
             navController = rememberNavController()
             SubspaceTheme {
@@ -77,12 +94,43 @@ class SubspaceNavHostTest {
         // (Settings is), so it is reachable by content description the whole
         // time the pill exists — see the file-level comment above.
         composeRule.onNodeWithContentDescription("Connect").assertExists()
+    }
 
-        composeRule.runOnIdle { navController.navigate(Editor(EDITOR_TEST_PROFILE_ID)) }
-        composeRule.onNodeWithContentDescription("Connect").assertDoesNotExist()
+    /**
+     * The real proof that a pushed (non-top-level) route hides the pill — see the file-level
+     * KDoc for why this no longer drives the full, now entirely Hilt-backed [SubspaceNavHost]
+     * for [Editor]/[QrScan] specifically. A small local [NavHost] carrying the same five route
+     * types with trivial bodies exercises [selectedTopLevelValue] (now `internal`) directly:
+     * [Home]/[Servers]/[Settings] resolve to a non-null pill value, [Editor]/[QrScan] to `null`.
+     */
+    @Test
+    fun selectedTopLevelValueIsNullOnlyForPushedRoutes() {
+        lateinit var localNavController: NavHostController
+        composeRule.setContent {
+            localNavController = rememberNavController()
+            NavHost(navController = localNavController, startDestination = Settings) {
+                composable<Home> { }
+                composable<Servers> { }
+                composable<Settings> { }
+                composable<Editor> { }
+                composable<QrScan> { }
+            }
+        }
 
-        composeRule.runOnIdle { navController.popBackStack() }
-        composeRule.onNodeWithContentDescription("Connect").assertExists()
+        composeRule.runOnIdle { localNavController.currentDestination.selectedTopLevelValue() shouldNotBe null }
+
+        composeRule.runOnIdle { localNavController.navigate(Home) }
+        composeRule.runOnIdle { localNavController.currentDestination.selectedTopLevelValue() shouldNotBe null }
+
+        composeRule.runOnIdle { localNavController.navigate(Servers) }
+        composeRule.runOnIdle { localNavController.currentDestination.selectedTopLevelValue() shouldNotBe null }
+
+        composeRule.runOnIdle { localNavController.navigate(Editor(EDITOR_TEST_PROFILE_ID)) }
+        composeRule.runOnIdle { localNavController.currentDestination.selectedTopLevelValue() shouldBe null }
+
+        composeRule.runOnIdle { localNavController.popBackStack() }
+        composeRule.runOnIdle { localNavController.navigate(QrScan) }
+        composeRule.runOnIdle { localNavController.currentDestination.selectedTopLevelValue() shouldBe null }
     }
 
     @Test

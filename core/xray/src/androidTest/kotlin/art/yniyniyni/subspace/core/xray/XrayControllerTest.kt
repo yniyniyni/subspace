@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertNotEquals
@@ -82,6 +83,65 @@ class XrayControllerTest {
 
             controller.validate(configFile)
             configFile.delete()
+        }
+
+    /**
+     * The same §10.5 argument as [generatedConfigIsAcceptedByTheRealCore], for the
+     * transport blocks — and this is the test that matters most for them.
+     *
+     * `wsSettings`/`grpcSettings`/`xhttpSettings` were verified against Xray-core
+     * v26.7.11's `infra/conf/transport_method.go` while writing the generator, but
+     * reading a struct tag proves the key exists, not that the core accepts the
+     * object this build actually emits around it. An unknown key inside a
+     * transport block is precisely §10.5's silent-or-fatal case, and the JVM tests
+     * can only assert the string contains what the generator put there.
+     *
+     * Camel-case name, no backticks: this module's instrumented tests run through
+     * D8, where DEX 040 restricts synthetic class names.
+     */
+    @Test
+    fun everyEmittedTransportIsAcceptedByTheRealCore() =
+        runTest {
+            val controller = XrayController()
+            val streams =
+                listOf(
+                    StreamSettings("tcp", reality),
+                    // network named, options unspecified — the core must take its
+                    // own transport defaults rather than reject the absent block.
+                    StreamSettings("ws", Security.None),
+                    StreamSettings(
+                        "ws",
+                        Security.None,
+                        TransportOptions.WebSocket("/chat", mapOf("Host" to "cdn.example")),
+                    ),
+                    StreamSettings("grpc", Security.None, TransportOptions.Grpc("GunService")),
+                    StreamSettings("xhttp", reality, TransportOptions.Xhttp("/down", "cdn.example", "stream-up")),
+                    StreamSettings("xhttp", Security.None, TransportOptions.Xhttp("/", host = null, mode = null)),
+                )
+
+            streams.forEachIndexed { index, stream ->
+                val settings =
+                    TunnelSettings(
+                        socksPort = controller.allocatePort(),
+                        dnsServer = "1.1.1.1",
+                        enableSniffing = true,
+                    )
+                val profile = Profile(id = "id", name = "n", outbound = outbound.copy(stream = stream))
+                val result = XrayConfigGenerator.generate(profile, settings)
+                check(result is ConfigResult.Ok) { "expected ConfigResult.Ok for ${stream.network}, got $result" }
+                val configFile = File(cacheDir, "instr-transport-$index.json").apply { writeText(result.json) }
+
+                try {
+                    controller.validate(configFile)
+                } catch (e: XrayException) {
+                    // §5.6: the message can quote the config back, so it must not
+                    // reach the failure text. The network name is ours, not the
+                    // user's, and is what identifies which case failed.
+                    fail("the core rejected an emitted ${stream.network} config: ${e.javaClass.simpleName}")
+                } finally {
+                    configFile.delete()
+                }
+            }
         }
 
     @Test

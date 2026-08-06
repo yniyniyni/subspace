@@ -73,7 +73,28 @@ internal const val EDITOR_RAW_JSON_TEST_TAG = "editor-raw-json"
 internal const val EDITOR_DUPLICATE_IDENTITY_TEST_TAG = "editor-duplicate-identity"
 
 private val VMESS_SECURITY_OPTIONS = listOf("auto", "aes-128-gcm", "chacha20-poly1305", "none")
-private val NETWORK_OPTIONS = listOf("tcp", "ws", "grpc")
+
+/**
+ * The transports this build can emit a config for — deliberately the same set
+ * `StoredProfile.connectable` gates on, minus the aliases (`raw`, `websocket`, `splithttp`),
+ * which are the same transports under a second name and would read as duplicates in a
+ * dropdown. A profile imported under an alias keeps it; this list is what a user can *pick*.
+ *
+ * Offering a network the generator cannot emit would let the editor turn a working profile
+ * into an unconnectable one, which is the mirror image of the xhttp regression.
+ */
+private val NETWORK_OPTIONS = listOf("tcp", "ws", "grpc", "xhttp")
+
+/**
+ * XHTTP modes, exactly as Xray-core v26.7.11 accepts them (`SplitHTTPConfig.Build`), plus a
+ * leading blank for "unset" — which the core reads as `auto`, and which is distinct from
+ * choosing `auto` explicitly only in that it writes no key at all.
+ *
+ * An unrecognised mode is a hard config-build error upstream, not a fallback, so this must
+ * stay a closed list rather than a text field.
+ */
+private val XHTTP_MODES = listOf("", "auto", "packet-up", "stream-up", "stream-one")
+
 private val STREAM_PROTOCOLS = setOf("vless", "vmess", "trojan")
 
 /**
@@ -124,6 +145,9 @@ fun EditorScreen(
             onRealitySpiderXChanged = viewModel::onRealitySpiderXChanged,
             onWsPathChanged = viewModel::onWsPathChanged,
             onGrpcServiceNameChanged = viewModel::onGrpcServiceNameChanged,
+            onXhttpPathChanged = viewModel::onXhttpPathChanged,
+            onXhttpHostChanged = viewModel::onXhttpHostChanged,
+            onXhttpModeChanged = viewModel::onXhttpModeChanged,
             onSave = viewModel::save,
         ),
         modifier = modifier,
@@ -160,6 +184,9 @@ internal data class EditorActions(
     val onRealitySpiderXChanged: (String) -> Unit,
     val onWsPathChanged: (String) -> Unit,
     val onGrpcServiceNameChanged: (String) -> Unit,
+    val onXhttpPathChanged: (String) -> Unit,
+    val onXhttpHostChanged: (String) -> Unit,
+    val onXhttpModeChanged: (String) -> Unit,
     val onSave: () -> Unit,
 )
 
@@ -422,8 +449,38 @@ private fun TransportSection(
                     value = state.grpcServiceName,
                     onValueChange = actions.onGrpcServiceNameChanged,
                 )
+
+            // Both spellings: a profile imported from a config written against the
+            // older name keeps it, and its fields must still be editable.
+            "xhttp", "splithttp" -> XhttpFields(state, actions)
         }
     }
+}
+
+@Composable
+private fun XhttpFields(
+    state: EditorState,
+    actions: EditorActions,
+) {
+    EditorField(
+        label = stringResource(R.string.editor_xhttp_path_label),
+        value = state.xhttpPath,
+        onValueChange = actions.onXhttpPathChanged,
+    )
+    EditorField(
+        label = stringResource(R.string.editor_xhttp_host_label),
+        value = state.xhttpHost,
+        onValueChange = actions.onXhttpHostChanged,
+    )
+    EditorDropdownField(
+        label = stringResource(R.string.editor_xhttp_mode_label),
+        selected = state.xhttpMode,
+        options = XHTTP_MODES,
+        onSelected = actions.onXhttpModeChanged,
+        // The blank sentinel needs a readable label; the four real modes are
+        // Xray's own literals and are not translated (they go into the config).
+        optionLabel = { mode -> mode.ifEmpty { stringResource(R.string.editor_xhttp_mode_auto) } },
+    )
 }
 
 @Composable
@@ -612,9 +669,15 @@ private fun EditorDropdownField(
     onSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
     error: FailureDetail? = null,
+    // Defaults to the option itself, which is right for every existing caller: their
+    // options are Xray's own literals and go into the config verbatim. Overridden only
+    // where an option has no readable form of its own — XHTTP's blank "unset" sentinel,
+    // which would otherwise render as an empty, unlabelled menu row with nothing for a
+    // screen reader to announce.
+    optionLabel: @Composable (String) -> String = { it },
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val labelledValue = stringResource(R.string.editor_dropdown_value, label, selected)
+    val labelledValue = stringResource(R.string.editor_dropdown_value, label, optionLabel(selected))
 
     Column(modifier = modifier) {
         Box {
@@ -626,8 +689,9 @@ private fun EditorDropdownField(
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 options.forEach { option ->
+                    val optionText = optionLabel(option)
                     DropdownMenuItem(
-                        text = { Text(option) },
+                        text = { Text(optionText) },
                         onClick = {
                             menuOpen = false
                             onSelected(option)

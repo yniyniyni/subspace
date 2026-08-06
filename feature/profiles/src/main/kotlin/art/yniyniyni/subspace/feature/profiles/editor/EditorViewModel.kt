@@ -111,6 +111,17 @@ internal data class EditorState(
     val realitySpiderX: String = "",
     val wsPath: String = "",
     val grpcServiceName: String = "",
+    val xhttpPath: String = "",
+    /** XHTTP `Host` header. Blank means unset, which dials with the address (§ see [toOutbound]). */
+    val xhttpHost: String = "",
+    /**
+     * XHTTP mode, one of [XHTTP_MODES]. Blank means unset, which Xray reads as `auto`.
+     *
+     * A closed option list rather than a text field on purpose: Xray-core v26.7.11 rejects
+     * the whole config on an unrecognised mode (`SplitHTTPConfig.Build`: `unsupported mode`),
+     * so a typo here would turn a working profile into one that fails at validation.
+     */
+    val xhttpMode: String = "",
     /** Preserved from the loaded outbound, unedited — see [toOutbound]'s KDoc. */
     val originalWsHeaders: Map<String, String> = emptyMap(),
     val errors: Map<EditorFieldKey, FailureDetail> = emptyMap(),
@@ -210,6 +221,12 @@ constructor(
     fun onWsPathChanged(value: String) = update { it.copy(wsPath = value) }
 
     fun onGrpcServiceNameChanged(value: String) = update { it.copy(grpcServiceName = value) }
+
+    fun onXhttpPathChanged(value: String) = update { it.copy(xhttpPath = value) }
+
+    fun onXhttpHostChanged(value: String) = update { it.copy(xhttpHost = value) }
+
+    fun onXhttpModeChanged(value: String) = update { it.copy(xhttpMode = value) }
 
     /**
      * Persists the current draft.
@@ -323,6 +340,16 @@ private fun EditorState.withStream(stream: StreamSettings): EditorState {
             withSecurity.copy(network = stream.network, wsPath = transport.path, originalWsHeaders = transport.headers)
         is TransportOptions.Grpc ->
             withSecurity.copy(network = stream.network, grpcServiceName = transport.serviceName)
+        is TransportOptions.Xhttp ->
+            withSecurity.copy(
+                network = stream.network,
+                xhttpPath = transport.path,
+                // Null becomes blank for the text field and blank becomes null again in
+                // [toOutbound], so an unset host survives an untouched edit as unset rather
+                // than being written back as an empty header.
+                xhttpHost = transport.host.orEmpty(),
+                xhttpMode = transport.mode.orEmpty(),
+            )
     }
 }
 
@@ -364,7 +391,28 @@ private fun EditorState.validate(): Map<EditorFieldKey, FailureDetail> {
  * this task builds a UI for), so a save must carry the loaded headers forward rather than
  * silently dropping them to an empty map — the exact "unmodelled fields vanish" failure §6
  * exists to prevent, this time for a TYPED profile instead of RAW_JSON.
+ *
+ * The `xhttp` branch is the same guarantee for the transport that regression exposed: before
+ * it existed, saving an xhttp profile through this editor rewrote its transport to
+ * [TransportOptions.None], discarding the path and Host it was imported with. Editing the
+ * name of a working server must not quietly change how it dials.
  */
+private fun EditorState.toTransportOptions(): TransportOptions =
+    when (network) {
+        "ws" -> TransportOptions.WebSocket(path = wsPath, headers = originalWsHeaders)
+        "grpc" -> TransportOptions.Grpc(serviceName = grpcServiceName)
+        // Blank back to null, the inverse of [withStream]'s orEmpty(): "" and null are
+        // different requests on the wire, and only null means "let Xray decide".
+        "xhttp", "splithttp" ->
+            TransportOptions.Xhttp(
+                path = xhttpPath.ifBlank { "/" },
+                host = xhttpHost.ifBlank { null },
+                mode = xhttpMode.ifBlank { null },
+            )
+
+        else -> TransportOptions.None
+    }
+
 private fun EditorState.toOutbound(): Outbound {
     val portValue = port.toIntOrNull() ?: 0
     val security: Security =
@@ -380,13 +428,7 @@ private fun EditorState.toOutbound(): Outbound {
                 )
             EditorSecurityKind.Tls -> Security.Tls(tlsServerName, tlsFingerprint, tlsAllowInsecure)
         }
-    val transport: TransportOptions =
-        when (network) {
-            "ws" -> TransportOptions.WebSocket(path = wsPath, headers = originalWsHeaders)
-            "grpc" -> TransportOptions.Grpc(serviceName = grpcServiceName)
-            else -> TransportOptions.None
-        }
-    val stream = StreamSettings(network = network, security = security, transport = transport)
+    val stream = StreamSettings(network = network, security = security, transport = toTransportOptions())
     return when (protocol) {
         "vless" -> VlessOutbound(address, portValue, primaryCredential, flow.ifBlank { null }, stream)
         "vmess" ->

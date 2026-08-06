@@ -15,9 +15,15 @@ import org.junit.Test
  * [HomeState.activeProfile] had a decoded outbound, never
  * [art.yniyniyni.subspace.core.data.StoredProfile.connectable] — which
  * [ServersState][art.yniyniyni.subspace.feature.profiles.list.ServersState] already surfaces.
- * A stored `ws`/`grpc` VLESS profile set active therefore passed `canConnect`, prompted for
- * VPN permission, started the foreground service, and failed there instead of being refused
- * up front.
+ * A stored profile whose transport `:core:xray` could not emit therefore passed `canConnect`,
+ * prompted for VPN permission, started the foreground service, and failed there instead of
+ * being refused up front.
+ *
+ * That gate delegates to `connectable` and is still right; what `connectable` *means* has
+ * since changed. `ws`/`grpc`/`xhttp` are now emitted by `XrayConfigGenerator`, so they are
+ * connectable, and the "unsupported" fixture here is a transport that genuinely has no
+ * emission (`kcp`). This file asserts the delegation, not a hardcoded list of transports —
+ * `StoredProfileTest` in `:core:data` owns which networks qualify.
  */
 class HomeStateTest {
     private fun profile(network: String) =
@@ -50,8 +56,16 @@ class HomeStateTest {
     }
 
     @Test
-    fun `canConnect is false for a ws active profile even while disconnected`() {
-        val state = HomeState(connection = ConnectionState.Disconnected, activeProfile = profile("ws"))
+    fun `canConnect is true for an xhttp active profile while disconnected`() {
+        // The regression, at the Home gate: this profile could connect, and the
+        // control refused the tap and explained that the build did not support it.
+        val state = HomeState(connection = ConnectionState.Disconnected, activeProfile = profile("xhttp"))
+        state.canConnect shouldBe true
+    }
+
+    @Test
+    fun `canConnect is false for a transport the generator cannot emit`() {
+        val state = HomeState(connection = ConnectionState.Disconnected, activeProfile = profile("kcp"))
         state.canConnect shouldBe false
     }
 
@@ -63,10 +77,11 @@ class HomeStateTest {
     @Test
     fun `activeProfileUnsupported is false for a connectable profile`() {
         HomeState(activeProfile = profile("tcp")).activeProfileUnsupported shouldBe false
+        HomeState(activeProfile = profile("xhttp")).activeProfileUnsupported shouldBe false
     }
 
     @Test
     fun `activeProfileUnsupported is true for a decoded but unconnectable profile`() {
-        HomeState(activeProfile = profile("ws")).activeProfileUnsupported shouldBe true
+        HomeState(activeProfile = profile("kcp")).activeProfileUnsupported shouldBe true
     }
 }

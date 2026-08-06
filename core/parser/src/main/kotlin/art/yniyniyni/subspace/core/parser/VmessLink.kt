@@ -151,7 +151,14 @@ private fun JsonObject.integerOrStringIntOrNull(key: String): Int? {
     return primitive.content.toIntOrNull()
 }
 
-private fun JsonObject.nonBlankString(key: String): String? {
+/**
+ * `internal`, not `private`: `XrayJsonTransport.kt` needs exactly this reading of an Xray
+ * JSON string field (a wrong type or a blank value are both "unset"), and a second copy under
+ * the same name and receiver in this module would be an overload ambiguity rather than a
+ * convenience. The rest of that family lives in `XrayJsonValues.kt`; this one stays here
+ * because it is defined in terms of [stringOrNull], which is this file's own.
+ */
+internal fun JsonObject.nonBlankString(key: String): String? {
     val value = stringOrNull(key) ?: return null
     return value.takeIf { it.isNotBlank() }
 }

@@ -26,10 +26,10 @@
     <!-- RAW_JSON runs through the typed projection, not verbatim (§6) — "raw"
          alone would promise passthrough execution this build does not have. -->
     <string name="servers_compatibility_mode">Compatibility mode</string>
-    <!-- :core:xray only emits VLESS over plain tcp; every other protocol, and
-         VLESS over ws/grpc/xhttp (no transport emission yet), is unconnectable
-         in this build. Deliberately doesn't say "protocol" — it must stay
-         honest for both reasons a row can land here. -->
+    <!-- :core:xray emits VLESS only, over tcp/ws/grpc/xhttp. Every other protocol,
+         and any other transport (kcp, httpupgrade, hysteria), is unconnectable in
+         this build. Deliberately doesn't say "protocol" — it must stay honest for
+         both reasons a row can land here. -->
     <string name="servers_not_connectable">Not supported by this build yet</string>
 
     <!-- %1$s = server name, %2$s = protocol (e.g. "VLESS"), %3$s = transport
@@ -164,6 +164,15 @@
     <string name="editor_reality_spider_x_label">Spider X</string>
     <string name="editor_ws_path_label">Path</string>
     <string name="editor_grpc_service_name_label">Service name</string>
+    <string name="editor_xhttp_path_label">Path</string>
+    <!-- Blank is valid and common: XHTTP then sends the server address as the Host
+         header, which is what most links mean. -->
+    <string name="editor_xhttp_host_label">Host (optional)</string>
+    <string name="editor_xhttp_mode_label">Mode</string>
+    <!-- The label for XHTTP's unset mode. The four real modes (auto, packet-up,
+         stream-up, stream-one) are Xray's own literals, go into the config verbatim,
+         and are deliberately not translated. -->
+    <string name="editor_xhttp_mode_auto">Automatic</string>
 
     <string name="editor_save_button">Save</string>
 

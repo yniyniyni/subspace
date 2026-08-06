@@ -103,5 +103,20 @@ private fun transportOptions(
             if (serviceName == null) TransportOptions.None else TransportOptions.Grpc(serviceName)
         }
 
+        // Both spellings, because Xray-core v26.7.11 accepts both for the one
+        // transport (`infra/conf/transport_method.go`: `case "xhttp",
+        // "splithttp"`) and links in the wild carry either. `network` keeps
+        // whatever the link said — the generator emits it back verbatim and the
+        // core maps it — so this does not normalise one to the other.
+        "xhttp", "splithttp" ->
+            TransportOptions.Xhttp(
+                path = uri.query["path"]?.takeIf { it.isNotBlank() } ?: "/",
+                // Null, not "": an absent Host means Xray dials with the
+                // destination address, where empty would be a literal empty
+                // header. Same for an absent mode, which the core reads as `auto`.
+                host = uri.query["host"]?.takeIf { it.isNotBlank() },
+                mode = uri.query["mode"]?.takeIf { it.isNotBlank() },
+            )
+
         else -> TransportOptions.None
     }

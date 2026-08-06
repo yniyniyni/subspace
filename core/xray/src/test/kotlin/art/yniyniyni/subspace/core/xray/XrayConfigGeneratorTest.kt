@@ -7,6 +7,7 @@ import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import art.yniyniyni.subspace.core.model.SocksOutbound
 import art.yniyniyni.subspace.core.model.StreamSettings
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
@@ -149,6 +150,140 @@ class XrayConfigGeneratorTest {
      * one place a copy-paste between the four branches would go unnoticed:
      * every wrong answer is still an `Unsupported`.
      */
+    // ── Transport emission ──────────────────────────────────────────────────
+    //
+    // Every key below is verified against Xray-core v26.7.11 — the version §14.3
+    // pins — in `infra/conf/transport_method.go`: `WebSocketConfig` (`path`,
+    // `host`, `headers`), `GRPCConfig` (`serviceName`), `SplitHTTPConfig`
+    // (`path`, `host`, `mode`). §10.5: an invented key here is either silently
+    // ignored or rejects the whole config, and neither is visible from Kotlin.
+    //
+    // This whole block exists because `appendStreamSettings` used to emit
+    // `"network"` and the security block and nothing else, so a ws/grpc/xhttp
+    // profile dialled with none of its own transport options. That is what made
+    // `StoredProfile.connectable` demote those rows to "not supported by this
+    // build yet" rather than fix the generator.
+
+    private fun streamSettingsBlockOf(json: String): String =
+        json.substringAfter("\"streamSettings\": {").substringBefore("\n      }")
+
+    /** The shared VLESS outbound with one transport swapped in — the only axis these vary on. */
+    private fun vlessWith(
+        network: String,
+        security: Security,
+        transport: TransportOptions,
+    ): VlessOutbound =
+        outbound.copy(stream = StreamSettings(network = network, security = security, transport = transport))
+
+    @Test
+    fun `emits wsSettings with the stored path and headers`() {
+        val ws =
+            vlessWith("ws", Security.None, TransportOptions.WebSocket("/chat", mapOf("Host" to "cdn.example")))
+
+        val json = generateJson(ws, settings)
+
+        json shouldContain "\"network\": \"ws\""
+        json shouldContain "\"wsSettings\": {"
+        json shouldContain "\"path\": \"/chat\""
+        json shouldContain "\"Host\": \"cdn.example\""
+    }
+
+    @Test
+    fun `omits the ws headers block when the source carried none`() {
+        val ws =
+            vlessWith("ws", Security.None, TransportOptions.WebSocket("/", emptyMap()))
+
+        val json = generateJson(ws, settings)
+
+        json shouldContain "\"wsSettings\": {"
+        // An empty `headers` object is legal but says something the source did
+        // not: it asserts "no headers" where the link merely never mentioned any.
+        streamSettingsBlockOf(json) shouldNotContain "\"headers\""
+    }
+
+    @Test
+    fun `emits grpcSettings with the stored service name`() {
+        val grpc =
+            vlessWith("grpc", Security.None, TransportOptions.Grpc("GunService"))
+
+        val json = generateJson(grpc, settings)
+
+        json shouldContain "\"network\": \"grpc\""
+        json shouldContain "\"grpcSettings\": {"
+        json shouldContain "\"serviceName\": \"GunService\""
+    }
+
+    @Test
+    fun `emits xhttpSettings with the stored path, host and mode`() {
+        val xhttp =
+            vlessWith("xhttp", reality, TransportOptions.Xhttp("/down", "cdn.example", "stream-up"))
+
+        val json = generateJson(xhttp, settings)
+
+        json shouldContain "\"network\": \"xhttp\""
+        json shouldContain "\"xhttpSettings\": {"
+        json shouldContain "\"path\": \"/down\""
+        json shouldContain "\"host\": \"cdn.example\""
+        json shouldContain "\"mode\": \"stream-up\""
+    }
+
+    @Test
+    fun `omits xhttp host and mode when the source left them unset`() {
+        val xhttp =
+            vlessWith("xhttp", Security.None, TransportOptions.Xhttp("/", host = null, mode = null))
+
+        val json = generateJson(xhttp, settings)
+
+        json shouldContain "\"xhttpSettings\": {"
+        json shouldContain "\"path\": \"/\""
+        // Xray falls back to the dial address for an absent Host and to `auto`
+        // for an absent mode. Emitting `""` instead would be a different
+        // request on the wire than the link described.
+        streamSettingsBlockOf(json) shouldNotContain "\"host\""
+        streamSettingsBlockOf(json) shouldNotContain "\"mode\""
+    }
+
+    @Test
+    fun `emits no transport block for a plain tcp profile`() {
+        // The tcp path must not gain a `rawSettings` block it never had — the
+        // golden file pins that, and this says why.
+        streamSettingsBlockOf(generateJson(outbound, settings)) shouldNotContain "Settings\": {\n          \"path\""
+    }
+
+    @Test
+    fun `emits no transport block when a ws profile carries no options`() {
+        // TransportOptions.None on a non-tcp network: the source named the
+        // transport but nothing about it. Xray supplies that transport's own
+        // defaults when its settings object is absent (verified in
+        // v26.7.11 `StreamConfig.Build` — a nil `WSSettings` skips the block
+        // rather than erroring), which is exactly what "unspecified" means.
+        val ws = vlessWith("ws", Security.None, TransportOptions.None)
+
+        val json = generateJson(ws, settings)
+
+        json shouldContain "\"network\": \"ws\""
+        streamSettingsBlockOf(json) shouldNotContain "wsSettings"
+    }
+
+    @Test
+    fun `still produces parseable json for every transport`() {
+        val transports =
+            listOf(
+                StreamSettings("ws", Security.None, TransportOptions.WebSocket("/p", mapOf("Host" to "h.example"))),
+                StreamSettings("grpc", Security.None, TransportOptions.Grpc("svc")),
+                StreamSettings("xhttp", reality, TransportOptions.Xhttp("/p", "h.example", "auto")),
+                StreamSettings("xhttp", Security.None, TransportOptions.Xhttp("/", null, null)),
+            )
+
+        transports.forEach { stream ->
+            withClue(stream.network) {
+                val json = generateJson(outbound.copy(stream = stream), settings)
+                (json.count { it == '{' } - json.count { it == '}' }) shouldBe 0
+                (json.count { it == '[' } - json.count { it == ']' }) shouldBe 0
+            }
+        }
+    }
+
     @Test
     fun `refuses a non-vless outbound rather than emitting a broken config`() {
         val stream = StreamSettings(network = "tcp", security = Security.None)

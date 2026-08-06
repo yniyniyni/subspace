@@ -150,6 +150,24 @@ class OutboundMapperTest {
         private val emptyWebSocketStream =
             plainStream.copy(network = "ws", transport = TransportOptions.WebSocket(path = "/", headers = emptyMap()))
 
+        private val xhttpStream =
+            StreamSettings(
+                network = "xhttp",
+                security = Security.Reality("sni.example", "pk", "0123abcd", "chrome", "/"),
+                transport = TransportOptions.Xhttp(path = "/down", host = "cdn.example", mode = "stream-up"),
+            )
+
+        // The null-host/null-mode case separately: those two fields are the
+        // difference between "Xray dials with the destination address / `auto`"
+        // and a literal empty value, and a mapper that flattened null to "" would
+        // still round-trip the sample above.
+        private val bareXhttpStream =
+            StreamSettings(
+                network = "xhttp",
+                security = Security.None,
+                transport = TransportOptions.Xhttp(path = "/", host = null, mode = null),
+            )
+
         private val outboundSamples: List<Pair<String, Outbound>> =
             listOf(
                 "vless + reality + websocket" to
@@ -167,6 +185,22 @@ class OutboundMapperTest {
                         uuid = "8f2c4a1e-0000-4000-8000-000000000001",
                         flow = null,
                         stream = plainStream,
+                    ),
+                "vless + reality + xhttp" to
+                    VlessOutbound(
+                        address = "198.51.100.1",
+                        port = 443,
+                        uuid = "8f2c4a1e-0000-4000-8000-000000000001",
+                        flow = null,
+                        stream = xhttpStream,
+                    ),
+                "vless + xhttp with no host or mode" to
+                    VlessOutbound(
+                        address = "198.51.100.1",
+                        port = 443,
+                        uuid = "8f2c4a1e-0000-4000-8000-000000000001",
+                        flow = null,
+                        stream = bareXhttpStream,
                     ),
                 "vmess + tls + grpc" to
                     VmessOutbound(

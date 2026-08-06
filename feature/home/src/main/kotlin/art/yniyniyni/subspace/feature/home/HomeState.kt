@@ -34,10 +34,13 @@ internal data class HomeState(
      * ([StoredProfile.outbound] `null` — a corrupt row, per its own KDoc), or
      * [StoredProfile.connectable] is false — a stored profile whose protocol or transport
      * `:core:xray` cannot yet generate a working config for (fix round 2, Important finding
-     * 4: this used to check only that an outbound existed, so a `ws`/`grpc` VLESS row set
-     * active passed here, prompted for VPN permission, started the foreground service, and
-     * failed there instead of being refused up front — see [activeProfileUnsupported] for
-     * how that case is now explained rather than just silently disabled).
+     * 4: this used to check only that an outbound existed, so a row whose transport the
+     * generator could not emit passed here, prompted for VPN permission, started the
+     * foreground service, and failed there instead of being refused up front — see
+     * [activeProfileUnsupported] for how that case is now explained rather than just
+     * silently disabled). Which transports qualify is [StoredProfile.connectable]'s to
+     * decide, not this screen's — `ws`/`grpc`/`xhttp` are emitted now and this gate needed
+     * no change when they became so.
      * Also false while the tunnel is not [ConnectionState.Disconnected]:
      * a connect attempt already in flight, or already connected, must go
      * through [canDisconnect] instead, not stack a second attempt.

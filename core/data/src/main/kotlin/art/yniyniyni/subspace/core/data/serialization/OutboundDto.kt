@@ -114,4 +114,22 @@ internal sealed interface TransportDto {
     data class Grpc(
         val serviceName: String,
     ) : TransportDto
+
+    /**
+     * XHTTP.
+     *
+     * [host] and [mode] are nullable and defaulted, so a row written before this
+     * variant existed is not the concern — no such row can exist, since nothing
+     * could produce one. They are nullable because null and `""` mean different
+     * things to Xray: an absent host dials with the destination address, an empty
+     * one is a literal empty header. See
+     * [art.yniyniyni.subspace.core.model.TransportOptions.Xhttp].
+     */
+    @Serializable
+    @SerialName("xhttp")
+    data class Xhttp(
+        val path: String,
+        val host: String? = null,
+        val mode: String? = null,
+    ) : TransportDto
 }

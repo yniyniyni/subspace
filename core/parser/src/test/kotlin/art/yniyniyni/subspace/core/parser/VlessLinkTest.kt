@@ -81,6 +81,42 @@ class VlessLinkTest {
         out.stream.transport shouldBe TransportOptions.WebSocket(path = "/", headers = emptyMap())
     }
 
+    // xhttp regression: this parser read `type=xhttp` into stream.network but had no
+    // TransportOptions branch for it, so path/host/mode vanished the same way ws's did
+    // before the fix above. That loss is what made a working xhttp server present as
+    // "not supported by this build yet" once StoredProfile.connectable started checking
+    // the network — see XrayConfigGenerator.appendTransportSettings.
+    @Test
+    fun `an xhttp link carries its path, host and mode into transport options`() {
+        val link = "vless://$UUID@host.example:443?type=xhttp&path=%2Fdown&host=cdn.example&mode=stream-up"
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.network shouldBe "xhttp"
+        out.stream.transport shouldBe
+            TransportOptions.Xhttp(path = "/down", host = "cdn.example", mode = "stream-up")
+    }
+
+    @Test
+    fun `an xhttp link with no path defaults to the root and leaves host and mode unset`() {
+        // Null rather than "": Xray falls back to the dial address for an absent
+        // host and to `auto` for an absent mode, which is what the link means.
+        val result = parseVlessLink("vless://$UUID@host.example:443?type=xhttp", 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.transport shouldBe TransportOptions.Xhttp(path = "/", host = null, mode = null)
+    }
+
+    @Test
+    fun `a splithttp link is read as xhttp`() {
+        // Xray-core v26.7.11 maps both names to the same transport
+        // (`infra/conf/transport_method.go`), and links in the wild use both.
+        val result = parseVlessLink("vless://$UUID@host.example:443?type=splithttp&path=%2Fs", 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.transport shouldBe TransportOptions.Xhttp(path = "/s", host = null, mode = null)
+    }
+
     @Test
     fun `a grpc link carries its service name into transport options`() {
         val link = "vless://$UUID@host.example:443?type=grpc&serviceName=raygun"

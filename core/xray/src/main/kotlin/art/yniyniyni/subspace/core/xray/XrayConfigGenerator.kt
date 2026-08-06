@@ -5,6 +5,7 @@ import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import art.yniyniyni.subspace.core.model.SocksOutbound
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
@@ -63,6 +64,13 @@ public object XrayConfigGenerator {
      * `else` — adding a sixth protocol to the model is a compile error here
      * until this generator is taught to emit it, rather than a silent
      * fallthrough to a config that connects to nothing.
+     *
+     * Within VLESS it emits `tcp`, `ws`, `grpc` and `xhttp`. That set is mirrored by
+     * `StoredProfile.connectable` in `:core:data`, which decides what the UI offers —
+     * `:core:data` cannot depend on this module (§4), so the two are kept in step by
+     * hand. Teaching this generator a new transport means widening that set too;
+     * leaving it narrow is how a working xhttp server came to be labelled
+     * "not supported by this build yet".
      */
     public fun generate(
         profile: Profile,
@@ -194,6 +202,10 @@ public object XrayConfigGenerator {
         out: VlessOutbound,
     ) {
         val stream = out.stream
+        // The security block is last in the object unless a transport block
+        // follows it, and JSON has no trailing commas — so whether it ends with
+        // one is decided here rather than inside each security branch.
+        val tail = if (stream.transport is TransportOptions.None) "" else ","
         sb.appendLine("""      "streamSettings": {""")
         sb.appendLine("""        "network": "${stream.network}",""")
         when (val security = stream.security) {
@@ -205,7 +217,7 @@ public object XrayConfigGenerator {
                 sb.appendLine("""          "shortId": "${security.shortId}",""")
                 sb.appendLine("""          "fingerprint": "${security.fingerprint}",""")
                 sb.appendLine("""          "spiderX": "${security.spiderX}"""")
-                sb.appendLine("""        }""")
+                sb.appendLine("""        }$tail""")
             }
 
             is Security.Tls -> {
@@ -214,13 +226,93 @@ public object XrayConfigGenerator {
                 sb.appendLine("""          "serverName": "${security.serverName}",""")
                 sb.appendLine("""          "fingerprint": "${security.fingerprint}",""")
                 sb.appendLine("""          "allowInsecure": ${security.allowInsecure}""")
-                sb.appendLine("""        }""")
+                sb.appendLine("""        }$tail""")
             }
 
             Security.None -> {
-                sb.appendLine("""        "security": "none"""")
+                sb.appendLine("""        "security": "none"$tail""")
             }
         }
+        appendTransportSettings(sb, stream.transport)
         sb.appendLine("""      }""")
+    }
+
+    /**
+     * Emits the transport's own settings object, when the source specified one.
+     *
+     * Every key here is verified against Xray-core v26.7.11 —
+     * `infra/conf/transport_method.go`, the version §14.3 pins: `WebSocketConfig`
+     * (`path`, `host`, `headers`), `GRPCConfig` (`serviceName`), `SplitHTTPConfig`
+     * (`path`, `host`, `mode`). §10.5 applies with full force in this function —
+     * an invented key is either silently ignored, which presents as a tunnel that
+     * connects and carries nothing, or rejects the entire config.
+     *
+     * [TransportOptions.None] emits **nothing**, including for a non-`tcp`
+     * network. That is not a gap: `StreamConfig.Build` skips a transport whose
+     * settings object is nil rather than erroring, and the dial then takes that
+     * transport's registered defaults — which is what a link naming `type=ws`
+     * and no path actually means. Writing `"path": ""` instead would assert an
+     * empty path the source never claimed.
+     *
+     * Absent optional fields are likewise omitted rather than emitted empty.
+     * `""` is a value, and for `host` in particular it is a different request on
+     * the wire: omitted means Xray falls back to the dial address, where empty
+     * would be a literal empty `Host` header.
+     */
+    private fun appendTransportSettings(
+        sb: StringBuilder,
+        transport: TransportOptions,
+    ) {
+        when (transport) {
+            is TransportOptions.None -> Unit
+            is TransportOptions.WebSocket -> appendWebSocketSettings(sb, transport)
+            is TransportOptions.Grpc -> {
+                sb.appendLine("""        "grpcSettings": {""")
+                sb.appendLine("""          "serviceName": "${transport.serviceName}"""")
+                sb.appendLine("""        }""")
+            }
+
+            is TransportOptions.Xhttp -> appendXhttpSettings(sb, transport)
+        }
+    }
+
+    private fun appendWebSocketSettings(
+        sb: StringBuilder,
+        transport: TransportOptions.WebSocket,
+    ) {
+        sb.appendLine("""        "wsSettings": {""")
+        sb.appendLine("""          "path": "${transport.path}"${if (transport.headers.isEmpty()) "" else ","}""")
+        if (transport.headers.isNotEmpty()) {
+            sb.appendLine("""          "headers": {""")
+            // Sorted, like `OutboundMapper` sorts the same map before hashing it:
+            // §6 requires byte-identical output for the same profile, and a Map's
+            // iteration order is a property of its implementation, not its contents.
+            val headers = transport.headers.toSortedMap()
+            headers.entries.forEachIndexed { index, (name, value) ->
+                val comma = if (index == headers.size - 1) "" else ","
+                sb.appendLine("""            "$name": "$value"$comma""")
+            }
+            sb.appendLine("""          }""")
+        }
+        sb.appendLine("""        }""")
+    }
+
+    private fun appendXhttpSettings(
+        sb: StringBuilder,
+        transport: TransportOptions.Xhttp,
+    ) {
+        // Built as a list first: `host` and `mode` are independently optional, so
+        // deciding each line's trailing comma in place would need to look ahead
+        // past the other one.
+        val fields = mutableListOf(""""path": "${transport.path}"""")
+        transport.host?.let { fields += """"host": "$it"""" }
+        transport.mode?.let { fields += """"mode": "$it"""" }
+
+        sb.appendLine("""        "xhttpSettings": {""")
+        fields.forEachIndexed { index, field ->
+            val comma = if (index == fields.size - 1) "" else ","
+            sb.appendLine("""          $field$comma""")
+        }
+        sb.appendLine("""        }""")
     }
 }

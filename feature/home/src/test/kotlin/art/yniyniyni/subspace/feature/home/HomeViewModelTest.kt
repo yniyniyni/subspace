@@ -4,12 +4,15 @@ package art.yniyniyni.subspace.feature.home
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.model.failure
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -64,6 +67,9 @@ class HomeViewModelTest {
             stream = StreamSettings(network = "tcp", security = Security.None),
         )
 
+    /** A transport `:core:xray` has no emission for, so `StoredProfile.connectable` is false. */
+    private val kcpOutbound = defaultOutbound.copy(stream = StreamSettings("kcp", Security.None))
+
     private fun storedProfile(
         id: Long,
         name: String,
@@ -103,6 +109,22 @@ class HomeViewModelTest {
             activeProfileId.map { id -> profiles.firstOrNull { it.id == id } }
     }
 
+    /**
+     * An active profile that can be swapped after construction.
+     *
+     * [FakeActiveProfileSource] resolves against a fixed list, so it cannot express "the row
+     * changed while the consent dialog was open" — the shape the stale-callback tests need.
+     */
+    private class MutableActiveProfileSource(initial: StoredProfile?) : ActiveProfileSource {
+        private val _activeProfile = MutableStateFlow(initial)
+        override val activeProfile: Flow<StoredProfile?> = _activeProfile.asStateFlow()
+        override val hasAnyProfile: Flow<Boolean> = MutableStateFlow(true)
+
+        fun emit(next: StoredProfile?) {
+            _activeProfile.value = next
+        }
+    }
+
     private data class ConnectAttempt(val profile: Profile, val rowId: Long)
 
     private class FakeTunnelConnection : TunnelConnection {
@@ -110,6 +132,10 @@ class HomeViewModelTest {
         override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
         var lastConnected: ConnectAttempt? = null
+            private set
+
+        /** Counted, not just recorded: "started no connection" and "started two" are both bugs. */
+        var connectCount: Int = 0
             private set
 
         fun emit(next: ConnectionState) {
@@ -121,6 +147,7 @@ class HomeViewModelTest {
             rowId: Long,
         ) {
             lastConnected = ConnectAttempt(profile, rowId)
+            connectCount++
         }
 
         override fun disconnect() = Unit
@@ -156,6 +183,100 @@ class HomeViewModelTest {
             advanceUntilIdle()
 
             tunnel.lastConnected?.rowId shouldBe secondProfile.id
+        }
+
+    // ── onConsentGranted's canConnect precondition (PR #4 review, P1 finding B) ──
+    //
+    // VPN consent is asynchronous: the system dialog is open while this process
+    // keeps running, so the connection state or the selected profile can change
+    // before approval returns. onConsentGranted documented a canConnect
+    // precondition and never enforced it, so a stale callback could start a
+    // second connection or connect to a profile that had since become
+    // unsupported or been deleted.
+
+    @Test
+    fun `consent granted from a failed state starts exactly one connection`() =
+        runTest {
+            val settings = FakeSettings()
+            val profile = storedProfile(id = 3L, name = "retry")
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(profiles = listOf(profile), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+            settings.setActiveProfile(profile.id)
+            tunnel.emit(failure(FailureReason.CoreStartFailed, "redacted"))
+
+            viewModel.onConsentGranted()
+            advanceUntilIdle()
+
+            tunnel.connectCount shouldBe 1
+            tunnel.lastConnected?.rowId shouldBe profile.id
+        }
+
+    @Test
+    fun `consent granted while busy starts no connection`() =
+        runTest {
+            val busy =
+                listOf<ConnectionState>(
+                    ConnectionState.Connecting(StartupStage.StartingCore),
+                    ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 10808),
+                    ConnectionState.Disconnecting,
+                )
+
+            busy.forEach { connection ->
+                val settings = FakeSettings()
+                val profile = storedProfile(id = 4L, name = "busy")
+                val tunnel = FakeTunnelConnection()
+                val profileSource =
+                    FakeActiveProfileSource(profiles = listOf(profile), activeProfileId = settings.activeProfileId)
+                val viewModel = HomeViewModel(tunnel, profileSource)
+                settings.setActiveProfile(profile.id)
+                tunnel.emit(connection)
+
+                viewModel.onConsentGranted()
+                advanceUntilIdle()
+
+                withClue(connection.toString()) { tunnel.connectCount shouldBe 0 }
+            }
+        }
+
+    @Test
+    fun `a stale consent callback does not connect an unsupported profile`() =
+        runTest {
+            // The profile was connectable when consent was requested and is not by
+            // the time it returns — the row was edited to a transport this build
+            // cannot emit. Connecting anyway would start the foreground service to
+            // fail immediately.
+            val settings = FakeSettings()
+            val supported = storedProfile(id = 5L, name = "was-fine")
+            val unsupported = supported.copy(outbound = kcpOutbound)
+            val tunnel = FakeTunnelConnection()
+            val profileSource = MutableActiveProfileSource(supported)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+            viewModel.state.value.canConnect shouldBe true
+
+            profileSource.emit(unsupported)
+            viewModel.onConsentGranted()
+            advanceUntilIdle()
+
+            tunnel.connectCount shouldBe 0
+        }
+
+    @Test
+    fun `a stale consent callback does not connect a profile that disappeared`() =
+        runTest {
+            val settings = FakeSettings()
+            val profile = storedProfile(id = 6L, name = "deleted")
+            val tunnel = FakeTunnelConnection()
+            val profileSource = MutableActiveProfileSource(profile)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+            viewModel.state.value.canConnect shouldBe true
+
+            profileSource.emit(null)
+            viewModel.onConsentGranted()
+            advanceUntilIdle()
+
+            tunnel.connectCount shouldBe 0
         }
 
     @Test

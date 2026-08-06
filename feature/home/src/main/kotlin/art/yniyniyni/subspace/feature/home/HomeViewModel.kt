@@ -49,17 +49,35 @@ internal class HomeViewModel @Inject constructor(
      * Consent is the Activity's job — a ViewModel cannot launch an intent for
      * a result — so the screen asks first and calls this only on approval.
      *
-     * A no-op when [HomeState.canConnect] would be `false`: nothing is
-     * selected, or the selected row's config failed to decode. There is
-     * nothing sensible to connect to, so this silently refuses rather than
-     * asking the service to attempt it — the same "refuse rather than guess"
-     * rule [art.yniyniyni.subspace.service.ProfileParcel.toProfile] applies
-     * to an undecodable parcel.
+     * A no-op when [HomeState.canConnect] is `false`: nothing is selected, the selected row's
+     * config failed to decode, its transport is one `:core:xray` cannot emit, or a session is
+     * already in flight. There is nothing sensible to connect to, so this silently refuses
+     * rather than asking the service to attempt it — the same "refuse rather than guess" rule
+     * [art.yniyniyni.subspace.service.ProfileParcel.toProfile] applies to an undecodable
+     * parcel.
+     *
+     * That precondition is **re-read here**, not assumed from when consent was requested (PR
+     * #4 review, P1 finding B). The system consent dialog is asynchronous and this process
+     * keeps running behind it, so between the request and the approval the tunnel state can
+     * change and the active row can be edited, deselected or deleted. Enforcing it only at
+     * the tap site let a stale callback stack a second connection or dial a profile that had
+     * since become unconnectable.
+     *
+     * One snapshot, read once: checking [HomeState.canConnect] on one read of [state] and
+     * then resolving the profile from another would reintroduce the same race inside this
+     * function, which is why [HomeState.activeProfile] is taken from the value that was
+     * checked rather than re-read.
      */
     fun onConsentGranted() {
-        val activeProfile = state.value.activeProfile ?: return
-        val profile = activeProfile.toProfile() ?: return
-        tunnel.connect(profile, rowId = activeProfile.id)
+        val snapshot = state.value
+        if (!snapshot.canConnect) return
+        // Both non-null by canConnect: it is false for a null activeProfile and false for a
+        // row whose outbound failed to decode (StoredProfile.connectable). Resolved with
+        // `let` rather than two more early returns so the precondition stays the single gate
+        // above — a second `?: return` here would read as a case this function handles, when
+        // it is actually unreachable.
+        val activeProfile = snapshot.activeProfile
+        activeProfile?.toProfile()?.let { profile -> tunnel.connect(profile, rowId = activeProfile.id) }
     }
 
     fun onDisconnect() {

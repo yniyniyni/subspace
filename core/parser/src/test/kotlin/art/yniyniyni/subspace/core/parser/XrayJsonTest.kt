@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -494,6 +495,110 @@ class XrayJsonTest {
         corpus.forEach { input ->
             parseXrayJson(input)
         }
+    }
+
+    // ── Transport options ───────────────────────────────────────────────────
+    //
+    // xhttp regression: this parser read `streamSettings.network` but never read the
+    // matching settings object, so every raw-Xray profile stored
+    // TransportOptions.None regardless of its transport. The subscription path is
+    // exactly where that hurts — a panel emits a whole config, not a share link —
+    // and it is why an xhttp server that used to connect began presenting as "not
+    // supported by this build yet" once `StoredProfile.connectable` checked the
+    // network. Key names are Xray-core v26.7.11's (`infra/conf/transport_method.go`).
+
+    private fun streamConfig(streamSettings: String): String =
+        """
+        {"outbounds":[{"protocol":"vless","tag":"proxy",
+        "settings":{"vnext":[{"address":"host.example","port":443,
+        "users":[{"id":"$XJ_UUID"}]}]},
+        "streamSettings":$streamSettings}]}
+        """.trimIndent().replace("\n", "")
+
+    private fun transportOf(streamSettings: String): TransportOptions {
+        val outcome = parseXrayJson(streamConfig(streamSettings))
+        outcome.failures shouldBe emptyList()
+        return (outcome.profiles.single().outbound as VlessOutbound).stream.transport
+    }
+
+    @Test
+    fun `reads xhttpSettings path host and mode`() {
+        val transport =
+            transportOf(
+                """
+                {"network":"xhttp","security":"none",
+                "xhttpSettings":{"path":"/down","host":"cdn.example","mode":"stream-up"}}
+                
+                """.trimIndent()
+                    .replace("\n", ""),
+            )
+
+        transport shouldBe TransportOptions.Xhttp(path = "/down", host = "cdn.example", mode = "stream-up")
+    }
+
+    @Test
+    fun `reads splithttpSettings under the xhttp alias`() {
+        // v26.7.11 accepts both spellings for the same transport, and a config
+        // written against the older name must not lose its options.
+        val transport =
+            transportOf("""{"network":"splithttp","security":"none","splithttpSettings":{"path":"/s"}}""")
+
+        transport shouldBe TransportOptions.Xhttp(path = "/s", host = null, mode = null)
+    }
+
+    @Test
+    fun `an xhttp config with no settings block defaults the path and leaves host and mode unset`() {
+        val transport = transportOf("""{"network":"xhttp","security":"none"}""")
+
+        transport shouldBe TransportOptions.Xhttp(path = "/", host = null, mode = null)
+    }
+
+    @Test
+    fun `reads wsSettings path and headers`() {
+        val transport =
+            transportOf(
+                """
+                {"network":"ws","security":"none",
+                "wsSettings":{"path":"/chat","headers":{"Host":"cdn.example"}}}
+                
+                """.trimIndent()
+                    .replace("\n", ""),
+            )
+
+        transport shouldBe TransportOptions.WebSocket(path = "/chat", headers = mapOf("Host" to "cdn.example"))
+    }
+
+    @Test
+    fun `reads a ws host field as a Host header`() {
+        // WebSocketConfig carries both `host` and `headers`; the model has only
+        // headers, and `host` is shorthand for exactly that header.
+        val transport =
+            transportOf("""{"network":"ws","security":"none","wsSettings":{"path":"/c","host":"cdn.example"}}""")
+
+        transport shouldBe TransportOptions.WebSocket(path = "/c", headers = mapOf("Host" to "cdn.example"))
+    }
+
+    @Test
+    fun `reads grpcSettings service name`() {
+        val transport =
+            transportOf("""{"network":"grpc","security":"none","grpcSettings":{"serviceName":"GunService"}}""")
+
+        transport shouldBe TransportOptions.Grpc(serviceName = "GunService")
+    }
+
+    @Test
+    fun `a tcp config carries no transport options`() {
+        // rawSettings/tcpSettings model header obfuscation this build does not
+        // emit, so tcp stays None rather than gaining a lossy half-reading.
+        transportOf("""{"network":"tcp","security":"none"}""") shouldBe TransportOptions.None
+    }
+
+    @Test
+    fun `a transport settings block of the wrong json type is ignored, not fatal`() {
+        // §7: never throw on malformed input. A string where an object belongs
+        // degrades to defaults rather than losing the profile.
+        transportOf("""{"network":"grpc","security":"none","grpcSettings":"nonsense"}""") shouldBe
+            TransportOptions.None
     }
 
     private fun vlessOutboundJson(vnextEntries: String): String =

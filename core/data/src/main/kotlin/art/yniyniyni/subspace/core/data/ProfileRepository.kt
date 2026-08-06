@@ -57,17 +57,50 @@ public data class StoredProfile(
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
 
     /**
-     * `:core:xray` emits VLESS only, and — within VLESS — only `network == "tcp"`:
-     * [art.yniyniyni.subspace.core.xray.XrayConfigGenerator] never emits `wsSettings`,
-     * `grpcSettings` or `xhttpSettings` and never reads
-     * [art.yniyniyni.subspace.core.model.StreamSettings.transport], so a
-     * `ws`/`grpc`/`xhttp` profile dials with no path and no Host and the server rejects it.
-     * A row whose [outbound] failed to decode is not connectable either — there is no
-     * config to generate from `null`.
+     * Whether `:core:xray` can generate a working config for this row.
+     *
+     * VLESS only — [art.yniyniyni.subspace.core.xray.XrayConfigGenerator] refuses the other
+     * four protocols outright — and, within VLESS, only a transport that generator emits
+     * ([CONNECTABLE_NETWORKS]). A row whose [outbound] failed to decode is not connectable
+     * either: there is no config to generate from `null`.
+     *
+     * This predicate has been wrong in both directions, so the reasoning is worth keeping.
+     * It first checked only `protocol == "vless"`, which promised a working config for a
+     * transport the generator wrote no settings for. It was then narrowed to
+     * `network == "tcp"`, which over-corrected: omitting a transport's settings object does
+     * not make Xray fail, it makes Xray use that transport's registered defaults (verified
+     * in v26.7.11 `StreamConfig.Build` — a nil settings pointer skips the block), so an
+     * xhttp server on a default path connected fine and was nonetheless labelled "not
+     * supported by this build yet". The generator now emits `wsSettings`, `grpcSettings` and
+     * `xhttpSettings` from [art.yniyniyni.subspace.core.model.StreamSettings.transport], and
+     * this is the set of networks it handles.
+     *
+     * An allow-list, deliberately, not a deny-list: a transport added to the model without a
+     * matching branch in the generator must default to *not* connectable. The inverse would
+     * promise a config this build cannot write, which is the first version of this bug.
      */
     public val connectable: Boolean
-        get() = (outbound as? VlessOutbound)?.stream?.network == "tcp"
+        get() = (outbound as? VlessOutbound)?.stream?.network?.lowercase() in CONNECTABLE_NETWORKS
 }
+
+/**
+ * The `streamSettings.network` values [art.yniyniyni.subspace.core.xray.XrayConfigGenerator]
+ * can emit a transport block for, as Xray-core v26.7.11 spells them
+ * (`infra/conf/transport_method.go`, `TransportProtocol.Build`) — including its aliases,
+ * since it lowercases and accepts either name of a pair, and a stored profile keeps whatever
+ * its source wrote.
+ *
+ * `kcp`/`mkcp`, `httpupgrade` and `hysteria` are real transports Xray supports and this
+ * generator does not, so they are absent on purpose. Hysteria2 generation is M8's, and §6
+ * warns its config shape is unlike every other protocol's.
+ *
+ * Lives in `:core:data` rather than `:core:xray` because `:core:data` cannot depend on
+ * `:core:xray` (§4 module rules) — [StoredProfile] is the type the UI reads. It is therefore
+ * a copy of a fact owned elsewhere, and `XrayConfigGeneratorTest` pins the emitting side of
+ * it; keep the two in step.
+ */
+private val CONNECTABLE_NETWORKS =
+    setOf("tcp", "raw", "ws", "websocket", "grpc", "xhttp", "splithttp")
 
 /** A folder of profiles, in display order. */
 public data class ProfileGroup(val id: Long, val name: String, val profiles: List<StoredProfile>)
@@ -190,10 +223,14 @@ internal constructor(
      * so falling back to outbound identity can only ever separate profiles the raw hash
      * would have wrongly merged, never merge ones it would have kept apart.)
      *
-     * One residual gap stays open here: two outbounds within one element that differ *only*
-     * in `xhttp` transport settings still collide, because [identityHashOf]'s typed
-     * projection has no field for `xhttp` to hash — the pre-existing §6 lossy-projection gap,
-     * unrelated to this fix and out of scope for it.
+     * The `xhttp` case this KDoc used to list as a residual gap — two outbounds in one
+     * element differing only in their `xhttp` settings, colliding because the typed
+     * projection had no field for them — is closed:
+     * [art.yniyniyni.subspace.core.model.TransportOptions.Xhttp] now carries path, host and
+     * mode, and [identityHashOf] hashes the whole outbound. §6's lossy-projection gap is
+     * narrower than it was, not gone: an outbound differing only in a field still outside
+     * the model (`XHTTPObject`'s padding and session-id options, `tcpSettings` header
+     * obfuscation) collides the same way.
      *
      * Writes go through [ProfileDao.upsertProfile]: a profile whose identity already exists
      * in [groupId] overwrites that row instead of duplicating it. A provider changing a

@@ -50,4 +50,10 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:xray"))
     implementation(project(":core:data"))
+
+    // TerminalOutcomeTest drives a deliberately-delayed persistence write against a
+    // concurrent teardown, which needs runTest's scheduler to be deterministic rather
+    // than a real-clock sleep. The convention plugin puts this on androidTest only;
+    // :feature:home already adds it to the JVM test set the same way.
+    testImplementation(libs.kotlinx.coroutines.test)
 }

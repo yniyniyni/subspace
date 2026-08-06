@@ -226,29 +226,51 @@ private fun parseVlessDestination(
         }
     return when (val parsedSecurity = parseSecurity(streamSettings, address)) {
         is SecurityParse.Bad -> users.map { bad(index, parsedSecurity.reason, parsedSecurity.detail) }
-        is SecurityParse.Ok ->
-            users.map { userElement ->
-                val user =
-                    userElement as? JsonObject
-                        ?: return@map bad(
-                            index,
-                            ParseFailureReason.MissingCredential,
-                            FailureDetail.Malformed(DetailField.Credential),
-                        )
-                val uuid =
-                    user.stringValue("id")
-                        ?: return@map bad(
-                            index,
-                            ParseFailureReason.MissingCredential,
-                            FailureDetail.Missing(DetailField.Uuid),
-                        )
-                validateUuid(uuid)?.let { return@map bad(index, ParseFailureReason.MissingCredential, it) }
-                val flow = user.stringValue("flow")?.takeIf { it.isNotBlank() }
-                val stream = StreamSettings(network = network, security = parsedSecurity.security)
-                val vless = VlessOutbound(address, port, uuid, flow, stream)
-                LinkResult.Ok(Profile(profileId("vless", address, port, uuid), name, vless, rawJson = elementText))
-            }
+        is SecurityParse.Ok -> {
+            // Built once, outside the loop: every user under one vnext entry shares this
+            // outbound's stream, and only the credential differs between them.
+            //
+            // xhttp regression: this used to be `StreamSettings(network, security)` with no
+            // transport, so a config's ws path, gRPC service name or xhttp path/host/mode
+            // was dropped on import — see `XrayJsonTransport.kt` for why that mattered most
+            // on this path.
+            val stream =
+                StreamSettings(
+                    network = network,
+                    security = parsedSecurity.security,
+                    transport = transportOptions(streamSettings, network),
+                )
+            users.map { userElement -> parseUser(userElement, stream, address, port, index, name, elementText) }
+        }
     }
+}
+
+/** One `users[]` entry into a profile, or the specific failure that entry caused (§7). */
+@Suppress("ReturnCount", "LongParameterList")
+private fun parseUser(
+    userElement: JsonElement,
+    stream: StreamSettings,
+    address: String,
+    port: Int,
+    index: Int,
+    name: String,
+    elementText: String,
+): LinkResult {
+    val user =
+        userElement as? JsonObject
+            ?: return bad(
+                index,
+                ParseFailureReason.MissingCredential,
+                FailureDetail.Malformed(DetailField.Credential),
+            )
+    val uuid =
+        user.stringValue("id")
+            ?: return bad(index, ParseFailureReason.MissingCredential, FailureDetail.Missing(DetailField.Uuid))
+    validateUuid(uuid)?.let { return bad(index, ParseFailureReason.MissingCredential, it) }
+
+    val flow = user.stringValue("flow")?.takeIf { it.isNotBlank() }
+    val vless = VlessOutbound(address, port, uuid, flow, stream)
+    return LinkResult.Ok(Profile(profileId("vless", address, port, uuid), name, vless, rawJson = elementText))
 }
 
 @Suppress("CyclomaticComplexMethod", "ReturnCount")
@@ -326,23 +348,3 @@ private fun bad(
     reason: ParseFailureReason,
     detail: FailureDetail,
 ): LinkResult.Bad = LinkResult.Bad(parseFailure(index, reason, detail))
-
-private fun JsonObject.stringValue(key: String): String? =
-    (this[key] as? JsonPrimitive)
-        ?.stringContent()
-
-private fun JsonPrimitive.stringContent(): String? = content.takeIf { isString }
-
-private fun JsonObject.portValue(key: String): Int? = (this[key] as? JsonPrimitive)?.content?.toIntOrNull()
-
-private fun JsonObject.booleanValue(key: String): Boolean? =
-    (this[key] as? JsonPrimitive)
-        ?.takeIf { !it.isString }
-        ?.content
-        ?.let { value ->
-            when (value) {
-                "true" -> true
-                "false" -> false
-                else -> null
-            }
-        }

@@ -22,6 +22,7 @@ import art.yniyniyni.subspace.core.xray.XrayConfigGenerator
 import art.yniyniyni.subspace.core.xray.XrayController
 import art.yniyniyni.subspace.core.xray.XrayException
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +107,21 @@ class TunnelService : VpnService() {
     private var configFile: File? = null
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
+
+    /**
+     * Commits a terminal outcome in an order teardown cannot interleave with — see
+     * [TerminalOutcome] for the race this closes and why it is a separate class.
+     *
+     * Declared **after** [lock], not with the other collaborators above it: property
+     * initialisers run in declaration order, so constructing this before `lock = Any()` would
+     * capture null and every `synchronized` inside it would guard nothing.
+     */
+    private val terminalOutcome =
+        TerminalOutcome(
+            lock = lock,
+            currentGeneration = { generation },
+            publish = { state -> publishLocked(state) },
+        )
 
     override fun onCreate() {
         super.onCreate()
@@ -343,10 +359,18 @@ class TunnelService : VpnService() {
         }
 
         val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort)
-        if (!publishIfCurrent(gen, connected)) return
-        // The one write :bg performs on success (spec D4) — see ConnectionRecorder.
-        connectionRecorder.record(rowId, connected)
-        goForeground(R.string.notification_connected)
+        // One generation-checked transition: the connected notification is established and
+        // `Connected` published together under the lock, and the spec-D4 success write (see
+        // ConnectionRecorder) happens strictly after. Previously this published, suspended in
+        // the write, and called goForeground() on the way out — so a teardown during the
+        // write left this coroutine to restore the connected notification over a tunnel that
+        // was already down (§5.5). Nothing may be added after the `persist` lambda.
+        terminalOutcome.settle(
+            gen = gen,
+            state = connected,
+            lifecycle = { goForeground(R.string.notification_connected) },
+            persist = { connectionRecorder.record(rowId, connected) },
+        )
     }
 
     /**
@@ -356,9 +380,11 @@ class TunnelService : VpnService() {
      * to leave it on disk indefinitely, because only teardown deleted it.
      *
      * `suspend`, not plain: the one write `:bg` performs on failure (spec D4) runs
-     * here, after the lock is released — `synchronized` cannot contain a suspend
-     * call, which is also why the record happens outside the block rather than
-     * inside it.
+     * here, and it runs *after* the whole transition rather than in the middle of it.
+     * `stopForeground()`/`stopSelf()` used to follow that write, so a newer connection
+     * starting during it inherited this failure's teardown — its foreground state removed,
+     * or its service stopped, by the previous attempt (PR #4 review, P1 finding A). Both are
+     * now inside the generation-checked transition; nothing may be added after it.
      */
     private suspend fun failStart(
         gen: Int,
@@ -366,21 +392,22 @@ class TunnelService : VpnService() {
         cause: Exception,
         rowId: Long,
     ): Nothing? {
-        val failed =
-            synchronized(lock) {
-                if (gen != generation) return null
+        // failure() redacts at construction — libXray's errors quote the config
+        // straight back (§5.6). Built before the transition because that is the one
+        // thing here with no lifecycle effect.
+        val failed = failure(reason, cause.message.orEmpty())
+        terminalOutcome.settle(
+            gen = gen,
+            state = failed,
+            lifecycle = {
                 configFile?.delete()
                 configFile = null
                 controller = null
-                // failure() redacts at construction — libXray's errors quote the
-                // config straight back (§5.6).
-                val state = failure(reason, cause.message.orEmpty())
-                publishLocked(state)
-                state
-            }
-        connectionRecorder.record(rowId, failed)
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            },
+            persist = { connectionRecorder.record(rowId, failed) },
+        )
         return null
     }
 
@@ -624,6 +651,14 @@ internal class ConnectionRecorder(
                 is ConnectionState.Failed -> recordError(rowId, state.detail)
                 else -> Unit
             }
+        } catch (e: CancellationException) {
+            // Rethrown ahead of the catch below, which would otherwise absorb it:
+            // CancellationException is an Exception, so `catch (e: Exception)`
+            // swallowed service-scope cancellation and reported it as a failed
+            // write (PR #4 review, P1 finding A). Swallowing it also left the
+            // caller running, which is how a coroutine cancelled mid-record could
+            // carry on into whatever followed the write.
+            throw e
         } catch (e: Exception) {
             onFailure(e)
         }

@@ -210,6 +210,7 @@ private fun TransportOptions.toDto(): TransportDto =
         // "identical" servers to different identities.
         is TransportOptions.WebSocket -> TransportDto.WebSocket(path = path, headers = headers.toSortedMap())
         is TransportOptions.Grpc -> TransportDto.Grpc(serviceName = serviceName)
+        is TransportOptions.Xhttp -> TransportDto.Xhttp(path = path, host = host, mode = mode)
     }
 
 private fun TransportDto.toDomain(): TransportOptions =
@@ -217,4 +218,5 @@ private fun TransportDto.toDomain(): TransportOptions =
         is TransportDto.None -> TransportOptions.None
         is TransportDto.WebSocket -> TransportOptions.WebSocket(path = path, headers = headers)
         is TransportDto.Grpc -> TransportOptions.Grpc(serviceName = serviceName)
+        is TransportDto.Xhttp -> TransportOptions.Xhttp(path = path, host = host, mode = mode)
     }

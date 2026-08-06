@@ -29,8 +29,9 @@ import javax.inject.Inject
  * element-provenance report): [parsed] is what [SubscriptionParser] produced;
  * [imported] is what [ProfileSource.import] actually persisted, which can be
  * lower — a raw Xray document whose elements collide only in fields the typed
- * projection cannot see (the §6 `xhttp` residual) stores fewer rows than it
- * parsed profiles. "Imported 15 of 15" must mean 15 rows landed, not 15
+ * projection cannot see (§6's lossy projection; `xhttp` path/host/mode used to
+ * be an example and no longer is) stores fewer rows than it parsed
+ * profiles. "Imported 15 of 15" must mean 15 rows landed, not 15
  * profiles parsed and only 1 actually stored — that was the bug ([total] and
  * the summary string both read off [parsed], not off what reached storage).
  *

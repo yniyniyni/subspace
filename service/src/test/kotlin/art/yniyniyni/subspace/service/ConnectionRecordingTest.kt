@@ -4,8 +4,11 @@ package art.yniyniyni.subspace.service
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.failure
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
@@ -81,6 +84,76 @@ class ConnectionRecordingTest {
             fake.connectedCalls.isEmpty() shouldBe true
             fake.failures shouldBe 0
         }
+    }
+
+    // ── Cancellation is not a persistence failure (PR #4 review, P1 finding A) ──
+
+    @Test
+    fun `cancellation propagates rather than being swallowed as a write failure`() {
+        // record() catches Exception so a Room failure cannot take down a working
+        // tunnel (§10.4). CancellationException *is* an Exception, so that catch
+        // also swallowed service-scope cancellation — the stale start coroutine
+        // then resumed and ran the lifecycle call that followed the write, which
+        // is half of how a superseded generation could reassert foreground state.
+        var failures = 0
+        val recorder =
+            ConnectionRecorder(
+                recordConnected = { _, _ -> throw CancellationException("scope cancelled") },
+                recordError = { _, _ -> error("not reached") },
+                onFailure = { failures++ },
+            )
+
+        shouldThrow<CancellationException> {
+            runBlocking {
+                recorder.record(
+                    rowId = 1L,
+                    state = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 10808),
+                )
+            }
+        }
+        // Not reported as a persistence failure: nothing failed to write, the
+        // caller was cancelled.
+        failures shouldBe 0
+    }
+
+    @Test
+    fun `cancellation propagates from the failure-recording path too`() {
+        var failures = 0
+        val recorder =
+            ConnectionRecorder(
+                recordConnected = { _, _ -> error("not reached") },
+                recordError = { _, _ -> throw CancellationException("scope cancelled") },
+                onFailure = { failures++ },
+            )
+
+        shouldThrow<CancellationException> {
+            runBlocking {
+                recorder.record(rowId = 1L, state = failure(FailureReason.CoreStartFailed, "redacted"))
+            }
+        }
+        failures shouldBe 0
+    }
+
+    @Test
+    fun `an ordinary repository failure is reported but never escapes`() {
+        // The guarantee that must survive the fix above: a Room write that fails
+        // for its own reasons must not propagate into the start sequence.
+        var reported: Throwable? = null
+        val recorder =
+            ConnectionRecorder(
+                recordConnected = { _, _ -> throw IllegalStateException("disk I/O error on table profiles") },
+                recordError = { _, _ -> error("not reached") },
+                onFailure = { reported = it },
+            )
+
+        runBlocking {
+            recorder.record(
+                rowId = 1L,
+                state = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 10808),
+            )
+        }
+
+        reported.shouldBeInstanceOf<IllegalStateException>()
     }
 
     @Test

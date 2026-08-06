@@ -153,7 +153,7 @@ private fun parseXrayJsonDocument(
         }
     }
 
-    return ParseOutcome(profiles, failures)
+    return ParseOutcome(disambiguateDuplicateNames(profiles), failures)
 }
 
 @Suppress("ReturnCount", "LongParameterList")

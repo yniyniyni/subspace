@@ -333,6 +333,66 @@ class XrayJsonTest {
     }
 
     /**
+     * Defect 2 (device-fixes finding): the real subscription's first array
+     * element carried 8 `vless` outbounds under one `remarks`, so all 8 rows
+     * displayed identically and were indistinguishable in the Servers list —
+     * genuinely different servers (different address/port/transport) with no
+     * way to tell them apart. `remarks` stays the primary name (that choice
+     * was deliberate, see `root remarks names the profile instead of the
+     * outbound tag` above); a 1-based ordinal is appended only when this
+     * element actually produces more than one profile under the same name.
+     * The outbound's own `tag` was considered and rejected as the
+     * disambiguator instead of an ordinal: the same reasoning that made `tag`
+     * a bad *primary* name (exporters set it to `"proxy"` uniformly) makes it
+     * collide exactly where `remarks` already collided, so it disambiguates
+     * nothing in the real-world case this fixes.
+     */
+    @Test
+    fun `several outbounds sharing one remarks value get distinct ordinal-suffixed names`() {
+        val json =
+            """
+            {"remarks":"🚀 Auto | Best Server",
+             "outbounds":[
+               ${validOutbound("first.example")},
+               ${validOutbound("second.example", uuid = "\"$SECOND_UUID\"")},
+               ${validOutbound("third.example", uuid = "\"$THIRD_UUID\"")}
+             ]}
+            """.trimIndent()
+
+        val outcome = parseXrayJson(json)
+
+        outcome.profiles.map { it.name } shouldBe
+            listOf(
+                "🚀 Auto | Best Server (1)",
+                "🚀 Auto | Best Server (2)",
+                "🚀 Auto | Best Server (3)",
+            )
+        outcome.profiles.map { it.outbound.address } shouldBe
+            listOf("first.example", "second.example", "third.example")
+    }
+
+    /**
+     * The other half of the fix: an element that yields exactly one profile
+     * must keep the name it produces today, byte for byte — no ordinal, even
+     * though the disambiguator machinery runs over every element.
+     */
+    @Test
+    fun `a single outbound under remarks keeps its name unchanged, with no ordinal`() {
+        val json = realityConfig.replace("\"outbounds\"", "\"remarks\":\"Solo\",\"outbounds\"")
+        parseXrayJson(json).profiles.single().name shouldBe "Solo"
+    }
+
+    /**
+     * An element with no `remarks` at all — not blank, not non-string, simply
+     * absent — must still fall back to the tag exactly as before; the
+     * disambiguator only ever appends, it never changes which name wins.
+     */
+    @Test
+    fun `an element with no remarks key keeps the existing tag fallback unchanged`() {
+        parseXrayJson(realityConfig).profiles.single().name shouldBe "proxy"
+    }
+
+    /**
      * The shape a desktop client actually exports: `remarks` carrying non-ASCII
      * text, `\/` escapes throughout, `mux`/`dns`/`routing`/`inbounds` around the
      * part we read, and the proxy outbound tagged `proxy`.

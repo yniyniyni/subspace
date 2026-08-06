@@ -6,6 +6,12 @@ package art.yniyniyni.subspace.core.parser
 // likely to be a broken blob than ordinary short text. See looksLikeBlob.
 private const val MIN_BLOB_LENGTH = 24
 
+private const val BOM = '\uFEFF'
+
+// A real Xray config nests perhaps eight levels; a Clash file fewer. 64 is far
+// above anything real and far below what overflows a stack. See nestsTooDeep.
+private const val MAX_NESTING_DEPTH = 64
+
 /**
  * The one public entry point of `:core:parser`.
  *
@@ -63,13 +69,12 @@ public object SubscriptionParser {
         raw: String,
         depth: Int,
     ): ParseOutcome {
-        val text = raw.trim()
-        if (text.isEmpty()) {
-            return ParseOutcome(
-                emptyList(),
-                listOf(parseFailure(0, ParseFailureReason.EmptyInput, FailureDetail.None)),
-            )
-        }
+        // U+FEFF is not Char.isWhitespace(), so trim() leaves it and
+        // startsWith("{") fails — a fetched subscription file is exactly
+        // where BOMs come from, and before M4 nothing here was fetched.
+        // Stripped before *and* after trim so a BOM behind leading
+        // whitespace is also caught.
+        val text = raw.removePrefix(BOM.toString()).trim().removePrefix(BOM.toString())
 
         // Order is load-bearing and pinned by a test.
         //
@@ -86,6 +91,27 @@ public object SubscriptionParser {
         // dispatch only has to route both shapes to it instead of falling
         // through to Clash/base64 and reporting the wrong format entirely.
         return when {
+            text.isEmpty() ->
+                ParseOutcome(
+                    emptyList(),
+                    listOf(parseFailure(0, ParseFailureReason.EmptyInput, FailureDetail.None)),
+                )
+
+            // Checked before any format-specific parsing: StackOverflowError
+            // is an Error, not an Exception, so no runCatching/try-catch below
+            // this point can turn it into a ParseFailure after the fact.
+            nestsTooDeep(text) ->
+                ParseOutcome(
+                    emptyList(),
+                    listOf(
+                        parseFailure(
+                            0,
+                            ParseFailureReason.MalformedJson,
+                            FailureDetail.Malformed(DetailField.JsonBody),
+                        ),
+                    ),
+                )
+
             text.startsWith("{") || text.startsWith("[") -> parseXrayJson(text)
             looksLikeClash(text) -> parseClashYaml(text)
             else -> {
@@ -146,3 +172,30 @@ private fun looksLikeClash(text: String): Boolean =
  */
 private fun looksLikeBlob(text: String): Boolean =
     text.length >= MIN_BLOB_LENGTH && text.none { it.isWhitespace() } && !text.contains("://")
+
+/**
+ * Whether [text] nests deeper than the core will ever legitimately need.
+ *
+ * A real Xray config nests perhaps eight levels; a Clash file fewer. 64 is far
+ * above anything real and far below what overflows a stack. Checked before
+ * parsing because `StackOverflowError` is an `Error`, not an `Exception` —
+ * `runCatching` does not catch it, so §7's never-throw rule cannot be
+ * satisfied after the fact.
+ *
+ * Counts only structural brackets, so a `{` inside a quoted string can
+ * inflate the count. That is the safe direction: it can reject an
+ * absurd-looking document, never accept an overflowing one.
+ */
+private fun nestsTooDeep(text: String): Boolean {
+    var depth = 0
+    text.forEach { char ->
+        when (char) {
+            '{', '[' -> {
+                depth++
+                if (depth > MAX_NESTING_DEPTH) return true
+            }
+            '}', ']' -> if (depth > 0) depth--
+        }
+    }
+    return false
+}

@@ -3,111 +3,44 @@ package art.yniyniyni.subspace.feature.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.Profile
-import art.yniyniyni.subspace.core.parser.SubscriptionParser
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
-
-/** What the screen renders. */
-internal data class HomeState(
-    val input: String = "",
-    val connection: ConnectionState = ConnectionState.Disconnected,
-    /** Null when there is nothing to complain about. A string resource id. */
-    val inputError: Int? = null,
-    /**
-     * Redacted detail from [SubscriptionParser] (§5.6), shown alongside
-     * [inputError] when the parser has more to say than the generic message.
-     */
-    val inputErrorDetail: String? = null,
-    val busy: Boolean = false,
-) {
-    val canConnect: Boolean
-        get() = input.isNotBlank() && connection is ConnectionState.Disconnected && !busy
-
-    val canDisconnect: Boolean
-        get() =
-            connection is ConnectionState.Connected ||
-                connection is ConnectionState.Connecting
-}
 
 @HiltViewModel
 internal class HomeViewModel @Inject constructor(
     private val tunnel: TunnelConnection,
+    private val profileSource: ActiveProfileSource,
 ) : ViewModel() {
-    private val input = MutableStateFlow("")
-    private val inputError = MutableStateFlow<Int?>(null)
-    private val inputErrorDetail = MutableStateFlow<String?>(null)
-    private val busy = MutableStateFlow(false)
-
     private val _state = MutableStateFlow(HomeState())
     val state: StateFlow<HomeState> = _state.asStateFlow()
 
     init {
-        // §5.5: the connection half of this state comes from the service and
-        // is only ever mirrored here. The text field is the only part the UI
-        // actually owns.
+        // §5.5: connection comes from the service and is only ever mirrored
+        // here — this combine never derives it from anything local. The
+        // active profile is likewise read, never chosen, by this screen:
+        // choosing happens on the Servers screen via
+        // SettingsRepository.setActiveProfile; this only reflects the
+        // result.
         combine(
-            input,
             tunnel.state,
-            inputError,
-            inputErrorDetail,
-            busy,
-        ) { text, conn, error, detail, working ->
+            profileSource.activeProfile,
+            profileSource.hasAnyProfile,
+        ) { connection, activeProfile, hasAnyProfile ->
             HomeState(
-                input = text,
-                connection = conn,
-                inputError = error,
-                inputErrorDetail = detail,
-                busy = working,
+                connection = connection,
+                activeProfile = activeProfile,
+                hasAnyProfile = hasAnyProfile,
             )
         }.onEach { _state.value = it }
             .launchIn(viewModelScope)
-    }
-
-    fun onInputChanged(value: String) {
-        input.value = value
-        inputError.value = null
-        inputErrorDetail.value = null
-    }
-
-    /**
-     * Turns whatever was pasted into a [Profile] via [SubscriptionParser] —
-     * the single entry point for `:core:parser`, which handles link,
-     * base64, Clash YAML, and raw Xray JSON detection itself (§7).
-     *
-     * @return null if nothing usable came out; [inputError] then holds the
-     *   generic reason and [inputErrorDetail] the parser's redacted detail,
-     *   when it has one (§5.6: already redacted, safe to surface — §10.4,
-     *   it is the only diagnostic a user can hand back).
-     */
-    private suspend fun parseInput(raw: String): Profile? {
-        // §5.3: the connect button must stay responsive. `viewModelScope` runs
-        // on Dispatchers.Main.immediate, so parsing here directly would do the
-        // whole pass on the UI thread — a SHA-256 plus regex validation per
-        // entry, and a YAML document parse per Clash entry, across a
-        // subscription that is routinely hundreds of entries long.
-        //
-        // Default, not IO: this is pure CPU work with no blocking call in it.
-        // IO's pool is sized for threads parked on syscalls, and putting
-        // compute there both misprices the thread and competes with the real
-        // blocking work §5.3 names (subscription fetch, libXray start/stop).
-        val outcome = withContext(Dispatchers.Default) { SubscriptionParser.parse(raw) }
-        val profile = outcome.profiles.firstOrNull()
-        if (profile == null) {
-            inputError.value = R.string.error_unparseable
-            inputErrorDetail.value = outcome.failures.firstOrNull()?.detail
-        }
-        return profile
     }
 
     /**
@@ -115,20 +48,35 @@ internal class HomeViewModel @Inject constructor(
      *
      * Consent is the Activity's job — a ViewModel cannot launch an intent for
      * a result — so the screen asks first and calls this only on approval.
+     *
+     * A no-op when [HomeState.canConnect] would be `false`: nothing is
+     * selected, or the selected row's config failed to decode. There is
+     * nothing sensible to connect to, so this silently refuses rather than
+     * asking the service to attempt it — the same "refuse rather than guess"
+     * rule [art.yniyniyni.subspace.service.ProfileParcel.toProfile] applies
+     * to an undecodable parcel.
      */
     fun onConsentGranted() {
-        if (busy.value) return
-        busy.value = true
-        viewModelScope.launch {
-            val profile = parseInput(input.value)
-            if (profile != null) {
-                tunnel.connect(profile)
-            }
-            busy.value = false
-        }
+        val activeProfile = state.value.activeProfile ?: return
+        val profile = activeProfile.toProfile() ?: return
+        tunnel.connect(profile, rowId = activeProfile.id)
     }
 
     fun onDisconnect() {
         tunnel.disconnect()
     }
 }
+
+/**
+ * Rebuilds the domain [Profile] this row's persisted config decodes to, or
+ * `null` for a corrupt row ([StoredProfile.outbound] is only ever null when
+ * the stored JSON failed to parse — see its own KDoc).
+ *
+ * [Profile.id] wants a String and [StoredProfile] only carries a Room
+ * [Long] primary key, so this stringifies it. That id is opaque wire
+ * plumbing only [art.yniyniyni.subspace.service.ProfileParcel] reads back,
+ * never the row identity — the row id travels separately, as
+ * [TunnelConnection.connect]'s own `rowId` parameter.
+ */
+private fun StoredProfile.toProfile(): Profile? =
+    outbound?.let { decoded -> Profile(id = id.toString(), name = name, outbound = decoded) }

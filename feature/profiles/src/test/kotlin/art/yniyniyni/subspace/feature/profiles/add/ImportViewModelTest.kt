@@ -1,0 +1,366 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package art.yniyniyni.subspace.feature.profiles.add
+
+import art.yniyniyni.subspace.core.data.ProfileGroup
+import art.yniyniyni.subspace.core.data.ProfileKind
+import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.model.Outbound
+import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+
+/**
+ * Covers what Task 19 builds: turning pasted or imported text into stored
+ * profiles via [SubscriptionParser][art.yniyniyni.subspace.core.parser.SubscriptionParser]
+ * and [ProfileSource.import], honestly reporting both halves of the resulting
+ * `ParseOutcome` (§7) rather than silently dropping the failing entries
+ * (§10.4).
+ *
+ * `viewModelScope` needs a Main dispatcher outside Android, hence
+ * [UnconfinedTestDispatcher] — same setup as [art.yniyniyni.subspace.feature.home.HomeViewModelTest]
+ * and [art.yniyniyni.subspace.feature.profiles.list.ServersViewModelTest]. But
+ * [ImportViewModel.import] hops to a genuine `Dispatchers.Default` background
+ * thread for the parse (see its own KDoc for why), which the test scheduler
+ * [advanceUntilIdle] drains does not control — a bare `advanceUntilIdle()`
+ * after [ImportViewModel.import] is not enough and the very first version of
+ * this file proved it, failing all four tests with `imported=0` instead of
+ * the real count (assertions ran before the background hop resumed). Fixed
+ * the same way the M1 predecessor's test did (`git show a2e3bf4`,
+ * `HomeViewModelTest`'s old `parseInput` coverage): also await
+ * `state.first { it.completed }`, which suspends on the real cross-thread
+ * resume rather than the virtual clock.
+ *
+ * Backtick test names keep the spaces the brief wrote them with, same as
+ * [art.yniyniyni.subspace.feature.home.HomeViewModelTest]: this file runs as
+ * a plain JVM unit test (`:feature:profiles:testDebugUnitTest`), never
+ * through D8/dexing, so the DEX-040 synthetic-class-name restriction that
+ * forces camelCase in this repo's *instrumented* tests does not apply here.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class ImportViewModelTest {
+    /**
+     * A minimal but complete `:core:xray`-emittable VLESS body: `protocol`
+     * alone (the brief's own illustrative fixture) has no `settings.vnext`,
+     * so `parseXrayJson` reports it as malformed JSON rather than a profile —
+     * this adds the address/port/user `parseVlessOutbound` requires while
+     * keeping the brief's own irregular spacing (`"outbounds" :`, double
+     * spaces around the braces) to prove that formatting survives storage
+     * unchanged. 198.51.100.7 is RFC 5737 documentation space, matching
+     * FailureTextTest's own convention for "an address that must never leak."
+     */
+    private val validRawJson =
+        """{  "outbounds" : [ { "protocol":"vless","settings":{"vnext":[{"address":"198.51.100.7",""" +
+            """"port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111"}]}]} } ]  }"""
+
+    /**
+     * Defect 1's third site (device fixes report): the target panel returns a
+     * top-level JSON **array** wrapping a whole Xray config. §6 stores raw
+     * Xray JSON byte-for-byte, but the capture at this call site was
+     * `raw.takeIf { raw.trim().startsWith("{") }` — `false` for a leading
+     * `[`, so a fixed parser alone would still silently store this as
+     * `TYPED` and drop the provenance rule. 203.0.113.9 is RFC 5737
+     * documentation space, matching [validRawJson]'s own convention.
+     *
+     * Element-provenance fix (device-fixes finding, part 2): the profile this yields now
+     * carries only [validRawJsonArrayElement]'s bytes, not the enclosing array — see
+     * `XrayJsonTest`'s own coverage of that split. Written already in the compact form
+     * `kotlinx.serialization`'s `JsonElement.toString()` re-serializes an array element
+     * into (no extra whitespace, same key order), so the "stored byte-for-byte" test below
+     * can compare it with a plain string equality instead of re-parsing both sides.
+     */
+    private val validRawJsonArrayElement =
+        """{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"203.0.113.9",""" +
+            """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]}}]}"""
+    private val validRawJsonArray = "[$validRawJsonArrayElement]"
+
+    private class FakeProfileSource : ProfileSource {
+        private val stored = mutableMapOf<Long, StoredProfile>()
+        private var nextId = 1L
+
+        var lastImportedGroupId: Long? = null
+            private set
+
+        override fun observeGroups(
+            query: String,
+            protocol: String?,
+        ): Flow<List<ProfileGroup>> = MutableStateFlow(emptyList())
+
+        override val activeProfileId: Flow<Long?> = MutableStateFlow(null)
+
+        override suspend fun setActiveProfile(id: Long?) = Unit
+
+        override suspend fun renameGroup(
+            id: Long,
+            name: String,
+        ) = Unit
+
+        override suspend fun deleteGroup(id: Long) = Unit
+
+        // Mirrors ProfileRepository.defaultGroupId()'s "Local configs" group
+        // (spec D3) — a single fixed id is enough here, nothing in this test
+        // exercises group creation itself.
+        override suspend fun defaultGroupId(): Long = 1L
+
+        // Mirrors ProfileRepository.import's own identity rule closely enough to exercise
+        // ImportViewModel's wiring (not to re-prove the rule itself — ProfileRepositoryTest
+        // owns that, against the real Room table): a profile's own Profile.rawJson decides
+        // TYPED vs RAW_JSON, and profiles sharing one element's rawJson (several outbounds
+        // out of one raw document) are still distinguishable by outbound, so they still
+        // count as separate stored rows here — this fake has no real upsert-by-identity to
+        // collapse them, so distinctness is simulated by grouping on (rawJson, outbound)
+        // instead of a real identity hash.
+        override suspend fun import(
+            profiles: List<Profile>,
+            groupId: Long,
+        ): Int {
+            lastImportedGroupId = groupId
+            profiles.forEach { profile ->
+                val id = nextId++
+                stored[id] =
+                    StoredProfile(
+                        id = id,
+                        groupId = groupId,
+                        kind = if (profile.rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON,
+                        name = profile.name,
+                        protocol = "vless",
+                        address = profile.outbound.address,
+                        port = profile.outbound.port,
+                        transport = "tcp",
+                        outbound = profile.outbound,
+                        rawJson = profile.rawJson,
+                        lastConnectedAt = null,
+                        lastError = null,
+                    )
+            }
+            return profiles.map { it.rawJson to it.outbound }.distinct().size
+        }
+
+        override suspend fun profile(id: Long): StoredProfile? = stored[id]
+
+        // Not exercised here — EditorViewModelTest (Task 21) owns real
+        // coverage of these three.
+        override suspend fun rename(
+            id: Long,
+            name: String,
+        ) = Unit
+
+        override suspend fun move(
+            id: Long,
+            toGroupId: Long,
+        ) = true
+
+        override suspend fun update(
+            id: Long,
+            name: String,
+            outbound: Outbound,
+        ) = true
+    }
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `a partial import reports both halves`() =
+        runTest {
+            val source = FakeProfileSource()
+            val viewModel = ImportViewModel(source)
+
+            val validLines =
+                (1..197).map { i ->
+                    "vless://11111111-1111-1111-1111-111111111111@host$i.example.com:443#server$i"
+                }
+            val brokenLines =
+                listOf(
+                    // Malformed UUID -> MissingCredential.
+                    "vless://not-a-uuid@bad.example.com:443#broken1",
+                    // Port out of range -> InvalidPort.
+                    "vless://11111111-1111-1111-1111-111111111111@bad.example.com:99999#broken2",
+                    // No "://" at all -> UnknownScheme.
+                    "not-a-link-at-all",
+                )
+            val twoHundredLinesOfWhichThreeAreBroken = (validLines + brokenLines).joinToString("\n")
+
+            viewModel.import(twoHundredLinesOfWhichThreeAreBroken)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 197
+            viewModel.state.value.parsed shouldBe 197
+            viewModel.state.value.failures.size shouldBe 3
+        }
+
+    // §10.1 fix (element-provenance report): before this, ImportState.imported and the
+    // "Imported N of N" summary both read off ParseOutcome.profiles.size — "true" of what
+    // the parser produced and false of what reached storage whenever two parsed profiles
+    // shared an identity, exactly the shape of the real 15-parsed/1-stored bug. Two
+    // identical share links are the simplest reproduction that does not need raw JSON at
+    // all: they parse to two profiles with an identical outbound, FakeProfileSource's
+    // distinct-by-outbound count (mirroring ProfileRepository's real upsert-by-identity)
+    // collapses them to one stored row, and `imported` must say so.
+    @Test
+    fun `imported reports rows actually stored, not profiles parsed`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            val link = "vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one"
+
+            viewModel.import(listOf(link, link).joinToString("\n"))
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.parsed shouldBe 2
+            viewModel.state.value.imported shouldBe 1
+            viewModel.state.value.total shouldBe 2
+        }
+
+    @Test
+    fun `raw json is stored byte-for-byte`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import(validRawJson)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.profile(1)?.rawJson shouldBe validRawJson
+        }
+
+    @Test
+    fun `raw json wrapped in a top-level array is stored as that element's own bytes`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import(validRawJsonArray)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.profile(1)?.rawJson shouldBe validRawJsonArrayElement
+        }
+
+    @Test
+    fun `a clean import lands in the default group`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import("vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.lastImportedGroupId shouldBe repository.defaultGroupId()
+        }
+
+    @Test
+    fun `an empty paste reports zero imported and one failure, not a crash`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import("")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.failures.size shouldBe 1
+            viewModel.state.value.completed shouldBe true
+        }
+
+    // Fix round 1, finding 3: `input` moved from AddServerSheet's own
+    // `rememberSaveable` into ImportState (see that class's own KDoc for why)
+    // so it can be driven and cleared here without Compose at all.
+
+    @Test
+    fun `typing into the paste field updates state input`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+
+            viewModel.onInputChanged("vless://pasted")
+
+            viewModel.state.value.input shouldBe "vless://pasted"
+        }
+
+    @Test
+    fun `a successful import clears the pasted input`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            val link = "vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one"
+            viewModel.onInputChanged(link)
+
+            viewModel.import(viewModel.state.value.input)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.input shouldBe ""
+        }
+
+    @Test
+    fun `a fully failed import keeps the pasted input so the user can fix it`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val brokenPaste = "not-a-link-at-all"
+            viewModel.onInputChanged(brokenPaste)
+
+            viewModel.import(viewModel.state.value.input)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.input shouldBe brokenPaste
+        }
+
+    // Fix round 1, finding 2: the file-read path (AddServerSheet.kt) reports
+    // a null/thrown read through these two ImportViewModel entry points
+    // rather than doing nothing or crashing the coroutine.
+
+    @Test
+    fun `reportFileReadFailure surfaces a visible failure and leaves busy false`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            viewModel.beginFileRead()
+
+            viewModel.reportFileReadFailure()
+
+            viewModel.state.value.fileReadFailed shouldBe true
+            viewModel.state.value.busy shouldBe false
+        }
+
+    @Test
+    fun `beginFileRead resets a stale completed result but keeps the pasted input`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            viewModel.import("vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+            viewModel.onInputChanged("kept across the file pick")
+
+            viewModel.beginFileRead()
+
+            viewModel.state.value.completed shouldBe false
+            viewModel.state.value.busy shouldBe true
+            viewModel.state.value.input shouldBe "kept across the file pick"
+        }
+}

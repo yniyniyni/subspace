@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no
+     hardcoded UI text. §5.6: no string here may interpolate a server
+     address, uuid, or key. -->
+<resources>
+    <!-- ConnectControl's accessible label names the action a tap performs,
+         not the current connection state (a screen reader user needs to know
+         what tapping does, not what already happened) — see the KDoc on
+         ConnectControl.kt's actionDescription(). -->
+    <string name="connect_control_action_connect">Connect</string>
+    <string name="connect_control_action_connecting">Connecting</string>
+    <string name="connect_control_action_disconnect">Disconnect</string>
+
+    <!-- FloatingNavigationBar's own instrumented test uses these three as its
+         representative destinations. Real screens build their own NavItem
+         lists from their own feature module's strings (:core:ui cannot
+         depend on :feature:*), but these names match the app's actual three
+         top-level destinations, so a real caller may reuse them too. -->
+    <string name="nav_item_connect">Connect</string>
+    <string name="nav_item_servers">Servers</string>
+    <string name="nav_item_settings">Settings</string>
+
+    <!-- SubspaceBottomSheetTest's fixture title — no real caller exists yet
+         (Task 19), so this is test-only, unlike the nav_item_* strings above. -->
+    <string name="bottom_sheet_test_title">Sheet Title</string>
+
+    <!-- GroupCard (Task 18). A group's name is not a secret the way a server
+         address is (§5.6) — it never interpolates one. -->
+    <!-- %1$s = the group's name, %2$d = its real (unfiltered) profile count. -->
+    <string name="group_card_expand_description">Expand %1$s, %2$d servers</string>
+    <string name="group_card_collapse_description">Collapse %1$s, %2$d servers</string>
+    <string name="group_card_overflow_description">More options for %1$s</string>
+    <string name="group_card_rename">Rename</string>
+    <string name="group_card_delete">Delete</string>
+    <string name="group_card_add_profile">Add profile</string>
+    <plurals name="group_card_profile_count">
+        <item quantity="one">%1$d server</item>
+        <item quantity="other">%1$d servers</item>
+    </plurals>
+</resources>

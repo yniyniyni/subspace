@@ -26,23 +26,43 @@ internal fun parseVmessLink(
     val decoded =
         decodeBase64Tolerant(body)
             ?: return LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.MalformedBase64, "vmess body is not base64"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedBase64,
+                    FailureDetail.Malformed(DetailField.Base64Body),
+                ),
             )
 
     val obj =
         parseJsonObject(decoded)
             ?: return LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.MalformedJson, "vmess body is not a JSON object"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedJson,
+                    FailureDetail.Malformed(DetailField.JsonBody),
+                ),
             )
 
     val address = obj.nonBlankString("add")
     if (address == null) {
-        return LinkResult.Bad(parseFailure(index, ParseFailureReason.MalformedUri, "vmess address is missing"))
+        return LinkResult.Bad(
+            parseFailure(
+                index,
+                ParseFailureReason.MalformedUri,
+                FailureDetail.Missing(DetailField.Address),
+            ),
+        )
     }
 
     val port = obj.integerOrStringIntOrNull("port")
     if (port == null) {
-        return LinkResult.Bad(parseFailure(index, ParseFailureReason.InvalidPort, "vmess port is not a number"))
+        return LinkResult.Bad(
+            parseFailure(
+                index,
+                ParseFailureReason.InvalidPort,
+                FailureDetail.Malformed(DetailField.Port),
+            ),
+        )
     }
     validatePort(port)?.let {
         return LinkResult.Bad(parseFailure(index, ParseFailureReason.InvalidPort, it))
@@ -51,7 +71,11 @@ internal fun parseVmessLink(
     val uuid = obj.nonBlankString("id")
     if (uuid == null) {
         return LinkResult.Bad(
-            parseFailure(index, ParseFailureReason.MissingCredential, "vmess UUID is missing"),
+            parseFailure(
+                index,
+                ParseFailureReason.MissingCredential,
+                FailureDetail.Missing(DetailField.Uuid),
+            ),
         )
     }
     validateUuid(uuid)?.let {
@@ -82,7 +106,11 @@ internal fun parseVmessLink(
                 primitive.isString && value.isBlank() -> 0
                 else -> value.toLongOrNull()?.takeIf { it in Int.MIN_VALUE..Int.MAX_VALUE }?.toInt()
             } ?: return LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.MalformedJson, "vmess alterId is not a number"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedJson,
+                    FailureDetail.Malformed(DetailField.AlterId),
+                ),
             )
         }
     val outbound =

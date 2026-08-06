@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no
+     hardcoded UI text. §5.6: no string here may interpolate a server
+     address, uuid, or key. -->
 <resources>
     <string name="app_name">Subspace</string>
 </resources>

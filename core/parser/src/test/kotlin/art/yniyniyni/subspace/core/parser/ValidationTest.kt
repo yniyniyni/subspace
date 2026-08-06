@@ -2,9 +2,7 @@
 package art.yniyniyni.subspace.core.parser
 
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
+import io.kotest.matchers.shouldNotBe
 import org.junit.Test
 
 class ValidationTest {
@@ -15,8 +13,8 @@ class ValidationTest {
 
     @Test
     fun `rejects port zero and out of range`() {
-        (validatePort(0) != null) shouldBe true
-        (validatePort(70000) != null) shouldBe true
+        validatePort(0) shouldBe FailureDetail.Range(DetailField.Port, 1, 65_535, 0)
+        validatePort(70_000) shouldBe FailureDetail.Range(DetailField.Port, 1, 65_535, 70_000)
     }
 
     @Test
@@ -26,10 +24,12 @@ class ValidationTest {
 
     @Test
     fun `rejects a malformed uuid`() {
-        val input = "not-a-uuid"
-        val message = validateUuid(input)
-        assertTrue(message != null)
-        assertFalse(message.orEmpty().contains(input))
+        validateUuid("not-a-uuid") shouldBe FailureDetail.Malformed(DetailField.Uuid)
+    }
+
+    @Test
+    fun `reports a missing uuid separately from a malformed one`() {
+        validateUuid("") shouldBe FailureDetail.Missing(DetailField.Uuid)
     }
 
     @Test
@@ -39,23 +39,19 @@ class ValidationTest {
 
     @Test
     fun `rejects a non canonical reality key with non zero pad bits`() {
-        val input = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh9"
-        val message = validateRealityPublicKey(input)
-        assertTrue(message != null)
-        assertFalse(message.orEmpty().contains(input))
+        validateRealityPublicKey("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh9") shouldBe
+            FailureDetail.Malformed(DetailField.PublicKey)
     }
 
     @Test
     fun `rejects a truncated reality key`() {
-        val input = "AAECAwQF"
-        val message = validateRealityPublicKey(input)
-        assertTrue(message != null)
-        assertFalse(message.orEmpty().contains(input))
+        validateRealityPublicKey("AAECAwQF") shouldBe
+            FailureDetail.Length(DetailField.PublicKey, expected = 43, actual = 8)
     }
 
     @Test
-    fun `reality key message names publicKey not password`() {
-        validateRealityPublicKey("AAECAwQF") shouldContain "publicKey"
+    fun `missing reality key names the public key field`() {
+        validateRealityPublicKey("") shouldBe FailureDetail.Missing(DetailField.PublicKey)
     }
 
     @Test
@@ -80,27 +76,16 @@ class ValidationTest {
 
     @Test
     fun `rejects unknown shadowsocks method without echoing it`() {
-        val input = "rot13"
-        val message = validateShadowsocksMethod(input)
-        assertTrue(message != null)
-        assertFalse(message.orEmpty().contains(input))
+        validateShadowsocksMethod("rot13") shouldBe FailureDetail.Unsupported(DetailField.Method)
     }
 
     @Test
-    fun `arbitrary strings never throw and are not echoed`() {
+    fun `arbitrary strings never throw and produce only typed details`() {
         val inputs = listOf("", "\u0000", "\n", "x".repeat(10_000), "credential\uD83D\uDD12")
         inputs.forEach { input ->
-            val messages =
-                listOf(
-                    validateUuid(input),
-                    validateRealityPublicKey(input),
-                    validateShadowsocksMethod(input),
-                )
-            messages.filterNotNull().forEach { message ->
-                if (input.isNotEmpty()) {
-                    assertFalse(message.contains(input))
-                }
-            }
+            validateUuid(input) shouldNotBe null
+            validateRealityPublicKey(input) shouldNotBe null
+            validateShadowsocksMethod(input) shouldNotBe null
         }
     }
 }

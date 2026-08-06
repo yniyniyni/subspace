@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  androidTest only. WriterService exists so MultiProcessInvalidationTest can
+  perform a write from a genuinely separate process; android:process=":writer"
+  is the line that makes the test meaningful rather than decorative.
+
+  Declared here and not in src/main/AndroidManifest.xml on purpose: a test-only
+  service must never reach the release APK.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name="art.yniyniyni.subspace.core.data.WriterService"
+            android:exported="false"
+            android:process=":writer" />
+    </application>
+
+</manifest>

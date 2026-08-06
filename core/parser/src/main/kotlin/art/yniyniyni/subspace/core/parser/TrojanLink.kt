@@ -15,7 +15,11 @@ internal fun parseTrojanLink(
     val uri =
         parseUri(raw)
             ?: return LinkResult.Bad(
-                parseFailure(index, ParseFailureReason.MalformedUri, "link is not a usable URI"),
+                parseFailure(
+                    index,
+                    ParseFailureReason.MalformedUri,
+                    FailureDetail.Malformed(DetailField.Uri),
+                ),
             )
 
     validatePort(uri.port)?.let {
@@ -23,7 +27,11 @@ internal fun parseTrojanLink(
     }
     if (uri.userInfo.isEmpty()) {
         return LinkResult.Bad(
-            parseFailure(index, ParseFailureReason.MissingCredential, "trojan password is missing"),
+            parseFailure(
+                index,
+                ParseFailureReason.MissingCredential,
+                FailureDetail.Missing(DetailField.Password),
+            ),
         )
     }
 

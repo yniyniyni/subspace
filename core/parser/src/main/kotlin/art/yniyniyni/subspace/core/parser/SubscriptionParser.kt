@@ -48,7 +48,7 @@ public object SubscriptionParser {
         // point the user at the wrong format (§10.4).
         return ParseOutcome(
             emptyList(),
-            listOf(parseFailure(0, ParseFailureReason.EmptyInput, "input contains no server entries")),
+            listOf(parseFailure(0, ParseFailureReason.EmptyInput, FailureDetail.None)),
         )
     }
 
@@ -67,7 +67,7 @@ public object SubscriptionParser {
         if (text.isEmpty()) {
             return ParseOutcome(
                 emptyList(),
-                listOf(parseFailure(0, ParseFailureReason.EmptyInput, "nothing to parse")),
+                listOf(parseFailure(0, ParseFailureReason.EmptyInput, FailureDetail.None)),
             )
         }
 
@@ -78,8 +78,15 @@ public object SubscriptionParser {
         // raw config would be routed to the Clash branch, fail on the missing
         // `proxies:` key, and be reported as malformed YAML — pointing the user
         // at entirely the wrong format.
+        //
+        // '[' alongside '{': device-fixes finding — the target panel
+        // (Remnawave) returns a top-level JSON *array* wrapping a whole Xray
+        // config when asked with a v2rayNG/Happ User-Agent. parseXrayJson
+        // itself decides what an array root means (see its own KDoc); this
+        // dispatch only has to route both shapes to it instead of falling
+        // through to Clash/base64 and reporting the wrong format entirely.
         return when {
-            text.startsWith("{") -> parseXrayJson(text)
+            text.startsWith("{") || text.startsWith("[") -> parseXrayJson(text)
             looksLikeClash(text) -> parseClashYaml(text)
             else -> {
                 val decoded = decodeBase64Tolerant(text)
@@ -96,7 +103,7 @@ public object SubscriptionParser {
                                 parseFailure(
                                     0,
                                     ParseFailureReason.MalformedBase64,
-                                    "input looks like a base64 subscription but did not decode",
+                                    FailureDetail.Malformed(DetailField.Base64Body),
                                 ),
                             ),
                         )

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlinx.kover")
 }
 
 kotlin {

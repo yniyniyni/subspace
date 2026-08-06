@@ -4,7 +4,8 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.shouldNotBe
+import kotlinx.serialization.json.Json
 import org.junit.Test
 
 private const val XJ_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
@@ -60,10 +61,133 @@ class XrayJsonTest {
     }
 
     @Test
-    fun `non-object json is a typed failure`() {
-        val outcome = parseXrayJson("[]")
+    fun `non-object non-array json is a typed failure`() {
+        val outcome = parseXrayJson("true")
         outcome.failures.size shouldBe 1
         outcome.failures[0].reason shouldBe ParseFailureReason.MalformedJson
+    }
+
+    /**
+     * Defect 1 (device fixes): the target panel returns a top-level JSON
+     * **array** wrapping a whole Xray config —
+     * `[{ "dns": …, "outbounds": … }]`. An empty array is the same "container
+     * present, holds nothing" shape `{}` and `{"outbounds":[]}` already are —
+     * [ParseOutcome.EMPTY], not a failure. [SubscriptionParser.parse] is what
+     * turns that into the reported `EmptyInput` (see its own KDoc).
+     */
+    @Test
+    fun `an empty array yields no profiles or failures`() {
+        parseXrayJson("[]") shouldBe ParseOutcome.EMPTY
+    }
+
+    /**
+     * Defect 1's actual observed shape: one element wrapping a whole config.
+     * Array semantics decision (see XrayJson.kt's `parseXrayJsonArray` KDoc):
+     * each array element is parsed exactly as a top-level object would be,
+     * so a single-element array behaves identically to the unwrapped object.
+     */
+    @Test
+    fun `a one-element array wrapping a config parses exactly like the bare object`() {
+        val outcome = parseXrayJson("[$realityConfig]")
+        outcome.failures shouldBe emptyList()
+        val out = outcome.profiles.single().outbound as VlessOutbound
+        out.address shouldBe "host.example"
+        out.uuid shouldBe XJ_UUID
+    }
+
+    /**
+     * Several configs, not just one wrapped — the deliberate part of the
+     * array-semantics decision. A panel that ever emits more than one config
+     * object must not silently lose every element after the first.
+     */
+    @Test
+    fun `a multi-element array parses every element, not just the first`() {
+        val second =
+            realityConfig
+                .replace("host.example", "second.example")
+                .replace(XJ_UUID, SECOND_UUID)
+        val outcome = parseXrayJson("[$realityConfig,$second]")
+
+        outcome.failures shouldBe emptyList()
+        outcome.profiles.map { (it.outbound as VlessOutbound).address } shouldBe
+            listOf("host.example", "second.example")
+    }
+
+    /**
+     * An array element that is not itself a JSON object is reported at its
+     * own array position — there is no outbound index yet at that point, so
+     * this necessarily uses a different index space than a bad outbound
+     * within a chosen object does. The good element on either side still
+     * parses (§7).
+     */
+    @Test
+    fun `a non-object array element is a failure at its array position, not lost`() {
+        val outcome = parseXrayJson("""[$realityConfig, 7, $realityConfig]""")
+
+        outcome.profiles.size shouldBe 2
+        outcome.failures.size shouldBe 1
+        outcome.failures.single().index shouldBe 1
+        outcome.failures.single().reason shouldBe ParseFailureReason.MalformedJson
+    }
+
+    /**
+     * Element provenance, part 1 (device-fixes finding, part 2): a bare top-level object is
+     * its own element, so the profile it yields carries the whole (already-trimmed here)
+     * document as [art.yniyniyni.subspace.core.model.Profile.rawJson] — same byte-for-byte
+     * behaviour §6 has always described for a single hand-pasted `config.json`.
+     */
+    @Test
+    fun `a bare top-level object's profile carries the whole document as rawJson`() {
+        val outcome = parseXrayJson(realityConfig)
+        outcome.profiles.single().rawJson shouldBe realityConfig
+    }
+
+    /**
+     * Element provenance, part 2: the real bug. Before this fix every profile out of an
+     * array hashed the *whole* array's bytes, so elements `[1]`..`[7]` of the 8-element
+     * document that triggered this fix were indistinguishable from one another at the
+     * identity layer and collapsed into one upserted row. Each element now carries only its
+     * own re-serialized bytes ([JsonElement.toString] — the parser has no access to the
+     * original per-element substring once `kotlinx.serialization` has parsed it), so two
+     * elements' profiles are provably different [rawJson] values, not just different outbounds.
+     */
+    @Test
+    fun `each array element carries only its own bytes as rawJson, not the whole document`() {
+        val second = realityConfig.replace("host.example", "second.example").replace(XJ_UUID, SECOND_UUID)
+        val outcome = parseXrayJson("[$realityConfig,$second]")
+
+        val expectedFirst = Json.parseToJsonElement(realityConfig).toString()
+        val expectedSecond = Json.parseToJsonElement(second).toString()
+        outcome.profiles.map { it.rawJson } shouldBe listOf(expectedFirst, expectedSecond)
+        expectedFirst shouldNotBe expectedSecond
+    }
+
+    /**
+     * Element provenance, part 3: the other half of the real document's shape — one element
+     * (`[0]`, 8 `vless` outbounds there) fans out into several profiles. All of them still
+     * share that one element's bytes; `ProfileRepository.import` is what falls back to
+     * outbound-based identity for this case (see its own KDoc), not the parser — this test
+     * only pins the parser's half: the shared bytes themselves.
+     */
+    @Test
+    fun `a document with several outbounds shares one element's bytes across every profile it yields`() {
+        val json =
+            """
+            {"outbounds":[
+              ${validOutbound("first.example")},
+              ${validOutbound("second.example", uuid = "\"$SECOND_UUID\"")},
+              ${validOutbound("third.example", uuid = "\"$THIRD_UUID\"")}
+            ]}
+            """.trimIndent()
+
+        val outcome = parseXrayJson(json)
+
+        outcome.profiles.map { it.outbound.address } shouldBe
+            listOf("first.example", "second.example", "third.example")
+        outcome.profiles
+            .map { it.rawJson }
+            .distinct()
+            .size shouldBe 1
     }
 
     @Test
@@ -108,8 +232,13 @@ class XrayJsonTest {
     }
 
     @Test
-    fun `unsupported or non-string security is a typed malformed failure`() {
-        listOf("\"bogus\"", "true", "123", "{}").forEach { security ->
+    fun `unsupported and non-string security have distinct typed details`() {
+        mapOf(
+            "\"bogus\"" to FailureDetail.Unsupported(DetailField.Security),
+            "true" to FailureDetail.Malformed(DetailField.Security),
+            "123" to FailureDetail.Malformed(DetailField.Security),
+            "{}" to FailureDetail.Malformed(DetailField.Security),
+        ).forEach { (security, expectedDetail) ->
             val json =
                 validOutbound("security.example", security = "none")
                     .replace("\"security\":\"none\"", "\"security\":$security")
@@ -117,7 +246,7 @@ class XrayJsonTest {
 
             failure.index shouldBe 0
             failure.reason shouldBe ParseFailureReason.MalformedJson
-            failure.detail shouldNotContain "bogus"
+            failure.detail shouldBe expectedDetail
         }
     }
 
@@ -204,6 +333,66 @@ class XrayJsonTest {
     }
 
     /**
+     * Defect 2 (device-fixes finding): the real subscription's first array
+     * element carried 8 `vless` outbounds under one `remarks`, so all 8 rows
+     * displayed identically and were indistinguishable in the Servers list —
+     * genuinely different servers (different address/port/transport) with no
+     * way to tell them apart. `remarks` stays the primary name (that choice
+     * was deliberate, see `root remarks names the profile instead of the
+     * outbound tag` above); a 1-based ordinal is appended only when this
+     * element actually produces more than one profile under the same name.
+     * The outbound's own `tag` was considered and rejected as the
+     * disambiguator instead of an ordinal: the same reasoning that made `tag`
+     * a bad *primary* name (exporters set it to `"proxy"` uniformly) makes it
+     * collide exactly where `remarks` already collided, so it disambiguates
+     * nothing in the real-world case this fixes.
+     */
+    @Test
+    fun `several outbounds sharing one remarks value get distinct ordinal-suffixed names`() {
+        val json =
+            """
+            {"remarks":"🚀 Auto | Best Server",
+             "outbounds":[
+               ${validOutbound("first.example")},
+               ${validOutbound("second.example", uuid = "\"$SECOND_UUID\"")},
+               ${validOutbound("third.example", uuid = "\"$THIRD_UUID\"")}
+             ]}
+            """.trimIndent()
+
+        val outcome = parseXrayJson(json)
+
+        outcome.profiles.map { it.name } shouldBe
+            listOf(
+                "🚀 Auto | Best Server (1)",
+                "🚀 Auto | Best Server (2)",
+                "🚀 Auto | Best Server (3)",
+            )
+        outcome.profiles.map { it.outbound.address } shouldBe
+            listOf("first.example", "second.example", "third.example")
+    }
+
+    /**
+     * The other half of the fix: an element that yields exactly one profile
+     * must keep the name it produces today, byte for byte — no ordinal, even
+     * though the disambiguator machinery runs over every element.
+     */
+    @Test
+    fun `a single outbound under remarks keeps its name unchanged, with no ordinal`() {
+        val json = realityConfig.replace("\"outbounds\"", "\"remarks\":\"Solo\",\"outbounds\"")
+        parseXrayJson(json).profiles.single().name shouldBe "Solo"
+    }
+
+    /**
+     * An element with no `remarks` at all — not blank, not non-string, simply
+     * absent — must still fall back to the tag exactly as before; the
+     * disambiguator only ever appends, it never changes which name wins.
+     */
+    @Test
+    fun `an element with no remarks key keeps the existing tag fallback unchanged`() {
+        parseXrayJson(realityConfig).profiles.single().name shouldBe "proxy"
+    }
+
+    /**
      * The shape a desktop client actually exports: `remarks` carrying non-ASCII
      * text, `\/` escapes throughout, `mux`/`dns`/`routing`/`inbounds` around the
      * part we read, and the proxy outbound tagged `proxy`.
@@ -252,12 +441,12 @@ class XrayJsonTest {
     }
 
     @Test
-    fun `unsupported protocol is a typed redacted failure`() {
+    fun `unsupported protocol is a typed closed-vocabulary failure`() {
         val outcome = parseXrayJson("{\"outbounds\":[{\"protocol\":\"wireguard\"}]}")
         outcome.profiles shouldBe emptyList()
         outcome.failures.size shouldBe 1
         outcome.failures[0].reason shouldBe ParseFailureReason.UnknownScheme
-        outcome.failures[0].detail shouldNotContain "wireguard"
+        outcome.failures[0].detail shouldBe FailureDetail.Unsupported(DetailField.Scheme)
     }
 
     @Test
@@ -303,10 +492,7 @@ class XrayJsonTest {
             )
 
         corpus.forEach { input ->
-            val outcome = parseXrayJson(input)
-            outcome.failures.forEach { failure ->
-                if (input.isNotBlank()) failure.detail shouldNotContain input
-            }
+            parseXrayJson(input)
         }
     }
 

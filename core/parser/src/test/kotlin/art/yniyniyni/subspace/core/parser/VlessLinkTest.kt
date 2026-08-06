@@ -2,9 +2,9 @@
 package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
 private const val UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
@@ -45,6 +45,64 @@ class VlessLinkTest {
     fun `defaults network to tcp`() {
         val result = parseVlessLink("vless://$UUID@host.example:443", 0) as LinkResult.Ok
         (result.profile.outbound as VlessOutbound).stream.network shouldBe "tcp"
+    }
+
+    // Fix round 2, Important finding 5: this parser read type= into stream.network but built
+    // StreamSettings with only (network, security) — the transport parameter defaulted to
+    // TransportOptions.None, so a ws link's path and Host silently vanished. ClashTransport.kt
+    // already gets this right for the YAML path; this pins the share-link path to match, since
+    // the link list is this app's own default import path.
+    @Test
+    fun `a ws link carries its path and host into transport options`() {
+        val link = "vless://$UUID@host.example:443?type=ws&path=%2Fray&host=cdn.example"
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.network shouldBe "ws"
+        out.stream.transport shouldBe
+            TransportOptions.WebSocket(path = "/ray", headers = mapOf("Host" to "cdn.example"))
+    }
+
+    @Test
+    fun `a ws link with no host query param carries no header`() {
+        val link = "vless://$UUID@host.example:443?type=ws&path=%2Fray"
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.transport shouldBe TransportOptions.WebSocket(path = "/ray", headers = emptyMap())
+    }
+
+    @Test
+    fun `a ws link with no path query param defaults to the root`() {
+        val link = "vless://$UUID@host.example:443?type=ws"
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.transport shouldBe TransportOptions.WebSocket(path = "/", headers = emptyMap())
+    }
+
+    @Test
+    fun `a grpc link carries its service name into transport options`() {
+        val link = "vless://$UUID@host.example:443?type=grpc&serviceName=raygun"
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.transport shouldBe TransportOptions.Grpc(serviceName = "raygun")
+    }
+
+    @Test
+    fun `a grpc link with no service name query param falls back to none`() {
+        val link = "vless://$UUID@host.example:443?type=grpc"
+        val result = parseVlessLink(link, 0) as LinkResult.Ok
+        val out = result.profile.outbound as VlessOutbound
+
+        out.stream.transport shouldBe TransportOptions.None
+    }
+
+    @Test
+    fun `a tcp link carries no transport options`() {
+        val result = parseVlessLink("vless://$UUID@host.example:443?type=tcp", 0) as LinkResult.Ok
+        (result.profile.outbound as VlessOutbound).stream.transport shouldBe TransportOptions.None
     }
 
     @Test
@@ -118,13 +176,12 @@ class VlessLinkTest {
     }
 
     @Test
-    fun `failure detail never echoes link or credential`() {
+    fun `invalid reality key reports only its field and length`() {
         val link = "vless://$UUID@host.example:443?security=reality&pbk=AAEC"
         val result = parseVlessLink(link, 0) as LinkResult.Bad
 
-        result.failure.detail shouldNotContain link
-        result.failure.detail shouldNotContain UUID
-        result.failure.detail shouldNotContain "AAEC"
+        result.failure.detail shouldBe
+            FailureDetail.Length(DetailField.PublicKey, expected = 43, actual = 4)
     }
 
     @Test

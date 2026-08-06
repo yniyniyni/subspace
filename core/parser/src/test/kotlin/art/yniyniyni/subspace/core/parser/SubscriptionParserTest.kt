@@ -48,6 +48,24 @@ class SubscriptionParserTest {
     }
 
     /**
+     * Defect 1 (device fixes report): the target panel (Remnawave) returns a
+     * top-level JSON **array** wrapping a whole Xray config when asked with a
+     * v2rayNG/Happ User-Agent — `[{ "dns": …, "outbounds": … }]`. Before this
+     * fix `text.startsWith("{")` was `false` for `[`, so this fell through to
+     * the Clash check, then base64, and failed with "Imported 0 of 1" instead
+     * of reaching [parseXrayJson] at all.
+     */
+    @Test
+    fun `detects a top-level json array wrapping a raw xray config`() {
+        val json =
+            """
+            [{"outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[
+            {"address":"a.example","port":443,"users":[{"id":"$SUB_UUID"}]}]}}]}]
+            """.trimIndent()
+        SubscriptionParser.parse(json).profiles.size shouldBe 1
+    }
+
+    /**
      * Load-bearing, not stylistic. JSON is a subset of YAML, so a raw Xray
      * config parses cleanly as YAML. If the YAML check ran first, every raw
      * config would be routed to the Clash branch, fail on the missing

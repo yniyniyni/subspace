@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
+import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.model.Profile
@@ -20,6 +21,7 @@ import art.yniyniyni.subspace.core.xray.TunnelSettings
 import art.yniyniyni.subspace.core.xray.XrayConfigGenerator
 import art.yniyniyni.subspace.core.xray.XrayController
 import art.yniyniyni.subspace.core.xray.XrayException
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +29,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.File
+import javax.inject.Inject
 
 private const val TAG = "TunnelService"
 
@@ -67,8 +70,22 @@ private const val DNS_SERVER = "1.1.1.1"
  *  - Slow teardown work runs **outside** [lock], so a wedged `quit()` cannot
  *    block state publication forever.
  */
+@AndroidEntryPoint
 @Suppress("TooManyFunctions")
 class TunnelService : VpnService() {
+    // Field injection, not constructor injection: VpnService (like every Android
+    // component) is instantiated by the platform, not by Hilt. Available once
+    // super.onCreate() has run — Hilt_TunnelService.onCreate() injects before
+    // delegating up to the real Service.onCreate().
+    @Inject
+    lateinit var profileRepository: ProfileRepository
+
+    // Built in onCreate, once profileRepository is injected. Wraps the
+    // repository's two spec-D4 methods as plain suspend lambdas rather than
+    // handing ConnectionRecorder the repository itself — see ConnectionRecorder's
+    // KDoc for why that indirection is what keeps it unit-testable.
+    private lateinit var connectionRecorder: ConnectionRecorder
+
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
             // §10.4: anything escaping the start sequence must still produce a
@@ -97,6 +114,16 @@ class TunnelService : VpnService() {
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
         File(filesDir, CONFIG_NAME).delete()
+        connectionRecorder =
+            ConnectionRecorder(
+                recordConnected = profileRepository::recordConnected,
+                recordError = profileRepository::recordError,
+                onFailure = { e ->
+                    // §5.6: never the exception message — Room/SQLite errors can
+                    // quote back the value that failed to write.
+                    Log.e(TAG, "failed to record connection outcome: ${e.javaClass.simpleName}")
+                },
+            )
     }
 
     /**
@@ -155,7 +182,10 @@ class TunnelService : VpnService() {
      * §10.4: no broad catch — every step publishes its own specific failure and
      * unwinds what it already built.
      */
-    private fun startTunnel(profile: Profile) {
+    private fun startTunnel(
+        profile: Profile,
+        rowId: Long,
+    ) {
         val gen =
             synchronized(lock) {
                 // §5.5 makes this service the source of truth, so it cannot rely
@@ -184,8 +214,8 @@ class TunnelService : VpnService() {
 
             // Split at the seam that matters for unwinding: once the core is up,
             // every later failure must stop it again.
-            val socksPort = startCore(gen, xray, profile) ?: return@launch
-            attachTun(gen, xray, socksPort)
+            val socksPort = startCore(gen, xray, profile, rowId) ?: return@launch
+            attachTun(gen, xray, socksPort, rowId)
         }
     }
 
@@ -196,13 +226,14 @@ class TunnelService : VpnService() {
         gen: Int,
         xray: XrayController,
         profile: Profile,
+        rowId: Long,
     ): Int? {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.AllocatingPort))) return null
         val socksPort =
             try {
                 xray.allocatePort()
             } catch (e: XrayException) {
-                return failStart(gen, FailureReason.PortAllocationFailed, e)
+                return failStart(gen, FailureReason.PortAllocationFailed, e, rowId)
             }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
@@ -218,6 +249,7 @@ class TunnelService : VpnService() {
                         gen,
                         FailureReason.ProtocolNotSupported,
                         IllegalArgumentException("${config.protocol} is not supported yet"),
+                        rowId,
                     )
 
                 is ConfigResult.Ok -> config.json
@@ -226,7 +258,7 @@ class TunnelService : VpnService() {
             try {
                 writeConfig(json)
             } catch (e: java.io.IOException) {
-                return failStart(gen, FailureReason.ConfigGenerationFailed, e)
+                return failStart(gen, FailureReason.ConfigGenerationFailed, e, rowId)
             }
         synchronized(lock) {
             if (gen != generation) return null
@@ -239,14 +271,14 @@ class TunnelService : VpnService() {
         try {
             xray.validate(file)
         } catch (e: XrayException) {
-            return failStart(gen, FailureReason.ConfigRejected, e)
+            return failStart(gen, FailureReason.ConfigRejected, e, rowId)
         }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingCore))) return null
         try {
             xray.start(file, protector())
         } catch (e: XrayException) {
-            return failStart(gen, FailureReason.CoreStartFailed, e)
+            return failStart(gen, FailureReason.CoreStartFailed, e, rowId)
         }
 
         return socksPort
@@ -265,12 +297,18 @@ class TunnelService : VpnService() {
         gen: Int,
         xray: XrayController,
         socksPort: Int,
+        rowId: Long,
     ) {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
         val fd = establishTun()
         if (fd == null) {
             xray.stop()
-            failStart(gen, FailureReason.TunEstablishFailed, IllegalStateException("establish() returned null"))
+            failStart(
+                gen,
+                FailureReason.TunEstablishFailed,
+                IllegalStateException("establish() returned null"),
+                rowId,
+            )
             return
         }
         synchronized(lock) {
@@ -295,11 +333,19 @@ class TunnelService : VpnService() {
                 }
             }
             fd.close()
-            failStart(gen, FailureReason.TunnelStartFailed, IllegalStateException("tun2socks refused to start"))
+            failStart(
+                gen,
+                FailureReason.TunnelStartFailed,
+                IllegalStateException("tun2socks refused to start"),
+                rowId,
+            )
             return
         }
 
-        if (!publishIfCurrent(gen, ConnectionState.Connected(System.currentTimeMillis(), socksPort))) return
+        val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort)
+        if (!publishIfCurrent(gen, connected)) return
+        // The one write :bg performs on success (spec D4) — see ConnectionRecorder.
+        connectionRecorder.record(rowId, connected)
         goForeground(R.string.notification_connected)
     }
 
@@ -308,21 +354,31 @@ class TunnelService : VpnService() {
      *
      * §5.6: the config file holds the UUID and REALITY key. A failed start used
      * to leave it on disk indefinitely, because only teardown deleted it.
+     *
+     * `suspend`, not plain: the one write `:bg` performs on failure (spec D4) runs
+     * here, after the lock is released — `synchronized` cannot contain a suspend
+     * call, which is also why the record happens outside the block rather than
+     * inside it.
      */
-    private fun failStart(
+    private suspend fun failStart(
         gen: Int,
         reason: FailureReason,
         cause: Exception,
+        rowId: Long,
     ): Nothing? {
-        synchronized(lock) {
-            if (gen != generation) return null
-            configFile?.delete()
-            configFile = null
-            controller = null
-            // failure() redacts at construction — libXray's errors quote the
-            // config straight back (§5.6).
-            publishLocked(failure(reason, cause.message.orEmpty()))
-        }
+        val failed =
+            synchronized(lock) {
+                if (gen != generation) return null
+                configFile?.delete()
+                configFile = null
+                controller = null
+                // failure() redacts at construction — libXray's errors quote the
+                // config straight back (§5.6).
+                val state = failure(reason, cause.message.orEmpty())
+                publishLocked(state)
+                state
+            }
+        connectionRecorder.record(rowId, failed)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         return null
@@ -495,7 +551,7 @@ class TunnelService : VpnService() {
                     stopSelf()
                     return
                 }
-                startTunnel(decoded)
+                startTunnel(decoded, profile.rowId)
             }
 
             override fun disconnect() {
@@ -525,5 +581,51 @@ class TunnelService : VpnService() {
 
     private companion object {
         const val CONFIG_NAME = "xray-config.json"
+    }
+}
+
+/**
+ * Writes the one persistence side effect `:bg` performs (spec D4): the outcome
+ * of a connect attempt, against the profile row [ProfileParcel.rowId] names.
+ *
+ * Takes [recordConnected] and [recordError] as suspend function references —
+ * `ProfileRepository::recordConnected`/`recordError` in production — rather
+ * than an [art.yniyniyni.subspace.core.data.ProfileRepository] directly.
+ * `ProfileRepository`'s constructor is `internal` to `:core:data`, so `:service`
+ * cannot build a real instance to test against, and this project carries no
+ * mocking library that would let a test fake one either (§10.7 does not
+ * justify adding one for two methods). This indirection is what keeps
+ * `ConnectionRecordingTest` a plain JVM unit test.
+ *
+ * §5.3: only ever called from `:bg`'s IO-dispatched start sequence.
+ * §10.4: a persistence failure must not take the tunnel down, but it must not
+ * vanish silently either — [onFailure] receives it, and [TunnelService] logs
+ * only the exception's class name (§5.6: a Room/SQLite failure message can
+ * echo back the value that failed to write).
+ */
+internal class ConnectionRecorder(
+    private val recordConnected: suspend (rowId: Long, atEpochMillis: Long) -> Unit,
+    private val recordError: suspend (rowId: Long, redactedDetail: String) -> Unit,
+    private val onFailure: (Throwable) -> Unit,
+) {
+    /**
+     * Records [state] against [rowId] when it is a terminal outcome
+     * ([ConnectionState.Connected] or [ConnectionState.Failed]); a no-op for
+     * every other [ConnectionState], which is not something this class persists.
+     */
+    @Suppress("TooGenericExceptionCaught") // §10.4: a write failure here must never propagate into the start sequence.
+    suspend fun record(
+        rowId: Long,
+        state: ConnectionState,
+    ) {
+        try {
+            when (state) {
+                is ConnectionState.Connected -> recordConnected(rowId, System.currentTimeMillis())
+                is ConnectionState.Failed -> recordError(rowId, state.detail)
+                else -> Unit
+            }
+        } catch (e: Exception) {
+            onFailure(e)
+        }
     }
 }

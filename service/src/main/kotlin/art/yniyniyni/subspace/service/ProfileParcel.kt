@@ -36,6 +36,12 @@ import art.yniyniyni.subspace.core.model.VmessOutbound
  * logged, which is why this is a plain class with a hand-written [toString]: a
  * `data class` would generate one that prints every secret, and `toString`
  * reaches crash output without anyone choosing to log it.
+ *
+ * [rowId] is the Room primary key of the profile being connected (spec D4) —
+ * not [id], which is the domain [Profile.id] the parser assigned and carries no
+ * relationship to a table row. `:bg` needs [rowId] to write [ConnectionState]
+ * outcomes back to the right row via `ProfileRepository.recordConnected`/
+ * `recordError`; it never reads [id] for that purpose.
  */
 @Suppress("LongParameterList")
 // A parcel is a flat wire format; the parameter count is the field count, and
@@ -43,6 +49,7 @@ import art.yniyniyni.subspace.core.model.VmessOutbound
 // that M3 deletes. The constructor is never called by hand — use [from].
 public class ProfileParcel(
     val protocol: Int,
+    val rowId: Long,
     val id: String,
     val name: String,
     val address: String,
@@ -62,6 +69,7 @@ public class ProfileParcel(
 ) : Parcelable {
     constructor(parcel: Parcel) : this(
         protocol = parcel.readInt(),
+        rowId = parcel.readLong(),
         id = parcel.readString().orEmpty(),
         name = parcel.readString().orEmpty(),
         address = parcel.readString().orEmpty(),
@@ -85,6 +93,7 @@ public class ProfileParcel(
         flags: Int,
     ) {
         dest.writeInt(protocol)
+        dest.writeLong(rowId)
         dest.writeString(id)
         dest.writeString(name)
         dest.writeString(address)
@@ -216,6 +225,18 @@ public class ProfileParcel(
         const val SECURITY_REALITY = 1
         const val SECURITY_TLS = 2
 
+        /**
+         * The sentinel [rowId] for a caller that has not resolved a Room row.
+         *
+         * Room's `@PrimaryKey(autoGenerate = true)` never assigns `0` to a real row
+         * (SQLite `AUTOINCREMENT`-style ids start at 1), so `:bg` writing to this id
+         * is a guaranteed no-op `UPDATE ... WHERE id = 0` rather than a collision
+         * with a real profile. [TunnelClient.connect] still uses this default today
+         * — Part 2's Home rewrite is what starts resolving a real row and passing
+         * it through.
+         */
+        const val UNASSIGNED_ROW_ID = 0L
+
         @JvmField
         val CREATOR =
             object : Parcelable.Creator<ProfileParcel> {
@@ -224,7 +245,10 @@ public class ProfileParcel(
                 override fun newArray(size: Int) = arrayOfNulls<ProfileParcel>(size)
             }
 
-        fun from(profile: Profile): ProfileParcel {
+        fun from(
+            profile: Profile,
+            rowId: Long = UNASSIGNED_ROW_ID,
+        ): ProfileParcel {
             val out = profile.outbound
             val fields = fieldsFor(out)
             val security = fields.stream?.security ?: Security.None
@@ -238,6 +262,7 @@ public class ProfileParcel(
                 }
             return ProfileParcel(
                 protocol = fields.protocol,
+                rowId = rowId,
                 id = profile.id,
                 name = profile.name,
                 address = out.address,

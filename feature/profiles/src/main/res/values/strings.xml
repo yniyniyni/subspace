@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- §12: strings live here from the first commit; no hardcoded UI text.
+     §5.6: no string here may interpolate a server address, uuid, or key —
+     only names (not secrets) and counts appear below. -->
+<resources>
+    <string name="servers_title">Servers</string>
+
+    <string name="servers_search_placeholder">Search servers</string>
+    <string name="servers_search_clear_description">Clear search</string>
+
+    <!-- The "no protocol filter" chip. ServersState.ALL_PROTOCOLS_SENTINEL is
+         a domain sentinel compared in Kotlin, never rendered directly — this
+         is the text a user actually sees for it (fix round 1). -->
+    <string name="servers_protocol_filter_all">All</string>
+
+    <!-- %1$s is the currently selected sort order's own label below. -->
+    <string name="servers_sort_button">Sort: %1$s</string>
+    <string name="servers_sort_alphabetical">A–Z</string>
+    <string name="servers_sort_as_listed">As listed</string>
+    <string name="servers_sort_last_used">Recently used</string>
+
+    <string name="servers_empty_title">No servers yet</string>
+    <string name="servers_empty_body">Import a subscription or paste a config to add your first server.</string>
+    <string name="servers_empty_action">Add server</string>
+
+    <!-- RAW_JSON runs through the typed projection, not verbatim (§6) — "raw"
+         alone would promise passthrough execution this build does not have. -->
+    <string name="servers_compatibility_mode">Compatibility mode</string>
+    <!-- :core:xray only emits VLESS over plain tcp; every other protocol, and
+         VLESS over ws/grpc/xhttp (no transport emission yet), is unconnectable
+         in this build. Deliberately doesn't say "protocol" — it must stay
+         honest for both reasons a row can land here. -->
+    <string name="servers_not_connectable">Not supported by this build yet</string>
+
+    <!-- %1$s = server name, %2$s = protocol (e.g. "VLESS"), %3$s = transport
+         summary (e.g. "ws · tls · 443") — never an address, uuid, or key. -->
+    <string name="servers_row_description_select">Select %1$s as active server, %2$s, %3$s</string>
+    <string name="servers_row_description_active">%1$s, %2$s, %3$s, currently active</string>
+    <!-- Task 21: the row's edit button, separate from the row tap itself
+         (which sets the profile active) — opens the profile editor. -->
+    <string name="servers_row_edit_description">Edit %1$s</string>
+
+    <string name="servers_rename_group_title">Rename group</string>
+    <string name="servers_rename_group_confirm">Rename</string>
+    <string name="servers_dialog_cancel">Cancel</string>
+    <!-- %1$s = group name. -->
+    <string name="servers_delete_group_title">Delete “%1$s”?</string>
+    <string name="servers_delete_group_confirm">Delete</string>
+    <!-- %1$d = the group's real profile count. Warns before a cascading
+         delete: ProfileGroupEntity's FK removes every profile in the group
+         along with it. -->
+    <plurals name="servers_delete_group_message">
+        <item quantity="one">This removes %1$d server with it. This cannot be undone.</item>
+        <item quantity="other">This removes %1$d servers with it. This cannot be undone.</item>
+    </plurals>
+
+    <!-- Task 19: AddServerSheet. §5.6 applies here too — nothing below may
+         interpolate the pasted text or file content itself, only bounded
+         counts and field names. -->
+    <string name="import_sheet_title">Add server</string>
+    <string name="import_paste_label">Share link, subscription, Clash YAML, or Xray JSON</string>
+    <string name="import_button">Import</string>
+    <string name="import_from_file_button">Import from file</string>
+    <!-- Task 20 fix round 1: opens QrScanScreen. A scanned payload feeds the
+         same import(raw) path this whole sheet already uses. -->
+    <string name="import_scan_qr_button">Scan QR code</string>
+    <!-- Fix round 1, finding 2: shown when the picked file could not be read
+         at all (a stale/revoked URI, or an I/O error mid-read) — never the
+         underlying exception's own message, which can carry a path or
+         provider detail (§5.6). -->
+    <string name="import_file_read_failed">Could not read that file</string>
+
+    <!-- %1$d = profiles actually stored, %2$d = total entries attempted
+         (imported + failed). ARCHITECTURE.md §7/§10.4: 197 of 200 is a normal,
+         successful outcome, not an error — this always states both halves. -->
+    <string name="import_result_summary">Imported %1$d of %2$d</string>
+    <string name="import_result_failures_hide">Hide failures</string>
+    <!-- %1$d = the failure count, shown on the collapsed toggle. -->
+    <plurals name="import_result_failures_show">
+        <item quantity="one">Show %1$d failure</item>
+        <item quantity="other">Show %1$d failures</item>
+    </plurals>
+
+    <!-- Each failure line: %1$d = ParseFailure.index + 1 (a human-facing
+         1-based entry number, never the entry's own text — §5.6). -->
+    <string name="import_failure_generic">Entry %1$d could not be read</string>
+    <!-- %2$s = field name below, %3$d = expected length, %4$d = actual length. -->
+    <string name="import_failure_length">Entry %1$d: %2$s must have length %3$d (actual: %4$d)</string>
+    <!-- %2$s = field name, %3$d = min, %4$d = max, %5$d = actual. -->
+    <string name="import_failure_range">Entry %1$d: %2$s must be from %3$d to %4$d (actual: %5$d)</string>
+    <!-- %2$s = field name. -->
+    <string name="import_failure_missing">Entry %1$d: %2$s is missing</string>
+    <string name="import_failure_unsupported">Entry %1$d: %2$s is not supported</string>
+    <string name="import_failure_malformed">Entry %1$d: %2$s is malformed</string>
+
+    <string name="import_detail_field_scheme">Scheme</string>
+    <string name="import_detail_field_uri">URI</string>
+    <string name="import_detail_field_address">Address</string>
+    <string name="import_detail_field_port">Port</string>
+    <string name="import_detail_field_uuid">UUID</string>
+    <string name="import_detail_field_password">Password</string>
+    <string name="import_detail_field_method">Method</string>
+    <string name="import_detail_field_public_key">Public key</string>
+    <string name="import_detail_field_short_id">Short ID</string>
+    <string name="import_detail_field_fingerprint">Fingerprint</string>
+    <string name="import_detail_field_network">Network</string>
+    <string name="import_detail_field_security">Security</string>
+    <string name="import_detail_field_base64_body">Base64 body</string>
+    <string name="import_detail_field_json_body">JSON body</string>
+    <string name="import_detail_field_yaml_body">YAML body</string>
+    <string name="import_detail_field_credential">Credential</string>
+    <string name="import_detail_field_alter_id">Alter ID</string>
+
+    <!-- Task 20: QrScanScreen. §5.6 applies here too — nothing below may
+         interpolate a decoded payload; only the fixed camera/permission
+         vocabulary appears. -->
+    <string name="qr_scan_cancel_description">Cancel scanning</string>
+    <string name="qr_scan_preview_description">Camera preview. Point the camera at a QR code to scan it.</string>
+    <!-- Shown after the user denies the camera permission once — §10.4:
+         names what is actually blocked rather than a generic failure. -->
+    <string name="qr_scan_permission_denied_message">Camera access is needed to scan a QR code.</string>
+    <string name="qr_scan_grant_permission_button">Grant camera access</string>
+    <!-- Shown when the system will no longer show the permission prompt
+         (denied with "don\'t ask again", or denied twice on some OEM
+         builds) — the only way back in is the system Settings screen. -->
+    <string name="qr_scan_permission_permanently_denied_message">
+        Camera access was denied. To scan a QR code, allow Camera for Subspace in system settings.
+    </string>
+    <string name="qr_scan_open_settings_button">Open settings</string>
+
+    <!-- Task 21: the profile editor. §5.6 applies here too — every string below
+         is a field LABEL or fixed vocabulary; the field VALUES (address, uuid,
+         password, keys) live only in EditorState and are never interpolated
+         into a resource string. -->
+    <string name="editor_back_description">Back</string>
+    <string name="editor_title">Edit server</string>
+    <string name="editor_loading_description">Loading server</string>
+    <string name="editor_not_found_title">Server not found</string>
+    <string name="editor_not_found_body">This server no longer exists or was never saved.</string>
+    <string name="editor_not_found_back_button">Go back</string>
+
+    <string name="editor_name_label">Name</string>
+    <string name="editor_group_label">Group</string>
+    <string name="editor_address_label">Address</string>
+    <string name="editor_port_label">Port</string>
+    <string name="editor_uuid_label">UUID</string>
+    <string name="editor_password_label">Password</string>
+    <string name="editor_username_label">Username (optional)</string>
+    <string name="editor_socks_password_label">Password (optional)</string>
+    <string name="editor_flow_label">Flow (optional)</string>
+    <string name="editor_alter_id_label">Alter ID</string>
+    <string name="editor_vmess_security_label">Encryption</string>
+    <string name="editor_method_label">Cipher</string>
+    <string name="editor_network_label">Network</string>
+    <string name="editor_security_label">Security</string>
+    <string name="editor_security_none">None</string>
+    <string name="editor_tls_server_name_label">Server name (SNI)</string>
+    <string name="editor_tls_fingerprint_label">Fingerprint</string>
+    <string name="editor_tls_allow_insecure_label">Allow insecure</string>
+    <string name="editor_reality_server_name_label">Server name (SNI)</string>
+    <string name="editor_reality_public_key_label">Public key</string>
+    <string name="editor_reality_short_id_label">Short ID</string>
+    <string name="editor_reality_fingerprint_label">Fingerprint</string>
+    <string name="editor_reality_spider_x_label">Spider X</string>
+    <string name="editor_ws_path_label">Path</string>
+    <string name="editor_grpc_service_name_label">Service name</string>
+
+    <string name="editor_save_button">Save</string>
+
+    <!-- ARCHITECTURE.md §6: passthrough execution (running a RAW_JSON profile's
+         own bytes instead of the typed projection) is not implemented. This
+         notice is the one place the editor says so out loud, so a user does
+         not read "read-only" as an unfinished feature rather than a deliberate
+         one — see EditorViewModel.kt's own KDoc for the full reasoning. -->
+    <string name="editor_raw_json_notice">
+        This server was added from a pasted config file. Subspace runs a parsed copy of it, not
+        the file itself, so editing the text here would show you something the app does not
+        actually use yet. Only the name can be changed — everything else is shown for reference.
+    </string>
+    <string name="editor_raw_json_label">Pasted config (read-only)</string>
+
+    <!-- Same closed-vocabulary shape as import_failure_* above, minus the
+         "Entry N" prefix — these are single-field validation errors on a form,
+         not a list of parsed entries. %1$s is the field name (below). -->
+    <!-- %1$s = a field label (e.g. "Network"), %2$s = its currently selected value. Backs both
+         EditorDropdownField's own button text and GroupDropdown's — §12: was a bare Kotlin
+         string interpolation in both places (fix round 2, Minor finding 6). -->
+    <string name="editor_dropdown_value">%1$s: %2$s</string>
+    <string name="editor_error_length">%1$s must have length %2$d (actual: %3$d)</string>
+    <string name="editor_error_range">%1$s must be from %2$d to %3$d (actual: %4$d)</string>
+    <string name="editor_error_missing">%1$s is missing</string>
+    <string name="editor_error_unsupported">%1$s is not supported</string>
+    <string name="editor_error_malformed">%1$s is malformed</string>
+
+    <!-- Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (§4.2)
+         rejects a save whose edited outbound now matches a sibling profile in the same
+         group. §5.6: this string never names the address/UUID/whatever actually collided —
+         only that it did, and what the user can do about it. -->
+    <string name="editor_duplicate_identity">
+        A profile with these settings already exists in this group. Change a setting — the
+        address, port, or credential — or pick a different group, then save again.
+    </string>
+</resources>

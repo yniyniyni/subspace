@@ -33,26 +33,32 @@ private fun parseShadowsocksLinkSafely(
     val separator = "://"
     val schemeEnd = text.indexOf(separator)
     if (schemeEnd <= 0 || !text.substring(0, schemeEnd).equals("ss", ignoreCase = true)) {
-        return malformed(index, "ss link has no usable body")
+        return malformed(index)
     }
 
     val rest = text.substring(schemeEnd + separator.length)
     val fragmentIndex = rest.indexOf('#')
     val body = if (fragmentIndex >= 0) rest.substring(0, fragmentIndex) else rest
     val name = if (fragmentIndex >= 0) percentDecode(rest.substring(fragmentIndex + 1)) else ""
-    if (body.isEmpty()) return malformed(index, "ss link has no body")
+    if (body.isEmpty()) return malformed(index)
 
     // Decide the format before decoding: an outside-blob '@' is SIP002.
     val parts = if (body.contains('@')) parseSip002(body) else parseLegacy(body)
-    if (parts == null) return malformed(index, "ss body is not decodable")
+    if (parts == null) return malformed(index)
 
-    validatePort(parts.port)?.let { return LinkResult.Bad(parseFailure(index, ParseFailureReason.InvalidPort, it)) }
+    validatePort(parts.port)?.let {
+        return LinkResult.Bad(parseFailure(index, ParseFailureReason.InvalidPort, it))
+    }
     validateShadowsocksMethod(parts.method)?.let {
         return LinkResult.Bad(parseFailure(index, ParseFailureReason.UnsupportedMethod, it))
     }
     if (parts.password.isEmpty()) {
         return LinkResult.Bad(
-            parseFailure(index, ParseFailureReason.MissingCredential, "ss password is missing"),
+            parseFailure(
+                index,
+                ParseFailureReason.MissingCredential,
+                FailureDetail.Missing(DetailField.Password),
+            ),
         )
     }
 
@@ -227,7 +233,11 @@ internal fun shadowsocksIdentityMaterial(
     password: String,
 ): String = "${method.length}:$method|${password.length}:$password"
 
-private fun malformed(
-    index: Int,
-    detail: String,
-): LinkResult = LinkResult.Bad(parseFailure(index, ParseFailureReason.MalformedBase64, detail))
+private fun malformed(index: Int): LinkResult =
+    LinkResult.Bad(
+        parseFailure(
+            index,
+            ParseFailureReason.MalformedBase64,
+            FailureDetail.Malformed(DetailField.Base64Body),
+        ),
+    )

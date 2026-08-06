@@ -9,11 +9,20 @@ private val UUID_SHAPE =
 /** REALITY public keys are X25519: 32 bytes, base64url, unpadded — 43 chars. */
 private const val REALITY_KEY_LENGTH = 43
 private const val REALITY_KEY_BYTES = 32
+private const val MIN_PORT = 1
 private const val MAX_PORT = 65_535
-private const val INVALID_UUID_MESSAGE = "id is not a well-formed UUID"
 private val BASE64URL_SHAPE = Regex("""^[A-Za-z0-9_-]+$""")
 
-internal val SHADOWSOCKS_METHODS: Set<String> =
+/**
+ * Every Shadowsocks cipher this parser accepts.
+ *
+ * Widened from `internal` to `public` for Task 21: the profile editor
+ * (`:feature:profiles`) validates a hand-edited Shadowsocks method against
+ * this exact set, rather than maintaining a second list that could silently
+ * drift from what [validateShadowsocksMethod] actually accepts — the editor
+ * and the importer must not be able to disagree about what is valid.
+ */
+public val SHADOWSOCKS_METHODS: Set<String> =
     setOf(
         "aes-128-gcm",
         "aes-192-gcm",
@@ -27,24 +36,43 @@ internal val SHADOWSOCKS_METHODS: Set<String> =
         "plain",
     )
 
-internal fun validatePort(port: Int): String? = if (port in 1..MAX_PORT) null else invalidPortMessage(port)
+/**
+ * Whether [port] is a valid TCP/UDP port number.
+ *
+ * Public since Task 21 — the profile editor validates an edited port through
+ * this exact function, the same one every share-link and Clash parser in
+ * this file already calls, so the editor and the importer cannot disagree
+ * about what is valid.
+ */
+public fun validatePort(port: Int): FailureDetail? =
+    if (port in MIN_PORT..MAX_PORT) {
+        null
+    } else {
+        FailureDetail.Range(DetailField.Port, MIN_PORT, MAX_PORT, port)
+    }
 
-internal fun validateUuid(uuid: String): String? = if (UUID_SHAPE.matches(uuid)) null else INVALID_UUID_MESSAGE
-
-internal fun validateRealityPublicKey(pbk: String): String? =
+/** Whether [uuid] is a well-formed VLESS/VMess credential. Public since Task 21 — see [validatePort]'s KDoc. */
+public fun validateUuid(uuid: String): FailureDetail? =
     when {
-        pbk.isEmpty() -> "publicKey (pbk) is missing"
+        uuid.isEmpty() -> FailureDetail.Missing(DetailField.Uuid)
+        UUID_SHAPE.matches(uuid) -> null
+        else -> FailureDetail.Malformed(DetailField.Uuid)
+    }
+
+/** Whether [pbk] is a canonical REALITY X25519 public key. Public since Task 21 — see [validatePort]'s KDoc. */
+public fun validateRealityPublicKey(pbk: String): FailureDetail? =
+    when {
+        pbk.isEmpty() -> FailureDetail.Missing(DetailField.PublicKey)
         pbk.length != REALITY_KEY_LENGTH ->
-            "publicKey (pbk) must be $REALITY_KEY_LENGTH characters, got ${pbk.length}"
-        !BASE64URL_SHAPE.matches(pbk) -> "publicKey (pbk) must be unpadded base64url"
-        !isCanonicalRealityPublicKey(pbk) -> "publicKey (pbk) must be canonical base64url"
+            FailureDetail.Length(DetailField.PublicKey, REALITY_KEY_LENGTH, pbk.length)
+        !BASE64URL_SHAPE.matches(pbk) -> FailureDetail.Malformed(DetailField.PublicKey)
+        !isCanonicalRealityPublicKey(pbk) -> FailureDetail.Malformed(DetailField.PublicKey)
         else -> null
     }
 
-internal fun validateShadowsocksMethod(method: String): String? =
-    if (method in SHADOWSOCKS_METHODS) null else "unsupported Shadowsocks method"
-
-private fun invalidPortMessage(port: Int): String = "port must be 1..$MAX_PORT, got $port"
+/** Whether [method] is one of [SHADOWSOCKS_METHODS]. Public since Task 21 — see [validatePort]'s KDoc. */
+public fun validateShadowsocksMethod(method: String): FailureDetail? =
+    if (method in SHADOWSOCKS_METHODS) null else FailureDetail.Unsupported(DetailField.Method)
 
 private fun isCanonicalRealityPublicKey(pbk: String): Boolean =
     runCatching {

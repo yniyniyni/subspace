@@ -24,7 +24,10 @@ internal class BoundTunnelConnection @Inject constructor(
 ) : TunnelConnection {
     override val state: StateFlow<ConnectionState> get() = client.state
 
-    override fun connect(profile: Profile) = client.connect(profile)
+    override fun connect(
+        profile: Profile,
+        rowId: Long,
+    ) = client.connect(profile, rowId)
 
     override fun disconnect() = client.disconnect()
 }
@@ -35,4 +38,8 @@ internal object HomeModule {
     @Provides
     @Singleton
     fun tunnelConnection(impl: BoundTunnelConnection): TunnelConnection = impl
+
+    @Provides
+    @Singleton
+    fun activeProfileSource(impl: BoundActiveProfileSource): ActiveProfileSource = impl
 }

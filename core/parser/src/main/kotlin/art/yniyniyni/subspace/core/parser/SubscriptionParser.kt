@@ -78,8 +78,15 @@ public object SubscriptionParser {
         // raw config would be routed to the Clash branch, fail on the missing
         // `proxies:` key, and be reported as malformed YAML — pointing the user
         // at entirely the wrong format.
+        //
+        // '[' alongside '{': device-fixes finding — the target panel
+        // (Remnawave) returns a top-level JSON *array* wrapping a whole Xray
+        // config when asked with a v2rayNG/Happ User-Agent. parseXrayJson
+        // itself decides what an array root means (see its own KDoc); this
+        // dispatch only has to route both shapes to it instead of falling
+        // through to Clash/base64 and reporting the wrong format entirely.
         return when {
-            text.startsWith("{") -> parseXrayJson(text)
+            text.startsWith("{") || text.startsWith("[") -> parseXrayJson(text)
             looksLikeClash(text) -> parseClashYaml(text)
             else -> {
                 val decoded = decodeBase64Tolerant(text)

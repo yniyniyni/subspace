@@ -12,18 +12,63 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-/** Extracts supported server profiles from a complete raw Xray JSON object. */
-@Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+/**
+ * Extracts supported server profiles from a complete raw Xray JSON document —
+ * a top-level object, or (device-fixes finding) a top-level array of them.
+ *
+ * The target panel (Remnawave) was observed returning a top-level JSON
+ * **array** wrapping a whole Xray config for some User-Agents:
+ * `[{ "dns": …, "inbounds": …, "outbounds": …, "routing": … }]`. Array
+ * semantics decision: treated as a list of *independent* Xray config objects,
+ * not "exactly one object, wrapped" — each element is parsed exactly as a
+ * bare top-level object would be, and the outcomes are concatenated. Assuming
+ * single-element-only would silently drop every config after the first the
+ * day a panel emits more than one; parsing each element identically to the
+ * object case costs nothing extra and degrades correctly to the observed
+ * one-element case. An element that is not itself a JSON object is reported
+ * as its own failure at its array position (see [parseXrayJsonArray]) rather
+ * than aborting the whole array — §7's "one bad entry must not lose the
+ * others" applies one level up, not just within a single config's outbounds.
+ */
+@Suppress("ReturnCount")
 internal fun parseXrayJson(text: String): ParseOutcome {
     val root =
         try {
-            Json.parseToJsonElement(text) as? JsonObject
+            Json.parseToJsonElement(text)
         } catch (_: SerializationException) {
             null
         } catch (_: IllegalArgumentException) {
             null
         }
-            ?: return ParseOutcome(
+
+    return when (root) {
+        is JsonObject -> parseXrayJsonDocument(root)
+        // See this function's own KDoc for the array-semantics decision.
+        // `index` on a bad (non-object) element is the element's position in
+        // the array — there is no outbound index yet at that point, so this
+        // necessarily uses a different index space than a bad outbound within
+        // a chosen element does (that one is still the outbound index,
+        // unchanged). Inlined here rather than a separate top-level function
+        // to stay under this file's function-count budget.
+        is JsonArray ->
+            root.foldIndexed(ParseOutcome.EMPTY) { index, acc, element ->
+                val document =
+                    element as? JsonObject
+                        ?: return@foldIndexed acc +
+                            ParseOutcome(
+                                emptyList(),
+                                listOf(
+                                    parseFailure(
+                                        index,
+                                        ParseFailureReason.MalformedJson,
+                                        FailureDetail.Malformed(DetailField.JsonBody),
+                                    ),
+                                ),
+                            )
+                acc + parseXrayJsonDocument(document)
+            }
+        else ->
+            ParseOutcome(
                 emptyList(),
                 listOf(
                     parseFailure(
@@ -33,7 +78,11 @@ internal fun parseXrayJson(text: String): ParseOutcome {
                     ),
                 ),
             )
+    }
+}
 
+@Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+private fun parseXrayJsonDocument(root: JsonObject): ParseOutcome {
     val outbounds = root["outbounds"] as? JsonArray ?: return ParseOutcome.EMPTY
     // The root label, not an outbound field. `tag` is a routing identifier that
     // exporters set to "proxy" essentially always, so it makes a poor name;

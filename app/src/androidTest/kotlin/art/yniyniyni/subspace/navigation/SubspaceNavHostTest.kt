@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.navigation
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -12,7 +13,9 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -174,6 +177,46 @@ class SubspaceNavHostTest {
         composeRule.runOnIdle { localNavController.popBackStack() }
         composeRule.runOnIdle { localNavController.navigate(QrScan) }
         composeRule.runOnIdle { localNavController.currentDestination.selectedTopLevelValue() shouldBe null }
+    }
+
+    /**
+     * Defect 2 (device fixes report): Home's "Add your first server" empty-state action and its
+     * "Add server" chip used to push `Editor(profileId = 0L)` — well-formed per [Editor]'s own
+     * KDoc (0L is the create-new-profile signal) but wired in Task 16 before an editor existed
+     * to receive it. By the time [EditorScreen][art.yniyniyni.subspace.feature.profiles.editor.EditorScreen]
+     * landed (Task 21) it correctly read 0L as `UNASSIGNED_ROW_ID` and rendered "Server not
+     * found" — a dead end, not a bug in the editor. [NavHostController.navigateToAddFirstServer]
+     * (production code, called unmodified here — no Hilt harness exists, see the file KDoc)
+     * now reaches [Servers] instead, where
+     * [ServersScreen][art.yniyniyni.subspace.feature.profiles.list.ServersScreen]'s own empty
+     * state offers a working "Add server" affordance (`AddServerSheet`, already covered by
+     * `AddServerSheetTest` in `:feature:profiles`). This drives that real function
+     * against a small local graph whose bodies render markers standing in for the real
+     * screens' distinguishing content — [Servers]'s marker, and [Editor]'s marker text copied
+     * verbatim from `EditorScreenTest.anUnknownProfileShowsTheNotFoundMessage` — and asserts
+     * the not-found marker is unreachable from this path while the Servers one is.
+     */
+    @Test
+    fun addingTheFirstServerReachesServersNotTheEditorNotFoundScreen() {
+        lateinit var localNavController: NavHostController
+        composeRule.setContent {
+            localNavController = rememberNavController()
+            NavHost(navController = localNavController, startDestination = Home) {
+                composable<Home> { }
+                composable<Servers> { Text("ServersScreen marker") }
+                composable<Settings> { }
+                composable<Editor> { Text("Server not found") }
+                composable<QrScan> { }
+            }
+        }
+
+        composeRule.runOnIdle { localNavController.navigateToAddFirstServer() }
+
+        composeRule.onNodeWithText("ServersScreen marker").assertExists()
+        composeRule.onNodeWithText("Server not found").assertDoesNotExist()
+        composeRule.runOnIdle {
+            localNavController.currentDestination?.hasRoute<Servers>() shouldBe true
+        }
     }
 
     @Test

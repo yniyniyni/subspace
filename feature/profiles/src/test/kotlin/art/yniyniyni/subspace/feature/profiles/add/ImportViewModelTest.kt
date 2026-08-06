@@ -65,6 +65,19 @@ class ImportViewModelTest {
         """{  "outbounds" : [ { "protocol":"vless","settings":{"vnext":[{"address":"198.51.100.7",""" +
             """"port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111"}]}]} } ]  }"""
 
+    /**
+     * Defect 1's third site (device fixes report): the target panel returns a
+     * top-level JSON **array** wrapping a whole Xray config. §6 stores raw
+     * Xray JSON byte-for-byte, but the capture at this call site was
+     * `raw.takeIf { raw.trim().startsWith("{") }` — `false` for a leading
+     * `[`, so a fixed parser alone would still silently store this as
+     * `TYPED` and drop the provenance rule. 203.0.113.9 is RFC 5737
+     * documentation space, matching [validRawJson]'s own convention.
+     */
+    private val validRawJsonArray =
+        """[{  "outbounds" : [ { "protocol":"vless","settings":{"vnext":[{"address":"203.0.113.9",""" +
+            """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]} } ]  }]"""
+
     private class FakeProfileSource : ProfileSource {
         private val stored = mutableMapOf<Long, StoredProfile>()
         private var nextId = 1L
@@ -190,6 +203,19 @@ class ImportViewModelTest {
             viewModel.state.first { it.completed }
 
             repository.profile(1)?.rawJson shouldBe validRawJson
+        }
+
+    @Test
+    fun `raw json wrapped in a top-level array is stored byte-for-byte`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import(validRawJsonArray)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.profile(1)?.rawJson shouldBe validRawJsonArray
         }
 
     @Test

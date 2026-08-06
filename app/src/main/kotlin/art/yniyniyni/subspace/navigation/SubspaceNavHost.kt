@@ -108,10 +108,7 @@ fun SubspaceNavHost(
                 HomeScreen(
                     onRequestConsent = onRequestConsent,
                     onNavigateToServers = { navController.navigateToTopLevel(SERVERS_VALUE) },
-                    // 0L never resolves to a real Room row (autoGenerate never
-                    // assigns it), which is the create-new-profile signal
-                    // Editor's own KDoc reserves — see Routes.kt.
-                    onAddServer = { navController.navigate(Editor(profileId = 0L)) },
+                    onAddServer = { navController.navigateToAddFirstServer() },
                 )
             }
             composable<Servers> {
@@ -214,6 +211,28 @@ internal fun topLevelNavItems(): List<NavItem> =
         ),
         NavItem(value = SETTINGS_VALUE, labelRes = CoreUiR.string.nav_item_settings, icon = Icons.Default.Settings),
     )
+
+/**
+ * Home's "Add your first server" empty-state action and its always-visible
+ * "Add server" chip (see [art.yniyniyni.subspace.feature.home.HomeScreen]'s
+ * own KDoc for both — one `onAddServer` callback serves both).
+ *
+ * Device fixes finding: this used to push the `Editor(profileId = 0L)`
+ * placeholder from Task 16, wired before an editor existed to receive it.
+ * `0L` is `UNASSIGNED_ROW_ID` and
+ * [EditorScreen][art.yniyniyni.subspace.feature.profiles.editor.EditorScreen]
+ * is *correct* to read it as absent (see [Editor]'s own KDoc) — it rendered
+ * "Server not found", a dead end for a user who has never added anything.
+ * [Servers] is where "Add server" actually resolves to something real —
+ * [ServersScreen][art.yniyniyni.subspace.feature.profiles.list.ServersScreen]
+ * has owned `AddServerSheet`, including its own empty-state "Add server"
+ * button, since Task 19 — so this reuses [navigateToTopLevel] exactly the
+ * way `onNavigateToServers` already does, rather than pushing [Editor] with
+ * a sentinel id.
+ */
+internal fun NavHostController.navigateToAddFirstServer() {
+    navigateToTopLevel(SERVERS_VALUE)
+}
 
 /**
  * `internal`, not `private` — see [topLevelNavItems]'s own KDoc for why

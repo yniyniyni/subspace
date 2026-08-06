@@ -59,10 +59,73 @@ class XrayJsonTest {
     }
 
     @Test
-    fun `non-object json is a typed failure`() {
-        val outcome = parseXrayJson("[]")
+    fun `non-object non-array json is a typed failure`() {
+        val outcome = parseXrayJson("true")
         outcome.failures.size shouldBe 1
         outcome.failures[0].reason shouldBe ParseFailureReason.MalformedJson
+    }
+
+    /**
+     * Defect 1 (device fixes): the target panel returns a top-level JSON
+     * **array** wrapping a whole Xray config —
+     * `[{ "dns": …, "outbounds": … }]`. An empty array is the same "container
+     * present, holds nothing" shape `{}` and `{"outbounds":[]}` already are —
+     * [ParseOutcome.EMPTY], not a failure. [SubscriptionParser.parse] is what
+     * turns that into the reported `EmptyInput` (see its own KDoc).
+     */
+    @Test
+    fun `an empty array yields no profiles or failures`() {
+        parseXrayJson("[]") shouldBe ParseOutcome.EMPTY
+    }
+
+    /**
+     * Defect 1's actual observed shape: one element wrapping a whole config.
+     * Array semantics decision (see XrayJson.kt's `parseXrayJsonArray` KDoc):
+     * each array element is parsed exactly as a top-level object would be,
+     * so a single-element array behaves identically to the unwrapped object.
+     */
+    @Test
+    fun `a one-element array wrapping a config parses exactly like the bare object`() {
+        val outcome = parseXrayJson("[$realityConfig]")
+        outcome.failures shouldBe emptyList()
+        val out = outcome.profiles.single().outbound as VlessOutbound
+        out.address shouldBe "host.example"
+        out.uuid shouldBe XJ_UUID
+    }
+
+    /**
+     * Several configs, not just one wrapped — the deliberate part of the
+     * array-semantics decision. A panel that ever emits more than one config
+     * object must not silently lose every element after the first.
+     */
+    @Test
+    fun `a multi-element array parses every element, not just the first`() {
+        val second =
+            realityConfig
+                .replace("host.example", "second.example")
+                .replace(XJ_UUID, SECOND_UUID)
+        val outcome = parseXrayJson("[$realityConfig,$second]")
+
+        outcome.failures shouldBe emptyList()
+        outcome.profiles.map { (it.outbound as VlessOutbound).address } shouldBe
+            listOf("host.example", "second.example")
+    }
+
+    /**
+     * An array element that is not itself a JSON object is reported at its
+     * own array position — there is no outbound index yet at that point, so
+     * this necessarily uses a different index space than a bad outbound
+     * within a chosen object does. The good element on either side still
+     * parses (§7).
+     */
+    @Test
+    fun `a non-object array element is a failure at its array position, not lost`() {
+        val outcome = parseXrayJson("""[$realityConfig, 7, $realityConfig]""")
+
+        outcome.profiles.size shouldBe 2
+        outcome.failures.size shouldBe 1
+        outcome.failures.single().index shouldBe 1
+        outcome.failures.single().reason shouldBe ParseFailureReason.MalformedJson
     }
 
     @Test

@@ -118,9 +118,15 @@ constructor(
             // whitespace and key order included, since that is what
             // identityHashOfRaw hashes. Detected the same way
             // SubscriptionParser's own top-level dispatch does (a trimmed
-            // leading '{'), because nothing in ParseOutcome says which
-            // container the input was.
-            val rawJson = raw.takeIf { raw.trim().startsWith("{") }
+            // leading '{' or '[' — device-fixes finding: the target panel can
+            // return the whole config wrapped in a top-level array, and that
+            // is still raw Xray JSON, not a typed container), because nothing
+            // in ParseOutcome says which container the input was.
+            val rawJson =
+                raw.takeIf { candidate ->
+                    val trimmed = candidate.trim()
+                    trimmed.startsWith("{") || trimmed.startsWith("[")
+                }
 
             if (outcome.profiles.isNotEmpty()) {
                 val groupId = profileSource.defaultGroupId()

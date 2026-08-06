@@ -13,6 +13,8 @@
 //   - :service and :core:parser never depend on :core:ui (§4: :core:ui is
 //     Compose, for :feature:* and :app only)
 //   - :core:ui depends on :core:model only (§4)
+//   - only :core:data may depend on :core:network (§4)
+//   - :core:network depends on :core:model only (§4)
 // The fourth rule ("zero Android dependencies for :core:model and :core:parser")
 // needs no check: those modules apply subspace.jvm, the plain Kotlin/JVM plugin,
 // so an Android import fails to compile. That is a stronger guarantee than a
@@ -109,6 +111,24 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
         if (path == ":core:ui") {
             projectDeps.filter { it != ":core:model" }.forEach {
                 violations += "$path depends on $it — :core:ui may depend on :core:model only (§4)"
+            }
+        }
+
+        // :core:network is the HTTP client. Only :core:data may reach it —
+        // everything else goes through that module's repository, like every
+        // other data source. Without this, a ViewModel fetching a subscription
+        // directly is a compile success and an architecture regression (§4).
+        if (path.startsWith(":feature:") || path == ":service" || path == ":app") {
+            projectDeps.filter { it == ":core:network" }.forEach {
+                violations += "$path depends on $it — only :core:data may depend on :core:network (§4)"
+            }
+        }
+
+        // :core:network returns a body and a header set; deciding what they
+        // mean is not its job (§4).
+        if (path == ":core:network") {
+            projectDeps.filter { it != ":core:model" }.forEach {
+                violations += "$path depends on $it — :core:network may depend on :core:model only (§4)"
             }
         }
 

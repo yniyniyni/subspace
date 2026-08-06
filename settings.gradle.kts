@@ -32,6 +32,7 @@ rootProject.name = "subspace"
 include(":app")
 include(":core:model")
 include(":core:data")
+include(":core:network")
 include(":core:parser")
 include(":core:ui")
 include(":core:xray")

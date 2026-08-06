@@ -138,6 +138,7 @@ compile error.
 :app                    Application, DI wiring, navigation host
 :core:model             Pure Kotlin data classes. No Android imports.
 :core:data              Room, DataStore, repositories
+:core:network           HTTP: subscription fetch, HWID, User-Agent
 :core:parser            Subscription and share-link parsing. Pure, heavily tested.
 :core:ui                Design system: theme, tokens, shared Compose components
 :core:xray              Config JSON generation, libXray lifecycle wrapper
@@ -158,6 +159,12 @@ Rules:
   `:service` and `:core:parser` may not. It exists because `:feature:*` modules
   cannot depend on each other and `:app` sits downstream of them, so shared UI
   has nowhere else to live.
+- `:core:network` depends on `:core:model` only. It returns a body and a header
+  set; deciding what they mean belongs to `:core:parser`. Only `:core:data` may
+  depend on it — `:feature:*`, `:service` and `:app` reach fetching through that
+  module's repository, like every other data source.
+- `:core:data` may depend on `:core:parser` and `:core:network`. It is the only
+  module that depends on either.
 
 ---
 

@@ -25,6 +25,16 @@ import javax.inject.Inject
  * attempted yet" from "attempted and imported nothing, entirely failures" (both
  * have `imported == 0`).
  *
+ * [imported] and [parsed] are deliberately two different numbers (§10.1 fix,
+ * element-provenance report): [parsed] is what [SubscriptionParser] produced;
+ * [imported] is what [ProfileSource.import] actually persisted, which can be
+ * lower — a raw Xray document whose elements collide only in fields the typed
+ * projection cannot see (the §6 `xhttp` residual) stores fewer rows than it
+ * parsed profiles. "Imported 15 of 15" must mean 15 rows landed, not 15
+ * profiles parsed and only 1 actually stored — that was the bug ([total] and
+ * the summary string both read off [parsed], not off what reached storage).
+ *
+
  * [input] is the paste field's own text, held here rather than in
  * `rememberSaveable` (fix round 1, finding 3): the M1 predecessor this
  * file's own KDoc already cites, `HomeViewModel.parseInput`, kept it in
@@ -51,10 +61,12 @@ internal data class ImportState(
     val busy: Boolean = false,
     val completed: Boolean = false,
     val imported: Int = 0,
+    val parsed: Int = 0,
     val failures: List<ParseFailure> = emptyList(),
     val fileReadFailed: Boolean = false,
 ) {
-    val total: Int get() = imported + failures.size
+    /** What was attempted, for the "of N" half of the summary — always [parsed], never [imported]. */
+    val total: Int get() = parsed + failures.size
 }
 
 @HiltViewModel
@@ -113,25 +125,18 @@ constructor(
             // same call for the same reason before Task 17 retired it).
             val outcome = withContext(Dispatchers.Default) { SubscriptionParser.parse(raw) }
 
-            // §6: provenance decides storage, not the profiles that came out
-            // of it. Raw Xray JSON is stored byte-for-byte — untrimmed, exact
-            // whitespace and key order included, since that is what
-            // identityHashOfRaw hashes. Detected the same way
-            // SubscriptionParser's own top-level dispatch does (a trimmed
-            // leading '{' or '[' — device-fixes finding: the target panel can
-            // return the whole config wrapped in a top-level array, and that
-            // is still raw Xray JSON, not a typed container), because nothing
-            // in ParseOutcome says which container the input was.
-            val rawJson =
-                raw.takeIf { candidate ->
-                    val trimmed = candidate.trim()
-                    trimmed.startsWith("{") || trimmed.startsWith("[")
+            // Element-provenance fix: `:core:parser` now attaches each profile's own
+            // provenance (Profile.rawJson) as it parses, so this call no longer needs to
+            // re-derive "was this raw JSON" from raw's own leading character — see
+            // ProfileRepository.import's KDoc for what ProfileSource.import does with it,
+            // and what the returned count means.
+            val storedCount =
+                if (outcome.profiles.isNotEmpty()) {
+                    val groupId = profileSource.defaultGroupId()
+                    profileSource.import(outcome.profiles, groupId)
+                } else {
+                    0
                 }
-
-            if (outcome.profiles.isNotEmpty()) {
-                val groupId = profileSource.defaultGroupId()
-                profileSource.import(outcome.profiles, groupId, rawJson)
-            }
 
             _state.update { current ->
                 ImportState(
@@ -142,7 +147,8 @@ constructor(
                     input = if (outcome.profiles.isNotEmpty()) "" else current.input,
                     busy = false,
                     completed = true,
-                    imported = outcome.profiles.size,
+                    imported = storedCount,
+                    parsed = outcome.profiles.size,
                     failures = outcome.failures,
                 )
             }

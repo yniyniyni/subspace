@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.model.VlessOutbound
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,6 +30,18 @@ import kotlinx.serialization.json.JsonPrimitive
  * as its own failure at its array position (see [parseXrayJsonArray]) rather
  * than aborting the whole array — §7's "one bad entry must not lose the
  * others" applies one level up, not just within a single config's outbounds.
+ *
+ * Element provenance (device-fixes finding, part 2): the target panel's array response
+ * turned out to hold 8 config objects, one of which (`[0]`) itself carried 8 `vless`
+ * outbounds — 15 profiles from one document, all originally hashed from the *whole*
+ * document's bytes and collapsing into one stored row at upsert. Each [Profile] now carries
+ * the bytes of the element that produced it ([Profile.rawJson]): the whole (trimmed) [text]
+ * for a bare top-level object, or that one array entry — re-serialized via
+ * [JsonElement.toString], since the source text of an individual array element is not
+ * otherwise recoverable from a parsed [JsonElement] — for a top-level array. `:core:data`
+ * still has to fall back to outbound-based identity for elements that themselves yield
+ * several profiles (element `[0]`'s shape); see `ProfileRepository.import`'s KDoc for that
+ * half of the fix.
  */
 @Suppress("ReturnCount")
 internal fun parseXrayJson(text: String): ParseOutcome {
@@ -42,7 +55,7 @@ internal fun parseXrayJson(text: String): ParseOutcome {
         }
 
     return when (root) {
-        is JsonObject -> parseXrayJsonDocument(root)
+        is JsonObject -> parseXrayJsonDocument(root, elementText = text)
         // See this function's own KDoc for the array-semantics decision.
         // `index` on a bad (non-object) element is the element's position in
         // the array — there is no outbound index yet at that point, so this
@@ -65,7 +78,7 @@ internal fun parseXrayJson(text: String): ParseOutcome {
                                     ),
                                 ),
                             )
-                acc + parseXrayJsonDocument(document)
+                acc + parseXrayJsonDocument(document, elementText = document.toString())
             }
         else ->
             ParseOutcome(
@@ -82,7 +95,10 @@ internal fun parseXrayJson(text: String): ParseOutcome {
 }
 
 @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
-private fun parseXrayJsonDocument(root: JsonObject): ParseOutcome {
+private fun parseXrayJsonDocument(
+    root: JsonObject,
+    elementText: String,
+): ParseOutcome {
     val outbounds = root["outbounds"] as? JsonArray ?: return ParseOutcome.EMPTY
     // The root label, not an outbound field. `tag` is a routing identifier that
     // exporters set to "proxy" essentially always, so it makes a poor name;
@@ -110,7 +126,7 @@ private fun parseXrayJsonDocument(root: JsonObject): ParseOutcome {
                             )
 
                     "vless" ->
-                        parseVlessOutbound(outbound, index, remarks).forEach { result ->
+                        parseVlessOutbound(outbound, index, remarks, elementText).forEach { result ->
                             when (result) {
                                 is LinkResult.Ok -> profiles += result.profile
                                 is LinkResult.Bad -> failures += result.failure
@@ -140,11 +156,12 @@ private fun parseXrayJsonDocument(root: JsonObject): ParseOutcome {
     return ParseOutcome(profiles, failures)
 }
 
-@Suppress("ReturnCount")
+@Suppress("ReturnCount", "LongParameterList")
 private fun parseVlessOutbound(
     outbound: JsonObject,
     index: Int,
     remarks: String?,
+    elementText: String,
 ): List<LinkResult> {
     val settings = outbound["settings"] as? JsonObject
     val vnext =
@@ -164,16 +181,17 @@ private fun parseVlessOutbound(
                 ?: return@flatMap listOf(
                     bad(index, ParseFailureReason.MalformedJson, FailureDetail.Malformed(DetailField.JsonBody)),
                 )
-        parseVlessDestination(outbound, vnextObject, index, remarks)
+        parseVlessDestination(outbound, vnextObject, index, remarks, elementText)
     }
 }
 
-@Suppress("ReturnCount")
+@Suppress("ReturnCount", "LongParameterList")
 private fun parseVlessDestination(
     outbound: JsonObject,
     vnext: JsonObject,
     index: Int,
     remarks: String?,
+    elementText: String,
 ): List<LinkResult> {
     val address =
         vnext.stringValue("address")?.takeIf { it.isNotBlank() }
@@ -228,7 +246,7 @@ private fun parseVlessDestination(
                 val flow = user.stringValue("flow")?.takeIf { it.isNotBlank() }
                 val stream = StreamSettings(network = network, security = parsedSecurity.security)
                 val vless = VlessOutbound(address, port, uuid, flow, stream)
-                LinkResult.Ok(Profile(profileId("vless", address, port, uuid), name, vless))
+                LinkResult.Ok(Profile(profileId("vless", address, port, uuid), name, vless, rawJson = elementText))
             }
     }
 }

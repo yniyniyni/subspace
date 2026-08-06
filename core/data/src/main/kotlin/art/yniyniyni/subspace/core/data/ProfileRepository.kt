@@ -159,40 +159,67 @@ internal constructor(
     /**
      * Imports parsed profiles into [groupId], one row per profile.
      *
-     * [rawJson] is non-null only for a hand-written config pasted whole: every profile in
-     * that call shares it and is stored as [ProfileKind.RAW_JSON], identified by a hash of
-     * the exact pasted bytes rather than the decoded outbound (§6). For every other source
-     * (share links, base64 lists, Clash YAML) [rawJson] is null, profiles are
-     * [ProfileKind.TYPED], and identity comes from [identityHashOf] the whole outbound.
+     * [Profile.rawJson] carries provenance per-profile now, not per-batch (element-provenance
+     * fix, device-fixes finding part 2): a profile parsed out of a hand-written Xray config
+     * carries the bytes of the *element* that produced it (`:core:parser`'s `XrayJson.kt` —
+     * the whole document for a bare top-level object, one array entry for a top-level array
+     * of configs), and is stored as [ProfileKind.RAW_JSON]. Every other source (share links,
+     * base64 lists, Clash YAML) leaves [Profile.rawJson] null, and those profiles are
+     * [ProfileKind.TYPED].
+     *
+     * Identity: [identityHashOfRaw] hashes those element bytes — correct exactly when the
+     * element produced *one* profile, since then its bytes distinguish it from every other
+     * element. An element that fans out into several profiles (one Xray config with several
+     * `vless` outbounds — the shape that caused this fix: 8 outbounds in one array element,
+     * all upserting the same row because they all hashed the same shared bytes) still shares
+     * those bytes across every profile it produced, so those specific profiles fall back to
+     * [identityHashOf] the outbound instead — exactly what [ProfileKind.TYPED] already does.
+     * [rawJsonFanoutCounts] finds that case by counting, within *this* call's own profiles,
+     * how many share each non-null [Profile.rawJson] value; a count of one keeps the raw hash,
+     * anything higher falls back. (Two elements that happen to be byte-identical would also
+     * fall into the "higher" branch — harmless: their raw hashes would already have collided,
+     * so falling back to outbound identity can only ever separate profiles the raw hash
+     * would have wrongly merged, never merge ones it would have kept apart.)
+     *
+     * One residual gap stays open here: two outbounds within one element that differ *only*
+     * in `xhttp` transport settings still collide, because [identityHashOf]'s typed
+     * projection has no field for `xhttp` to hash — the pre-existing §6 lossy-projection gap,
+     * unrelated to this fix and out of scope for it.
      *
      * Writes go through [ProfileDao.upsertProfile]: a profile whose identity already exists
      * in [groupId] overwrites that row instead of duplicating it. A provider changing a
      * server's SNI is a different identity and therefore a new row, not an update — see
      * [identityHashOf]'s KDoc; that is intended for M3, subscription sync at M4 keys on
      * something else.
+     *
+     * @return how many distinct rows this call actually wrote — the number of distinct
+     *   identities among [profiles], **not** `profiles.size`. `import`'s caller
+     *   ([art.yniyniyni.subspace.feature.profiles.add.ImportViewModel]) reports this to the
+     *   user rather than the parsed count (§10.1: "15 of 15" must mean 15 rows landed, not
+     *   15 profiles parsed and 1 actually stored).
      */
     public suspend fun import(
         profiles: List<Profile>,
         groupId: Long,
-        rawJson: String? = null,
-    ) {
+    ): Int {
         val now = System.currentTimeMillis()
+        val rawJsonFanoutCounts = profiles.mapNotNull { it.rawJson }.groupingBy { it }.eachCount()
+        val identityHashes = mutableSetOf<String>()
         profiles.forEachIndexed { index, profile ->
+            val rawJson = profile.rawJson
             val kind = if (rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON
+            val identityHash =
+                if (rawJson != null && rawJsonFanoutCounts.getValue(rawJson) == 1) {
+                    identityHashOfRaw(rawJson)
+                } else {
+                    identityHashOf(profile.outbound)
+                }
+            identityHashes += identityHash
             dao.upsertProfile(
                 ProfileEntity(
                     groupId = groupId,
                     kind = kind.name,
-                    // RAW_JSON hashes the exact pasted bytes; TYPED hashes the
-                    // whole outbound. Both cover everything that distinguishes
-                    // one server from another, which is what makes the unique
-                    // index safe (§4.2).
-                    identityHash =
-                    if (rawJson == null) {
-                        identityHashOf(profile.outbound)
-                    } else {
-                        identityHashOfRaw(rawJson)
-                    },
+                    identityHash = identityHash,
                     name = profile.name,
                     protocol = profile.outbound.protocolName(),
                     address = profile.outbound.address,
@@ -207,6 +234,7 @@ internal constructor(
                 ),
             )
         }
+        return identityHashes.size
     }
 
     /**

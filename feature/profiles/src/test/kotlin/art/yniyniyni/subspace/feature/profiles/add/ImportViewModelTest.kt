@@ -73,10 +73,18 @@ class ImportViewModelTest {
      * `[`, so a fixed parser alone would still silently store this as
      * `TYPED` and drop the provenance rule. 203.0.113.9 is RFC 5737
      * documentation space, matching [validRawJson]'s own convention.
+     *
+     * Element-provenance fix (device-fixes finding, part 2): the profile this yields now
+     * carries only [validRawJsonArrayElement]'s bytes, not the enclosing array — see
+     * `XrayJsonTest`'s own coverage of that split. Written already in the compact form
+     * `kotlinx.serialization`'s `JsonElement.toString()` re-serializes an array element
+     * into (no extra whitespace, same key order), so the "stored byte-for-byte" test below
+     * can compare it with a plain string equality instead of re-parsing both sides.
      */
-    private val validRawJsonArray =
-        """[{  "outbounds" : [ { "protocol":"vless","settings":{"vnext":[{"address":"203.0.113.9",""" +
-            """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]} } ]  }]"""
+    private val validRawJsonArrayElement =
+        """{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"203.0.113.9",""" +
+            """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]}}]}"""
+    private val validRawJsonArray = "[$validRawJsonArrayElement]"
 
     private class FakeProfileSource : ProfileSource {
         private val stored = mutableMapOf<Long, StoredProfile>()
@@ -106,11 +114,18 @@ class ImportViewModelTest {
         // exercises group creation itself.
         override suspend fun defaultGroupId(): Long = 1L
 
+        // Mirrors ProfileRepository.import's own identity rule closely enough to exercise
+        // ImportViewModel's wiring (not to re-prove the rule itself — ProfileRepositoryTest
+        // owns that, against the real Room table): a profile's own Profile.rawJson decides
+        // TYPED vs RAW_JSON, and profiles sharing one element's rawJson (several outbounds
+        // out of one raw document) are still distinguishable by outbound, so they still
+        // count as separate stored rows here — this fake has no real upsert-by-identity to
+        // collapse them, so distinctness is simulated by grouping on (rawJson, outbound)
+        // instead of a real identity hash.
         override suspend fun import(
             profiles: List<Profile>,
             groupId: Long,
-            rawJson: String?,
-        ) {
+        ): Int {
             lastImportedGroupId = groupId
             profiles.forEach { profile ->
                 val id = nextId++
@@ -118,18 +133,19 @@ class ImportViewModelTest {
                     StoredProfile(
                         id = id,
                         groupId = groupId,
-                        kind = if (rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON,
+                        kind = if (profile.rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON,
                         name = profile.name,
                         protocol = "vless",
                         address = profile.outbound.address,
                         port = profile.outbound.port,
                         transport = "tcp",
                         outbound = profile.outbound,
-                        rawJson = rawJson,
+                        rawJson = profile.rawJson,
                         lastConnectedAt = null,
                         lastError = null,
                     )
             }
+            return profiles.map { it.rawJson to it.outbound }.distinct().size
         }
 
         override suspend fun profile(id: Long): StoredProfile? = stored[id]
@@ -189,7 +205,32 @@ class ImportViewModelTest {
             viewModel.state.first { it.completed }
 
             viewModel.state.value.imported shouldBe 197
+            viewModel.state.value.parsed shouldBe 197
             viewModel.state.value.failures.size shouldBe 3
+        }
+
+    // §10.1 fix (element-provenance report): before this, ImportState.imported and the
+    // "Imported N of N" summary both read off ParseOutcome.profiles.size — "true" of what
+    // the parser produced and false of what reached storage whenever two parsed profiles
+    // shared an identity, exactly the shape of the real 15-parsed/1-stored bug. Two
+    // identical share links are the simplest reproduction that does not need raw JSON at
+    // all: they parse to two profiles with an identical outbound, FakeProfileSource's
+    // distinct-by-outbound count (mirroring ProfileRepository's real upsert-by-identity)
+    // collapses them to one stored row, and `imported` must say so.
+    @Test
+    fun `imported reports rows actually stored, not profiles parsed`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            val link = "vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one"
+
+            viewModel.import(listOf(link, link).joinToString("\n"))
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.parsed shouldBe 2
+            viewModel.state.value.imported shouldBe 1
+            viewModel.state.value.total shouldBe 2
         }
 
     @Test
@@ -206,7 +247,7 @@ class ImportViewModelTest {
         }
 
     @Test
-    fun `raw json wrapped in a top-level array is stored byte-for-byte`() =
+    fun `raw json wrapped in a top-level array is stored as that element's own bytes`() =
         runTest {
             val repository = FakeProfileSource()
             val viewModel = ImportViewModel(repository)
@@ -215,7 +256,7 @@ class ImportViewModelTest {
             advanceUntilIdle()
             viewModel.state.first { it.completed }
 
-            repository.profile(1)?.rawJson shouldBe validRawJsonArray
+            repository.profile(1)?.rawJson shouldBe validRawJsonArrayElement
         }
 
     @Test

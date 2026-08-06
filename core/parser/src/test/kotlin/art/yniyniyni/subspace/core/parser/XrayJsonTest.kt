@@ -4,6 +4,8 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import kotlinx.serialization.json.Json
 import org.junit.Test
 
 private const val XJ_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
@@ -126,6 +128,66 @@ class XrayJsonTest {
         outcome.failures.size shouldBe 1
         outcome.failures.single().index shouldBe 1
         outcome.failures.single().reason shouldBe ParseFailureReason.MalformedJson
+    }
+
+    /**
+     * Element provenance, part 1 (device-fixes finding, part 2): a bare top-level object is
+     * its own element, so the profile it yields carries the whole (already-trimmed here)
+     * document as [art.yniyniyni.subspace.core.model.Profile.rawJson] — same byte-for-byte
+     * behaviour §6 has always described for a single hand-pasted `config.json`.
+     */
+    @Test
+    fun `a bare top-level object's profile carries the whole document as rawJson`() {
+        val outcome = parseXrayJson(realityConfig)
+        outcome.profiles.single().rawJson shouldBe realityConfig
+    }
+
+    /**
+     * Element provenance, part 2: the real bug. Before this fix every profile out of an
+     * array hashed the *whole* array's bytes, so elements `[1]`..`[7]` of the 8-element
+     * document that triggered this fix were indistinguishable from one another at the
+     * identity layer and collapsed into one upserted row. Each element now carries only its
+     * own re-serialized bytes ([JsonElement.toString] — the parser has no access to the
+     * original per-element substring once `kotlinx.serialization` has parsed it), so two
+     * elements' profiles are provably different [rawJson] values, not just different outbounds.
+     */
+    @Test
+    fun `each array element carries only its own bytes as rawJson, not the whole document`() {
+        val second = realityConfig.replace("host.example", "second.example").replace(XJ_UUID, SECOND_UUID)
+        val outcome = parseXrayJson("[$realityConfig,$second]")
+
+        val expectedFirst = Json.parseToJsonElement(realityConfig).toString()
+        val expectedSecond = Json.parseToJsonElement(second).toString()
+        outcome.profiles.map { it.rawJson } shouldBe listOf(expectedFirst, expectedSecond)
+        expectedFirst shouldNotBe expectedSecond
+    }
+
+    /**
+     * Element provenance, part 3: the other half of the real document's shape — one element
+     * (`[0]`, 8 `vless` outbounds there) fans out into several profiles. All of them still
+     * share that one element's bytes; `ProfileRepository.import` is what falls back to
+     * outbound-based identity for this case (see its own KDoc), not the parser — this test
+     * only pins the parser's half: the shared bytes themselves.
+     */
+    @Test
+    fun `a document with several outbounds shares one element's bytes across every profile it yields`() {
+        val json =
+            """
+            {"outbounds":[
+              ${validOutbound("first.example")},
+              ${validOutbound("second.example", uuid = "\"$SECOND_UUID\"")},
+              ${validOutbound("third.example", uuid = "\"$THIRD_UUID\"")}
+            ]}
+            """.trimIndent()
+
+        val outcome = parseXrayJson(json)
+
+        outcome.profiles.map { it.outbound.address } shouldBe
+            listOf("first.example", "second.example", "third.example")
+        outcome.profiles
+            .map { it.rawJson }
+            .distinct()
+            .size shouldBe 1
     }
 
     @Test

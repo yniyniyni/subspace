@@ -137,8 +137,7 @@ class EditorViewModelTest {
         override suspend fun import(
             profiles: List<Profile>,
             groupId: Long,
-            rawJson: String?,
-        ) = Unit
+        ) = 0
 
         override suspend fun profile(id: Long): StoredProfile? = stored[id]
 

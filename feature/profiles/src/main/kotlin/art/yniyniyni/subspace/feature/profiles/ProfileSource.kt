@@ -61,13 +61,14 @@ internal interface ProfileSource {
 
     /**
      * Imports [profiles] into [groupId]; see [ProfileRepository.import] for what
-     * [rawJson] means (§6: non-null only for a hand-pasted config, stored byte-for-byte).
+     * [Profile.rawJson] means (§6: non-null only for a profile from a hand-pasted config,
+     * carrying that config's own bytes) and what the returned count is (rows actually
+     * written, not `profiles.size`).
      */
     suspend fun import(
         profiles: List<Profile>,
         groupId: Long,
-        rawJson: String?,
-    )
+    ): Int
 
     /**
      * A single profile by its row id, or `null` if it no longer exists. Lets a
@@ -142,8 +143,7 @@ constructor(
     override suspend fun import(
         profiles: List<Profile>,
         groupId: Long,
-        rawJson: String?,
-    ) = profileRepository.import(profiles, groupId, rawJson)
+    ): Int = profileRepository.import(profiles, groupId)
 
     override suspend fun profile(id: Long): StoredProfile? = profileRepository.profile(id)
 

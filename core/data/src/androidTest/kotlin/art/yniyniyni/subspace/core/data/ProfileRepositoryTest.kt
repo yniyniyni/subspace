@@ -64,6 +64,45 @@ class ProfileRepositoryTest {
             repository.observeGroups().first().single().profiles.size shouldBe 1
         }
 
+    // The real bug this pins (element-provenance report): a real subscription document was
+    // a top-level array of 8 elements — element [0] an "auto/best server" config with 8
+    // `vless` outbounds, elements [1]..[7] one single-server config each. 15 profiles from
+    // one document, all reported "Imported 15 of 15", but every one of them hashed identity
+    // from the *whole document's* bytes and collapsed into a single upserted row: 1 row, not
+    // 15. This constructs that shape directly against Profile (not through
+    // SubscriptionParser — XrayJsonTest owns the parser's half of the fix: that array
+    // elements each get their own Profile.rawJson, and that several outbounds out of one
+    // element still share it) to pin ProfileRepository.import's own half: 15 profiles in,
+    // 15 distinct rows out — the 7 that each carry a unique element's bytes via
+    // identityHashOfRaw, and the 8 that share element [0]'s bytes via the
+    // identityHashOf(outbound) fallback described in import's own KDoc.
+    @Test
+    fun importingARawDocumentThatYieldsFifteenProfilesStoresFifteenDistinctRows() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            val autoBestServerElement =
+                """{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"198.51.100.0"}]}}]}"""
+            val eightSharingOneElement =
+                (1..8).map { i ->
+                    sampleProfile(address = "198.51.100.$i").copy(rawJson = autoBestServerElement)
+                }
+            val sevenWithTheirOwnElement =
+                (1..7).map { i ->
+                    sampleProfile(address = "203.0.113.$i").copy(
+                        rawJson =
+                        """{"outbounds":[{"protocol":"vless","settings":""" +
+                            """{"vnext":[{"address":"203.0.113.$i"}]}}]}""",
+                    )
+                }
+
+            val storedCount = repository.import(eightSharingOneElement + sevenWithTheirOwnElement, groupId)
+
+            storedCount shouldBe 15
+            val stored = repository.observeGroups().first().single().profiles
+            stored.size shouldBe 15
+            stored.map { db.profileDao().profile(it.id)!!.identityHash }.distinct().size shouldBe 15
+        }
+
     @Test
     fun deletingAGroupRemovesItsProfiles() =
         runTest {
@@ -180,7 +219,7 @@ class ProfileRepositoryTest {
         runTest {
             val groupId = repository.defaultGroupId()
             val rawJson = """{"outbounds":[{"protocol":"vless"}]}"""
-            repository.import(listOf(sampleProfile()), groupId, rawJson = rawJson)
+            repository.import(listOf(sampleProfile().copy(rawJson = rawJson)), groupId)
             val stored = repository.observeGroups().first().single().profiles.single()
             val before = db.profileDao().profile(stored.id)!!
 

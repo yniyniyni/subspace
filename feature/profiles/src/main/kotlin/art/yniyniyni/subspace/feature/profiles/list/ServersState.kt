@@ -84,11 +84,11 @@ internal data class ServersGroup(
  *   Shown as "compatibility mode", never "raw": passthrough execution of a
  *   hand-pasted config is not implemented (§6), and "raw" alone would promise
  *   behaviour this build does not have.
- * @property connectable mirrors [art.yniyniyni.subspace.core.data.StoredProfile.connectable].
- *   `:core:xray` only emits VLESS; every other protocol fails at connect time
- *   with `ProtocolNotSupported`. Task 17 left this unchecked in Home's
- *   `canConnect` — surfaced here so a user can see, before picking a server,
- *   which ones this build can actually connect to.
+ * @property connectable mirrors [art.yniyniyni.subspace.core.data.StoredProfile.connectable] —
+ *   see its own KDoc for what makes a row connectable (VLESS over plain `tcp` only; `:core:xray`
+ *   has no transport emission for `ws`/`grpc`/`xhttp` yet). Task 17 left this unchecked in
+ *   Home's `canConnect` — surfaced here so a user can see, before picking a server, which ones
+ *   this build can actually connect to.
  * @property isActive whether this is the profile [art.yniyniyni.subspace.core.data.SettingsRepository.activeProfileId]
  *   currently names.
  */

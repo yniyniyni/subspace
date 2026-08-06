@@ -102,12 +102,31 @@ internal interface ProfileDao {
      * `SQLiteConstraintException` on the unique index — trading the old
      * silent-drop bug for an unhandled crash. Wrapping both statements in one
      * transaction serializes concurrent callers instead.
+     *
+     * On the update branch, [ProfileEntity.lastConnectedAt], [ProfileEntity.lastError] and
+     * [ProfileEntity.createdAt] are carried over from [existing] rather than taken from
+     * [profile] (fix round 2, Important finding 1). [profile] here is freshly built by
+     * `ProfileRepository.import` from what the *source* (a subscription, a pasted link)
+     * describes and always sets those three columns as if the row were new — correct the
+     * first time a given identity is imported, wrong on a re-import: the row already in
+     * this slot may carry connection history the device learned since, and a plain
+     * full-row overwrite erased it (re-importing a subscription reset every profile's
+     * "last used" to never-used and restamped its creation time). Every other column still
+     * comes from [profile], since those genuinely describe what the source says now — a
+     * renamed or re-keyed server, an updated `rawJson` — same as before this fix.
      */
     @Transaction
     suspend fun upsertProfile(profile: ProfileEntity) {
         val existing = findProfile(profile.groupId, profile.identityHash)
         if (existing != null) {
-            updateProfile(profile.copy(id = existing.id))
+            updateProfile(
+                profile.copy(
+                    id = existing.id,
+                    lastConnectedAt = existing.lastConnectedAt,
+                    lastError = existing.lastError,
+                    createdAt = existing.createdAt,
+                ),
+            )
         } else {
             insertProfile(profile)
         }

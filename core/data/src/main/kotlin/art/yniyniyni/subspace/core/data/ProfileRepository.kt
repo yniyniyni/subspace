@@ -56,8 +56,17 @@ public data class StoredProfile(
     /** RAW_JSON runs through the typed projection in M3 (§6). */
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
 
-    /** `:core:xray` emits VLESS only; every other protocol is refused at generation. */
-    public val connectable: Boolean get() = protocol == "vless"
+    /**
+     * `:core:xray` emits VLESS only, and — within VLESS — only `network == "tcp"`:
+     * [art.yniyniyni.subspace.core.xray.XrayConfigGenerator] never emits `wsSettings`,
+     * `grpcSettings` or `xhttpSettings` and never reads
+     * [art.yniyniyni.subspace.core.model.StreamSettings.transport], so a
+     * `ws`/`grpc`/`xhttp` profile dials with no path and no Host and the server rejects it.
+     * A row whose [outbound] failed to decode is not connectable either — there is no
+     * config to generate from `null`.
+     */
+    public val connectable: Boolean
+        get() = (outbound as? VlessOutbound)?.stream?.network == "tcp"
 }
 
 /** A folder of profiles, in display order. */
@@ -212,7 +221,7 @@ internal constructor(
                 if (rawJson != null && rawJsonFanoutCounts.getValue(rawJson) == 1) {
                     identityHashOfRaw(rawJson)
                 } else {
-                    identityHashOf(profile.outbound)
+                    identityHashOf(profile.outbound, kind)
                 }
             identityHashes += identityHash
             dao.upsertProfile(
@@ -310,7 +319,7 @@ internal constructor(
                     port = outbound.port,
                     transport = outbound.transportSummary(),
                     outbound = outbound.toJson(),
-                    identityHash = identityHashOf(outbound),
+                    identityHash = identityHashOf(outbound, ProfileKind.TYPED),
                 ),
             )
             true

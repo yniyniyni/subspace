@@ -160,6 +160,14 @@ internal fun HomeScreenContent(
 
         ConnectionDetail(state.connection)
 
+        if (state.activeProfileUnsupported) {
+            Text(
+                text = stringResource(R.string.home_active_server_unsupported),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         ActiveServerTile(
             state = state,
             onNavigateToServers = actions.onNavigateToServers,

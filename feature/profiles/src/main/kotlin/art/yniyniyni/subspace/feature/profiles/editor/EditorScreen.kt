@@ -614,15 +614,15 @@ private fun EditorDropdownField(
     error: FailureDetail? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val description = "$label: $selected"
+    val labelledValue = stringResource(R.string.editor_dropdown_value, label, selected)
 
     Column(modifier = modifier) {
         Box {
             TextButton(
                 onClick = { menuOpen = true },
-                modifier = Modifier.semantics { contentDescription = description },
+                modifier = Modifier.semantics { contentDescription = labelledValue },
             ) {
-                Text("$label: $selected")
+                Text(labelledValue)
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 options.forEach { option ->
@@ -656,14 +656,14 @@ private fun GroupDropdown(
     val selectedName = options.firstOrNull { it.id == selectedId }?.name.orEmpty()
     var menuOpen by remember { mutableStateOf(false) }
     val label = stringResource(R.string.editor_group_label)
-    val description = "$label: $selectedName"
+    val labelledValue = stringResource(R.string.editor_dropdown_value, label, selectedName)
 
     Box(modifier = modifier) {
         TextButton(
             onClick = { menuOpen = true },
-            modifier = Modifier.semantics { contentDescription = description },
+            modifier = Modifier.semantics { contentDescription = labelledValue },
         ) {
-            Text("$label: $selectedName")
+            Text(labelledValue)
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             options.forEach { option ->

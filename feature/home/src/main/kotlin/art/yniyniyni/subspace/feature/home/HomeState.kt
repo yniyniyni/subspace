@@ -30,17 +30,34 @@ internal data class HomeState(
      * Whether tapping the connect control should attempt a connection.
      *
      * False whenever there is nothing to connect to ([activeProfile] is
-     * `null`) or that row's persisted config failed to decode
-     * ([StoredProfile.outbound] `null` — a corrupt row, per its own KDoc).
+     * `null`), that row's persisted config failed to decode
+     * ([StoredProfile.outbound] `null` — a corrupt row, per its own KDoc), or
+     * [StoredProfile.connectable] is false — a stored profile whose protocol or transport
+     * `:core:xray` cannot yet generate a working config for (fix round 2, Important finding
+     * 4: this used to check only that an outbound existed, so a `ws`/`grpc` VLESS row set
+     * active passed here, prompted for VPN permission, started the foreground service, and
+     * failed there instead of being refused up front — see [activeProfileUnsupported] for
+     * how that case is now explained rather than just silently disabled).
      * Also false while the tunnel is not [ConnectionState.Disconnected]:
      * a connect attempt already in flight, or already connected, must go
      * through [canDisconnect] instead, not stack a second attempt.
      */
     val canConnect: Boolean
-        get() = activeProfile?.outbound != null && connection is ConnectionState.Disconnected
+        get() = activeProfile?.connectable == true && connection is ConnectionState.Disconnected
 
     val canDisconnect: Boolean
         get() =
             connection is ConnectionState.Connected ||
                 connection is ConnectionState.Connecting
+
+    /**
+     * Whether [activeProfile] decoded fine but [canConnect] is still false because
+     * [StoredProfile.connectable] says this build cannot generate a working config for it —
+     * the one case where disabling the connect control needs an explanation to the user
+     * rather than just a silently inert tap (fix round 2, Important finding 4). False for a
+     * corrupt row ([StoredProfile.outbound] `null`) — that is a decode problem, not the
+     * transport/protocol gap this screen explains here.
+     */
+    val activeProfileUnsupported: Boolean
+        get() = activeProfile?.let { it.outbound != null && !it.connectable } == true
 }

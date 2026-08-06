@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.data.serialization
 
+import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
@@ -52,12 +53,22 @@ class OutboundMapperTest {
         val otherSecurity = Security.Reality("other.example", "pk", "0123abcd", "chrome", "")
         val other = vless.copy(stream = vless.stream.copy(security = otherSecurity))
 
-        identityHashOf(vless) shouldNotBe identityHashOf(other)
+        identityHashOf(vless, ProfileKind.TYPED) shouldNotBe identityHashOf(other, ProfileKind.TYPED)
     }
 
     @Test
     fun `identity distinguishes servers differing only by flow`() {
-        identityHashOf(vless) shouldNotBe identityHashOf(vless.copy(flow = null))
+        identityHashOf(vless, ProfileKind.TYPED) shouldNotBe identityHashOf(vless.copy(flow = null), ProfileKind.TYPED)
+    }
+
+    // Fix round 2, Important finding 2: ProfileRepository.import's outbound-identity
+    // fallback for a fanned-out raw element used to call identityHashOf with no kind, so a
+    // RAW_JSON profile from that fallback hashed identically to a TYPED profile describing
+    // the same outbound. That let a plain re-import silently flip a RAW_JSON row to TYPED
+    // and null out its rawJson — see IdentityHash.kt's own KDoc.
+    @Test
+    fun `identity distinguishes typed and raw kinds for the same outbound`() {
+        identityHashOf(vless, ProfileKind.TYPED) shouldNotBe identityHashOf(vless, ProfileKind.RAW_JSON)
     }
 
     @Test
@@ -74,7 +85,7 @@ class OutboundMapperTest {
         val ascending = vless.copy(stream = withHeaders(headersInOrder("Host", "X-Foo")))
         val descending = vless.copy(stream = withHeaders(headersInOrder("X-Foo", "Host")))
 
-        identityHashOf(ascending) shouldBe identityHashOf(descending)
+        identityHashOf(ascending, ProfileKind.TYPED) shouldBe identityHashOf(descending, ProfileKind.TYPED)
     }
 
     private fun withHeaders(headers: Map<String, String>): StreamSettings =

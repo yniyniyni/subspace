@@ -26,8 +26,10 @@
     <!-- RAW_JSON runs through the typed projection, not verbatim (§6) — "raw"
          alone would promise passthrough execution this build does not have. -->
     <string name="servers_compatibility_mode">Compatibility mode</string>
-    <!-- :core:xray only emits VLESS; every other protocol fails at connect
-         time with ProtocolNotSupported. -->
+    <!-- :core:xray only emits VLESS over plain tcp; every other protocol, and
+         VLESS over ws/grpc/xhttp (no transport emission yet), is unconnectable
+         in this build. Deliberately doesn't say "protocol" — it must stay
+         honest for both reasons a row can land here. -->
     <string name="servers_not_connectable">Not supported by this build yet</string>
 
     <!-- %1$s = server name, %2$s = protocol (e.g. "VLESS"), %3$s = transport
@@ -180,6 +182,10 @@
     <!-- Same closed-vocabulary shape as import_failure_* above, minus the
          "Entry N" prefix — these are single-field validation errors on a form,
          not a list of parsed entries. %1$s is the field name (below). -->
+    <!-- %1$s = a field label (e.g. "Network"), %2$s = its currently selected value. Backs both
+         EditorDropdownField's own button text and GroupDropdown's — §12: was a bare Kotlin
+         string interpolation in both places (fix round 2, Minor finding 6). -->
+    <string name="editor_dropdown_value">%1$s: %2$s</string>
     <string name="editor_error_length">%1$s must have length %2$d (actual: %3$d)</string>
     <string name="editor_error_range">%1$s must be from %2$d to %3$d (actual: %4$d)</string>
     <string name="editor_error_missing">%1$s is missing</string>

@@ -287,6 +287,82 @@ class ProfileRepositoryTest {
             db.profileDao().profile(inGroupA.id)!!.groupId shouldBe groupA
         }
 
+    // Fix round 2, Important finding 1: ProfileDao.upsertProfile used to overwrite the
+    // whole row on a matching-identity re-import, including lastConnectedAt/lastError/
+    // createdAt — columns the source never described in the first place. A user who
+    // imports a subscription, connects (earning a lastConnectedAt), then re-imports the
+    // same subscription a week later to pick up a changed server saw every *other* row's
+    // connection history silently reset to "never used". This pins that the device-learned
+    // columns survive a re-import while the source-described ones (here: name) still
+    // update — the same "leaves untouched" claim renamingAProfileLeavesEveryOtherColumnUntouched
+    // makes for rename(), now for import()'s own upsert path.
+    @Test
+    fun reimportingAProfileWithTheSameIdentityPreservesItsConnectionHistory() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            repository.import(listOf(sampleProfile(address = "198.51.100.1").copy(name = "Original")), groupId)
+            val stored = repository.observeGroups().first().single().profiles.single()
+            val createdAt = db.profileDao().profile(stored.id)!!.createdAt
+
+            repository.recordConnected(stored.id, 1_700_000_000_000L)
+            repository.recordError(stored.id, "handshakeFailed")
+            val afterConnect = db.profileDao().profile(stored.id)!!
+            afterConnect.lastConnectedAt shouldBe 1_700_000_000_000L
+            afterConnect.lastError shouldBe "handshakeFailed"
+
+            // A week later: same identity, source now describes a new display name.
+            val renamedBySource = sampleProfile(address = "198.51.100.1").copy(name = "Renamed by provider")
+            repository.import(listOf(renamedBySource), groupId)
+
+            val afterReimport = db.profileDao().profile(stored.id)!!
+            afterReimport.id shouldBe stored.id
+            afterReimport.name shouldBe "Renamed by provider"
+            afterReimport.lastConnectedAt shouldBe 1_700_000_000_000L
+            afterReimport.lastError shouldBe "handshakeFailed"
+            afterReimport.createdAt shouldBe createdAt
+        }
+
+    // Fix round 2, Important finding 2: the outbound-identity fallback import() uses for a
+    // fanned-out raw element (several outbounds sharing one element's bytes — see import's
+    // own KDoc) used to hash with no kind discriminator, so a RAW_JSON profile produced that
+    // way could collide with a TYPED profile of the same server (e.g. the equivalent
+    // vless:// link, pasted into the same group later). The upsert then silently overwrote
+    // the RAW_JSON row: kind flipped to TYPED and rawJson went to null, discarding the exact
+    // bytes §6 exists to preserve. This pins that a TYPED import never touches a RAW_JSON
+    // sibling with the same outbound.
+    @Test
+    fun importingATypedProfileNeverOverwritesARawJsonSiblingWithTheSameOutbound() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            // Two outbounds in one element forces both resulting RAW_JSON profiles onto the
+            // outbound-identity fallback (fanout count 2, not 1) rather than identityHashOfRaw.
+            val fanoutElement =
+                """{"outbounds":[
+                    {"protocol":"vless","settings":{"vnext":[{"address":"198.51.100.1"}]}},
+                    {"protocol":"vless","settings":{"vnext":[{"address":"198.51.100.2"}]}}
+                ]}"""
+            val rawProfiles =
+                listOf(
+                    sampleProfile(address = "198.51.100.1").copy(rawJson = fanoutElement),
+                    sampleProfile(address = "198.51.100.2").copy(rawJson = fanoutElement),
+                )
+            repository.import(rawProfiles, groupId)
+            val rawStored = repository.observeGroups().first().single().profiles.single { it.address == "198.51.100.1" }
+            val rawRowBefore = db.profileDao().profile(rawStored.id)!!
+            rawRowBefore.kind shouldBe ProfileKind.RAW_JSON.name
+            rawRowBefore.rawJson shouldNotBe null
+
+            // A TYPED profile (no rawJson) describing the exact same outbound as the first
+            // raw element's first entry — the collision case.
+            repository.import(listOf(sampleProfile(address = "198.51.100.1")), groupId)
+
+            val afterProfiles = repository.observeGroups().first().single().profiles
+            afterProfiles.size shouldBe 3
+            val rawRowAfter = db.profileDao().profile(rawStored.id)!!
+            rawRowAfter.kind shouldBe ProfileKind.RAW_JSON.name
+            rawRowAfter.rawJson shouldBe rawRowBefore.rawJson
+        }
+
     private fun sampleProfile(address: String = "198.51.100.1") =
         Profile(
             id = "unused",

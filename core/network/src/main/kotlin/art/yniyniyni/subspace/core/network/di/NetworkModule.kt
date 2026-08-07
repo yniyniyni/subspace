@@ -6,6 +6,8 @@ import art.yniyniyni.subspace.core.network.AndroidDeviceInfo
 import art.yniyniyni.subspace.core.network.AndroidHwidProvider
 import art.yniyniyni.subspace.core.network.DeviceInfo
 import art.yniyniyni.subspace.core.network.HwidProvider
+import art.yniyniyni.subspace.core.network.SubscriptionFetcher
+import art.yniyniyni.subspace.core.network.SubscriptionSource
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -40,6 +42,11 @@ internal abstract class NetworkModule {
     @Binds
     @Singleton
     abstract fun bindDeviceInfo(impl: AndroidDeviceInfo): DeviceInfo
+
+    /** `:core:data`'s sync pipeline (Task 11) fetches through this seam; [SubscriptionFetcher] is the only impl. */
+    @Binds
+    @Singleton
+    abstract fun bindSubscriptionSource(impl: SubscriptionFetcher): SubscriptionSource
 
     companion object {
         @Provides

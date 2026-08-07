@@ -418,8 +418,13 @@ internal constructor(
         )
 }
 
-/** The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`). */
-private fun Outbound.protocolName(): String =
+/**
+ * The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`).
+ *
+ * `internal`, not `private`: `SubscriptionSyncer` (Task 11) builds [ProfileEntity] rows from
+ * parsed [Profile]s the same way [import] does and reuses this rather than re-deriving it.
+ */
+internal fun Outbound.protocolName(): String =
     when (this) {
         is VlessOutbound -> "vless"
         is VmessOutbound -> "vmess"
@@ -435,8 +440,11 @@ private fun Outbound.protocolName(): String =
  * A **display** value only: it exists so search matches what the user can see, and nothing
  * ever reads it back into a config. [ShadowsocksOutbound] and [SocksOutbound] carry no
  * [art.yniyniyni.subspace.core.model.StreamSettings] at all — they summarise as plain `tcp`.
+ *
+ * `internal`, not `private`: shared with `SubscriptionSyncer` for the same reason as
+ * [protocolName].
  */
-private fun Outbound.transportSummary(): String {
+internal fun Outbound.transportSummary(): String {
     val stream =
         when (this) {
             is VlessOutbound -> stream

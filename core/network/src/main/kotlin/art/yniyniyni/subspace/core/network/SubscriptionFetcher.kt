@@ -60,11 +60,11 @@ constructor(
     private val hwidProvider: HwidProvider,
     @param:AppVersion private val appVersion: String,
     private val deviceInfo: DeviceInfo = EmptyDeviceInfo,
-) {
+) : SubscriptionSource {
     private val baseClient = OkHttpClient.Builder().build()
 
     /** Fetches [request]. Always on [Dispatchers.IO] (§5.3). */
-    public suspend fun fetch(request: SubscriptionRequest): FetchOutcome =
+    override suspend fun fetch(request: SubscriptionRequest): FetchOutcome =
         withContext(Dispatchers.IO) {
             // Client construction (the timeout chain) and call construction
             // (URL parsing) both throw on bad input rather than returning a

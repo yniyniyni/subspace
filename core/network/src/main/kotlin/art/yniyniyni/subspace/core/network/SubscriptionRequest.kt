@@ -17,4 +17,14 @@ public data class SubscriptionRequest(
     val hwidEnabled: Boolean,
     val userAgentOverride: String?,
     val timeoutSeconds: Int,
-)
+) {
+    // §5.6: url is a secret. The generated data-class toString() would print
+    // it verbatim, which is exactly the "reaches a log line" failure mode
+    // this class exists to avoid — this is a structural guard against a
+    // future `request.toString()` in a debug log, not a fix for a leak that
+    // exists today. The other fields are not secrets and stay visible: they
+    // are what makes a logged instance useful for debugging at all.
+    override fun toString(): String =
+        "SubscriptionRequest(url=<redacted>, hwidEnabled=$hwidEnabled, " +
+            "userAgentOverride=$userAgentOverride, timeoutSeconds=$timeoutSeconds)"
+}

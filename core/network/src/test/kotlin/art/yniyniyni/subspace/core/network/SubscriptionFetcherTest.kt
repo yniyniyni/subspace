@@ -160,4 +160,27 @@ class SubscriptionFetcherTest {
         // §5.6. FetchFailure is an enum with no payload, so this is structural.
         FetchFailure.entries.forEach { it.name.contains("http") shouldBe false }
     }
+
+    @Test
+    fun `an out-of-contract timeout does not throw`() = runTest {
+        // The directive registry keeps timeoutSeconds in 5-15, but the class's
+        // own KDoc claims an unconditional "never throws" — OkHttpClient's
+        // timeout builder methods throw IllegalArgumentException on a negative
+        // value, and that construction has to be covered by the same guard as
+        // request construction, not left to the caller-side contract holding.
+        fetcher().fetch(request(timeoutSeconds = -1)) shouldBe
+            FetchOutcome.Failed(FetchFailure.NotFound)
+    }
+
+    @Test
+    fun `a response over the size cap is rejected rather than read into memory`() = runTest {
+        // The subscription URL is untrusted input (§A.1): a hostile or
+        // corrupted server could otherwise OOM the fetch. The taxonomy is
+        // closed (§7), so this maps onto ServerError — see toOutcome's KDoc
+        // for why that member and not ClientError.
+        val oversized = "a".repeat((MAX_SUBSCRIPTION_BODY_BYTES + 1).toInt())
+        server.enqueue(MockResponse(code = 200, body = oversized))
+
+        fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.ServerError)
+    }
 }

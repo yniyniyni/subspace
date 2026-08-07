@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.ResponseBody
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -19,6 +20,21 @@ private const val HTTP_NOT_FOUND = 404
 private const val HTTP_CLIENT_ERROR_FLOOR = 400
 private const val HTTP_SERVER_ERROR_FLOOR = 500
 private const val HEADER_TRUE = "true"
+
+/**
+ * Upper bound on a subscription response body, in bytes.
+ *
+ * A realistic subscription — a few hundred servers — is well under this even
+ * in verbose formats: a single-line share-link format (vmess/vless/trojan/ss,
+ * base64-encoded) runs roughly 150-300 bytes per server, so 500 servers is
+ * under 150 KB; the verbosest realistic format, Clash YAML with full
+ * per-proxy TLS/transport settings, runs closer to 1-2 KB per proxy, so 500
+ * servers is still under 1 MB. 2 MiB leaves several times that headroom
+ * while still bounding memory against a malicious or corrupted response —
+ * the subscription URL is user-supplied and untrusted input (§A.1), not a
+ * value this module has any reason to believe is well-behaved.
+ */
+internal const val MAX_SUBSCRIPTION_BODY_BYTES = 2L * 1024 * 1024
 
 /**
  * ARCHITECTURE.md §A.1's first pipeline stage.
@@ -50,14 +66,27 @@ constructor(
     /** Fetches [request]. Always on [Dispatchers.IO] (§5.3). */
     public suspend fun fetch(request: SubscriptionRequest): FetchOutcome =
         withContext(Dispatchers.IO) {
-            val client = baseClient.newBuilder()
-                .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                .build()
-
-            val call = runCatching { client.newCall(request.toOkHttpRequest()) }.getOrNull()
-                ?: return@withContext FetchOutcome.Failed(FetchFailure.NotFound)
+            // Client construction (the timeout chain) and call construction
+            // (URL parsing) both throw on bad input rather than returning a
+            // Result — confirmed empirically, not assumed: an out-of-range
+            // duration throws IllegalStateException from OkHttp's own
+            // duration check, and a malformed URL throws IllegalArgumentException
+            // from Request.Builder.url(String). Sharing one runCatching over
+            // both keeps the class's "never throws" guarantee absolute rather
+            // than relying on the caller-side contract (§7 directive validation
+            // keeps timeoutSeconds in 5-15) never being violated. Both failure
+            // causes collapse onto NotFound: neither produced a request that
+            // could reach a server, the same "we could not even form a call"
+            // case a malformed URL already mapped to before this fix widened
+            // the guard to cover client construction too.
+            val call = runCatching {
+                baseClient.newBuilder()
+                    .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                    .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                    .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                    .build()
+                    .newCall(request.toOkHttpRequest())
+            }.getOrNull() ?: return@withContext FetchOutcome.Failed(FetchFailure.NotFound)
 
             try {
                 call.execute().use { response ->
@@ -99,6 +128,14 @@ constructor(
  * The device-limit headers are checked **before** the status code: the panel can
  * report a reached limit on a 200, and reporting that as success would show the
  * user an empty server list with no explanation.
+ *
+ * The success branch's read is capped at [MAX_SUBSCRIPTION_BODY_BYTES]. An
+ * over-cap body maps to [FetchFailure.ServerError]: the taxonomy is closed
+ * (§7), and of the existing members this is the closest fit — the server (or
+ * whatever answered on its behalf) sent a response this client cannot safely
+ * accept, the same category as any other response it cannot make sense of.
+ * Not [FetchFailure.ClientError]: nothing about the outgoing request was
+ * wrong.
  */
 private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
     fun flag(name: String) = headers[name].equals(HEADER_TRUE, ignoreCase = true)
@@ -116,6 +153,22 @@ private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
 
         code >= HTTP_CLIENT_ERROR_FLOOR -> FetchOutcome.Failed(FetchFailure.ClientError)
 
-        else -> FetchOutcome.Success(body.string(), headers)
+        else -> body.readBounded(MAX_SUBSCRIPTION_BODY_BYTES)
+            ?.let { FetchOutcome.Success(it, headers) }
+            ?: FetchOutcome.Failed(FetchFailure.ServerError)
     }
 }
+
+/**
+ * Reads the body as text, or `null` if it exceeds [maxBytes].
+ *
+ * Bounds the actual bytes pulled off the stream, not the `Content-Length`
+ * header: the header is attacker-controlled (or simply absent) exactly like
+ * the rest of the response, so trusting it is not a guard. [okio.BufferedSource.request]
+ * buffers up to `maxBytes + 1` bytes directly from the socket and stops —
+ * it never reads further than that regardless of how much data the server
+ * keeps sending — so memory use is bounded whether or not the declared
+ * length is honest.
+ */
+private fun ResponseBody.readBounded(maxBytes: Long): String? =
+    if (source().request(maxBytes + 1)) null else string()

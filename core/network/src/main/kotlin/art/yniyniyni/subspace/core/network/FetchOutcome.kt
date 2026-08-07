@@ -32,7 +32,22 @@ public enum class FetchFailure {
 /** The result of one [SubscriptionFetcher.fetch]. */
 public sealed interface FetchOutcome {
     /** @property headers every response header, lower-cased. The allow-list is the registry's job. */
-    public data class Success(val body: String, val headers: Map<String, String>) : FetchOutcome
+    public data class Success(val body: String, val headers: Map<String, String>) : FetchOutcome {
+        // §5.6: body is the raw subscription content — server addresses,
+        // credentials, everything. The generated data-class toString() would
+        // print it verbatim; this is a structural guard, not a fix for an
+        // active leak (see SubscriptionRequest's identical override).
+        //
+        // headers gets the same treatment for its *values*, not its keys:
+        // the panel can echo HWID/device-limit state and provider-specific
+        // headers back (§A.4.1), and a header value is exactly as much a
+        // secret as the body it describes. Key names alone (`profile-title`,
+        // `x-hwid-active`, ...) are shape, not content, and keeping them
+        // visible is what makes a redacted instance still useful for
+        // debugging which headers came back.
+        override fun toString(): String =
+            "Success(body=<redacted, ${body.length} chars>, headers=${headers.keys})"
+    }
 
     public data class Failed(val reason: FetchFailure) : FetchOutcome
 }

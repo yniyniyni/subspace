@@ -118,7 +118,19 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
         // everything else goes through that module's repository, like every
         // other data source. Without this, a ViewModel fetching a subscription
         // directly is a compile success and an architecture regression (§4).
-        if (path.startsWith(":feature:") || path == ":service" || path == ":app") {
+        //
+        // Deliberately an allowlist (path != ":core:data"), not a denylist of
+        // :feature:*/:service/:app: a denylist silently stops protecting the
+        // moment an eleventh module is added, whereas "everyone except
+        // :core:data" is what "only :core:data may depend on it" (ARCHITECTURE.md
+        // §4) actually means. path != ":core:network" excludes the module's own
+        // self-reference (see the comment on projectDeps above — self-deps are
+        // never a violation). The root build.gradle.kts only applies this
+        // plugin inside subprojects {}, and build-logic is a separate included
+        // build that never applies it at all — so root and build-logic never
+        // run this check and the allowlist only ever needs to reason about
+        // this build's real subprojects.
+        if (path != ":core:data" && path != ":core:network") {
             projectDeps.filter { it == ":core:network" }.forEach {
                 violations += "$path depends on $it — only :core:data may depend on :core:network (§4)"
             }

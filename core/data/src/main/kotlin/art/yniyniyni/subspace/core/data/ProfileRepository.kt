@@ -173,13 +173,23 @@ internal constructor(
                 )
         }
 
-    /** Creates a new manual group, appended after every existing group. */
-    public suspend fun createGroup(name: String): Long {
+    /**
+     * Creates a new group, appended after every existing group.
+     *
+     * [source] defaults to `"MANUAL"` for every pre-existing caller.
+     * [SubscriptionRepository.add] (Task 10) passes `"SUBSCRIPTION"` instead,
+     * reusing this same insert rather than duplicating it — the M4 seam
+     * [ProfileGroupEntity]'s KDoc describes.
+     */
+    public suspend fun createGroup(
+        name: String,
+        source: String = GROUP_SOURCE_MANUAL,
+    ): Long {
         val position = dao.observeGroups().first().size
         return dao.insertGroup(
             ProfileGroupEntity(
                 name = name,
-                source = GROUP_SOURCE_MANUAL,
+                source = source,
                 position = position,
                 createdAt = System.currentTimeMillis(),
             ),

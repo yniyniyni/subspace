@@ -36,15 +36,52 @@ class Migration1To2Test {
 
         val db = helper.runMigrationsAndValidate(TEST_DB, 2, true, MIGRATION_1_2)
 
-        db.query("SELECT name, lastConnectedAt, subscriptionKey FROM profiles WHERE id = 1")
+        // The group row itself must survive the migration untouched — the
+        // profile row above is meaningless if its parent group vanished.
+        db.query("SELECT name, source, position, createdAt FROM profile_groups WHERE id = 1")
             .use { cursor ->
                 cursor.moveToFirst() shouldBe true
-                cursor.getString(0) shouldBe "Server A"
-                // The column every refresh must preserve — see spec §6.5.
-                cursor.getLong(1) shouldBe 12345L
-                // New column, NULL for every hand-imported row.
-                cursor.isNull(2) shouldBe true
+                cursor.getString(0) shouldBe "Local configs"
+                cursor.getString(1) shouldBe "MANUAL"
+                cursor.getInt(2) shouldBe 0
+                cursor.getLong(3) shouldBe 100L
             }
+
+        // Every v1 column, not just the three most likely to break, plus the
+        // one column the migration adds. A migration that silently dropped or
+        // reordered a column would pass runMigrationsAndValidate's schema
+        // check (it compares TableInfo, not row contents) but fail here.
+        db.query(
+            "SELECT id, groupId, kind, identityHash, name, protocol, address, port, " +
+                "transport, outbound, rawJson, position, lastConnectedAt, lastError, " +
+                "createdAt, subscriptionKey FROM profiles WHERE id = 1",
+        ).use { cursor ->
+            cursor.moveToFirst() shouldBe true
+            cursor.getLong(0) shouldBe 1L
+            cursor.getLong(1) shouldBe 1L
+            cursor.getString(2) shouldBe "TYPED"
+            cursor.getString(3) shouldBe "hash-a"
+            cursor.getString(4) shouldBe "Server A"
+            cursor.getString(5) shouldBe "vless"
+            cursor.getString(6) shouldBe "example.com"
+            cursor.getInt(7) shouldBe 443
+            cursor.getString(8) shouldBe "tcp · reality · 443"
+            cursor.getString(9) shouldBe "{}"
+            cursor.isNull(10) shouldBe true // rawJson
+            cursor.getInt(11) shouldBe 0
+            // The column every refresh must preserve — see spec §6.5.
+            cursor.getLong(12) shouldBe 12345L
+            cursor.isNull(13) shouldBe true // lastError
+            cursor.getLong(14) shouldBe 100L
+            // New column, NULL for every hand-imported row.
+            cursor.isNull(15) shouldBe true // subscriptionKey
+        }
+
+        // Migrating did not fabricate or drop rows.
+        db.query("SELECT COUNT(*) FROM profiles").use {
+            it.moveToFirst()
+            it.getInt(0) shouldBe 1
+        }
     }
 
     @Test
@@ -94,9 +131,15 @@ class Migration1To2Test {
     }
 
     @Test
-    fun deletingASubscriptionCascadesToItsGroupAndProfiles() {
+    fun deletingAGroupCascadesThroughItsSubscriptionToTheDirectiveAndOverride() {
         // §A.1: "deletion must cascade". Enforced by the schema rather than by
-        // remembering to do it.
+        // remembering to do it. This deletes the *group* (not the subscription
+        // row itself, and no profiles are involved) and checks that the
+        // cascade reaches every table one FK hop away and two hops away:
+        // profile_groups -> subscriptions -> {subscription_directives,
+        // subscription_overrides}. The name says exactly that rather than
+        // promising a profiles cascade this test never exercises — that path
+        // is already covered by v1's own group-delete-cascades-profiles case.
         helper.createDatabase(TEST_DB, 1).close()
         val db = helper.runMigrationsAndValidate(TEST_DB, 2, true, MIGRATION_1_2)
 
@@ -114,6 +157,13 @@ class Migration1To2Test {
             "INSERT INTO subscription_directives (subscriptionId, key, value, receivedAt) " +
                 "VALUES (3, 'profile-title', 'Provider', 100)",
         )
+        // subscription_overrides had zero coverage before this test: its FK
+        // to subscriptions is the one schema element in this migration that
+        // no assertion touched.
+        db.execSQL(
+            "INSERT INTO subscription_overrides (subscriptionId, key, value, pinnedAt) " +
+                "VALUES (3, 'profile-title', 'User pin', 100)",
+        )
 
         db.execSQL("DELETE FROM profile_groups WHERE id = 7")
 
@@ -122,6 +172,10 @@ class Migration1To2Test {
             it.getInt(0) shouldBe 0
         }
         db.query("SELECT COUNT(*) FROM subscription_directives").use {
+            it.moveToFirst()
+            it.getInt(0) shouldBe 0
+        }
+        db.query("SELECT COUNT(*) FROM subscription_overrides").use {
             it.moveToFirst()
             it.getInt(0) shouldBe 0
         }

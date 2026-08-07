@@ -18,6 +18,21 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 internal val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
+        // "DEFAULT NULL" here is redundant with SQLite's own default for a
+        // nullable column and does not appear in the exported 2.json's
+        // `defaultValue` for this field (Room only emits a `defaultValue` for
+        // an explicit non-null default on the entity, e.g. via @ColumnInfo).
+        // That asymmetry is safe, not a bug: Room's TableInfo.Column.equals
+        // only compares defaultValue when the *entity-derived* side is
+        // non-null, so a live column with no recorded default validates fine
+        // against an entity that also has none. Do NOT "fix" this by adding
+        // `@ColumnInfo(defaultValue = "NULL")` to ProfileEntity.subscriptionKey
+        // to make the SQL and the entity match textually — that would give the
+        // entity side a non-null defaultValue string, and validation would
+        // then require every already-migrated v1-to-v2 database's live column
+        // to carry a recorded default it does not have, failing
+        // runMigrationsAndValidate (and, worse, every real user's first
+        // launch on v2) with an IllegalStateException.
         db.execSQL("ALTER TABLE profiles ADD COLUMN subscriptionKey TEXT DEFAULT NULL")
         db.execSQL(
             "CREATE UNIQUE INDEX IF NOT EXISTS index_profiles_groupId_subscriptionKey " +

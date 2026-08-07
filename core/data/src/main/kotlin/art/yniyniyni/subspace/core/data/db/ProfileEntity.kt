@@ -25,6 +25,15 @@ import androidx.room.PrimaryKey
  * a single id — fine for re-import dedup, silent data loss at an upsert.
  *
  * [lastConnectedAt] and [lastError] are the only columns `:bg` writes.
+ *
+ * [subscriptionKey] is the provider's own identity for a server within its
+ * subscription, and it is what refresh keys on — **not** [identityHash]. The M3
+ * spec's handoff note is the reason: because [identityHash] covers the whole
+ * outbound, a provider changing a server's SNI produces a *new* row rather than
+ * an update, orphaning the old one along with its connection history. NULL for
+ * every hand-imported profile; SQLite treats NULLs as distinct in a unique
+ * index, so any number of manual rows coexist and only subscription-backed rows
+ * are constrained.
  */
 @Entity(
     tableName = "profiles",
@@ -38,6 +47,7 @@ import androidx.room.PrimaryKey
     ],
     indices = [
         Index(value = ["groupId", "identityHash"], unique = true),
+        Index(value = ["groupId", "subscriptionKey"], unique = true),
         Index(value = ["groupId", "position"]),
     ],
 )
@@ -57,4 +67,5 @@ internal data class ProfileEntity(
     val lastConnectedAt: Long?,
     val lastError: String?,
     val createdAt: Long,
+    val subscriptionKey: String? = null,
 )

@@ -85,6 +85,7 @@ internal constructor(
     // the second then hits the unique index on url.
     private val addMutex = Mutex()
 
+    /** Every stored subscription, in insertion order. Recomposes on write. */
     public fun observeSubscriptions(): Flow<List<StoredSubscription>> =
         dao.observeSubscriptions().map { rows -> rows.map { it.toStored() } }
 
@@ -134,6 +135,7 @@ internal constructor(
         profiles.deleteGroup(subscription.groupId)
     }
 
+    /** Toggles the HWID header (§A.4.1) for [id]. A no-op if the subscription no longer exists. */
     public suspend fun setHwidEnabled(
         id: Long,
         enabled: Boolean,
@@ -142,6 +144,7 @@ internal constructor(
         dao.updateSubscription(existing.copy(hwidEnabled = enabled))
     }
 
+    /** Sets a per-subscription User-Agent override, or clears it when [userAgent] is null or blank. */
     public suspend fun setUserAgentOverride(
         id: Long,
         userAgent: String?,

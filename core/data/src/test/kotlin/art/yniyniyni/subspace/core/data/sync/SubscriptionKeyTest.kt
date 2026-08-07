@@ -33,9 +33,48 @@ class SubscriptionKeyTest {
     }
 
     @Test
-    fun `a stable list produces stable keys across calls`() {
-        val names = listOf("Tokyo", "Osaka", "Tokyo")
-        subscriptionKeysFor(names) shouldBe subscriptionKeysFor(names)
+    fun `a literal name that mimics an ordinal key does not collide with it`() {
+        // The reviewer's counterexample against the unescaped `<name>#<ordinal>`
+        // scheme: "Tokyo" x2 generates "Tokyo#0" and "Tokyo#1" as ordinal keys,
+        // and a third row literally named "Tokyo#0" is unique on its own, so it
+        // would take the bare key "Tokyo#0" — identical to the first row's
+        // generated key. Escaping closes this: the literal name's `#` is
+        // escaped, so its key can never equal an ordinal-generated one.
+        val keys = subscriptionKeysFor(listOf("Tokyo", "Tokyo", "Tokyo#0"))
+
+        keys.size shouldBe keys.toSet().size
+    }
+
+    @Test
+    fun `keys stay unique across an adversarial mix, including names already containing the escape sequence`() {
+        val names =
+            listOf(
+                "Tokyo",
+                "Tokyo",
+                "Tokyo#0",
+                "Tokyo#1",
+                "Tokyo\\#0",
+                "",
+                "",
+                "#0",
+                "#1",
+                "\\",
+                "\\\\",
+                "a#b",
+                "a#b",
+            )
+
+        val keys = subscriptionKeysFor(names)
+
+        keys.size shouldBe keys.toSet().size
+    }
+
+    @Test
+    fun `names differing only in case are distinct names`() {
+        // Only trimming is specified; case folding is a deliberate non-goal.
+        // Pinned so a later refactor doesn't fold case and silently change
+        // refresh identity for a provider whose casing varies between fetches.
+        subscriptionKeysFor(listOf("Tokyo", "tokyo")) shouldBe listOf("Tokyo", "tokyo")
     }
 
     @Test

@@ -10,7 +10,9 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(libs.okhttp)
 
     testImplementation(libs.kotest.assertions)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }

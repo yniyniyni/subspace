@@ -35,7 +35,7 @@ class SubscriptionRepositoryTest {
     @After fun tearDown() = db.close()
 
     @Test
-    fun `adding a subscription creates a SUBSCRIPTION-sourced group`() = runTest {
+    fun addingASubscriptionCreatesASubscriptionSourcedGroup() = runTest {
         val id = repository.add("https://example.com/sub", name = "Provider")
 
         val stored = repository.observeSubscriptions().first().single()
@@ -50,7 +50,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `adding the same url twice returns the existing subscription`() = runTest {
+    fun addingTheSameUrlTwiceReturnsTheExistingSubscription() = runTest {
         val first = repository.add("https://example.com/sub", name = "Provider")
         val second = repository.add("https://example.com/sub", name = "Provider Again")
 
@@ -59,7 +59,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `the provider value is effective when nothing is pinned`() = runTest {
+    fun theProviderValueIsEffectiveWhenNothingIsPinned() = runTest {
         val id = repository.add("https://example.com/sub", name = "Provider")
         db.subscriptionDao().putDirectives(
             listOf(SubscriptionDirectiveEntity(id, "profile-update-interval", "6", 0)),
@@ -73,7 +73,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `a pin beats the provider value and both stay readable`() = runTest {
+    fun aPinBeatsTheProviderValueAndBothStayReadable() = runTest {
         // Spec D3's UI consequence: "provider suggests 6 h, you pinned 24 h"
         // must be renderable, or a pinned field looks like a subscription that
         // stopped updating.
@@ -91,7 +91,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `a pin survives a directive update carrying a different value`() = runTest {
+    fun aPinSurvivesADirectiveUpdateCarryingADifferentValue() = runTest {
         val id = repository.add("https://example.com/sub", name = "Provider")
         repository.pin(id, "profile-update-interval", "24")
 
@@ -103,7 +103,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `unpinning falls back to the provider value`() = runTest {
+    fun unpinningFallsBackToTheProviderValue() = runTest {
         val id = repository.add("https://example.com/sub", name = "Provider")
         db.subscriptionDao().putDirectives(
             listOf(SubscriptionDirectiveEntity(id, "profile-update-interval", "6", 0)),
@@ -115,7 +115,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `the default applies only when there is no provider value and no pin`() = runTest {
+    fun theDefaultAppliesOnlyWhenThereIsNoProviderValueAndNoPin() = runTest {
         val id = repository.add("https://example.com/sub", name = "Provider")
 
         val effective = repository.effective(id, "profile-update-interval", default = "12")
@@ -126,7 +126,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `deleting a subscription removes its group and its servers`() = runTest {
+    fun deletingASubscriptionRemovesItsGroupAndItsServers() = runTest {
         // §A.1: deletion must cascade.
         val id = repository.add("https://example.com/sub", name = "Provider")
         val groupId = repository.observeSubscriptions().first().single().groupId
@@ -138,7 +138,7 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
-    fun `the hwid toggle persists`() = runTest {
+    fun theHwidTogglePersists() = runTest {
         val id = repository.add("https://example.com/sub", name = "Provider")
 
         repository.setHwidEnabled(id, false)

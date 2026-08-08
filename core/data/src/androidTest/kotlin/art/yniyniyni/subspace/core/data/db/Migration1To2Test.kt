@@ -48,13 +48,13 @@ class Migration1To2Test {
             }
 
         // Every v1 column, not just the three most likely to break, plus the
-        // one column the migration adds. A migration that silently dropped or
+        // two columns this migration adds. A migration that silently dropped or
         // reordered a column would pass runMigrationsAndValidate's schema
         // check (it compares TableInfo, not row contents) but fail here.
         db.query(
             "SELECT id, groupId, kind, identityHash, name, protocol, address, port, " +
                 "transport, outbound, rawJson, position, lastConnectedAt, lastError, " +
-                "createdAt, subscriptionKey FROM profiles WHERE id = 1",
+                "createdAt, subscriptionKey, droppedFromSubscriptionAt FROM profiles WHERE id = 1",
         ).use { cursor ->
             cursor.moveToFirst() shouldBe true
             cursor.getLong(0) shouldBe 1L
@@ -73,8 +73,9 @@ class Migration1To2Test {
             cursor.getLong(12) shouldBe 12345L
             cursor.isNull(13) shouldBe true // lastError
             cursor.getLong(14) shouldBe 100L
-            // New column, NULL for every hand-imported row.
+            // New columns, NULL for every hand-imported row.
             cursor.isNull(15) shouldBe true // subscriptionKey
+            cursor.isNull(16) shouldBe true // droppedFromSubscriptionAt
         }
 
         // Migrating did not fabricate or drop rows.

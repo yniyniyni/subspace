@@ -52,6 +52,13 @@ public data class StoredProfile(
     val rawJson: String?,
     val lastConnectedAt: Long?,
     val lastError: String?,
+    /**
+     * Spec D4's "kept and flagged" marker (Task 11 review fix, Important 4): non-null when this
+     * row's provider stopped offering it while it was the active profile, so it was kept rather
+     * than deleted. Part 2's UI is the intended reader — "no longer offered by this provider,
+     * since <this timestamp>" — nothing in `:core:data` reads it back.
+     */
+    val droppedFromSubscriptionAt: Long? = null,
 ) {
     /** RAW_JSON runs through the typed projection in M3 (§6). */
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
@@ -415,6 +422,7 @@ internal constructor(
             rawJson = rawJson,
             lastConnectedAt = lastConnectedAt,
             lastError = lastError,
+            droppedFromSubscriptionAt = droppedFromSubscriptionAt,
         )
 }
 

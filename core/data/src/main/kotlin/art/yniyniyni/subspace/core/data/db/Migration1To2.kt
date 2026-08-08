@@ -38,6 +38,12 @@ internal val MIGRATION_1_2 = object : Migration(1, 2) {
             "CREATE UNIQUE INDEX IF NOT EXISTS index_profiles_groupId_subscriptionKey " +
                 "ON profiles (groupId, subscriptionKey)",
         )
+        // Task 11 review fix: added directly to this same v1-to-v2 migration rather than as a
+        // v3 migration of its own. Version 2 has not shipped — it exists only on this
+        // unreleased branch — so there is no installed database with a v2 schema that a v3
+        // migration would need to carry forward; folding the column in here is strictly
+        // simpler and the schema JSON is re-exported to match.
+        db.execSQL("ALTER TABLE profiles ADD COLUMN droppedFromSubscriptionAt INTEGER DEFAULT NULL")
 
         db.execSQL(
             """

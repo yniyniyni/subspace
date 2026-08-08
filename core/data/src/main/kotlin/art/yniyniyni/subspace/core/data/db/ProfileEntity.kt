@@ -34,6 +34,15 @@ import androidx.room.PrimaryKey
  * every hand-imported profile; SQLite treats NULLs as distinct in a unique
  * index, so any number of manual rows coexist and only subscription-backed rows
  * are constrained.
+ *
+ * [droppedFromSubscriptionAt] is spec D4's "kept and flagged" marker: set when
+ * a sync finds this row's [subscriptionKey] active (the tunnel is using it) but
+ * absent from the provider's response, so the row survives instead of being
+ * deleted. Null otherwise. Cleared back to null the moment the row's
+ * `subscriptionKey` reappears in a response — see
+ * `SubscriptionDao.upsertBySubscriptionKey`. Added directly to the v2 schema
+ * (Task 11 review fix) rather than as a v3 migration: v2 has not shipped, so
+ * there is no installed database whose migration path would need to change.
  */
 @Entity(
     tableName = "profiles",
@@ -68,4 +77,5 @@ internal data class ProfileEntity(
     val lastError: String?,
     val createdAt: Long,
     val subscriptionKey: String? = null,
+    val droppedFromSubscriptionAt: Long? = null,
 )

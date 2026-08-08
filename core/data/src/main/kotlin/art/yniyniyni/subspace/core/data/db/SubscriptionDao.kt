@@ -15,6 +15,23 @@ import kotlinx.coroutines.flow.Flow
 // upsertBySubscriptionKey's KDoc for what this placeholder is for.
 private const val TEMP_IDENTITY_HASH_PREFIX = "subspace-sync-temp:"
 
+/**
+ * One sync's whole computed change set, bundled so [SubscriptionDao.applySync] stays under
+ * detekt's `LongParameterList` threshold instead of taking each field separately. Built by
+ * `SubscriptionSyncer` and handed to [SubscriptionDao.applySync] as a single immutable value —
+ * that handoff, one change set to one `@Transaction` method, is the point of spec §6.5.
+ */
+internal data class SyncChangeSet(
+    val subscriptionId: Long,
+    val groupId: Long,
+    val fetchedAt: Long,
+    val directives: List<SubscriptionDirectiveEntity>,
+    val groupName: String?,
+    val upserts: List<ProfileEntity>,
+    val deleteIds: List<Long>,
+    val flagIds: List<Long>,
+)
+
 /** Data access for the three subscription tables. */
 @Suppress("TooManyFunctions") // A DAO's surface is the width of its tables' usage, per ProfileDao.
 @Dao
@@ -39,6 +56,27 @@ internal interface SubscriptionDao {
 
     @Query("DELETE FROM subscriptions WHERE id = :id")
     suspend fun deleteSubscription(id: Long)
+
+    /**
+     * Records a fetch failure without touching any other column.
+     *
+     * A targeted `@Query`, not a whole-row `@Update`, deliberately (Task 11 review fix,
+     * Important 3): the syncer reads the subscription row *before* the network fetch, which can
+     * run for the full `subscription-request-timeout` window (5-15s). A user calling
+     * [SubscriptionRepository.setHwidEnabled] or `setUserAgentOverride` mid-fetch would have that
+     * edit silently reverted by a full-row `@Update` writing the syncer's stale, pre-fetch copy
+     * back over it. Writing only these two columns makes that race impossible instead of merely
+     * unlikely.
+     */
+    @Query("UPDATE subscriptions SET lastFetchStatus = :status, lastFetchDetail = :detail WHERE id = :id")
+    suspend fun recordFetchFailure(id: Long, status: String, detail: String)
+
+    /** The success half of [recordFetchFailure]'s targeted-column reasoning — same race, same fix. */
+    @Query(
+        "UPDATE subscriptions SET lastFetchedAt = :at, lastFetchStatus = NULL, lastFetchDetail = NULL " +
+            "WHERE id = :id",
+    )
+    suspend fun recordFetchSuccess(id: Long, at: Long)
 
     @Query("SELECT * FROM subscription_directives WHERE subscriptionId = :id")
     fun observeDirectives(id: Long): Flow<List<SubscriptionDirectiveEntity>>
@@ -93,6 +131,17 @@ internal interface SubscriptionDao {
     @Query("DELETE FROM profiles WHERE id = :id")
     suspend fun deleteProfileById(id: Long)
 
+    /**
+     * Sets spec D4's "kept and flagged" marker (Task 11 review fix, Important 4).
+     *
+     * [applySync] calls this only for a row whose flag is not already set, so the timestamp
+     * recorded is the *first* sync that found the row active-but-dropped, not the most recent
+     * one — "no longer offered since Aug 5" rather than a value that silently advances on every
+     * refresh while the row stays dropped.
+     */
+    @Query("UPDATE profiles SET droppedFromSubscriptionAt = :at WHERE id = :id")
+    suspend fun flagDroppedFromSubscription(id: Long, at: Long)
+
     /** Looks up a profile by its (groupId, subscriptionKey) slot — see [ProfileEntity]'s unique index. */
     @Query("SELECT * FROM profiles WHERE groupId = :groupId AND subscriptionKey = :subscriptionKey")
     suspend fun findBySubscriptionKey(groupId: Long, subscriptionKey: String): ProfileEntity?
@@ -110,20 +159,27 @@ internal interface SubscriptionDao {
     /**
      * Inserts a subscription-derived profile.
      *
-     * `REPLACE` on `(groupId, identityHash)` conflict, deliberately, unlike [ProfileDao]'s plain
-     * insert: spec §4.3's documented, bounded limitation is that two servers in one response with
-     * byte-identical outbounds but different names collide on that index. `ABORT` (Room's default)
-     * would throw and roll back the **whole** sync — directives and every other server in the same
-     * response — over one provider sending a duplicate. `REPLACE` instead drops the losing row
-     * silently; [art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer] reads the count back
-     * afterwards and logs the discrepancy (counts only, §5.6), which is what makes the case
-     * diagnosable instead of either silent or fatal.
+     * Plain `ABORT` (Room's default), matching [ProfileDao]'s own insert — **not** `REPLACE`
+     * (Task 11 review fix, Critical 1). An earlier version of this method used `REPLACE` on
+     * `(groupId, identityHash)` conflict to absorb spec §4.3's documented duplicate-outbound
+     * collision, reasoning that `ABORT` would roll back the whole sync over one provider
+     * sending a duplicate. That reasoning missed a sharper case: a *kept, active* row (spec D4)
+     * is never in [applySync]'s `upserts` or `deleteIds` — it is untouched, holding its real
+     * `identityHash` — so a brand-new entry whose outbound happens to collide with it hit
+     * `REPLACE` and silently deleted the row a live tunnel was using, while `applySync` still
+     * reported `keptActive = 1`. `SubscriptionSyncer.buildUpserts` now resolves every known
+     * duplicate-outbound case — both within-batch and against a kept row — in Kotlin *before*
+     * this method ever runs, using [findBySubscriptionKey]-derived and kept-row hashes it
+     * already has in hand, and counts what it drops. `ABORT` stays as the backstop for a
+     * collision *nothing* upstream accounted for: it must fail loudly rather than silently
+     * destroy a row, exactly why [ProfileRepositoryTest] pins `ABORT` on [ProfileDao.insertProfile]
+     * twice.
      */
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert
     suspend fun insertSubscriptionProfile(profile: ProfileEntity): Long
 
-    /** The update half of [insertSubscriptionProfile]'s `REPLACE` reasoning — same index, same trade-off. */
-    @Update(onConflict = OnConflictStrategy.REPLACE)
+    /** The update half of [insertSubscriptionProfile]'s `ABORT` reasoning — same index, same trade-off. */
+    @Update
     suspend fun updateSubscriptionProfile(profile: ProfileEntity)
 
     /**
@@ -152,6 +208,9 @@ internal interface SubscriptionDao {
      * [ProfileEntity.createdAt] are carried over from the existing row, same reasoning as
      * [ProfileDao.upsertProfile]: [profile] is freshly built from what the subscription says
      * *now*, and a plain overwrite would reset "Last used" on every refresh.
+     * [ProfileEntity.droppedFromSubscriptionAt] is deliberately **not** carried over: [profile]
+     * reappearing in a response at all — which is the only way this branch runs for a
+     * previously-flagged row — means the provider is offering it again, so the flag clears.
      */
     @Transaction
     suspend fun upsertBySubscriptionKey(profile: ProfileEntity) {
@@ -176,56 +235,67 @@ internal interface SubscriptionDao {
     /**
      * Applies one whole sync atomically (spec §6.5).
      *
-     * Either the directives, the servers, the group name and the timestamp all
-     * land, or none do. A half-applied subscription is the same hazard §A.3.1
-     * describes for half-applied routing, one milestone early.
+     * Either the directives, the servers, the group name and the timestamp all land, or none do.
+     * A half-applied subscription is the same hazard §A.3.1 describes for half-applied routing,
+     * one milestone early.
      *
-     * Write ordering, and why the unique-index collision this task was flagged
-     * against is not reachable:
+     * Takes a single [SyncChangeSet] rather than each field as its own parameter — partly for
+     * detekt's `LongParameterList`, but mainly because it keeps `SubscriptionSyncer` from ever
+     * calling the individual pieces of a sync separately: it computes the whole set first and
+     * hands it over once, which is the transaction-boundary property spec §6.5 requires.
      *
-     * 1. [deleteIds] first. A row absent from the new response is gone before
-     *    any insert or update runs, so nothing later in this method can ever
-     *    collide with a row that is about to disappear anyway.
-     * 2. [clearIdentityHash] on every row [upserts] is about to *update* (found
-     *    by [findBySubscriptionKey]), before any of them is given its final
-     *    data. Without this pass, a provider swapping two servers' names — each
-     *    keeps its own `subscriptionKey`, but the two rows need to trade
-     *    `identityHash` values — would collide: writing the first row's new
-     *    (target) hash fails because the second row, not yet processed, still
-     *    holds it. Clearing every matched row to a per-row-unique placeholder
-     *    first means no row in this batch is ever holding a value another row
-     *    in the same batch is about to be given.
-     * 3. [upsertBySubscriptionKey] for every entry, now safe: each lookup by
-     *    `subscriptionKey` finds either a row already neutralised in step 2 (an
-     *    update) or no row at all (an insert), and neither case can collide
-     *    with anything still in step-2's cleared state.
+     * [SyncChangeSet.subscriptionId]/[SyncChangeSet.groupId]/[SyncChangeSet.fetchedAt] are taken
+     * as bare values rather than a whole `SubscriptionEntity` (Task 11 review fix, Important 3):
+     * the caller read the subscription row before a fetch that can run up to
+     * `subscription-request-timeout` seconds, and writing that stale snapshot back with a full
+     * `@Update` would clobber a `hwidEnabled`/`userAgentOverride` edit a user made mid-sync.
+     * [recordFetchSuccess] writes only the three columns this method actually changes.
      *
-     * The one remaining collision — two *different* `subscriptionKey`s
-     * computing the *same* `identityHash` (byte-identical outbounds under
-     * different names) — is spec §4.3's documented, bounded limitation, not an
-     * ordering bug; [insertSubscriptionProfile] and [updateSubscriptionProfile]
-     * resolve it with `REPLACE` rather than aborting the whole transaction over
-     * it, and the syncer logs the resulting count discrepancy.
+     * Write ordering, and why the unique-index collision this task was flagged against is not
+     * reachable:
+     *
+     * 1. [SyncChangeSet.deleteIds] first. A row absent from the new response is gone before any
+     *    insert or update runs, so nothing later in this method can ever collide with a row that
+     *    is about to disappear anyway.
+     * 2. [SyncChangeSet.flagIds] next — spec D4's rows, still present, still active, just not
+     *    offered this time. Flagging them is independent of the identity work below; ordering
+     *    relative to it doesn't matter, only that it happens inside the same transaction.
+     * 3. [clearIdentityHash] on every row [SyncChangeSet.upserts] is about to *update* (found by
+     *    [findBySubscriptionKey]), before any of them is given its final data. Without this
+     *    pass, a provider swapping two servers' names — each keeps its own `subscriptionKey`,
+     *    but the two rows need to trade `identityHash` values — would collide: writing the
+     *    first row's new (target) hash fails because the second row, not yet processed, still
+     *    holds it. Clearing every matched row to a per-row-unique placeholder first means no row
+     *    in this batch is ever holding a value another row in the same batch is about to be
+     *    given.
+     * 4. [upsertBySubscriptionKey] for every entry, now safe: each lookup by `subscriptionKey`
+     *    finds either a row already neutralised in step 3 (an update) or no row at all (an
+     *    insert), and neither case can collide with anything still in step-3's cleared state.
+     *    [SyncChangeSet.upserts] itself is guaranteed free of both a within-batch duplicate
+     *    identityHash *and* a collision against a kept (flagged) row's identityHash —
+     *    `SubscriptionSyncer.buildUpserts` resolves both in Kotlin before this method is ever
+     *    called, using [insertSubscriptionProfile]'s KDoc reasoning. Any identityHash collision
+     *    that still reaches [insertSubscriptionProfile] or [updateSubscriptionProfile] here is
+     *    therefore one neither this method nor the syncer accounted for, and `ABORT` is
+     *    deliberate: it fails the whole transaction loudly rather than silently destroying
+     *    whichever row lost the race.
      */
     @Transaction
-    suspend fun applySync(
-        subscription: SubscriptionEntity,
-        directives: List<SubscriptionDirectiveEntity>,
-        groupName: String?,
-        upserts: List<ProfileEntity>,
-        deleteIds: List<Long>,
-    ) {
-        putDirectives(directives)
-        pruneDirectives(subscription.id, directives.map { it.key })
-        groupName?.let { renameGroup(subscription.groupId, it) }
-        deleteIds.forEach { deleteProfileById(it) }
-        upserts.forEach { profile ->
-            val key = requireNotNull(profile.subscriptionKey) {
-                "applySync requires every upsert to carry a non-null subscriptionKey"
+    suspend fun applySync(changeSet: SyncChangeSet) {
+        with(changeSet) {
+            putDirectives(directives)
+            pruneDirectives(subscriptionId, directives.map { it.key })
+            groupName?.let { renameGroup(groupId, it) }
+            deleteIds.forEach { deleteProfileById(it) }
+            flagIds.forEach { flagDroppedFromSubscription(it, fetchedAt) }
+            upserts.forEach { profile ->
+                val key = requireNotNull(profile.subscriptionKey) {
+                    "applySync requires every upsert to carry a non-null subscriptionKey"
+                }
+                findBySubscriptionKey(profile.groupId, key)?.let { clearIdentityHash(it.id) }
             }
-            findBySubscriptionKey(profile.groupId, key)?.let { clearIdentityHash(it.id) }
+            upserts.forEach { upsertBySubscriptionKey(it) }
+            recordFetchSuccess(subscriptionId, fetchedAt)
         }
-        upserts.forEach { upsertBySubscriptionKey(it) }
-        updateSubscription(subscription)
     }
 }

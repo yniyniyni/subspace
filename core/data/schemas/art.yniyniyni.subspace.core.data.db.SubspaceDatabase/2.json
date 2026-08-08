@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "a2d3519a2e6b3821e0bd682a70d94726",
+    "identityHash": "c736a63f3e4e69a7f0191b22e6f04c41",
     "entities": [
       {
         "tableName": "profile_groups",
@@ -48,7 +48,7 @@
       },
       {
         "tableName": "profiles",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `identityHash` TEXT NOT NULL, `name` TEXT NOT NULL, `protocol` TEXT NOT NULL, `address` TEXT NOT NULL, `port` INTEGER NOT NULL, `transport` TEXT NOT NULL, `outbound` TEXT NOT NULL, `rawJson` TEXT, `position` INTEGER NOT NULL, `lastConnectedAt` INTEGER, `lastError` TEXT, `createdAt` INTEGER NOT NULL, `subscriptionKey` TEXT, FOREIGN KEY(`groupId`) REFERENCES `profile_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `identityHash` TEXT NOT NULL, `name` TEXT NOT NULL, `protocol` TEXT NOT NULL, `address` TEXT NOT NULL, `port` INTEGER NOT NULL, `transport` TEXT NOT NULL, `outbound` TEXT NOT NULL, `rawJson` TEXT, `position` INTEGER NOT NULL, `lastConnectedAt` INTEGER, `lastError` TEXT, `createdAt` INTEGER NOT NULL, `subscriptionKey` TEXT, `droppedFromSubscriptionAt` INTEGER, FOREIGN KEY(`groupId`) REFERENCES `profile_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -141,6 +141,11 @@
             "fieldPath": "subscriptionKey",
             "columnName": "subscriptionKey",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "droppedFromSubscriptionAt",
+            "columnName": "droppedFromSubscriptionAt",
+            "affinity": "INTEGER"
           }
         ],
         "primaryKey": {
@@ -417,7 +422,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a2d3519a2e6b3821e0bd682a70d94726')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c736a63f3e4e69a7f0191b22e6f04c41')"
     ]
   }
 }

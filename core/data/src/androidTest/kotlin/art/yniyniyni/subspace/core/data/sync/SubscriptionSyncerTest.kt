@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
+import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.SubscriptionSource
@@ -38,8 +39,10 @@ private fun uuidFor(name: String): String {
     return "11111111-2222-3333-4444-$last12"
 }
 
-private fun link(name: String, host: String = "example.com") =
-    "vless://${uuidFor(name)}@$host:443?" +
+// [uuid] defaults to uuidFor(name) but can be overridden so a fixture can put one server's
+// content under a different server's label — see the name-swap and identical-rename tests below.
+private fun link(name: String, host: String = "example.com", uuid: String = uuidFor(name)) =
+    "vless://$uuid@$host:443?" +
         "security=reality&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sni=example.org&fp=chrome#$name"
 
 // Backtick names with spaces are avoided here for the same reason
@@ -55,7 +58,7 @@ class SubscriptionSyncerTest {
     private val source = SubscriptionSource { response }
 
     private fun syncer() =
-        SubscriptionSyncer(db.subscriptionDao(), subscriptions, profiles, source)
+        SubscriptionSyncer(db.subscriptionDao(), subscriptions, source)
 
     @Before
     fun setUp() {
@@ -119,7 +122,7 @@ class SubscriptionSyncerTest {
             .single { it.id == groupId }.profiles.single().id
         profiles.recordConnected(profileId, atEpochMillis = 999)
 
-        // Same name, different SNI — a new identityHash, the same subscriptionKey.
+        // Same name, different address (host) — a new identityHash, the same subscriptionKey.
         response = FetchOutcome.Success(link("Tokyo", host = "moved.example.com"), emptyMap())
         val result = syncer().sync(id)
 
@@ -159,6 +162,87 @@ class SubscriptionSyncerTest {
 
         result shouldBe SyncResult.Synced(0, 1, 0, keptActive = 1, rejectedDirectives = 0)
         profiles.profile(tokyo.id) shouldNotBe null
+        // The name says "flagged" — this is what makes that true rather than aspirational
+        // (Task 11 review fix, Important 4). Part 2's UI reads this to render "no longer
+        // offered by this provider".
+        profiles.profile(tokyo.id)!!.droppedFromSubscriptionAt shouldNotBe null
+    }
+
+    @Test
+    fun twoServersSwappingNamesBothSurviveWithHashesTraded() = runTest {
+        // Task 11 review fix, Important 5(a). Each name keeps its own subscriptionKey (unique,
+        // content-independent), so both rows are matched and updated in place rather than
+        // deleted/inserted — but the identityHash values behind those two stable keys must trade
+        // places within SubscriptionDao.applySync's one transaction. See its KDoc for why the
+        // clearIdentityHash pass makes that safe.
+        val id = addSubscription()
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val tokyoBefore = profiles.observeGroups().first()
+            .single { it.id == groupId }.profiles.single { it.name == "Tokyo" }
+        val osakaBefore = profiles.observeGroups().first()
+            .single { it.id == groupId }.profiles.single { it.name == "Osaka" }
+        val tokyoHashBefore = db.profileDao().profile(tokyoBefore.id)!!.identityHash
+        val osakaHashBefore = db.profileDao().profile(osakaBefore.id)!!.identityHash
+
+        // The content that used to be "Tokyo" is now labelled "Osaka", and vice versa.
+        response = FetchOutcome.Success(
+            "${link("Osaka", uuid = uuidFor("Tokyo"))}\n${link("Tokyo", uuid = uuidFor("Osaka"))}",
+            emptyMap(),
+        )
+        val result = syncer().sync(id)
+
+        result shouldBe SyncResult.Synced(0, 2, 0, 0, 0)
+
+        val tokyoAfter = profiles.observeGroups().first()
+            .single { it.id == groupId }.profiles.single { it.name == "Tokyo" }
+        val osakaAfter = profiles.observeGroups().first()
+            .single { it.id == groupId }.profiles.single { it.name == "Osaka" }
+
+        // Same rows survive — subscriptionKey stayed stable, so ids are unchanged.
+        tokyoAfter.id shouldBe tokyoBefore.id
+        osakaAfter.id shouldBe osakaBefore.id
+
+        // Content traded: the row keyed "Tokyo" now holds what was "Osaka"'s uuid, and the
+        // stored identityHash values traded to match, with no leftover clearIdentityHash
+        // placeholder ever persisted.
+        (tokyoAfter.outbound as VlessOutbound).uuid shouldBe uuidFor("Osaka")
+        (osakaAfter.outbound as VlessOutbound).uuid shouldBe uuidFor("Tokyo")
+        db.profileDao().profile(tokyoAfter.id)!!.identityHash shouldBe osakaHashBefore
+        db.profileDao().profile(osakaAfter.id)!!.identityHash shouldBe tokyoHashBefore
+    }
+
+    @Test
+    fun renamingTheActiveServerWithAnIdenticalOutboundKeepsItsProfileId() = runTest {
+        // Task 11 review fix, Important 5(b) — this is the exact regression Critical 1 named:
+        // a provider renaming a node (routine — names carry traffic/expiry counters) while the
+        // outbound is unchanged used to insert-or-replace its way into deleting the active row
+        // it collided with, while still reporting Synced(keptActive = 1). The active row must
+        // survive under its own id, and the collision must be visible (duplicatesDropped), not
+        // silent.
+        val id = addSubscription()
+        response = FetchOutcome.Success(link("Tokyo"), emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val tokyo = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+
+        // Same outbound (same uuid), new name/key, while it is the active profile.
+        response = FetchOutcome.Success(link("Tokyo Renamed", uuid = uuidFor("Tokyo")), emptyMap())
+        val result = syncer().sync(id, activeProfileId = tokyo.id)
+
+        result shouldBe SyncResult.Synced(
+            added = 0,
+            updated = 0,
+            removed = 0,
+            keptActive = 1,
+            rejectedDirectives = 0,
+            duplicatesDropped = 1,
+        )
+        profiles.profile(tokyo.id) shouldNotBe null
+        profiles.profile(tokyo.id)!!.name shouldBe "Tokyo"
     }
 
     @Test

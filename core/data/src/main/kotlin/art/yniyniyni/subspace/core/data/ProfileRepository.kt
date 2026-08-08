@@ -311,6 +311,17 @@ internal constructor(
      *   in its message, so it is caught and turned into a plain `false` here rather than
      *   let propagate: nothing above `:core:data` may see a config value inside a
      *   diagnostic (§5.6). `true` otherwise.
+     *
+     * **Undocumented until Task 11 review round 2, recorded now:** nothing stops [toGroupId]
+     * from being a subscription-sourced group. A hand-imported profile moved there keeps
+     * `subscriptionKey = null`, so `SubscriptionDao.subscriptionProfiles` — the query
+     * `SubscriptionSyncer.reconcile` diffs a response against — never sees it: it is not
+     * matched, not deleted, not protected the way a kept-active row's `identityHash` is. A
+     * later sync's insert or update can still collide with its `identityHash`, in which case
+     * `SubscriptionSyncer` catches the resulting `SQLiteConstraintException` and returns
+     * `SyncResult.ReconciliationConflict` — the sync fails cleanly rather than crashing — but
+     * the moved-in row itself is simply outside spec §6.5's reconciliation for as long as it
+     * stays in that group.
      */
     public suspend fun move(
         profileId: Long,

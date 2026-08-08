@@ -17,7 +17,14 @@ public sealed interface SyncResult {
      *   [duplicatesDropped] below does not count here even though it was parsed.
      * @property keptActive servers the provider dropped that were kept because
      *   they were active (spec D4). Non-zero means the UI must show the
-     *   "no longer offered by this provider" flag.
+     *   "no longer offered by this provider" flag. **Known cosmetic limitation** (Task 11
+     *   review round 2, recorded not fixed): if the provider actually renamed the active
+     *   server rather than dropping it, reconciliation has no way to tell "renamed" from
+     *   "withdrawn" — both look identical from outside (the old `subscriptionKey` is simply
+     *   absent from the new response) — so the row is flagged "no longer offered" even though
+     *   the provider is still offering it under a new name. Unavoidable under key-based
+     *   reconciliation; the flag clears the moment the user switches to a different active
+     *   profile and the row is naturally deleted or re-matched on the next sync.
      * @property rejectedDirectives how many directives failed validation. The
      *   keys are logged; the values never are (§5.6).
      * @property duplicatesDropped spec §4.3's documented, bounded limitation: how many parsed
@@ -25,7 +32,14 @@ public sealed interface SyncResult {
      *   (under a different name) already claiming the same identity slot this sync. Zero in the
      *   overwhelming majority of syncs — a provider serving a genuine duplicate is rare, but
      *   when it happens this is what makes "eleven where the provider listed twelve" diagnosable
-     *   instead of silent.
+     *   instead of silent. **Known bounded limitation** (Task 11 review round 2, recorded not
+     *   fixed): the row backing the *losing* entry is left holding its previous sync's content
+     *   until the collision stops recurring — every sync that still finds the same two response
+     *   entries colliding drops the same loser again, so a genuinely renamed server behind a
+     *   losing key is never imported while the winner keeps claiming the identity first. This
+     *   self-heals as soon as the response stops colliding (the provider fixes the duplicate, or
+     *   — in the active-row variant `insertSubscriptionProfile`'s KDoc describes — the tunnel
+     *   moves off the row that keeps winning the claim).
      */
     public data class Synced(
         val added: Int,
@@ -49,4 +63,20 @@ public sealed interface SyncResult {
      * @property detail the parser's own redacted failure reason. Never the body.
      */
     public data class NoServers(val detail: String) : SyncResult
+
+    /**
+     * The transaction aborted on an identity collision `SubscriptionSyncer` did not resolve in
+     * Kotlin before persisting (Task 11 review round 2's backstop). `SubscriptionDao.applySync`
+     * rolls back atomically on any thrown exception, so **stored servers are left untouched** —
+     * this is a "nothing happened" outcome, not a partial one. Exists alongside the Kotlin-side
+     * duplicate resolution in `SubscriptionSyncer.buildUpserts`/`reconcile`, not instead of it:
+     * that resolves every collision shape identified so far; this is the net under it for one
+     * neither of us has thought of yet, so the sync fails loudly and the tunnel is unaffected
+     * rather than the process crashing on an uncaught `SQLiteConstraintException`.
+     *
+     * @property detail a closed, redacted description — never the exception message, which can
+     *   quote this table's column values (§5.6, `ProfileRepository.move`'s KDoc explains the
+     *   same hazard for the same exception type).
+     */
+    public data class ReconciliationConflict(val detail: String) : SyncResult
 }

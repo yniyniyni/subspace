@@ -246,6 +246,67 @@ class SubscriptionSyncerTest {
     }
 
     @Test
+    fun theFlagClearsWhenTheServerReappears() = runTest {
+        // Task 11 review round 2: upsertBySubscriptionKey's update branch does not carry
+        // droppedFromSubscriptionAt over from the existing row (see its KDoc), so a rebuilt
+        // entity's null overwrites the flag the moment the row's subscriptionKey reappears in a
+        // response. That is correct behaviour, but nothing pinned the third leg of the D4
+        // lifecycle (drop -> flag set -> server returns -> flag null) until now — a flag that
+        // sets but never clears is a permanent false warning.
+        val id = addSubscription()
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val tokyo = profiles.observeGroups().first()
+            .single { it.id == groupId }.profiles.single { it.name == "Tokyo" }
+
+        // Dropped while active: the flag is set (pinned separately by
+        // theActiveServerIsKeptAndFlaggedWhenTheProviderDropsIt).
+        response = FetchOutcome.Success(link("Osaka"), emptyMap())
+        syncer().sync(id, activeProfileId = tokyo.id)
+        profiles.profile(tokyo.id)!!.droppedFromSubscriptionAt shouldNotBe null
+
+        // The provider offers Tokyo again.
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+        syncer().sync(id, activeProfileId = tokyo.id)
+
+        profiles.profile(tokyo.id)!!.droppedFromSubscriptionAt shouldBe null
+    }
+
+    @Test
+    fun aMisconfiguredDuplicateAgainstAnUnrelatedRowDoesNotThrow() = runTest {
+        // Task 11 review round 2's Important finding: Tokyo and Osaka start with distinct
+        // content. The provider then misconfigures Tokyo onto Osaka's exact outbound while
+        // leaving Osaka's own entry unchanged, so both entries in this response describe the
+        // same content. buildUpserts keeps whichever entry claims the shared hash first (Tokyo,
+        // by response order) and drops Osaka's duplicate entry -- but Osaka's *row* is not in
+        // upserts and still holds its real, real hash, which is exactly the value Tokyo's row is
+        // about to be written with. Before this fix, applySync's clear pass only neutralised
+        // rows that were themselves in upserts, so Tokyo's write collided with Osaka's
+        // still-real hash and SQLiteConstraintException escaped sync() uncaught. It must not.
+        val id = addSubscription()
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val osaka = profiles.observeGroups().first()
+            .single { it.id == groupId }.profiles.single { it.name == "Osaka" }
+
+        // Both entries now report Osaka's outbound; Tokyo's entry appears first in the response.
+        response = FetchOutcome.Success(
+            "${link("Tokyo", uuid = uuidFor("Osaka"))}\n${link("Osaka", uuid = uuidFor("Osaka"))}",
+            emptyMap(),
+        )
+        val result = syncer().sync(id)
+
+        result shouldBe SyncResult.Synced(0, 1, 0, keptActive = 0, rejectedDirectives = 0, duplicatesDropped = 1)
+        // Osaka's row was never deleted (its key is still in the response) and the sync did not
+        // throw -- it simply keeps its prior data, per Synced.duplicatesDropped's KDoc.
+        profiles.profile(osaka.id) shouldNotBe null
+    }
+
+    @Test
     fun aFetchFailureLeavesStoredServersUntouched() = runTest {
         val id = addSubscription()
         response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())

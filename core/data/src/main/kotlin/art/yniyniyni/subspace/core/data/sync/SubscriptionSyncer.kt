@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.data.sync
 
+import android.database.sqlite.SQLiteConstraintException
 import android.util.Log
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
@@ -149,6 +150,7 @@ internal constructor(
                     upserts = emptyList(),
                     deleteIds = emptyList(),
                     flagIds = emptyList(),
+                    clearIds = emptyList(),
                 ),
             )
             SyncResult.NoServers(parsed.failures.redactedDetail())
@@ -167,11 +169,23 @@ internal constructor(
         }
     }
 
-    /** Spec §6.5's reconciliation table, computed here and handed to [SubscriptionDao.applySync] as one change set. */
+    /**
+     * Spec §6.5's reconciliation table, computed here and handed to [SubscriptionDao.applySync]
+     * as one change set.
+     *
+     * Returns [SyncResult.ReconciliationConflict] instead of [SyncResult.Synced] if
+     * [SubscriptionDao.applySync] throws [SQLiteConstraintException] — an identity collision
+     * neither [buildUpserts] nor [clearIds] below accounted for (Task 11 review round 2's
+     * backstop; `ProfileRepository.move`'s KDoc documents one way that can still happen). The
+     * whole transaction rolls back on any thrown exception, so this is a clean "nothing landed"
+     * failure, never a partial write — and the exception's own message is never surfaced,
+     * because it can quote this table's column values (§5.6), the same hazard
+     * `ProfileRepository.move`'s existing catch guards against for the same exception type.
+     */
     private suspend fun reconcile(
         response: ParsedResponse,
         activeProfileId: Long?,
-    ): SyncResult.Synced {
+    ): SyncResult {
         val groupId = response.groupId
         val keys = subscriptionKeysFor(response.parsedProfiles.map { it.name })
         val keySet = keys.toSet()
@@ -202,7 +216,18 @@ internal constructor(
         val added = writtenKeys.count { it !in existingKeys }
         val updated = writtenKeys.size - added
 
-        dao.applySync(
+        // Every existing row currently holding a hash some surviving entity is about to write —
+        // by hash, not by subscriptionKey membership in built.entities (Task 11 review round 2).
+        // The key-only version closes the two-rows-trading-hashes case (a provider swapping two
+        // servers' names: both rows are in upserts, both get cleared) but misses a second one: a
+        // row whose own response entry buildUpserts dropped as a duplicate is not in upserts at
+        // all, yet can still be sitting on the exact hash a surviving entry now claims (a
+        // provider misconfiguring two different names onto the same outbound). See
+        // SubscriptionDao.applySync's KDoc, step 3, for the full reasoning.
+        val targetHashes = built.entities.map { it.identityHash }.toSet()
+        val clearIds = existingRows.filter { it.identityHash in targetHashes }.map { it.id }
+
+        val changeSet =
             SyncChangeSet(
                 subscriptionId = response.subscriptionId,
                 groupId = groupId,
@@ -212,22 +237,28 @@ internal constructor(
                 upserts = built.entities,
                 deleteIds = deleteIds,
                 flagIds = flagIds,
-            ),
-        )
+                clearIds = clearIds,
+            )
 
-        if (built.duplicatesDropped > 0) {
-            // Counts only — never a name, never an address (§5.6).
-            Log.w(TAG, "sync dropped ${built.duplicatesDropped} duplicate-outbound server(s) — see spec §4.3")
+        return try {
+            dao.applySync(changeSet)
+
+            if (built.duplicatesDropped > 0) {
+                // Counts only — never a name, never an address (§5.6).
+                Log.w(TAG, "sync dropped ${built.duplicatesDropped} duplicate-outbound server(s) — see spec §4.3")
+            }
+
+            SyncResult.Synced(
+                added = added,
+                updated = updated,
+                removed = deleteIds.size,
+                keptActive = keptRows.size,
+                rejectedDirectives = response.rejectedDirectives,
+                duplicatesDropped = built.duplicatesDropped,
+            )
+        } catch (ignored: SQLiteConstraintException) {
+            SyncResult.ReconciliationConflict("identity collision during reconciliation")
         }
-
-        return SyncResult.Synced(
-            added = added,
-            updated = updated,
-            removed = deleteIds.size,
-            keptActive = keptRows.size,
-            rejectedDirectives = response.rejectedDirectives,
-            duplicatesDropped = built.duplicatesDropped,
-        )
     }
 }
 

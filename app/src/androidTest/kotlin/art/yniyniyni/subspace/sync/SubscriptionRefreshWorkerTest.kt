@@ -146,6 +146,13 @@ class SubscriptionRefreshWorkerTest {
      * kill switch. `refreshDue(onOpen = true)` — what `SubspaceApplication` calls at launch — must
      * skip a subscription that opted out of refresh-on-open, while the interval path
      * (`refreshDue()`/`refreshDue(onOpen = false)`, what the worker calls) is unaffected by that key.
+     *
+     * "Did a sync run?" is read off `lastAttemptedAt`, not `lastFetchedAt`. [InMemorySubscriptionStack]'s
+     * stub source returns an empty, header-less body, so every sync here lands on the syncer's
+     * `NoServers` branch — and `recordFetchResult` only advances `lastFetchedAt` when the status is
+     * null (a server-bearing success), while `lastAttemptedAt` advances on every attempt. Asserting on
+     * `lastFetchedAt` would make the skip assertion vacuously true: it stays null whether or not the
+     * open-refresh gate works at all.
      */
     @Test
     fun aSubscriptionThatOptsOutOfOpenRefreshIsSkippedOnlyOnTheOpenTrigger() =
@@ -155,9 +162,9 @@ class SubscriptionRefreshWorkerTest {
             val scheduler = RefreshScheduler(WorkManager.getInstance(context), stack.repository, stack.syncer)
 
             scheduler.refreshDue(onOpen = true)
-            stack.repository.observeSubscriptions().first().single { it.id == id }.lastFetchedAt shouldBe null
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt shouldBe null
 
             scheduler.refreshDue(onOpen = false)
-            stack.repository.observeSubscriptions().first().single { it.id == id }.lastFetchedAt shouldNotBe null
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt shouldNotBe null
         }
 }

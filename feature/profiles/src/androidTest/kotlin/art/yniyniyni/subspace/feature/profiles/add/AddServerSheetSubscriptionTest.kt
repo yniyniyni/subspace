@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.add
 
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -46,11 +48,20 @@ class AddServerSheetSubscriptionTest {
     private fun setContent(
         state: ImportState = ImportState(),
         onAddSubscription: (String) -> Unit = {},
-    ) {
+    ) = setContent(mutableStateOf(state), onAddSubscription)
+
+    /**
+     * The [MutableState] overload, for the one test that needs the state to *change* after the
+     * user has typed — see [addSubscriptionButtonIsDisabledWhileBusyEvenWithAUrlTyped].
+     */
+    private fun setContent(
+        state: MutableState<ImportState>,
+        onAddSubscription: (String) -> Unit = {},
+    ): MutableState<ImportState> {
         composeRule.setContent {
             SubspaceTheme {
                 AddServerSheetContent(
-                    state = state,
+                    state = state.value,
                     actions =
                     ImportActions(
                         onInputChanged = {},
@@ -62,6 +73,7 @@ class AddServerSheetSubscriptionTest {
                 )
             }
         }
+        return state
     }
 
     @Test
@@ -91,10 +103,18 @@ class AddServerSheetSubscriptionTest {
 
     @Test
     fun addSubscriptionButtonIsDisabledWhileBusyEvenWithAUrlTyped() {
-        setContent(state = ImportState(busy = true))
+        // The URL field is itself `enabled = !busy`, so the text has to be typed before busy flips —
+        // which is also the only way this state is reached in production: type a URL, press Add,
+        // addSubscription() sets busy while the first sync runs. Starting at busy = true and typing
+        // would fail on a disabled field and prove nothing about the button.
+        val state = setContent(mutableStateOf(ImportState()))
 
         composeRule.onNodeWithTag(ADD_SUBSCRIPTION_FIELD_TEST_TAG).performTextInput("https://example.com/sub")
+        composeRule.onNodeWithText("Add subscription").assertIsEnabled()
 
+        state.value = ImportState(busy = true)
+
+        // busy dominates the `!busy && url.isNotBlank()` guard even though the URL is still there.
         composeRule.onNodeWithText("Add subscription").assertIsNotEnabled()
     }
 

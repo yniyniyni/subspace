@@ -11,6 +11,12 @@ import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
 import art.yniyniyni.subspace.core.data.testing.InMemorySubscriptionStack
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -73,5 +79,85 @@ class SubscriptionRefreshWorkerTest {
                     .build()
 
             worker.doWork() shouldBe ListenableWorker.Result.success()
+        }
+
+    /**
+     * Review round 1, Important 1: `reschedule()`'s own suspend calls (Room's `Flow.first()` inside
+     * `dueChecks()`) used to throw [kotlinx.coroutines.CancellationException] the moment the calling
+     * `Job` was cancelled — exactly what WorkManager does to a `CoroutineWorker` that outruns its
+     * ~10-minute ceiling. That left `reschedule()`'s `finally` running but never reaching
+     * `enqueueUniqueWork`: the one pending job silently vanished. `RefreshScheduler.reschedule()` now
+     * runs under `NonCancellable`; this proves it by cancelling the job while `refreshDue()` is
+     * genuinely mid-flight (blocked inside a fetch, not just cancelled before it started) and
+     * asserting a future wakeup is still enqueued afterwards.
+     */
+    @Test
+    fun cancellingTheJobMidRefreshDueStillEnqueuesAFutureWakeup() =
+        runTest {
+            val fetchStarted = CompletableDeferred<Unit>()
+            val hangingStack =
+                InMemorySubscriptionStack(
+                    context,
+                    onFetch = {
+                        fetchStarted.complete(Unit)
+                        delay(Long.MAX_VALUE)
+                    },
+                )
+            try {
+                hangingStack.repository.add("https://example.com/sub", name = "Cancel me mid-fetch")
+                val scheduler =
+                    RefreshScheduler(
+                        WorkManager.getInstance(context),
+                        hangingStack.repository,
+                        hangingStack.syncer,
+                    )
+
+                val job =
+                    launch {
+                        try {
+                            scheduler.refreshDue()
+                        } finally {
+                            scheduler.reschedule()
+                        }
+                    }
+
+                // Guarantees refreshDue() actually reached the fetch — not just "cancelled before it
+                // ever ran anything."
+                fetchStarted.await()
+                job.cancelAndJoin()
+
+                // Whether that enqueued work then runs successfully is a different question this test
+                // doesn't care about — this WorkManager instance has no Hilt-capable WorkerFactory
+                // (initializeTestWorkManager's default config can't construct a @HiltWorker), so the
+                // test WorkManager's own executor picks it straight up and it terminates on its own
+                // (state FAILED, for a reason unrelated to what's under test here). What matters is
+                // that enqueueUniqueWork was reached at all: before the NonCancellable fix, this list
+                // was empty because reschedule() never got that far.
+                val workInfos = WorkManager.getInstance(context).getWorkInfosForUniqueWork(REFRESH_WORK_NAME).get()
+                workInfos.isNotEmpty() shouldBe true
+            } finally {
+                hangingStack.close()
+            }
+        }
+
+    /**
+     * Review round 1, Important 2: `subscription-auto-update-open-enable` is spec §8's directive for
+     * the on-launch trigger specifically, distinct from `subscription-auto-update-enable`'s general
+     * kill switch. `refreshDue(onOpen = true)` — what `SubspaceApplication` calls at launch — must
+     * skip a subscription that opted out of refresh-on-open, while the interval path
+     * (`refreshDue()`/`refreshDue(onOpen = false)`, what the worker calls) is unaffected by that key.
+     */
+    @Test
+    fun aSubscriptionThatOptsOutOfOpenRefreshIsSkippedOnlyOnTheOpenTrigger() =
+        runTest {
+            val id = stack.repository.add("https://example.com/sub", name = "Open-disabled")
+            stack.repository.pin(id, "subscription-auto-update-open-enable", "false")
+            val scheduler = RefreshScheduler(WorkManager.getInstance(context), stack.repository, stack.syncer)
+
+            scheduler.refreshDue(onOpen = true)
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastFetchedAt shouldBe null
+
+            scheduler.refreshDue(onOpen = false)
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastFetchedAt shouldNotBe null
         }
 }

@@ -27,8 +27,16 @@ import art.yniyniyni.subspace.core.network.SubscriptionSource
  * The stubbed [SubscriptionSource] always returns an empty, header-less success — this fixture is
  * for tests that never call [SubscriptionSyncer.sync] (or exercise no-subscription paths where it is
  * never reached), not for exercising fetch behaviour itself.
+ *
+ * @param onFetch runs before every fetch returns its fixed success — a plain suspend hook (not a
+ *   [SubscriptionSource]/`FetchOutcome`) so a caller in another module can control fetch *timing*
+ *   (e.g. hang with `delay()` to make a sync cancellable mid-flight) without needing `:core:network`
+ *   types on its own classpath, which ARCHITECTURE.md §4 reserves to `:core:data`.
  */
-public class InMemorySubscriptionStack(context: Context) : AutoCloseable {
+public class InMemorySubscriptionStack(
+    context: Context,
+    private val onFetch: suspend () -> Unit = {},
+) : AutoCloseable {
     private val db: SubspaceDatabase = Room.inMemoryDatabaseBuilder(context, SubspaceDatabase::class.java).build()
     private val profiles = ProfileRepository(db.profileDao())
 
@@ -37,7 +45,10 @@ public class InMemorySubscriptionStack(context: Context) : AutoCloseable {
         SubscriptionSyncer(
             db.subscriptionDao(),
             repository,
-            SubscriptionSource { FetchOutcome.Success("", emptyMap()) },
+            SubscriptionSource {
+                onFetch()
+                FetchOutcome.Success("", emptyMap())
+            },
         )
 
     override fun close() {

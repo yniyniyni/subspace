@@ -38,6 +38,14 @@ private fun isMainProcess(): Boolean = !currentProcessName().endsWith(":bg")
 
 @HiltAndroidApp
 class SubspaceApplication : Application(), Configuration.Provider {
+    // Declaration order matters and is not enforced by the compiler: Hilt's generated
+    // member-injector assigns fields in the order they're declared, and RefreshScheduler's
+    // injected WorkManager is bound via WorkManager.getInstance(context) (WorkManagerModule),
+    // which reads workManagerConfiguration — and therefore hiltWorkerFactory — the first time
+    // it's called. hiltWorkerFactory must stay declared above refreshScheduler; swapping them
+    // (or a Hilt codegen change that stops honouring declaration order) surfaces as a
+    // `lateinit property hiltWorkerFactory has not been initialized` crash on launch, not a
+    // compile error.
     @Inject
     lateinit var hiltWorkerFactory: HiltWorkerFactory
 
@@ -61,12 +69,18 @@ class SubspaceApplication : Application(), Configuration.Provider {
                 // Spec §8's "on launch" trigger: refreshDue() already only syncs subscriptions
                 // whose own interval has elapsed, so this call covers both "refresh what's overdue
                 // right now" and re-establishes the one pending job for whatever's next.
+                // onOpen = true: this is specifically the on-launch trigger, so it additionally
+                // honours subscription-auto-update-open-enable (distinct from the general
+                // subscription-auto-update-enable switch dueChecks() already applies) — a provider
+                // can ask not to be refreshed on open without disabling interval refresh entirely.
                 //
                 // reschedule() runs in a finally for the same reason SubscriptionRefreshWorker.doWork()
                 // does: a crash mid-sync here must not leave the one pending job unscheduled — that
-                // would silently strand the whole feature until the app is opened again.
+                // would silently strand the whole feature until the app is opened again. reschedule()
+                // itself is NonCancellable internally, so this holds even if applicationScope were ever
+                // cancelled mid-refresh.
                 try {
-                    refreshScheduler.refreshDue()
+                    refreshScheduler.refreshDue(onOpen = true)
                 } finally {
                     refreshScheduler.reschedule()
                 }

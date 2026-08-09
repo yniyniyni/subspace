@@ -9,6 +9,7 @@ import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.TimeUnit
 
 class SubscriptionFetcherTest {
     private lateinit var server: MockWebServer
@@ -96,6 +97,19 @@ class SubscriptionFetcherTest {
         )
 
         fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.HwidRequired)
+    }
+
+    @Test
+    fun `a server that never answers is TimedOut, not Unreachable`() = runTest {
+        // M4's device run, against a deliberately hanging server. OkHttp's callTimeout — the one
+        // that actually fires, since all three timeouts share a duration and callTimeout spans
+        // the whole call — throws a plain InterruptedIOException, not SocketTimeoutException, so
+        // every timeout used to land in the generic IOException branch and be reported as
+        // "could not reach the server".
+        server.enqueue(MockResponse.Builder().headersDelay(30, TimeUnit.SECONDS).build())
+
+        fetcher().fetch(request().copy(timeoutSeconds = 1)) shouldBe
+            FetchOutcome.Failed(FetchFailure.TimedOut)
     }
 
     @Test

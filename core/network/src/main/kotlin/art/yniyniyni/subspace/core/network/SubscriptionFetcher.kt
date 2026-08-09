@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
@@ -100,6 +101,15 @@ constructor(
                 FetchOutcome.Failed(FetchFailure.TlsFailure)
             } catch (ignoredHost: UnknownHostException) {
                 FetchOutcome.Failed(FetchFailure.Unreachable)
+            } catch (ignoredCallTimeout: InterruptedIOException) {
+                // OkHttp's callTimeout — the one that actually fires here — throws a plain
+                // InterruptedIOException("timeout"), NOT SocketTimeoutException. All three
+                // timeouts are set to the same duration and callTimeout spans the whole call,
+                // so it wins the race, and without this branch every timeout fell through to
+                // the generic IOException below and was reported as "could not reach the
+                // server". M4's device run caught it against a deliberately hanging server:
+                // the SocketTimeoutException branch above is real but almost never reached.
+                FetchOutcome.Failed(FetchFailure.TimedOut)
             } catch (ignoredIo: IOException) {
                 // Deliberately last and deliberately broad-ish: the three above
                 // are the cases worth naming to the user, and everything else is

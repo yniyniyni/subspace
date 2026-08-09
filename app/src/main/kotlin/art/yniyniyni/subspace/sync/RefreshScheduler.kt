@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.isDirectiveEnabled
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
@@ -95,6 +96,29 @@ internal fun nextDueAt(
  */
 internal fun resolveIntervalHours(rawValue: String?): Int =
     rawValue?.toIntOrNull()?.coerceIn(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS) ?: DEFAULT_INTERVAL_HOURS
+
+/**
+ * The next refresh deadline for one subscription. [lastAttemptedAt] deliberately includes a
+ * failure or an empty response, so those outcomes wait for their normal provider interval rather
+ * than immediately rebuilding a one-shot work chain. [lastFetchedAt] is intentionally absent:
+ * it remains the last server-bearing success for UI reporting.
+ */
+internal fun nextAttemptDueAt(
+    now: Long,
+    lastAttemptedAt: Long?,
+    intervalHours: Int,
+): Long = lastAttemptedAt?.plus(intervalHours * HOUR_MILLIS) ?: now
+
+/** Turns one stored subscription row into the scheduler input used by [dueChecks]. */
+internal fun dueCheckFor(
+    subscription: StoredSubscription,
+    now: Long,
+    intervalHours: Int,
+): DueCheck =
+    DueCheck(
+        subscriptionId = subscription.id,
+        dueAtEpochMillis = nextAttemptDueAt(now, subscription.lastAttemptedAt, intervalHours),
+    )
 
 /** The general `subscription-auto-update-enable` gate under §A.1's boolean rule. */
 internal fun scheduledAutoUpdateEnabled(value: String?): Boolean = isDirectiveEnabled(value)
@@ -227,10 +251,6 @@ constructor(
             val intervalValue = subscriptions.effective(subscription.id, KEY_INTERVAL, intervalDefault).value
             val hours = resolveIntervalHours(intervalValue)
 
-            DueCheck(
-                subscriptionId = subscription.id,
-                // Never fetched yet: due immediately.
-                dueAtEpochMillis = subscription.lastFetchedAt?.plus(hours * HOUR_MILLIS) ?: now,
-            )
+            dueCheckFor(subscription, now, hours)
         }
 }

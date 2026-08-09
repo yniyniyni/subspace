@@ -34,6 +34,7 @@ class SubscriptionEntityTest {
             userAgentOverride = null,
             hwidEnabled = true,
             lastFetchedAt = 12345L,
+            lastAttemptedAt = 23456L,
             lastFetchStatus = "OK",
             lastFetchDetail = null,
             createdAt = 100L,
@@ -49,7 +50,7 @@ class SubscriptionEntityTest {
         subscription().toString() shouldBe
             "SubscriptionEntity(id=1, groupId=1, url=<redacted>, " +
             "userAgentOverride=null, hwidEnabled=true, " +
-            "lastFetchedAt=12345, lastFetchStatus=OK, " +
+            "lastFetchedAt=12345, lastAttemptedAt=23456, lastFetchStatus=OK, " +
             "lastFetchDetail=null, createdAt=100)"
     }
 

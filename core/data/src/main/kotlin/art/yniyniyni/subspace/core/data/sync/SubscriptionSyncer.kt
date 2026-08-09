@@ -36,6 +36,8 @@ private const val DEFAULT_TIMEOUT_SECONDS = 9
 private const val KEY_TIMEOUT = "subscription-request-timeout"
 private const val KEY_TITLE = "profile-title"
 private const val KEY_USER_AGENT = "change-user-agent"
+private const val NO_SERVERS_STATUS = "NoServers"
+private const val MAX_LOG_KEY_LENGTH = 64
 
 /**
  * ARCHITECTURE.md §A.1's pipeline, end to end: fetch → split → validate →
@@ -124,7 +126,7 @@ internal constructor(
         // The stored status/detail columns stay FetchFailure.name — SubscriptionEntity's own
         // storage, internal to :core:data, is unaffected by the SyncResult.Failed boundary
         // translation below (SubscriptionSyncFailure's own KDoc explains why that exists).
-        dao.recordFetchFailure(subscriptionId, reason.name, reason.name)
+        dao.recordFetchFailure(subscriptionId, reason.name, reason.name, System.currentTimeMillis())
         return SyncResult.Failed(reason.toSyncFailure())
     }
 
@@ -135,6 +137,12 @@ internal constructor(
     ): SyncResult {
         val split = DirectiveSplitter.split(outcome.headers, outcome.body)
         val validated = DirectiveValidator.validate(split.directives)
+        validated.rejections.forEach { rejection ->
+            // Values are hostile subscription contents and are structurally absent from
+            // DirectiveRejection. Restrict even an unknown key to header-name characters before
+            // it reaches logcat: it remains diagnosable without becoming a log-injection path.
+            Log.w(TAG, "rejected directive key=${rejection.key.logKey()} reason=${rejection.reason}")
+        }
         val parsed = SubscriptionParser.parse(split.remainingBody)
 
         val now = System.currentTimeMillis()
@@ -157,6 +165,8 @@ internal constructor(
                     deleteIds = emptyList(),
                     flagIds = emptyList(),
                     clearIds = emptyList(),
+                    fetchStatus = NO_SERVERS_STATUS,
+                    fetchDetail = NO_SERVERS_STATUS,
                 ),
             )
             SyncResult.NoServers(parsed.failures.redactedDetail())
@@ -171,7 +181,10 @@ internal constructor(
                     rejectedDirectives = validated.rejections.size,
                     now = now,
                 )
-            reconcile(response, activeProfileId)
+            // Fetching can take the full provider timeout. Resolve the active tunnel only
+            // immediately before reconciliation so a user switching profiles during that wait
+            // cannot cause the newly active, provider-absent row to be deleted (spec D4).
+            reconcile(response, activeProfileId ?: settings.activeProfileId.first())
         }
     }
 
@@ -359,3 +372,7 @@ private fun buildUpserts(
 /** The first failure's redacted reason (§5.6) — never the body. [ParseFailure]'s fields are closed vocabulary. */
 private fun List<ParseFailure>.redactedDetail(): String =
     firstOrNull()?.let { "${it.reason}: ${it.detail}" } ?: "unknown"
+
+/** A bounded, value-free diagnostic representation of a hostile directive key. */
+private fun String.logKey(): String =
+    filter { it.isLetterOrDigit() || it == '-' || it == '_' }.take(MAX_LOG_KEY_LENGTH)

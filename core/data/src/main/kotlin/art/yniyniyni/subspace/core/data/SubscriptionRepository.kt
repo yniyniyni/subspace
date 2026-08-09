@@ -32,6 +32,8 @@ public data class StoredSubscription(
     val userAgentOverride: String?,
     val hwidEnabled: Boolean,
     val lastFetchedAt: Long?,
+    /** The most recent attempt, successful or not; scheduler-only retry pacing state. */
+    val lastAttemptedAt: Long? = null,
     val lastFetchStatus: String?,
     val lastFetchDetail: String?,
 ) {
@@ -41,7 +43,7 @@ public data class StoredSubscription(
     override fun toString(): String =
         "StoredSubscription(id=$id, groupId=$groupId, url=<redacted>, " +
             "userAgentOverride=$userAgentOverride, hwidEnabled=$hwidEnabled, " +
-            "lastFetchedAt=$lastFetchedAt, lastFetchStatus=$lastFetchStatus, " +
+            "lastFetchedAt=$lastFetchedAt, lastAttemptedAt=$lastAttemptedAt, lastFetchStatus=$lastFetchStatus, " +
             "lastFetchDetail=$lastFetchDetail)"
 }
 
@@ -175,6 +177,7 @@ internal constructor(
                     userAgentOverride = null,
                     hwidEnabled = true,
                     lastFetchedAt = null,
+                    lastAttemptedAt = null,
                     lastFetchStatus = null,
                     lastFetchDetail = null,
                     createdAt = now,
@@ -280,6 +283,7 @@ private fun SubscriptionEntity.toStored() =
         userAgentOverride = userAgentOverride,
         hwidEnabled = hwidEnabled,
         lastFetchedAt = lastFetchedAt,
+        lastAttemptedAt = lastAttemptedAt,
         lastFetchStatus = lastFetchStatus,
         lastFetchDetail = lastFetchDetail,
     )

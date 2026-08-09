@@ -48,6 +48,8 @@ internal data class SubscriptionEntity(
     val userAgentOverride: String?,
     val hwidEnabled: Boolean,
     val lastFetchedAt: Long?,
+    /** The most recent fetch attempt, including failures and empty responses, for retry pacing. */
+    val lastAttemptedAt: Long?,
     val lastFetchStatus: String?,
     val lastFetchDetail: String?,
     val createdAt: Long,
@@ -62,7 +64,7 @@ internal data class SubscriptionEntity(
     override fun toString(): String =
         "SubscriptionEntity(id=$id, groupId=$groupId, url=<redacted>, " +
             "userAgentOverride=$userAgentOverride, hwidEnabled=$hwidEnabled, " +
-            "lastFetchedAt=$lastFetchedAt, lastFetchStatus=$lastFetchStatus, " +
+            "lastFetchedAt=$lastFetchedAt, lastAttemptedAt=$lastAttemptedAt, lastFetchStatus=$lastFetchStatus, " +
             "lastFetchDetail=$lastFetchDetail, createdAt=$createdAt)"
 }
 

@@ -15,6 +15,8 @@ import art.yniyniyni.subspace.core.network.SubscriptionRequest
 import art.yniyniyni.subspace.core.network.SubscriptionSource
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -60,9 +62,10 @@ class SubscriptionSyncerTest {
 
     private var response: FetchOutcome = FetchOutcome.Success("", emptyMap())
     private var lastRequest: SubscriptionRequest? = null
+    private var responseForRequest: suspend (SubscriptionRequest) -> FetchOutcome = { response }
     private val source = SubscriptionSource { request ->
         lastRequest = request
-        response
+        responseForRequest(request)
     }
 
     private fun syncer() =
@@ -77,6 +80,7 @@ class SubscriptionSyncerTest {
         profiles = ProfileRepository(db.profileDao())
         subscriptions = SubscriptionRepository(db.subscriptionDao(), profiles)
         settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
+        responseForRequest = { response }
     }
 
     @After fun tearDown() = db.close()
@@ -177,7 +181,11 @@ class SubscriptionSyncerTest {
             .single { it.id == groupId }.profiles.single { it.name == "Tokyo" }
 
         response = FetchOutcome.Success(link("Osaka"), emptyMap())
-        val result = syncer().sync(id, activeProfileId = tokyo.id)
+        // Production callers do not pass an id to sync(); the authoritative active profile is
+        // SettingsRepository's cross-process Room value. Pin this real path so a future default
+        // cannot delete the server the tunnel is using.
+        settings.setActiveProfile(tokyo.id)
+        val result = syncer().sync(id)
 
         result shouldBe SyncResult.Synced(0, 1, 0, keptActive = 1, rejectedDirectives = 0)
         profiles.profile(tokyo.id) shouldNotBe null
@@ -185,6 +193,34 @@ class SubscriptionSyncerTest {
         // (Task 11 review fix, Important 4). Part 2's UI reads this to render "no longer
         // offered by this provider".
         profiles.profile(tokyo.id)!!.droppedFromSubscriptionAt shouldNotBe null
+    }
+
+    @Test
+    fun aProfileActivatedDuringFetchIsKeptWhenTheResponseDropsIt() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val group = profiles.observeGroups().first().single { it.id == groupId }
+        val osaka = group.profiles.single { it.name == "Osaka" }
+
+        val fetchStarted = CompletableDeferred<Unit>()
+        val releaseFetch = CompletableDeferred<Unit>()
+        responseForRequest = {
+            fetchStarted.complete(Unit)
+            releaseFetch.await()
+            FetchOutcome.Success(link("Tokyo"), emptyMap())
+        }
+
+        val sync = async { syncer().sync(id) }
+        fetchStarted.await()
+        settings.setActiveProfile(osaka.id)
+        releaseFetch.complete(Unit)
+
+        sync.await() shouldBe SyncResult.Synced(0, 1, 0, keptActive = 1, rejectedDirectives = 0)
+        profiles.profile(osaka.id) shouldNotBe null
+        profiles.profile(osaka.id)!!.droppedFromSubscriptionAt shouldNotBe null
     }
 
     @Test
@@ -342,12 +378,18 @@ class SubscriptionSyncerTest {
     @Test
     fun aFetchFailureIsRecordedOnTheSubscriptionRow() = runTest {
         val id = addSubscription()
+        response = FetchOutcome.Success(link("Tokyo"), emptyMap())
+        syncer().sync(id)
+        val row = db.subscriptionDao().subscription(id) ?: error("missing test subscription")
+        db.subscriptionDao().updateSubscription(row.copy(lastFetchedAt = 2L, lastAttemptedAt = 1L))
         response = FetchOutcome.Failed(FetchFailure.HwidRequired)
 
         syncer().sync(id)
 
         val stored = subscriptions.observeSubscriptions().first().single()
         stored.lastFetchStatus shouldBe "HwidRequired"
+        stored.lastFetchedAt shouldBe 2L
+        ((stored.lastAttemptedAt ?: 0L) > 1L) shouldBe true
         // §5.6: a closed vocabulary, never a raw message.
         stored.lastFetchDetail?.contains("http") shouldBe false
     }
@@ -358,11 +400,17 @@ class SubscriptionSyncerTest {
         val id = addSubscription()
         response = FetchOutcome.Success(link("Tokyo"), emptyMap())
         syncer().sync(id)
+        val row = db.subscriptionDao().subscription(id) ?: error("missing test subscription")
+        db.subscriptionDao().updateSubscription(row.copy(lastFetchedAt = 2L, lastAttemptedAt = 1L))
 
         response = FetchOutcome.Success("not a subscription at all", emptyMap())
         val result = syncer().sync(id)
 
         (result is SyncResult.NoServers) shouldBe true
+        val stored = subscriptions.observeSubscriptions().first().single()
+        stored.lastFetchStatus shouldBe "NoServers"
+        stored.lastFetchedAt shouldBe 2L
+        ((stored.lastAttemptedAt ?: 0L) > 1L) shouldBe true
         val groupId = subscriptions.observeSubscriptions().first().single().groupId
         profiles.observeGroups().first().single { it.id == groupId }.profiles.size shouldBe 1
     }

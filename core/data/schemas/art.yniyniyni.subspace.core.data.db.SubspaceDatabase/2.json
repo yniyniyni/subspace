@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "c736a63f3e4e69a7f0191b22e6f04c41",
+    "identityHash": "c6e42ba320947fc76e68379bb62523f5",
     "entities": [
       {
         "tableName": "profile_groups",
@@ -226,7 +226,7 @@
       },
       {
         "tableName": "subscriptions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` INTEGER NOT NULL, `url` TEXT NOT NULL, `userAgentOverride` TEXT, `hwidEnabled` INTEGER NOT NULL, `lastFetchedAt` INTEGER, `lastFetchStatus` TEXT, `lastFetchDetail` TEXT, `createdAt` INTEGER NOT NULL, FOREIGN KEY(`groupId`) REFERENCES `profile_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` INTEGER NOT NULL, `url` TEXT NOT NULL, `userAgentOverride` TEXT, `hwidEnabled` INTEGER NOT NULL, `lastFetchedAt` INTEGER, `lastAttemptedAt` INTEGER, `lastFetchStatus` TEXT, `lastFetchDetail` TEXT, `createdAt` INTEGER NOT NULL, FOREIGN KEY(`groupId`) REFERENCES `profile_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -260,6 +260,11 @@
           {
             "fieldPath": "lastFetchedAt",
             "columnName": "lastFetchedAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastAttemptedAt",
+            "columnName": "lastAttemptedAt",
             "affinity": "INTEGER"
           },
           {
@@ -422,7 +427,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c736a63f3e4e69a7f0191b22e6f04c41')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c6e42ba320947fc76e68379bb62523f5')"
     ]
   }
 }

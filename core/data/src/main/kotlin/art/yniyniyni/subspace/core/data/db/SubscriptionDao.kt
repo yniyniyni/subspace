@@ -41,6 +41,10 @@ internal data class SyncChangeSet(
     val deleteIds: List<Long>,
     val flagIds: List<Long>,
     val clearIds: List<Long>,
+    /** Null for a server-bearing success; `NoServers` for an empty body that still landed metadata. */
+    val fetchStatus: String? = null,
+    /** Closed, redacted diagnostic vocabulary for [fetchStatus]. */
+    val fetchDetail: String? = null,
 )
 
 /** Data access for the three subscription tables. */
@@ -79,15 +83,19 @@ internal interface SubscriptionDao {
      * back over it. Writing only these two columns makes that race impossible instead of merely
      * unlikely.
      */
-    @Query("UPDATE subscriptions SET lastFetchStatus = :status, lastFetchDetail = :detail WHERE id = :id")
-    suspend fun recordFetchFailure(id: Long, status: String, detail: String)
+    @Query(
+        "UPDATE subscriptions SET lastAttemptedAt = :attemptedAt, lastFetchStatus = :status, " +
+            "lastFetchDetail = :detail WHERE id = :id",
+    )
+    suspend fun recordFetchFailure(id: Long, status: String, detail: String, attemptedAt: Long)
 
     /** The success half of [recordFetchFailure]'s targeted-column reasoning — same race, same fix. */
     @Query(
-        "UPDATE subscriptions SET lastFetchedAt = :at, lastFetchStatus = NULL, lastFetchDetail = NULL " +
-            "WHERE id = :id",
+        "UPDATE subscriptions SET lastAttemptedAt = :at, " +
+            "lastFetchedAt = CASE WHEN :status IS NULL THEN :at ELSE lastFetchedAt END, " +
+            "lastFetchStatus = :status, lastFetchDetail = :detail WHERE id = :id",
     )
-    suspend fun recordFetchSuccess(id: Long, at: Long)
+    suspend fun recordFetchResult(id: Long, at: Long, status: String?, detail: String?)
 
     @Query("SELECT * FROM subscription_directives WHERE subscriptionId = :id")
     fun observeDirectives(id: Long): Flow<List<SubscriptionDirectiveEntity>>
@@ -278,7 +286,7 @@ internal interface SubscriptionDao {
      * the caller read the subscription row before a fetch that can run up to
      * `subscription-request-timeout` seconds, and writing that stale snapshot back with a full
      * `@Update` would clobber a `hwidEnabled`/`userAgentOverride` edit a user made mid-sync.
-     * [recordFetchSuccess] writes only the three columns this method actually changes.
+     * [recordFetchResult] writes only the four columns this method actually changes.
      *
      * Write ordering, and why the unique-index collision this task was flagged against is not
      * reachable:
@@ -329,7 +337,7 @@ internal interface SubscriptionDao {
             flagIds.forEach { flagDroppedFromSubscription(it, fetchedAt) }
             clearIds.forEach { clearIdentityHash(it) }
             upserts.forEach { upsertBySubscriptionKey(it) }
-            recordFetchSuccess(subscriptionId, fetchedAt)
+            recordFetchResult(subscriptionId, fetchedAt, fetchStatus, fetchDetail)
         }
     }
 }

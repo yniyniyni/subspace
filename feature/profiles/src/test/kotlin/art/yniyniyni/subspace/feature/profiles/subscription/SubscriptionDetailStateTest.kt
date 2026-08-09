@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.profiles.subscription
 
 import art.yniyniyni.subspace.core.data.EffectiveValue
+import art.yniyniyni.subspace.core.data.StoredSubscription
 import io.kotest.matchers.shouldBe
 import org.junit.Test
 
@@ -62,5 +63,22 @@ class SubscriptionDetailStateTest {
     @Test
     fun `redaction survives a url with no path`() {
         redactUrl("https://panel.example.com") shouldBe "https://panel.example.com/…"
+    }
+
+    @Test
+    fun `an empty response remains a distinct persisted last-fetch outcome`() {
+        val stored =
+            StoredSubscription(
+                id = 1L,
+                groupId = 2L,
+                url = "https://panel.example.com/sub",
+                userAgentOverride = null,
+                hwidEnabled = true,
+                lastFetchedAt = 100L,
+                lastFetchStatus = "NoServers",
+                lastFetchDetail = "NoServers",
+            )
+
+        stored.toLastFetchState() shouldBe LastFetchState.NoServers(lastSuccessAtEpochMillis = 100L)
     }
 }

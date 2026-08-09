@@ -324,12 +324,18 @@ private fun lastFetchLabel(state: LastFetchState): String =
         is LastFetchState.Succeeded ->
             stringResource(R.string.subscription_detail_last_fetched, relativeTime(state.atEpochMillis))
         is LastFetchState.Failed -> userMessageText(state.reason.toUserMessage())
+        is LastFetchState.NoServers -> stringResource(R.string.subscription_error_no_servers)
     }
 
 @Composable
 private fun lastFetchSupportingText(state: LastFetchState): String? =
     when (state) {
         is LastFetchState.Failed ->
+            state.lastSuccessAtEpochMillis?.let {
+                stringResource(R.string.subscription_detail_last_succeeded, relativeTime(it))
+            }
+                ?: stringResource(R.string.subscription_detail_never_succeeded)
+        is LastFetchState.NoServers ->
             state.lastSuccessAtEpochMillis?.let {
                 stringResource(R.string.subscription_detail_last_succeeded, relativeTime(it))
             }

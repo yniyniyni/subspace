@@ -11,6 +11,7 @@ import java.net.URI
 
 private const val REDACTED_PATH_SUFFIX = "/…"
 private const val REDACTED_FALLBACK = "…"
+private const val NO_SERVERS_STATUS = "NoServers"
 
 /**
  * One pinnable directive's resolved value, alongside enough of spec D3's precedence for the UI
@@ -85,8 +86,8 @@ internal data class DirectiveRow(
 
 /**
  * §7's failure taxonomy, resolved from [StoredSubscription]'s own two-column encoding
- * ([StoredSubscription.lastFetchStatus] holds a [SubscriptionSyncFailure] name, or `null` on
- * success) into something the screen can render without re-deriving that mapping — see
+ * ([StoredSubscription.lastFetchStatus] holds a [SubscriptionSyncFailure] name, `NoServers`, or
+ * `null` on server-bearing success) into something the screen can render without re-deriving that mapping — see
  * [toLastFetchState].
  */
 internal sealed interface LastFetchState {
@@ -104,6 +105,9 @@ internal sealed interface LastFetchState {
         val reason: SubscriptionSyncFailure,
         val lastSuccessAtEpochMillis: Long?,
     ) : LastFetchState
+
+    /** The response was valid enough to land metadata, but yielded no usable server profiles. */
+    data class NoServers(val lastSuccessAtEpochMillis: Long?) : LastFetchState
 }
 
 /**
@@ -118,14 +122,17 @@ internal sealed interface LastFetchState {
  * same string in `ImportViewModel.toUserMessage()`.
  */
 internal fun StoredSubscription.toLastFetchState(): LastFetchState {
-    val status =
-        lastFetchStatus
-            ?: return lastFetchedAt?.let { LastFetchState.Succeeded(it) }
-                ?: LastFetchState.NeverFetched
-    val reason =
-        runCatching { SubscriptionSyncFailure.valueOf(status) }
-            .getOrDefault(SubscriptionSyncFailure.ServerError)
-    return LastFetchState.Failed(reason, lastFetchedAt)
+    val status = lastFetchStatus
+    return when {
+        status == null -> lastFetchedAt?.let { LastFetchState.Succeeded(it) } ?: LastFetchState.NeverFetched
+        status == NO_SERVERS_STATUS -> LastFetchState.NoServers(lastFetchedAt)
+        else -> {
+            val reason =
+                runCatching { SubscriptionSyncFailure.valueOf(status) }
+                    .getOrDefault(SubscriptionSyncFailure.ServerError)
+            LastFetchState.Failed(reason, lastFetchedAt)
+        }
+    }
 }
 
 /**

@@ -54,6 +54,7 @@ internal val MIGRATION_1_2 = object : Migration(1, 2) {
                 userAgentOverride TEXT,
                 hwidEnabled INTEGER NOT NULL,
                 lastFetchedAt INTEGER,
+                lastAttemptedAt INTEGER,
                 lastFetchStatus TEXT,
                 lastFetchDetail TEXT,
                 createdAt INTEGER NOT NULL,

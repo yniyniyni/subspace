@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.sync
 
+import art.yniyniyni.subspace.core.data.StoredSubscription
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.Test
@@ -53,5 +54,28 @@ class DueSubscriptionsTest {
         scheduledAutoUpdateEnabled("no") shouldBe false
         openAutoUpdateEnabled("0") shouldBe false
         openAutoUpdateEnabled("no") shouldBe false
+    }
+
+    @Test
+    fun `a failed or empty attempt waits for the provider interval`() {
+        val oldSuccess = 1_000_000L
+        val newerAttempt = oldSuccess + HOUR
+        val subscription =
+            StoredSubscription(
+                id = 1,
+                groupId = 1,
+                url = "https://example.com/sub",
+                userAgentOverride = null,
+                hwidEnabled = true,
+                lastFetchedAt = oldSuccess,
+                lastAttemptedAt = newerAttempt,
+                lastFetchStatus = "TimedOut",
+                lastFetchDetail = "TimedOut",
+            )
+
+        // dueChecks() calls dueCheckFor(): retry pacing follows every attempt, while the old
+        // server-bearing success remains UI history only.
+        dueCheckFor(subscription, now = newerAttempt + HOUR, intervalHours = 6).dueAtEpochMillis shouldBe
+            newerAttempt + 6 * HOUR
     }
 }

@@ -125,9 +125,24 @@ constructor(
 /**
  * Maps status and headers to the §7 taxonomy.
  *
- * The device-limit headers are checked **before** the status code: the panel can
- * report a reached limit on a 200, and reporting that as success would show the
- * user an empty server list with no explanation.
+ * The HWID headers are checked **before** the status code, and independently of
+ * it, because Remnawave does not report either HWID condition with an error
+ * status. `checkHwidDeviceLimit` returns `isSubscriptionAllowed: false` and the
+ * handler answers with an ordinary `SubscriptionWithConfigResponse` — a **200**
+ * carrying `body: ''` (or a fallback-remarks template when `isShowCustomRemarks`
+ * is on) plus the marker headers. Keying [FetchFailure.HwidRequired] off `404`
+ * made it unreachable in production and reported a device-limited fetch as an
+ * empty server list; M4's device run caught it. Verified against the panel
+ * source, `subscription.service.ts` `checkHwidDeviceLimit`/`getSubscription`.
+ *
+ * `x-hwid-limit` is deliberately **not** consulted. Despite its name it is not a
+ * "limit reached" signal: the panel emits it as a fixed v2rayTUN compatibility
+ * marker whenever HWID enforcement is engaged (`headers['x-hwid-limit'] =
+ * 'true'; // v2rayTUN`), and on one of its two response paths that assignment
+ * sits outside the not-allowed branch entirely, so it rides along on successful
+ * responses too. Treating it as a failure turned every fetch from such a panel
+ * into a spurious [FetchFailure.DeviceLimitReached]. The two headers below are
+ * the real signals, and `checkHwidDeviceLimit` makes them mutually exclusive.
  *
  * The success branch's read is capped at [MAX_SUBSCRIPTION_BODY_BYTES]. An
  * over-cap body maps to [FetchFailure.ServerError]: the taxonomy is closed
@@ -141,10 +156,10 @@ private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
     fun flag(name: String) = headers[name].equals(HEADER_TRUE, ignoreCase = true)
 
     return when {
-        flag("x-hwid-max-devices-reached") || flag("x-hwid-limit") ->
+        flag("x-hwid-max-devices-reached") ->
             FetchOutcome.Failed(FetchFailure.DeviceLimitReached)
 
-        code == HTTP_NOT_FOUND && flag("x-hwid-not-supported") ->
+        flag("x-hwid-not-supported") ->
             FetchOutcome.Failed(FetchFailure.HwidRequired)
 
         code == HTTP_NOT_FOUND -> FetchOutcome.Failed(FetchFailure.NotFound)

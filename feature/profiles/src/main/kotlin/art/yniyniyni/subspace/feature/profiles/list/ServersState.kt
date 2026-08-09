@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.profiles.list
 
 import art.yniyniyni.subspace.core.data.ProfileKind
+import art.yniyniyni.subspace.feature.profiles.add.UserMessage
 
 /**
  * The domain sentinel for "no protocol filter" — always [ServersState.availableProtocols]'
@@ -46,6 +47,15 @@ internal enum class SortOrder { Alphabetical, AsListed, LastUsed }
  * @property availableProtocols the protocol chips to render, derived from what
  *   is actually stored (never a hardcoded protocol list) and always led by
  *   [ALL_PROTOCOLS_SENTINEL].
+ * @property updateResult the outcome of the most recent
+ *   [GroupCard][art.yniyniyni.subspace.core.ui.component.GroupCard] update
+ *   button press, or `null` when there is nothing to report. M4's device run
+ *   found [ServersViewModel.onUpdateSubscription] discarding its [SyncResult][
+ *   art.yniyniyni.subspace.core.data.sync.SyncResult] entirely, so a refresh
+ *   that failed — including the HWID cases the milestone exists to
+ *   distinguish — left the screen completely silent. The detail screen's
+ *   `refreshResult` already did this; the card's button is the path that did
+ *   not.
  */
 internal data class ServersState(
     val groups: List<ServersGroup> = emptyList(),
@@ -53,6 +63,7 @@ internal data class ServersState(
     val protocolFilter: String = ALL_PROTOCOLS_SENTINEL,
     val sort: SortOrder = SortOrder.AsListed,
     val availableProtocols: List<String> = listOf(ALL_PROTOCOLS_SENTINEL),
+    val updateResult: UserMessage? = null,
 )
 
 /**

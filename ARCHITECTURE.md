@@ -974,11 +974,28 @@ into distinct, actionable UI states rather than a generic fetch failure:
 | `x-hwid-active` | Always `true` when the device limit is on |
 | `x-hwid-not-supported` | `true` when the limit is on but the client sent no `x-hwid` |
 | `x-hwid-max-devices-reached` | `true` when the user is at their device cap |
-| `x-hwid-limit` | Duplicate of the above, kept for v2RayTun compatibility |
+| `x-hwid-limit` | **Not a failure signal.** A fixed v2RayTun compatibility marker, set whenever HWID enforcement is engaged — including on successful responses |
+
+`x-hwid-not-supported` and `x-hwid-max-devices-reached` are the only two
+signals; the panel makes them mutually exclusive. `x-hwid-limit` must never be
+read as "limit reached" despite its name: on one of the panel's two response
+paths that assignment sits outside the not-allowed branch, so it rides along on
+ordinary successes. M4 shipped a classifier that treated it as a failure and
+turned every fetch from such a panel into a spurious "device limit reached";
+this table's earlier "duplicate of the above" wording is what it was written
+against.
+
+**Neither condition arrives as an error status.** The panel answers a refused
+fetch with an ordinary `200` — empty body, or a fallback-remarks template when
+`isShowCustomRemarks` is on — plus the marker headers. Classify on the headers
+alone, never on the status. M4's first implementation keyed the HWID case off
+`404`, which made it unreachable in production; the device run caught it. §10.5
+applies to this whole table: it is now checked against the panel source
+(`subscription.service.ts`, `checkHwidDeviceLimit`), not inferred.
 
 "Device limit reached — remove a device in your account" and "this
 subscription requires HWID, enable it in settings" are different problems
-with different fixes. A 404 with no explanation is the worst outcome and is
+with different fixes. A refusal with no explanation is the worst outcome and is
 exactly what the user gets today from most clients.
 
 Remnawave can also return a **provider ID** in response headers, letting a

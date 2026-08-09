@@ -68,6 +68,7 @@ import art.yniyniyni.subspace.core.ui.component.SettingRow
 import art.yniyniyni.subspace.feature.profiles.R
 import art.yniyniyni.subspace.feature.profiles.add.UserMessage
 import art.yniyniyni.subspace.feature.profiles.add.toUserMessage
+import art.yniyniyni.subspace.feature.profiles.add.userMessageText
 
 private val CONTENT_PADDING = 16.dp
 private val FIELD_GAP = 12.dp
@@ -354,16 +355,6 @@ private fun relativeTime(epochMillis: Long): String =
  * [art.yniyniyni.subspace.feature.profiles.add.AddServerSheet]'s own `SubscriptionResultText`
  * for the sibling copy this mirrors (private there, not reusable across files).
  */
-@Composable
-private fun userMessageText(message: UserMessage): String {
-    val quantity = message.quantity
-    return if (quantity != null) {
-        pluralStringResource(message.resId, quantity, quantity)
-    } else {
-        stringResource(message.resId)
-    }
-}
-
 /**
  * The most recent manual [SubscriptionDetailActions.onRefreshNow] result — tapping it dismisses
  * it. No auto-dismiss timer: a failure reason the user did not get to read defeats the point of

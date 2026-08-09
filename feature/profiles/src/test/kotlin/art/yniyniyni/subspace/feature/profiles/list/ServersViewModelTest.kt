@@ -6,10 +6,13 @@ import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import art.yniyniyni.subspace.feature.profiles.R
+import art.yniyniyni.subspace.feature.profiles.add.UserMessage
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
@@ -161,6 +164,12 @@ class ServersViewModelTest {
         var lastSyncedSubscriptionId: Long? = null
             private set
 
+        /**
+         * Settable so a test can drive the failure branch. A fake that only ever succeeds is why
+         * the discarded-[SyncResult] bug survived to the device run: nothing here could fail.
+         */
+        var syncResultToReturn: SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+
         override fun observeGroups(
             query: String,
             protocol: String?,
@@ -243,7 +252,7 @@ class ServersViewModelTest {
         override suspend fun syncSubscription(id: Long): SyncResult {
             syncSubscriptionCallCount++
             lastSyncedSubscriptionId = id
-            return SyncResult.Synced(0, 0, 0, 0, 0)
+            return syncResultToReturn
         }
 
         override suspend fun deleteSubscription(id: Long) = Unit
@@ -480,6 +489,74 @@ class ServersViewModelTest {
 
             subscribedSource.syncSubscriptionCallCount shouldBe 1
             subscribedSource.lastSyncedSubscriptionId shouldBe 9L
+        }
+
+    @Test
+    fun `a failed update surfaces its reason instead of failing silently`() =
+        runTest {
+            // M4's device run: the HWID toggle was off, the panel refused the fetch, and the
+            // Servers screen said nothing at all because onUpdateSubscription discarded its
+            // SyncResult. HwidRequired specifically, because telling it apart from
+            // DeviceLimitReached is the milestone's exit criterion.
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            viewModel.state.value.updateResult shouldBe
+                UserMessage(R.string.subscription_error_hwid_required)
+        }
+
+    @Test
+    fun `a successful update reports the rows written`() =
+        runTest {
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Synced(added = 3, 0, 0, 0, 0)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            viewModel.state.value.updateResult shouldBe UserMessage(R.plurals.subscription_added, quantity = 3)
+        }
+
+    @Test
+    fun `the update result survives the state rebuild the sync itself triggers`() =
+        runTest {
+            // buildState() does not know about updateResult, and a sync writes to the tables the
+            // state flow observes — so a naive assignment erases the message at exactly the moment
+            // it becomes relevant.
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+            viewModel.onQueryChanged("anything") // forces the combine to rebuild the whole state
+            advanceUntilIdle()
+
+            viewModel.state.value.updateResult shouldBe
+                UserMessage(R.string.subscription_error_hwid_required)
+        }
+
+    @Test
+    fun `dismissing the update result clears it`() =
+        runTest {
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            viewModel.onDismissUpdateResult()
+
+            viewModel.state.value.updateResult shouldBe null
         }
 
     @Test

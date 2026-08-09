@@ -9,6 +9,7 @@ import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.parser.directive.UserInfo
 import art.yniyniyni.subspace.core.parser.directive.parseUserInfo
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import art.yniyniyni.subspace.feature.profiles.add.toUserMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -75,7 +76,10 @@ constructor(
             profileSource.activeProfileId,
             subscriptionContextByGroupId,
         ) { raw, filtered, f, activeId, context -> buildState(raw, filtered, f, activeId, context) }
-            .onEach { _state.value = it }
+            // buildState knows nothing about updateResult, and a sync writes to the very tables
+            // this flow observes — so assigning its output wholesale would erase the message on
+            // the re-emission the sync itself triggers, which is exactly when it must be visible.
+            .onEach { built -> _state.value = built.copy(updateResult = _state.value.updateResult) }
             .launchIn(viewModelScope)
     }
 
@@ -146,16 +150,26 @@ constructor(
     }
 
     /**
-     * Runs one sync of the subscription owning a `SUBSCRIPTION` group right
-     * now — `GroupCard`'s Update button (fix round, Important 1). Fire-and-forget,
-     * same shape as [onRenameGroup]/[onDeleteGroup] above: the result isn't
-     * surfaced to the UI here (no designed success/failure affordance exists
-     * yet for this screen), but [ProfileSource.syncSubscription] still runs
-     * to completion and persists whatever it finds via [profileSource]'s own
-     * flows, which this screen already observes.
+     * Runs one sync of the subscription owning a `SUBSCRIPTION` group right now —
+     * `GroupCard`'s Update button — and reports the outcome.
+     *
+     * The result is not optional to surface: [SyncResult][art.yniyniyni.subspace.core.data.sync.SyncResult]
+     * carries the HWID-required and device-limit-reached distinction the whole
+     * milestone is built around, and this button was discarding it — a failed
+     * refresh from the group card was indistinguishable from a successful one.
+     * Found on device, not by any test, because nothing asserted on a failing
+     * sync here.
      */
     fun onUpdateSubscription(id: Long) {
-        viewModelScope.launch { profileSource.syncSubscription(id) }
+        viewModelScope.launch {
+            val result = profileSource.syncSubscription(id)
+            _state.value = _state.value.copy(updateResult = result.toUserMessage())
+        }
+    }
+
+    /** Clears [ServersState.updateResult] once the user has read it. */
+    fun onDismissUpdateResult() {
+        _state.value = _state.value.copy(updateResult = null)
     }
 
     private data class Filters(val query: String, val protocol: String, val sort: SortOrder)

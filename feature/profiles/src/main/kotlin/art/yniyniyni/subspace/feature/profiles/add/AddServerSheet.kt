@@ -327,15 +327,9 @@ private fun SubscriptionResultText(
     message: UserMessage,
     modifier: Modifier = Modifier,
 ) {
-    val quantity = message.quantity
     Text(
-        text =
-        if (quantity != null) {
-            pluralStringResource(message.resId, quantity, quantity)
-        } else {
-            stringResource(message.resId)
-        },
-        color = if (quantity == null) MaterialTheme.colorScheme.error else Color.Unspecified,
+        text = userMessageText(message),
+        color = if (message.quantity == null) MaterialTheme.colorScheme.error else Color.Unspecified,
         style = MaterialTheme.typography.bodyMedium,
         modifier = modifier,
     )

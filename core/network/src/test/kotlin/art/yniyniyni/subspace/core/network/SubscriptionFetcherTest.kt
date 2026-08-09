@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.network
 
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -60,14 +61,36 @@ class SubscriptionFetcherTest {
     }
 
     @Test
-    fun `404 with x-hwid-not-supported is HwidRequired, not NotFound`() = runTest {
-        // The milestone's exit criterion. Remnawave returns 404 both for a
-        // missing HWID header and for a wrong URL; only a response header tells
-        // them apart, and a bare 404 is what most clients give today (§A.4.1).
+    fun `a 200 with x-hwid-not-supported is HwidRequired`() = runTest {
+        // The milestone's exit criterion, in the shape the panel actually sends.
+        // M4's device run established that Remnawave does NOT 404 a missing
+        // HWID: checkHwidDeviceLimit returns isSubscriptionAllowed = false and
+        // the handler answers with an ordinary SubscriptionWithConfigResponse —
+        // 200, empty body, marker headers. Keying this off 404 (as this file
+        // originally did) made HwidRequired unreachable in production.
+        //
+        // x-hwid-limit rides along because the panel sets it whenever HWID
+        // enforcement is engaged; including it here pins the precedence that
+        // regressed the exit criterion into DeviceLimitReached.
+        server.enqueue(
+            MockResponse.Builder()
+                .code(200)
+                .addHeader("x-hwid-active", "true")
+                .addHeader("x-hwid-not-supported", "true")
+                .addHeader("x-hwid-limit", "true")
+                .build(),
+        )
+
+        fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.HwidRequired)
+    }
+
+    @Test
+    fun `x-hwid-not-supported on a 404 is still HwidRequired`() = runTest {
+        // The check is status-independent, so a panel that does answer 404 (or
+        // a proxy that rewrites the status) still reaches the right message.
         server.enqueue(
             MockResponse.Builder()
                 .code(404)
-                .addHeader("x-hwid-active", "true")
                 .addHeader("x-hwid-not-supported", "true")
                 .build(),
         )
@@ -89,6 +112,7 @@ class SubscriptionFetcherTest {
                 .code(200)
                 .addHeader("x-hwid-active", "true")
                 .addHeader("x-hwid-max-devices-reached", "true")
+                .addHeader("x-hwid-limit", "true")
                 .build(),
         )
 
@@ -97,16 +121,25 @@ class SubscriptionFetcherTest {
     }
 
     @Test
-    fun `x-hwid-limit is treated the same, for v2RayTun compatibility`() = runTest {
+    fun `x-hwid-limit alone is not a failure`() = runTest {
+        // x-hwid-limit is a fixed v2rayTUN compatibility marker, not a
+        // limit-reached signal. On one of the panel's two response paths the
+        // assignment sits outside the not-allowed branch, so it ships on
+        // successful responses; treating it as a failure turned every fetch
+        // from such a panel into a spurious DeviceLimitReached.
         server.enqueue(
             MockResponse.Builder()
                 .code(200)
                 .addHeader("x-hwid-limit", "true")
+                .body("vless://one\nvless://two")
                 .build(),
         )
 
-        fetcher().fetch(request()) shouldBe
-            FetchOutcome.Failed(FetchFailure.DeviceLimitReached)
+        val outcome = fetcher().fetch(request())
+
+        outcome.shouldBeInstanceOf<FetchOutcome.Success>()
+        outcome.body shouldBe "vless://one\nvless://two"
+        outcome.headers["x-hwid-limit"] shouldBe "true"
     }
 
     @Test

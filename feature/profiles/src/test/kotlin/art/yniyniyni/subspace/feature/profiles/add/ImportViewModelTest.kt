@@ -4,11 +4,14 @@ package art.yniyniyni.subspace.feature.profiles.add
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import art.yniyniyni.subspace.feature.profiles.R
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -169,19 +172,50 @@ class ImportViewModelTest {
             outbound: Outbound,
         ) = true
 
-        // Not exercised here — SubscriptionImportTest owns coverage of
-        // toUserMessage() as a pure function, and this fake has no real
-        // SubscriptionRepository/SubscriptionSyncer to model add-then-sync
-        // against (both have `internal` constructors scoped to :core:data;
-        // see ProfileSource's own KDoc for why this seam exists at all).
+        // Review round 1: these three used to be hardcoded (always Synced, no
+        // way to configure a failure) — a vacuous fake nothing below could
+        // have called out even if ImportViewModel.addSubscription's
+        // add-then-sync-then-conditional-delete wiring were completely
+        // broken. syncResultToReturn makes the outcome configurable per
+        // test; the call-tracking fields below let a test assert not just
+        // "what did addSubscription return" but "was sync/delete even
+        // reached, and with which id." onSyncSubscription is an optional
+        // suspension point (a real one — not virtual-clock-controlled) so a
+        // test can observe ImportViewModel's busy state while its coroutine
+        // is genuinely still in flight, the same thing `import`'s own
+        // `Dispatchers.Default` hop lets the tests above do implicitly.
+        var syncResultToReturn: SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+        var onSyncSubscription: suspend () -> Unit = {}
+
+        var addSubscriptionCallCount = 0
+            private set
+        var lastAddSubscriptionUrl: String? = null
+            private set
+        var syncSubscriptionCallCount = 0
+            private set
+        var lastSyncedSubscriptionId: Long? = null
+            private set
+        val deletedSubscriptionIds = mutableListOf<Long>()
+
         override suspend fun addSubscription(
             url: String,
             name: String,
-        ) = nextId++
+        ): Long {
+            addSubscriptionCallCount++
+            lastAddSubscriptionUrl = url
+            return nextId++
+        }
 
-        override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+        override suspend fun syncSubscription(id: Long): SyncResult {
+            syncSubscriptionCallCount++
+            lastSyncedSubscriptionId = id
+            onSyncSubscription()
+            return syncResultToReturn
+        }
 
-        override suspend fun deleteSubscription(id: Long) = Unit
+        override suspend fun deleteSubscription(id: Long) {
+            deletedSubscriptionIds += id
+        }
     }
 
     @Before
@@ -377,5 +411,139 @@ class ImportViewModelTest {
             viewModel.state.value.completed shouldBe false
             viewModel.state.value.busy shouldBe true
             viewModel.state.value.input shouldBe "kept across the file pick"
+        }
+
+    // Task 13, review round 1: addSubscription's own orchestration — the URL
+    // gate, add-then-sync, and the conditional delete the brief singles out
+    // ("on failure of the first sync after add, delete the subscription
+    // again") — had zero executed coverage. SubscriptionImportTest only
+    // proves SyncResult.toUserMessage() is a correct pure function; these
+    // prove ImportViewModel actually calls the sequence that function's
+    // input comes from.
+
+    @Test
+    fun addSubscriptionAddsThenSyncsTheNewSubscription() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.addSubscriptionCallCount shouldBe 1
+            repository.lastAddSubscriptionUrl shouldBe "https://example.com/sub"
+            repository.syncSubscriptionCallCount shouldBe 1
+            // Proves sync is called with the id addSubscription itself just returned,
+            // not some other one — FakeProfileSource.nextId starts at 1L.
+            repository.lastSyncedSubscriptionId shouldBe 1L
+        }
+
+    @Test
+    fun addSubscriptionDeletesTheSubscriptionWhenTheFirstSyncFails() =
+        runTest {
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.NotFound)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun addSubscriptionDeletesTheSubscriptionWhenTheFirstSyncFindsNoServers() =
+        runTest {
+            // NoServers is not SyncResult.Failed, but addSubscription treats it the same
+            // way for this purpose — a first sync that lands zero servers is still a
+            // group the user did not ask for. Worth its own case: it is the one non-Failed,
+            // non-Synced variant most likely to be miscategorised as "success enough."
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.NoServers("empty response")
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun addSubscriptionDoesNotDeleteTheSubscriptionWhenTheFirstSyncSucceeds() =
+        runTest {
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Synced(added = 3, 0, 0, 0, 0)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe emptyList()
+        }
+
+    @Test
+    fun addSubscriptionReportsTheMappedResultInState() =
+        runTest {
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            // Ties this file's orchestration coverage to SubscriptionImportTest's pure-function
+            // one: the state actually carries what toUserMessage() would produce for the same
+            // SyncResult, not some other resource id.
+            viewModel.state.value.subscriptionResult?.resId shouldBe R.string.subscription_error_hwid_required
+        }
+
+    @Test
+    fun addSubscriptionWithAnInvalidUrlIsANoOp() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            // Not http/https at all — DirectiveKind.Url's own scheme rule (a file:
+            // subscription URL is the same hazard §A.1 already guards against for
+            // provider-supplied URL directives, just typed by the user instead).
+            viewModel.addSubscription("file:///etc/passwd")
+            advanceUntilIdle()
+
+            repository.addSubscriptionCallCount shouldBe 0
+            repository.syncSubscriptionCallCount shouldBe 0
+            repository.deletedSubscriptionIds shouldBe emptyList()
+            viewModel.state.value.busy shouldBe false
+            viewModel.state.value.subscriptionResult shouldBe null
+        }
+
+    @Test
+    fun addSubscriptionIsBusyWhileTheSyncIsInFlight() =
+        runTest {
+            // syncSubscription's fake body never truly suspends by default (unlike
+            // import()'s real Dispatchers.Default hop), so under UnconfinedTestDispatcher
+            // the whole addSubscription coroutine would otherwise run to completion
+            // synchronously and busy would already be false by the time this test could
+            // observe it. onSyncSubscription's CompletableDeferred is a genuine suspension
+            // point, so busy=true is caught mid-flight rather than asserted vacuously.
+            val repository = FakeProfileSource()
+            val gate = CompletableDeferred<Unit>()
+            repository.onSyncSubscription = { gate.await() }
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+
+            viewModel.state.value.busy shouldBe true
+            viewModel.state.value.subscriptionResult shouldBe null
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            viewModel.state.value.busy shouldBe false
         }
 }

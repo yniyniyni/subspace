@@ -11,7 +11,14 @@ internal data class SettingsState(
     val theme: ThemePreference = ThemePreference.System,
     val appVersion: String = "",
     val xrayVersion: XrayVersionState = XrayVersionState.Loading,
-)
+    val hwidEnabled: Boolean = true,
+    val hwid: String = "",
+) {
+    /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (§5.6). */
+    override fun toString(): String =
+        "SettingsState(theme=$theme, appVersion=$appVersion, xrayVersion=$xrayVersion, " +
+            "hwidEnabled=$hwidEnabled, hwid=<redacted>)"
+}
 
 /**
  * §10.4: the Xray-core version is a real value fetched from a native call

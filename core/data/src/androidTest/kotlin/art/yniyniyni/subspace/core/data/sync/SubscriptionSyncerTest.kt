@@ -4,11 +4,14 @@ package art.yniyniyni.subspace.core.data.sync
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.core.network.FetchOutcome
+import art.yniyniyni.subspace.core.network.HwidProvider
+import art.yniyniyni.subspace.core.network.SubscriptionRequest
 import art.yniyniyni.subspace.core.network.SubscriptionSource
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -52,13 +55,18 @@ private fun link(name: String, host: String = "example.com", uuid: String = uuid
 class SubscriptionSyncerTest {
     private lateinit var db: SubspaceDatabase
     private lateinit var subscriptions: SubscriptionRepository
+    private lateinit var settings: SettingsRepository
     private lateinit var profiles: ProfileRepository
 
     private var response: FetchOutcome = FetchOutcome.Success("", emptyMap())
-    private val source = SubscriptionSource { response }
+    private var lastRequest: SubscriptionRequest? = null
+    private val source = SubscriptionSource { request ->
+        lastRequest = request
+        response
+    }
 
     private fun syncer() =
-        SubscriptionSyncer(db.subscriptionDao(), subscriptions, source)
+        SubscriptionSyncer(db.subscriptionDao(), subscriptions, settings, source)
 
     @Before
     fun setUp() {
@@ -68,6 +76,7 @@ class SubscriptionSyncerTest {
         ).build()
         profiles = ProfileRepository(db.profileDao())
         subscriptions = SubscriptionRepository(db.subscriptionDao(), profiles)
+        settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
     }
 
     @After fun tearDown() = db.close()
@@ -96,6 +105,16 @@ class SubscriptionSyncerTest {
         syncer().sync(id)
 
         subscriptions.effective(id, "profile-update-interval", null).value shouldBe "6"
+    }
+
+    @Test
+    fun globalHwidGateDisablesTheHeaderEvenWhenTheSubscriptionAllowsIt() = runTest {
+        val id = addSubscription()
+        settings.setHwidEnabled(false)
+
+        syncer().sync(id)
+
+        lastRequest?.hwidEnabled shouldBe false
     }
 
     @Test

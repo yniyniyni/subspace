@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.core.data.sync
 import android.database.sqlite.SQLiteConstraintException
 import android.util.Log
 import art.yniyniyni.subspace.core.data.ProfileKind
+import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.ProfileEntity
 import art.yniyniyni.subspace.core.data.db.SubscriptionDao
@@ -25,6 +26,7 @@ import art.yniyniyni.subspace.core.parser.SubscriptionParser
 import art.yniyniyni.subspace.core.parser.directive.DirectiveSplitter
 import art.yniyniyni.subspace.core.parser.directive.DirectiveValidator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -53,6 +55,7 @@ public class SubscriptionSyncer
 internal constructor(
     private val dao: SubscriptionDao,
     private val subscriptions: SubscriptionRepository,
+    private val settings: SettingsRepository,
     private val source: SubscriptionSource,
 ) {
     /**
@@ -95,7 +98,7 @@ internal constructor(
             source.fetch(
                 SubscriptionRequest(
                     url = subscription.url,
-                    hwidEnabled = subscription.hwidEnabled,
+                    hwidEnabled = subscription.hwidEnabled && settings.hwidEnabled.first(),
                     userAgentOverride = userAgent,
                     timeoutSeconds = timeout,
                 ),

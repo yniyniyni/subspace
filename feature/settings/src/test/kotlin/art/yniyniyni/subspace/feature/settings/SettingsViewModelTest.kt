@@ -46,10 +46,17 @@ class SettingsViewModelTest {
      */
     private class FakeSettingsSource(initial: ThemePreference = ThemePreference.System) : SettingsSource {
         private val _theme = MutableStateFlow(initial)
+        private val _hwidEnabled = MutableStateFlow(true)
         override val theme: Flow<ThemePreference> = _theme.asStateFlow()
+        override val hwidEnabled: Flow<Boolean> = _hwidEnabled.asStateFlow()
+        override val hwid: String = "test-hwid"
 
         override suspend fun setTheme(preference: ThemePreference) {
             _theme.value = preference
+        }
+
+        override suspend fun setHwidEnabled(enabled: Boolean) {
+            _hwidEnabled.value = enabled
         }
     }
 
@@ -88,6 +95,20 @@ class SettingsViewModelTest {
             val viewModel = SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource())
 
             viewModel.state.value.theme shouldBe ThemePreference.System
+        }
+
+    @Test
+    fun `hwid setting survives a viewmodel restart`() =
+        runTest {
+            val settingsSource = FakeSettingsSource()
+            val viewModel = SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource())
+
+            viewModel.onHwidEnabledChanged(false)
+            advanceUntilIdle()
+
+            val restarted = SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource())
+
+            restarted.state.value.hwidEnabled shouldBe false
         }
 
     @Test

@@ -4,10 +4,12 @@ package art.yniyniyni.subspace.core.data.testing
 import android.content.Context
 import androidx.room.Room
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import art.yniyniyni.subspace.core.network.FetchOutcome
+import art.yniyniyni.subspace.core.network.HwidProvider
 import art.yniyniyni.subspace.core.network.SubscriptionSource
 
 /**
@@ -39,12 +41,14 @@ public class InMemorySubscriptionStack(
 ) : AutoCloseable {
     private val db: SubspaceDatabase = Room.inMemoryDatabaseBuilder(context, SubspaceDatabase::class.java).build()
     private val profiles = ProfileRepository(db.profileDao())
+    private val settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
 
     public val repository: SubscriptionRepository = SubscriptionRepository(db.subscriptionDao(), profiles)
     public val syncer: SubscriptionSyncer =
         SubscriptionSyncer(
             db.subscriptionDao(),
             repository,
+            settings,
             SubscriptionSource {
                 onFetch()
                 FetchOutcome.Success("", emptyMap())

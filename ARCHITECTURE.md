@@ -720,6 +720,23 @@ Same key set, two transports. Both must be supported. Boolean directives use
 `true` or `1` to enable; **any other non-empty value disables** (`0`,
 `false`, anything).
 
+**When a key arrives on both transports, the header wins**, and the body line
+is consumed rather than left for the config parser to choke on. M4's device run
+settled what was previously a §10.5 guess, in two parts:
+
+- **Remnawave never emits body directives at all.** Every directive is an HTTP
+  header (`getUserProfileHeadersInfo`), and none of the five body generators
+  — clash, mihomo, singbox, xray-json, xray — writes a `#` line. The conflict
+  cannot arise from this panel, which is what bounds the risk here.
+- **The implemented rule is header-wins**, verified end to end against a
+  response that set `profile-title` and `profile-update-interval` both ways:
+  the header value was the one stored *and* the one applied (the group took the
+  header's name), and the body lines were stripped from the config text.
+
+What remains unverified is only what a provider that emits *both* intends by
+it, since no such provider is known in the target set. Treat this as settled for
+Remnawave and as a documented, tested choice elsewhere — not as an upstream fact.
+
 ### Architectural consequences
 
 - The subscription fetcher is **not** a parser that returns a server list.

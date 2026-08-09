@@ -82,6 +82,12 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+    // Task 12 / spec D9: the self-rescheduling refresh worker and its Hilt
+    // wiring. THIRD_PARTY.md records the justification and the licence, read
+    // from each artifact's own POM.
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
 
     // Same gap as the androidTest block below: :app doesn't go through
     // subspace.android.library, so the plain JVM unit-test kit every other
@@ -107,4 +113,13 @@ dependencies {
     // 3.5.0 fails every assertion on this API 37 test device (see
     // THIRD_PARTY.md / core/ui/build.gradle.kts for the full explanation).
     androidTestImplementation(libs.androidx.test.espresso.core)
+    // TestListenableWorkerBuilder / WorkManagerTestInitHelper for
+    // SubscriptionRefreshWorkerTest.
+    androidTestImplementation(libs.androidx.work.testing)
+    // InMemorySubscriptionStack: a real SubscriptionRepository/SubscriptionSyncer pair over an
+    // in-memory Room database, built inside :core:data (where its internal DAO/Database types are
+    // visible) and exposed here as a testFixtures artifact — :app cannot construct those types
+    // itself (§4: only :core:data may depend on :core:network, and SubscriptionRepository's own
+    // constructor is internal to that module).
+    androidTestImplementation(testFixtures(project(":core:data")))
 }

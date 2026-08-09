@@ -481,6 +481,20 @@ Read this section twice.
 | Compose screens | Compose UI tests for state rendering |
 | Tunnel, DNS, per-app, network transitions | **Manual, on device, every time** |
 
+`:core:data`'s repositories (`ProfileRepository`, `SubscriptionRepository`,
+`SubscriptionSyncer`, ...) take their DAO/`SubspaceDatabase` dependencies
+through `internal` constructors on purpose — production code reaches them only
+through Hilt, never by hand. A test in a *different* module that legitimately
+needs a real instance (not a fake) over an in-memory database — introduced by
+Task 12's `SubscriptionRefreshWorkerTest` in `:app` — cannot call those
+constructors itself (`internal` does not cross a Gradle module boundary) and
+must not add a dependency on `:core:network` just to supply one constructor
+argument (§4: only `:core:data` may depend on it). `:core:data`'s `testFixtures`
+source set (`android { testFixtures { enable = true } }`) is the sanctioned
+way out: it compiles with the same access `:core:data`'s own `androidTest`
+has, and exposes only the already-public repository/syncer types outward. See
+`InMemorySubscriptionStack` in `core/data/src/testFixtures/`.
+
 Manual smoke checklist before any release:
 
 - [ ] Connect, load a page, verify exit IP changed

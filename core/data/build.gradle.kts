@@ -9,6 +9,10 @@ plugins {
 android {
     namespace = "art.yniyniyni.subspace.core.data"
 
+    testFixtures {
+        enable = true
+    }
+
     // Schema export makes migrations reviewable in the diff instead of
     // discovered on a user's device.
     ksp {
@@ -40,4 +44,13 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.kotest.assertions)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+
+    // Task 12: an in-memory SubscriptionRepository builder, shared with :app's
+    // androidTest so SubscriptionRefreshWorkerTest can drive a real repository
+    // without depending on :core:data's internal DAO/Database types (§4 keeps
+    // those internal on purpose — DI-only construction).
+    testFixturesImplementation(project(":core:model"))
+    testFixturesImplementation(project(":core:network"))
+    testFixturesImplementation(libs.room.runtime)
+    testFixturesImplementation(libs.room.testing)
 }

@@ -5,14 +5,19 @@ import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/** `DirectiveRegistry`'s key for the quota/usage header Task 14's `GroupCard` renders. */
+private const val KEY_SUBSCRIPTION_USERINFO = "subscription-userinfo"
 
 /**
  * The [ProfileRepository], [SettingsRepository], [SubscriptionRepository] and
@@ -136,6 +141,23 @@ internal interface ProfileSource {
 
     /** Deletes a subscription and its group — see [SubscriptionRepository.delete]. */
     suspend fun deleteSubscription(id: Long)
+
+    /**
+     * Every stored subscription — Task 14: lets the Servers screen map a
+     * `SUBSCRIPTION`-sourced [ProfileGroup] (via [StoredSubscription.groupId])
+     * to the provider metadata it owns.
+     */
+    fun observeSubscriptions(): Flow<List<StoredSubscription>>
+
+    /**
+     * The raw `subscription-userinfo` value [id]'s provider last sent — pin,
+     * else provider, else `null`, per [SubscriptionRepository.observeEffective].
+     * `null` when the provider has sent no usable value; parsing the raw
+     * semicolon-separated header is the caller's job
+     * ([art.yniyniyni.subspace.core.parser.directive.parseUserInfo]), this
+     * seam only resolves precedence.
+     */
+    fun observeUserInfo(id: Long): Flow<String?>
 }
 
 @Suppress("TooManyFunctions") // Implements ProfileSource — see that interface's own identical call.
@@ -197,4 +219,9 @@ constructor(
     override suspend fun syncSubscription(id: Long): SyncResult = subscriptionSyncer.sync(id)
 
     override suspend fun deleteSubscription(id: Long) = subscriptionRepository.delete(id)
+
+    override fun observeSubscriptions(): Flow<List<StoredSubscription>> = subscriptionRepository.observeSubscriptions()
+
+    override fun observeUserInfo(id: Long): Flow<String?> =
+        subscriptionRepository.observeEffective(id, KEY_SUBSCRIPTION_USERINFO, default = null).map { it.value }
 }

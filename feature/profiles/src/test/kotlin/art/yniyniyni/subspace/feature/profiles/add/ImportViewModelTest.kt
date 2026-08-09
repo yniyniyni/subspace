@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.add
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
@@ -216,6 +217,12 @@ class ImportViewModelTest {
         override suspend fun deleteSubscription(id: Long) {
             deletedSubscriptionIds += id
         }
+
+        // Not exercised — ImportViewModel never reads either. Task 14's
+        // real coverage lives in ServersViewModelTest.
+        override fun observeSubscriptions(): Flow<List<StoredSubscription>> = MutableStateFlow(emptyList())
+
+        override fun observeUserInfo(id: Long): Flow<String?> = MutableStateFlow(null)
     }
 
     @Before

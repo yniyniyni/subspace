@@ -83,6 +83,8 @@ internal fun ServersGroupList(
                     onDelete = { actions.onDelete(group) },
                     onAddProfile = actions.onAddProfile,
                 ),
+                quotaUsedBytes = group.quotaUsedBytes,
+                quotaTotalBytes = group.quotaTotalBytes,
             ) {
                 group.profiles.forEach { row ->
                     ServerRowItem(

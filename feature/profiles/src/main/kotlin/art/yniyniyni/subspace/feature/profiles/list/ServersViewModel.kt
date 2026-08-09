@@ -5,15 +5,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.parser.directive.UserInfo
+import art.yniyniyni.subspace.core.parser.directive.parseUserInfo
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -52,14 +58,39 @@ constructor(
         val filteredGroups =
             filters.flatMapLatest { f -> profileSource.observeGroups(f.query, f.protocol.toRawProtocolOrNull()) }
 
+        // Task 14: quota bar data. Which groups are SUBSCRIPTION-sourced is
+        // never asked directly — a group's presence in this map (keyed by
+        // groupId, one entry per stored subscription) is itself the answer, so
+        // a MANUAL group's absence from it is what keeps GroupCard's quota
+        // params null for that group, with no separate "is this a
+        // subscription group" flag to keep in sync.
+        val quotaByGroupId = profileSource.observeSubscriptions().flatMapLatest { it.observeQuotaByGroupId() }
+
         combine(
             allGroups,
             filteredGroups,
             filters,
             profileSource.activeProfileId,
-        ) { raw, filtered, f, activeId -> buildState(raw, filtered, f, activeId) }
+            quotaByGroupId,
+        ) { raw, filtered, f, activeId, quota -> buildState(raw, filtered, f, activeId, quota) }
             .onEach { _state.value = it }
             .launchIn(viewModelScope)
+    }
+
+    /**
+     * Re-parses `subscription-userinfo` for every stored subscription
+     * whenever any of them changes, keyed by the group each one owns.
+     *
+     * Receiver, not a parameter: keeps the call site above
+     * (`profileSource.observeSubscriptions().flatMapLatest { ... }`) reading
+     * left-to-right as "subscriptions, then their quota", matching this
+     * class's other `flatMapLatest` chain immediately above it.
+     */
+    private fun List<StoredSubscription>.observeQuotaByGroupId(): Flow<Map<Long, UserInfo?>> {
+        if (isEmpty()) return flowOf(emptyMap())
+        val perSubscription =
+            map { sub -> profileSource.observeUserInfo(sub.id).map { raw -> sub.groupId to raw?.let(::parseUserInfo) } }
+        return combine(perSubscription) { pairs -> pairs.toMap() }
     }
 
     fun onQueryChanged(text: String) {
@@ -98,15 +129,25 @@ constructor(
         filtered: List<ProfileGroup>,
         filters: Filters,
         activeProfileId: Long?,
+        quotaByGroupId: Map<Long, UserInfo?>,
     ): ServersState {
         val totalCountById = raw.associate { it.id to it.profiles.size }
         val groups =
             filtered.map { group ->
+                val quota = quotaByGroupId[group.id]
                 ServersGroup(
                     id = group.id,
                     name = group.name,
                     totalProfileCount = totalCountById[group.id] ?: group.profiles.size,
                     profiles = group.profiles.sortedFor(filters.sort).map { it.toRow(activeProfileId) },
+                    // UserInfo.usedBytes defaults an absent upload/download to
+                    // zero (its own KDoc); that is correct for "one of the two
+                    // was sent" but would draw a fabricated "0 B used" if the
+                    // provider sent neither, so that case is excluded here
+                    // rather than in the parser — see this task's governing
+                    // rule against substituting a zero for an absent value.
+                    quotaUsedBytes = quota?.takeIf { it.upload != null || it.download != null }?.usedBytes,
+                    quotaTotalBytes = quota?.total,
                 )
             }
         return ServersState(

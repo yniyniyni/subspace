@@ -64,12 +64,23 @@ internal data class ServersState(
  *   list with a search never understates how many profiles a delete removes.
  * @property profiles the rows currently visible under [ServersState.query]/[ServersState.protocolFilter],
  *   ordered by [ServersState.sort].
+ * @property quotaUsedBytes Task 14: this group's subscription's parsed
+ *   `subscription-userinfo` usage, forwarded to
+ *   [GroupCard][art.yniyniyni.subspace.core.ui.component.GroupCard]'s
+ *   `quotaUsedBytes`. `null` for a `MANUAL` group (it has no subscription to
+ *   own one) and for a `SUBSCRIPTION` group whose provider has sent no
+ *   measurable usage — never a substituted zero.
+ * @property quotaTotalBytes the same directive's `total` field, forwarded to
+ *   `GroupCard`'s `quotaTotalBytes`. `null` under the same conditions as
+ *   [quotaUsedBytes], or when the provider omitted `total` entirely.
  */
 internal data class ServersGroup(
     val id: Long,
     val name: String,
     val totalProfileCount: Int,
     val profiles: List<ServerRow>,
+    val quotaUsedBytes: Long? = null,
+    val quotaTotalBytes: Long? = null,
 )
 
 /**

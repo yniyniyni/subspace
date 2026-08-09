@@ -37,4 +37,9 @@
         <item quantity="one">%1$d server</item>
         <item quantity="other">%1$d servers</item>
     </plurals>
+
+    <!-- QuotaBar (Task 14). %1$s/%2$s are already-formatted byte strings
+         (e.g. "1.2 GB"), not raw numbers — see QuotaBar.kt's own
+         toHumanReadableBytes(). -->
+    <string name="quota_bar_label">%1$s of %2$s used</string>
 </resources>

@@ -56,11 +56,21 @@ private const val CARET_ROTATION_EXPANDED = 180f
  * profile count, an expand/collapse caret, and an overflow menu for rename,
  * delete and adding a profile.
  *
- * Deliberately does **not** render a quota bar, a provider notice, or
- * Support/Update buttons — those need a subscription's own metadata, which is
- * M4, and a `MANUAL` group has no provider to quote in the first place. Nor
- * does it render an age/last-synced timestamp, for the same reason. This is
- * the container only; [content] supplies the node rows.
+ * Renders a [QuotaBar] beneath the header when [quotaUsedBytes]/
+ * [quotaTotalBytes] are given and measurable — a `SUBSCRIPTION` group whose
+ * provider sent a usable `subscription-userinfo`. Both default to `null`, so
+ * every pre-existing `MANUAL`-group call site is unchanged, and a `MANUAL`
+ * group — which has no provider to quote in the first place — simply never
+ * passes them. [QuotaBar]'s own contract (not a check duplicated here)
+ * already renders nothing for an absent or unlimited total, so this card
+ * does not need to re-derive that condition.
+ *
+ * A provider notice, Support/Update buttons and an age/last-synced timestamp
+ * are still unrendered: M4 consumes no directive this card could quote for
+ * a notice (`announce`/`support-url` are gated to a later milestone in
+ * `DirectiveRegistry`), and this module has no reachable manual-refresh
+ * trigger to wire a button to. Left for the task that does. This is the
+ * container only; [content] supplies the node rows.
  *
  * @param name the group's display name — never a server address, so nothing
  *   here needs §5.6's redaction care.
@@ -72,12 +82,13 @@ private const val CARET_ROTATION_EXPANDED = 180f
  *   component), matching [SubspaceBottomSheet]'s `open` convention.
  * @param actions the three overflow-menu callbacks, plus the header's own
  *   expand/collapse toggle — grouped into one carrier the same way
- *   [art.yniyniyni.subspace.feature.home.HomeActions] is. That leaves `name`,
- *   `profileCount`, `expanded`, `actions`, `modifier` and `content`: five
- *   orthogonal, independently-necessary parameters plus the idiomatic
- *   `modifier` slot every composable in this module carries — nothing left to
- *   fold without inventing an artificial grouping, hence the suppression
- *   below rather than a sixth carrier class.
+ *   [art.yniyniyni.subspace.feature.home.HomeActions] is.
+ * @param quotaUsedBytes bytes already consumed, forwarded to [QuotaBar] —
+ *   `null` for a `MANUAL` group or a `SUBSCRIPTION` group whose provider sent
+ *   no measurable usage.
+ * @param quotaTotalBytes the plan's cap in bytes, forwarded to [QuotaBar] —
+ *   `null` for a `MANUAL` group or a `SUBSCRIPTION` group whose provider sent
+ *   no `total` field.
  * @param content the group's node rows, rendered only while [expanded].
  */
 @Suppress("LongParameterList")
@@ -88,6 +99,8 @@ fun GroupCard(
     expanded: Boolean,
     actions: GroupCardActions,
     modifier: Modifier = Modifier,
+    quotaUsedBytes: Long? = null,
+    quotaTotalBytes: Long? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val toggleDescription =
@@ -141,6 +154,12 @@ fun GroupCard(
 
                 GroupCardOverflowMenu(groupName = name, actions = actions)
             }
+
+            QuotaBar(
+                usedBytes = quotaUsedBytes,
+                totalBytes = quotaTotalBytes,
+                modifier = Modifier.padding(top = GROUP_CARD_CONTENT_TOP_PADDING),
+            )
 
             AnimatedVisibility(visible = expanded, enter = expandVertically(), exit = shrinkVertically()) {
                 Column(modifier = Modifier.padding(top = GROUP_CARD_CONTENT_TOP_PADDING), content = content)

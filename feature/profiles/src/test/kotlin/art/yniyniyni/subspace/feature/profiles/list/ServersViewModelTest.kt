@@ -4,10 +4,12 @@ package art.yniyniyni.subspace.feature.profiles.list
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -135,6 +137,8 @@ class ServersViewModelTest {
      */
     private class FakeProfileSource(
         private val allGroups: List<ProfileGroup>,
+        private val subscriptions: List<StoredSubscription> = emptyList(),
+        private val userInfoBySubscriptionId: Map<Long, String?> = emptyMap(),
     ) : ProfileSource {
         private val _activeProfileId = MutableStateFlow<Long?>(null)
         override val activeProfileId: StateFlow<Long?> = _activeProfileId.asStateFlow()
@@ -228,6 +232,15 @@ class ServersViewModelTest {
         override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
 
         override suspend fun deleteSubscription(id: Long) = Unit
+
+        // Task 14: ServersViewModel's init block subscribes to this
+        // immediately. Most tests in this file construct FakeProfileSource
+        // with no subscriptions at all, so the default keeps every one of
+        // them exercising exactly the MANUAL-group (no quota) path; the
+        // quota-specific tests below pass a real list.
+        override fun observeSubscriptions(): Flow<List<StoredSubscription>> = MutableStateFlow(subscriptions)
+
+        override fun observeUserInfo(id: Long): Flow<String?> = MutableStateFlow(userInfoBySubscriptionId[id])
     }
 
     private lateinit var source: FakeProfileSource
@@ -337,5 +350,78 @@ class ServersViewModelTest {
             val visibleGroup = viewModel.state.value.groups.single()
             visibleGroup.profiles.map { it.name } shouldBe listOf("Tokyo")
             visibleGroup.totalProfileCount shouldBe group.profiles.size
+        }
+
+    // Task 14: quota data. A MANUAL group (every test above this point) never
+    // appears in FakeProfileSource.observeSubscriptions(), so its absence
+    // from the quota map — not a separate "is this SUBSCRIPTION" flag — is
+    // what already keeps quotaUsedBytes/quotaTotalBytes null there.
+
+    @Test
+    fun `a group with no matching subscription renders no quota`() =
+        runTest {
+            viewModel.state.value.groups.single().quotaUsedBytes.shouldBeNull()
+            viewModel.state.value.groups.single().quotaTotalBytes.shouldBeNull()
+        }
+
+    @Test
+    fun `quota is parsed from the subscription-userinfo directive of the subscription owning this group`() =
+        runTest {
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = null,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(
+                    allGroups = listOf(group),
+                    subscriptions = listOf(subscription),
+                    userInfoBySubscriptionId = mapOf(9L to "upload=3; download=7; total=100"),
+                )
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            val visibleGroup = subscribedViewModel.state.value.groups.single()
+            visibleGroup.quotaUsedBytes shouldBe 10L
+            visibleGroup.quotaTotalBytes shouldBe 100L
+        }
+
+    @Test
+    fun `a provider that sent neither upload nor download draws no used-bytes figure`() =
+        runTest {
+            // §A.1's anti-fabrication rule: UserInfo.usedBytes defaults an
+            // absent counter to zero, which is correct when only one of the
+            // two is missing but would be a fabricated "0 B used" if the
+            // provider sent neither — see ServersViewModel.buildState's own
+            // comment on this exclusion.
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = null,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(
+                    allGroups = listOf(group),
+                    subscriptions = listOf(subscription),
+                    userInfoBySubscriptionId = mapOf(9L to "total=100"),
+                )
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            val visibleGroup = subscribedViewModel.state.value.groups.single()
+            visibleGroup.quotaUsedBytes.shouldBeNull()
+            visibleGroup.quotaTotalBytes shouldBe 100L
         }
 }

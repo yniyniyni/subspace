@@ -71,7 +71,7 @@ internal constructor(
         withContext(Dispatchers.IO) {
             val subscription = dao.subscription(subscriptionId)
             if (subscription == null) {
-                SyncResult.Failed(FetchFailure.NotFound)
+                SyncResult.Failed(SubscriptionSyncFailure.NotFound)
             } else {
                 syncExisting(subscription, activeProfileId)
             }
@@ -118,8 +118,11 @@ internal constructor(
         subscriptionId: Long,
         reason: FetchFailure,
     ): SyncResult {
+        // The stored status/detail columns stay FetchFailure.name — SubscriptionEntity's own
+        // storage, internal to :core:data, is unaffected by the SyncResult.Failed boundary
+        // translation below (SubscriptionSyncFailure's own KDoc explains why that exists).
         dao.recordFetchFailure(subscriptionId, reason.name, reason.name)
-        return SyncResult.Failed(reason)
+        return SyncResult.Failed(reason.toSyncFailure())
     }
 
     private suspend fun applySuccess(

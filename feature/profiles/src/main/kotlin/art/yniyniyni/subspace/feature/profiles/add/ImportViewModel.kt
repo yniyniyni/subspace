@@ -5,9 +5,9 @@ import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import art.yniyniyni.subspace.core.data.sync.SyncResult
-import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.core.parser.ParseFailure
 import art.yniyniyni.subspace.core.parser.SubscriptionParser
 import art.yniyniyni.subspace.core.parser.directive.DirectiveKind
@@ -43,17 +43,21 @@ internal data class UserMessage(
  * Maps a subscription sync outcome to what the user reads, without ever
  * touching the subscription's own URL or the fetch response body (§5.6) —
  * [SyncResult]'s four variants carry only counts and a closed
- * [FetchFailure] vocabulary, never raw text from the provider.
+ * [SubscriptionSyncFailure] vocabulary — `:core:data`'s own translation of
+ * `:core:network`'s `FetchFailure`, never that type directly (see
+ * [SubscriptionSyncFailure]'s own KDoc for why crossing that boundary
+ * matters, not just style — a branch review caught this module reaching
+ * for `FetchFailure` directly and traced it to a real §4 enforcement gap).
  *
  * All four variants are handled explicitly: [SyncResult.NoServers] and
  * [SyncResult.ReconciliationConflict] are easy to miss reading the plan text,
  * which sometimes names only [SyncResult.Synced] and [SyncResult.Failed].
  * [SyncResult.ReconciliationConflict] has no string of its own in the closed
  * vocabulary Step 3 defines — spec-wise it is the same class of outcome as
- * [FetchFailure.ServerError] (a write that could not be trusted to have
- * landed cleanly, not something the URL or the user did wrong), so it reuses
- * [R.string.subscription_error_server] rather than inventing a tenth string
- * for a backstop [SubscriptionSyncer.sync] itself says should be rare.
+ * [SubscriptionSyncFailure.ServerError] (a write that could not be trusted to
+ * have landed cleanly, not something the URL or the user did wrong), so it
+ * reuses [R.string.subscription_error_server] rather than inventing a tenth
+ * string for a backstop [SubscriptionSyncer.sync] itself says should be rare.
  */
 internal fun SyncResult.toUserMessage(): UserMessage =
     when (this) {
@@ -63,17 +67,17 @@ internal fun SyncResult.toUserMessage(): UserMessage =
         is SyncResult.ReconciliationConflict -> UserMessage(R.string.subscription_error_server)
     }
 
-/** [FetchFailure]'s closed vocabulary, one distinct string per member (§10.4). */
-private fun FetchFailure.toUserMessage(): UserMessage =
+/** [SubscriptionSyncFailure]'s closed vocabulary, one distinct string per member (§10.4). */
+private fun SubscriptionSyncFailure.toUserMessage(): UserMessage =
     when (this) {
-        FetchFailure.HwidRequired -> UserMessage(R.string.subscription_error_hwid_required)
-        FetchFailure.DeviceLimitReached -> UserMessage(R.string.subscription_error_device_limit)
-        FetchFailure.NotFound -> UserMessage(R.string.subscription_error_not_found)
-        FetchFailure.Unreachable -> UserMessage(R.string.subscription_error_unreachable)
-        FetchFailure.TimedOut -> UserMessage(R.string.subscription_error_timed_out)
-        FetchFailure.TlsFailure -> UserMessage(R.string.subscription_error_tls)
-        FetchFailure.ClientError -> UserMessage(R.string.subscription_error_client)
-        FetchFailure.ServerError -> UserMessage(R.string.subscription_error_server)
+        SubscriptionSyncFailure.HwidRequired -> UserMessage(R.string.subscription_error_hwid_required)
+        SubscriptionSyncFailure.DeviceLimitReached -> UserMessage(R.string.subscription_error_device_limit)
+        SubscriptionSyncFailure.NotFound -> UserMessage(R.string.subscription_error_not_found)
+        SubscriptionSyncFailure.Unreachable -> UserMessage(R.string.subscription_error_unreachable)
+        SubscriptionSyncFailure.TimedOut -> UserMessage(R.string.subscription_error_timed_out)
+        SubscriptionSyncFailure.TlsFailure -> UserMessage(R.string.subscription_error_tls)
+        SubscriptionSyncFailure.ClientError -> UserMessage(R.string.subscription_error_client)
+        SubscriptionSyncFailure.ServerError -> UserMessage(R.string.subscription_error_server)
     }
 
 /** True for an absolute `http`/`https` URL with a host — [DirectiveKind.Url]'s own rule. */

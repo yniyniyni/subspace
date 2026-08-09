@@ -315,7 +315,7 @@ class SubscriptionSyncerTest {
         response = FetchOutcome.Failed(FetchFailure.TimedOut)
         val result = syncer().sync(id)
 
-        result shouldBe SyncResult.Failed(FetchFailure.TimedOut)
+        result shouldBe SyncResult.Failed(SubscriptionSyncFailure.TimedOut)
         val groupId = subscriptions.observeSubscriptions().first().single().groupId
         profiles.observeGroups().first().single { it.id == groupId }.profiles.size shouldBe 2
     }

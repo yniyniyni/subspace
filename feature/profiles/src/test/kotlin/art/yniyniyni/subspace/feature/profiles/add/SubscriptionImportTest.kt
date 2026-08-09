@@ -1,13 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.add
 
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SyncResult
-import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.feature.profiles.R
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import org.junit.Test
 
+/**
+ * `SubscriptionSyncFailure`, not `:core:network`'s `FetchFailure` directly —
+ * a branch review found the original `FetchFailure`-typed version of this
+ * file forced `:core:data`'s `:core:network` dependency to `api`, which made
+ * `checkModuleBoundaries`'s "only `:core:data` may depend on `:core:network`"
+ * rule pass on paper while every downstream module actually had the type
+ * resolvable. `SubscriptionSyncFailure` is `:core:data`'s own 1:1 translation
+ * — see its KDoc — so this file only ever needs `:core:data` on its
+ * classpath, which it already has.
+ */
 class SubscriptionImportTest {
     @Test
     fun aSuccessfulSyncReportsRowsWrittenNotServersParsed() {
@@ -30,37 +40,37 @@ class SubscriptionImportTest {
     fun hwidRequiredMapsToTheDeviceIdStringNotAGenericOne() {
         // The milestone's exit criterion, at the layer the user reads. §A.4.1:
         // a bare 404 is the worst outcome and is what most clients give today.
-        SyncResult.Failed(FetchFailure.HwidRequired).toUserMessage().resId shouldBe
+        SyncResult.Failed(SubscriptionSyncFailure.HwidRequired).toUserMessage().resId shouldBe
             R.string.subscription_error_hwid_required
     }
 
     @Test
     fun deviceLimitReachedMapsToADifferentStringFromHwidRequired() {
-        SyncResult.Failed(FetchFailure.DeviceLimitReached).toUserMessage().resId shouldNotBe
-            SyncResult.Failed(FetchFailure.HwidRequired).toUserMessage().resId
+        SyncResult.Failed(SubscriptionSyncFailure.DeviceLimitReached).toUserMessage().resId shouldNotBe
+            SyncResult.Failed(SubscriptionSyncFailure.HwidRequired).toUserMessage().resId
     }
 
     @Test
     fun notFoundPointsAtTheUrlNotAtHwid() {
-        SyncResult.Failed(FetchFailure.NotFound).toUserMessage().resId shouldBe
+        SyncResult.Failed(SubscriptionSyncFailure.NotFound).toUserMessage().resId shouldBe
             R.string.subscription_error_not_found
     }
 
     @Test
-    fun everyFetchFailureMapsToADistinctString() {
+    fun everySubscriptionSyncFailureMapsToADistinctString() {
         // §10.4: a generic failure is not a diagnosis. If two of these collapse
         // to one resource, the taxonomy exists in the type system and in
         // nothing the user can see.
-        val ids = FetchFailure.entries.map { SyncResult.Failed(it).toUserMessage().resId }
+        val ids = SubscriptionSyncFailure.entries.map { SyncResult.Failed(it).toUserMessage().resId }
 
-        ids.toSet().size shouldBe FetchFailure.entries.size
+        ids.toSet().size shouldBe SubscriptionSyncFailure.entries.size
     }
 
     @Test
     fun noMessageCarriesAFormatArgumentThatCouldHoldAUrl() {
         // §5.6. The failure branch takes no arguments at all, so there is
         // nowhere for a URL or a body to be interpolated.
-        FetchFailure.entries.forEach {
+        SubscriptionSyncFailure.entries.forEach {
             SyncResult.Failed(it).toUserMessage().quantity shouldBe null
         }
     }

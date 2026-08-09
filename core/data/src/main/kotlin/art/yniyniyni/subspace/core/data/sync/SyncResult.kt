@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.data.sync
 
-import art.yniyniyni.subspace.core.network.FetchFailure
-
 /**
  * What one sync did.
  *
@@ -50,7 +48,11 @@ public sealed interface SyncResult {
         val duplicatesDropped: Int = 0,
     ) : SyncResult
 
-    public data class Failed(val reason: FetchFailure) : SyncResult
+    /**
+     * @property reason [SubscriptionSyncFailure], not `:core:network`'s `FetchFailure` directly
+     *   — see that type's own KDoc for why the translation happens at this boundary.
+     */
+    public data class Failed(val reason: SubscriptionSyncFailure) : SyncResult
 
     /**
      * The fetch succeeded and the body yielded no servers.

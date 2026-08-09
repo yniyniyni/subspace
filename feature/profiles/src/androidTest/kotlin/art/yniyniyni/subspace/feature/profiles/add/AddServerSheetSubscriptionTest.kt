@@ -135,8 +135,8 @@ class AddServerSheetSubscriptionTest {
     }
 
     // Every failure string is distinct — the Compose-layer half of
-    // SubscriptionImportTest's "every FetchFailure maps to a distinct
-    // string" JVM assertion.
+    // SubscriptionImportTest's "every SubscriptionSyncFailure maps to a
+    // distinct string" JVM assertion.
 
     @Test
     fun hwidRequiredRendersTheDeviceIdString() {

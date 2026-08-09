@@ -128,6 +128,15 @@
         <item quantity="one">Added %1$d server</item>
         <item quantity="other">Added %1$d servers</item>
     </plurals>
+    <plurals name="subscription_refreshed">
+        <item quantity="one">Up to date — %1$d server</item>
+        <item quantity="other">Up to date — %1$d servers</item>
+    </plurals>
+    <plurals name="subscription_removed">
+        <item quantity="one">Removed %1$d server</item>
+        <item quantity="other">Removed %1$d servers</item>
+    </plurals>
+    <string name="subscription_up_to_date">Up to date</string>
     <string name="subscription_error_hwid_required">This subscription requires a device ID. Enable it in Settings.</string>
     <string name="subscription_detail_hwid_disabled_globally">Disabled globally in Settings. Turn on Send device ID there to use this subscription preference.</string>
     <string name="subscription_error_device_limit">Device limit reached. Remove a device in your account.</string>

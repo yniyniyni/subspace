@@ -37,6 +37,65 @@ class SubscriptionImportTest {
     }
 
     @Test
+    fun aRefreshThatChangesNothingDoesNotSayAddedZeroServers() {
+        // M4's device run. The provider's list was unchanged, six rows were rewritten in place,
+        // and the screen read "Added 0 servers" — which a user reads as failure. Reporting
+        // `added` alone is only correct for a first sync.
+        val message = SyncResult.Synced(
+            added = 0,
+            updated = 6,
+            removed = 0,
+            keptActive = 0,
+            rejectedDirectives = 0,
+        ).toUserMessage()
+
+        message.resId shouldBe R.plurals.subscription_refreshed
+        message.quantity shouldBe 6
+    }
+
+    @Test
+    fun aRefreshThatOnlyRemovesReportsTheRemoval() {
+        val message = SyncResult.Synced(
+            added = 0,
+            updated = 0,
+            removed = 2,
+            keptActive = 0,
+            rejectedDirectives = 0,
+        ).toUserMessage()
+
+        message.resId shouldBe R.plurals.subscription_removed
+        message.quantity shouldBe 2
+    }
+
+    @Test
+    fun anEmptyButSuccessfulSyncStillReadsAsSuccess() {
+        val message = SyncResult.Synced(
+            added = 0,
+            updated = 0,
+            removed = 0,
+            keptActive = 0,
+            rejectedDirectives = 0,
+        ).toUserMessage()
+
+        message.resId shouldBe R.string.subscription_up_to_date
+        message.quantity shouldBe null
+    }
+
+    @Test
+    fun anAdditionWinsOverAConcurrentRemoval() {
+        val message = SyncResult.Synced(
+            added = 3,
+            updated = 1,
+            removed = 2,
+            keptActive = 0,
+            rejectedDirectives = 0,
+        ).toUserMessage()
+
+        message.resId shouldBe R.plurals.subscription_added
+        message.quantity shouldBe 3
+    }
+
+    @Test
     fun hwidRequiredMapsToTheDeviceIdStringNotAGenericOne() {
         // The milestone's exit criterion, at the layer the user reads. §A.4.1:
         // a bare 404 is the worst outcome and is what most clients give today.

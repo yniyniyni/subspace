@@ -61,10 +61,31 @@ internal data class UserMessage(
  */
 internal fun SyncResult.toUserMessage(): UserMessage =
     when (this) {
-        is SyncResult.Synced -> UserMessage(R.plurals.subscription_added, added)
+        is SyncResult.Synced -> syncedMessage()
         is SyncResult.Failed -> reason.toUserMessage()
         is SyncResult.NoServers -> UserMessage(R.string.subscription_error_no_servers)
         is SyncResult.ReconciliationConflict -> UserMessage(R.string.subscription_error_server)
+    }
+
+/**
+ * Describes what a successful sync actually did.
+ *
+ * Reporting `added` alone is wrong on every refresh that changes nothing: the provider's list is
+ * unchanged, six rows are rewritten in place, `added` is 0, and the user reads "Added 0 servers"
+ * — indistinguishable from a failure. That is the same class of defect M3's device run recorded
+ * as "Imported 0 of 1 with no reason", and M4's device run hit it again on the refresh path.
+ *
+ * Ordering is by what the user most needs to know: new servers first, then a removal-only
+ * refresh, then the ordinary "nothing changed but it worked" case. A refresh that both added and
+ * removed reports the addition — the group's own row count shows the rest, and a message that
+ * tries to say everything says nothing.
+ */
+private fun SyncResult.Synced.syncedMessage(): UserMessage =
+    when {
+        added > 0 -> UserMessage(R.plurals.subscription_added, added)
+        removed > 0 -> UserMessage(R.plurals.subscription_removed, removed)
+        updated > 0 -> UserMessage(R.plurals.subscription_refreshed, updated)
+        else -> UserMessage(R.string.subscription_up_to_date)
     }
 
 /**

@@ -125,6 +125,7 @@ class EditorViewModelTest {
         ): Flow<List<ProfileGroup>> = MutableStateFlow(groups)
 
         override val activeProfileId: StateFlow<Long?> = MutableStateFlow<Long?>(null).asStateFlow()
+        override val globalHwidEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 
         override suspend fun setActiveProfile(id: Long?) = Unit
 

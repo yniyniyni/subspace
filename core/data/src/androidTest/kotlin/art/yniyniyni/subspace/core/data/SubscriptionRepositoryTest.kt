@@ -146,6 +146,30 @@ class SubscriptionRepositoryTest {
         repository.observeSubscriptions().first().single().hwidEnabled shouldBe false
     }
 
+    @Test
+    fun refreshScheduleChangesReEmitWhenAnIntervalPinLands() {
+        runBlocking {
+            val id = repository.add("https://example.com/sub", name = "Provider")
+
+            withTimeout(REEMIT_TIMEOUT_MS) {
+                val emissions = Channel<Unit>(Channel.UNLIMITED)
+                val collector =
+                    launch {
+                        repository.observeRefreshScheduleChanges().collect { emissions.send(it) }
+                    }
+
+                // Initial Room snapshot: one subscription, no directives or pins yet.
+                emissions.receive()
+                repository.pin(id, "profile-update-interval", "1")
+
+                // The app-level RefreshScheduler collector receives this and replaces its unique
+                // one-shot work with the newly earliest due time.
+                emissions.receive()
+                collector.cancel()
+            }
+        }
+    }
+
     // Review finding (Task 10): observeEffective's own resolution logic is
     // exercised transitively via effective()'s tests above (they share
     // resolveEffective), but the combine() wiring — does landing a pin

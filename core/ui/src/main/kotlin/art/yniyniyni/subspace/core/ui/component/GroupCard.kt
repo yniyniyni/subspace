@@ -132,11 +132,14 @@ fun GroupCard(
     ) {
         Column(modifier = Modifier.padding(GROUP_CARD_PADDING)) {
             GroupCardHeader(
-                name = name,
-                profileCount = profileCount,
-                expanded = expanded,
+                state =
+                GroupCardHeaderState(
+                    name = name,
+                    profileCount = profileCount,
+                    expanded = expanded,
+                    onOpenDetail = onOpenDetail,
+                ),
                 actions = actions,
-                onOpenDetail = onOpenDetail,
             )
 
             QuotaBar(
@@ -170,22 +173,19 @@ fun GroupCard(
  */
 @Composable
 private fun GroupCardHeader(
-    name: String,
-    profileCount: Int,
-    expanded: Boolean,
+    state: GroupCardHeaderState,
     actions: GroupCardActions,
-    onOpenDetail: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val toggleDescription =
         stringResource(
-            if (expanded) R.string.group_card_collapse_description else R.string.group_card_expand_description,
-            name,
-            profileCount,
+            if (state.expanded) R.string.group_card_collapse_description else R.string.group_card_expand_description,
+            state.name,
+            state.profileCount,
         )
     val caretRotation by
         animateFloatAsState(
-            targetValue = if (expanded) CARET_ROTATION_EXPANDED else CARET_ROTATION_COLLAPSED,
+            targetValue = if (state.expanded) CARET_ROTATION_EXPANDED else CARET_ROTATION_COLLAPSED,
             label = "group-card-caret-rotation",
         )
 
@@ -204,9 +204,13 @@ private fun GroupCardHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column {
-                Text(text = name, style = MaterialTheme.typography.titleMedium)
+                Text(text = state.name, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    text = pluralStringResource(R.plurals.group_card_profile_count, profileCount, profileCount),
+                    text = pluralStringResource(
+                        R.plurals.group_card_profile_count,
+                        state.profileCount,
+                        state.profileCount,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -220,9 +224,20 @@ private fun GroupCardHeader(
             )
         }
 
-        GroupCardOverflowMenu(groupName = name, actions = actions, onOpenDetail = onOpenDetail)
+        GroupCardOverflowMenu(
+            groupName = state.name,
+            actions = actions,
+            onOpenDetail = state.onOpenDetail,
+        )
     }
 }
+
+private data class GroupCardHeaderState(
+    val name: String,
+    val profileCount: Int,
+    val expanded: Boolean,
+    val onOpenDetail: (() -> Unit)?,
+)
 
 /**
  * [GroupCard]'s four callbacks, grouped into one carrier — see [GroupCard]'s

@@ -16,6 +16,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
@@ -156,6 +157,17 @@ constructor(
                 )
             }
         }
+    }
+
+    /**
+     * Keeps the pending work aligned with Room mutations that can move the earliest due time.
+     *
+     * The app, not `:feature:profiles`, owns this collector: feature modules must not depend on
+     * `:app` (§4), and collecting the data-layer signal here makes add/delete/pin/provider-refresh
+     * changes converge on the same [reschedule] path as worker completion and app launch.
+     */
+    suspend fun rescheduleOnChanges() {
+        subscriptions.observeRefreshScheduleChanges().collect { reschedule() }
     }
 
     /**

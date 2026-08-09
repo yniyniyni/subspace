@@ -96,8 +96,13 @@ constructor(
             combine(
                 rowsFlow,
                 profileSource.observeEffective(subscriptionId, KEY_USER_AGENT, default = null),
-            ) { rows, userAgent ->
-                DetailSettings(rows = rows, providerUserAgent = userAgent.providerValue)
+                profileSource.globalHwidEnabled,
+            ) { rows, userAgent, globalHwidEnabled ->
+                DetailSettings(
+                    rows = rows,
+                    providerUserAgent = userAgent.providerValue,
+                    globalHwidEnabled = globalHwidEnabled,
+                )
             }
 
         loadJob =
@@ -116,6 +121,7 @@ constructor(
                         userInfo = userInfo,
                         rows = settings.rows,
                         providerUserAgent = settings.providerUserAgent,
+                        globalHwidEnabled = settings.globalHwidEnabled,
                         ephemeral = eph,
                     ),
                 )
@@ -179,6 +185,7 @@ constructor(
             quotaUsedBytes = inputs.userInfo?.takeIf { it.upload != null || it.download != null }?.usedBytes,
             quotaTotalBytes = inputs.userInfo?.total,
             hwidEnabled = subscription.hwidEnabled,
+            globalHwidEnabled = inputs.globalHwidEnabled,
             userAgentOverride = subscription.userAgentOverride,
             providerUserAgent = inputs.providerUserAgent,
             rows = inputs.rows,
@@ -195,12 +202,14 @@ constructor(
         val userInfo: UserInfo?,
         val rows: List<DirectiveRow>,
         val providerUserAgent: String?,
+        val globalHwidEnabled: Boolean,
         val ephemeral: Ephemeral,
     )
 
     private data class DetailSettings(
         val rows: List<DirectiveRow>,
         val providerUserAgent: String?,
+        val globalHwidEnabled: Boolean,
     )
 
     /**

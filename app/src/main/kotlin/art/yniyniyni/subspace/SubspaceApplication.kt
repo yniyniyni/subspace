@@ -65,6 +65,7 @@ class SubspaceApplication : Application(), Configuration.Provider {
         // Only in :main (see isMainProcess's KDoc) — :bg is TunnelService's process and has no
         // business refreshing subscriptions or touching WorkManager.
         if (isMainProcess()) {
+            applicationScope.launch { refreshScheduler.rescheduleOnChanges() }
             applicationScope.launch {
                 // Spec §8's "on launch" trigger: refreshDue() already only syncs subscriptions
                 // whose own interval has elapsed, so this call covers both "refresh what's overdue

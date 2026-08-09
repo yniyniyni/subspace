@@ -7,8 +7,11 @@ import art.yniyniyni.subspace.core.data.db.SubscriptionOverrideEntity
 import art.yniyniyni.subspace.core.parser.directive.DirectiveKind
 import art.yniyniyni.subspace.core.parser.directive.KindResult
 import art.yniyniyni.subspace.core.parser.directive.canonicalise
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -119,6 +122,32 @@ internal constructor(
     /** Every stored subscription, in insertion order. Recomposes on write. */
     public fun observeSubscriptions(): Flow<List<StoredSubscription>> =
         dao.observeSubscriptions().map { rows -> rows.map { it.toStored() } }
+
+    /**
+     * Emits whenever anything that determines the next automatic refresh changes.
+     *
+     * A subscription row covers add/delete and the last successful fetch time; its directives and
+     * overrides cover the provider and user values of `profile-update-interval` and
+     * `subscription-auto-update-enable`. The app owns WorkManager, so it observes this compact
+     * signal and calls `RefreshScheduler.reschedule()` rather than asking a feature module to
+     * depend upstream on `:app`.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    public fun observeRefreshScheduleChanges(): Flow<Unit> =
+        dao.observeSubscriptions().flatMapLatest { rows ->
+            if (rows.isEmpty()) {
+                flowOf(Unit)
+            } else {
+                combine(
+                    rows.map { subscription ->
+                        combine(
+                            dao.observeDirectives(subscription.id),
+                            dao.observeOverrides(subscription.id),
+                        ) { _, _ -> Unit }
+                    },
+                ) { Unit }
+            }
+        }
 
     /**
      * Adds a subscription and the group that holds its servers.

@@ -118,6 +118,9 @@ internal data class ServersGroup(
  *   transport list of its own.
  * @property isActive whether this is the profile [art.yniyniyni.subspace.core.data.SettingsRepository.activeProfileId]
  *   currently names.
+ * @property droppedFromSubscriptionAt non-null when this active server was retained after its
+ *   provider stopped offering it. The row renders a warning instead of silently making the
+ *   orphaned server look current (spec D4).
  */
 internal data class ServerRow(
     val id: Long,
@@ -129,4 +132,5 @@ internal data class ServerRow(
     val compatibilityMode: Boolean,
     val connectable: Boolean,
     val isActive: Boolean,
+    val droppedFromSubscriptionAt: Long? = null,
 )

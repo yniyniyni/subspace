@@ -234,7 +234,11 @@ private fun DetailBody(
         LastFetchRow(state = state, onRefreshNow = actions.onRefreshNow)
         state.refreshResult?.let { RefreshResultBanner(message = it, onDismiss = actions.onDismissRefreshResult) }
         QuotaBar(usedBytes = state.quotaUsedBytes, totalBytes = state.quotaTotalBytes)
-        HwidRow(checked = state.hwidEnabled, onCheckedChange = actions.onHwidEnabledChanged)
+        HwidRow(
+            checked = state.hwidEnabled,
+            globallyEnabled = state.globalHwidEnabled,
+            onCheckedChange = actions.onHwidEnabledChanged,
+        )
         UserAgentRow(
             value = state.userAgentOverride,
             providerValue = state.providerUserAgent,
@@ -376,18 +380,28 @@ private fun RefreshResultBanner(
 @Composable
 private fun HwidRow(
     checked: Boolean,
+    globallyEnabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val label = stringResource(R.string.subscription_detail_hwid_label)
+    val description =
+        stringResource(
+            if (globallyEnabled) {
+                R.string.subscription_detail_hwid_description
+            } else {
+                R.string.subscription_detail_hwid_disabled_globally
+            },
+        )
     SettingRow(
         icon = Icons.Default.Lock,
         label = label,
-        supportingText = stringResource(R.string.subscription_detail_hwid_description),
+        supportingText = description,
         trailing = {
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                enabled = globallyEnabled,
                 modifier = Modifier.semantics { contentDescription = label },
             )
         },

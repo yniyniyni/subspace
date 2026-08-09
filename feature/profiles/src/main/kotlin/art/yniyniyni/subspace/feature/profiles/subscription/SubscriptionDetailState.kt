@@ -158,6 +158,8 @@ internal data class SubscriptionDetailState(
     val quotaUsedBytes: Long? = null,
     val quotaTotalBytes: Long? = null,
     val hwidEnabled: Boolean = true,
+    /** The global Settings gate, separate from [hwidEnabled]'s per-subscription preference. */
+    val globalHwidEnabled: Boolean = true,
     val userAgentOverride: String? = null,
     /** What the provider's `change-user-agent` directive currently suggests, if any. */
     val providerUserAgent: String? = null,

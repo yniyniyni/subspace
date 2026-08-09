@@ -221,6 +221,7 @@ private fun StoredProfile.toRow(activeProfileId: Long?): ServerRow =
         compatibilityMode = compatibilityMode,
         connectable = connectable,
         isActive = id == activeProfileId,
+        droppedFromSubscriptionAt = droppedFromSubscriptionAt,
     )
 
 private fun List<ProfileGroup>.availableProtocolLabels(): List<String> =

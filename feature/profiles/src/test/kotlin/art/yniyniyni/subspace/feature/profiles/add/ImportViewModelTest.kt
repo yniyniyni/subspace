@@ -105,6 +105,7 @@ class ImportViewModelTest {
         ): Flow<List<ProfileGroup>> = MutableStateFlow(emptyList())
 
         override val activeProfileId: Flow<Long?> = MutableStateFlow(null)
+        override val globalHwidEnabled: Flow<Boolean> = MutableStateFlow(true)
 
         override suspend fun setActiveProfile(id: Long?) = Unit
 

@@ -769,9 +769,9 @@ Mandatory rules:
 - [ ] Multi-subscription, multi-profile management, grouping, collapse/expand
 - [ ] Latency testing with selectable mode: `proxy` (GET), `proxy-head`,
       `tcp`, and a configurable check URL. **`icmp` is not implementable on
-      unrooted Android** — raw sockets require root. Either omit the mode or
-      shell out to `/system/bin/ping` and parse it, which is fragile across
-      OEMs. Recommendation: ship `tcp` and `proxy`, drop `icmp`.
+      unrooted Android** — raw sockets require root. M4 records the decision:
+      accept `proxy`, `proxy-head` and `tcp`; reject `icmp`. M4.5 owns the
+      latency implementation and must not revive the rejected mode.
 - [ ] Server sorting: as-delivered, by ping, alphabetical
 - [ ] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
 - [ ] Per-app proxy: off / include-list / bypass-list
@@ -955,7 +955,9 @@ Requirements:
       does not survive reinstall, which silently burns a slot from the
       user's device limit every time they reinstall — a support nightmare.
       Hash the value before sending so the raw platform ID never leaves the
-      device.
+      device. The panel accepts only `/^[a-zA-Z0-9=-]{10,64}$/`: standard
+      base64's `+` and `/`, and base64url's `_`, are therefore not valid wire
+      encodings even though they are common hash renderings.
 - [ ] Send it by default. Happ sends by default; Throne ships it as a
       toggle disabled by default and consequently breaks against
       limit-enabled providers out of the box.

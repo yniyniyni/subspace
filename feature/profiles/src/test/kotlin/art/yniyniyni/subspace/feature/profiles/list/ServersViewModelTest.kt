@@ -65,6 +65,7 @@ class ServersViewModelTest {
         transport: String,
         kind: ProfileKind = ProfileKind.TYPED,
         lastConnectedAt: Long? = null,
+        droppedFromSubscriptionAt: Long? = null,
     ): StoredProfile =
         StoredProfile(
             id = id,
@@ -79,6 +80,7 @@ class ServersViewModelTest {
             rawJson = null,
             lastConnectedAt = lastConnectedAt,
             lastError = null,
+            droppedFromSubscriptionAt = droppedFromSubscriptionAt,
         )
 
     // Frankfurt: VLESS, matches the search query "cdn.example" via its address.
@@ -143,6 +145,7 @@ class ServersViewModelTest {
     ) : ProfileSource {
         private val _activeProfileId = MutableStateFlow<Long?>(null)
         override val activeProfileId: StateFlow<Long?> = _activeProfileId.asStateFlow()
+        override val globalHwidEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 
         var lastActiveSet: Long? = null
             private set
@@ -333,6 +336,17 @@ class ServersViewModelTest {
         runTest {
             val trojan = viewModel.state.value.groups.flatMap { it.profiles }.single { it.protocol == "trojan" }
             trojan.connectable shouldBe false
+        }
+
+    @Test
+    fun `a server kept after provider removal is visibly marked`() =
+        runTest {
+            val removed = frankfurt.copy(droppedFromSubscriptionAt = 1_000L)
+            val source = FakeProfileSource(listOf(group.copy(profiles = listOf(removed))))
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.state.value.groups.single().profiles.single().droppedFromSubscriptionAt shouldBe 1_000L
         }
 
     // Beyond the brief's five: proves the filter/sort/selection plumbing this

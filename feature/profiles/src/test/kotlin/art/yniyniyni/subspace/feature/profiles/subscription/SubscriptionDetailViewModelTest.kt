@@ -43,6 +43,7 @@ class SubscriptionDetailViewModelTest {
                 KEY_USER_AGENT to "Provider Agent",
             )
         private val pins = MutableStateFlow<Map<String, String>>(emptyMap())
+        val globalHwidEnabledState = MutableStateFlow(true)
 
         var pinned: Triple<Long, String, String>? = null
             private set
@@ -59,6 +60,7 @@ class SubscriptionDetailViewModelTest {
 
         override fun observeGroups(query: String, protocol: String?): Flow<List<ProfileGroup>> = groups
         override val activeProfileId: StateFlow<Long?> = MutableStateFlow(null)
+        override val globalHwidEnabled: StateFlow<Boolean> = globalHwidEnabledState
         override suspend fun setActiveProfile(id: Long?) = Unit
         override suspend fun renameGroup(id: Long, name: String) = Unit
         override suspend fun deleteGroup(id: Long) = Unit
@@ -174,6 +176,16 @@ class SubscriptionDetailViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.providerUserAgent shouldBe "Provider Agent"
+        }
+
+    @Test
+    fun globalHwidGateIsVisibleInTheDetailState() =
+        runTest {
+            viewModel.load(SUBSCRIPTION_ID)
+            source.globalHwidEnabledState.value = false
+            advanceUntilIdle()
+
+            viewModel.state.value.globalHwidEnabled shouldBe false
         }
 
     @Test

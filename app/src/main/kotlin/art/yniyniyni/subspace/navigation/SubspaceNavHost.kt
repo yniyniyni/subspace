@@ -127,7 +127,9 @@ fun SubspaceNavHost(
                     // Task 15: GroupCard's new "subscription details" overflow item, for a
                     // SUBSCRIPTION-sourced group only — see ServersGroupList's own wiring for
                     // why a MANUAL group never reaches this callback at all.
-                    onOpenSubscriptionDetail = { id -> navController.navigate(SubscriptionDetail(subscriptionId = id)) },
+                    onOpenSubscriptionDetail = { id ->
+                        navController.navigate(SubscriptionDetail(subscriptionId = id))
+                    },
                 )
             }
             composable<Settings> {

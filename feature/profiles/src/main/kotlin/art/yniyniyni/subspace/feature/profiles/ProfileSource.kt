@@ -52,6 +52,9 @@ internal interface ProfileSource {
     /** The profile [SettingsRepository.activeProfileId] currently names, or `null`. */
     val activeProfileId: Flow<Long?>
 
+    /** Whether the Settings-level Device ID gate permits any subscription to send its ID. */
+    val globalHwidEnabled: Flow<Boolean>
+
     /** Sets the active profile, or clears it when [id] is `null`. */
     suspend fun setActiveProfile(id: Long?)
 
@@ -214,6 +217,8 @@ constructor(
     ): Flow<List<ProfileGroup>> = profileRepository.observeGroups(query, protocol)
 
     override val activeProfileId: Flow<Long?> = settingsRepository.activeProfileId
+
+    override val globalHwidEnabled: Flow<Boolean> = settingsRepository.hwidEnabled
 
     override suspend fun setActiveProfile(id: Long?) = settingsRepository.setActiveProfile(id)
 

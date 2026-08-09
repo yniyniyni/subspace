@@ -104,6 +104,10 @@ private const val CARET_ROTATION_EXPANDED = 180f
  *   this group's subscription right now. `null` renders no Update button; a
  *   `MANUAL` group has no subscription to sync, so its call site never
  *   supplies this.
+ * @param onOpenDetail Task 15: invoked when "Subscription details" is chosen from the overflow
+ *   menu — opens the subscription detail screen. `null` renders no such item, same "a `MANUAL`
+ *   group has nothing to open" reasoning [onUpdate] documents; its call site never supplies this
+ *   for a `MANUAL` group either.
  * @param content the group's node rows, rendered only while [expanded].
  */
 @Suppress("LongParameterList")
@@ -118,6 +122,7 @@ fun GroupCard(
     quotaTotalBytes: Long? = null,
     lastFetchedAtEpochMillis: Long? = null,
     onUpdate: (() -> Unit)? = null,
+    onOpenDetail: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
@@ -126,7 +131,13 @@ fun GroupCard(
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(GROUP_CARD_PADDING)) {
-            GroupCardHeader(name = name, profileCount = profileCount, expanded = expanded, actions = actions)
+            GroupCardHeader(
+                name = name,
+                profileCount = profileCount,
+                expanded = expanded,
+                actions = actions,
+                onOpenDetail = onOpenDetail,
+            )
 
             QuotaBar(
                 usedBytes = quotaUsedBytes,
@@ -163,6 +174,7 @@ private fun GroupCardHeader(
     profileCount: Int,
     expanded: Boolean,
     actions: GroupCardActions,
+    onOpenDetail: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val toggleDescription =
@@ -208,7 +220,7 @@ private fun GroupCardHeader(
             )
         }
 
-        GroupCardOverflowMenu(groupName = name, actions = actions)
+        GroupCardOverflowMenu(groupName = name, actions = actions, onOpenDetail = onOpenDetail)
     }
 }
 
@@ -283,6 +295,7 @@ private fun GroupCardUpdateRow(
 private fun GroupCardOverflowMenu(
     groupName: String,
     actions: GroupCardActions,
+    onOpenDetail: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -316,6 +329,15 @@ private fun GroupCardOverflowMenu(
                     actions.onAddProfile()
                 },
             )
+            if (onOpenDetail != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.group_card_open_detail)) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenDetail()
+                    },
+                )
+            }
         }
     }
 }

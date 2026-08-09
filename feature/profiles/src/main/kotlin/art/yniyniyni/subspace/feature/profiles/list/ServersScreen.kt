@@ -67,11 +67,15 @@ private val FILTER_CHIP_GAP = 8.dp
  * @param onEditProfile a row's edit icon (Task 21) — forwarded verbatim to
  *   `SubspaceNavHost`, which navigates to `Editor(profileId)`. Same reason
  *   [onScanQr] is a callback rather than this screen owning a `NavController`.
+ * @param onOpenSubscriptionDetail Task 15: a `GroupCard`'s "Subscription details" overflow item
+ *   — forwarded verbatim to `SubspaceNavHost`, which navigates to
+ *   `SubscriptionDetail(subscriptionId)`. Same reason [onEditProfile] is a callback.
  */
 @Composable
 fun ServersScreen(
     onScanQr: () -> Unit,
     onEditProfile: (Long) -> Unit,
+    onOpenSubscriptionDetail: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: ServersViewModel = hiltViewModel()
@@ -91,6 +95,7 @@ fun ServersScreen(
             onAddProfile = { showAddSheet = true },
             onProfileEdit = onEditProfile,
             onUpdateSubscription = viewModel::onUpdateSubscription,
+            onOpenSubscriptionDetail = onOpenSubscriptionDetail,
         ),
         modifier = modifier,
     )
@@ -99,7 +104,7 @@ fun ServersScreen(
 }
 
 /**
- * [ServersScreenContent]'s eight callbacks, grouped for the same reason
+ * [ServersScreenContent]'s nine callbacks, grouped for the same reason
  * [art.yniyniyni.subspace.feature.home.HomeActions] is.
  */
 internal data class ServersActions(
@@ -113,6 +118,8 @@ internal data class ServersActions(
     val onProfileEdit: (Long) -> Unit,
     /** Fix round, Important 1: forwarded to [ServersGroupListActions.onUpdateSubscription]. */
     val onUpdateSubscription: (Long) -> Unit,
+    /** Task 15: forwarded to [ServersGroupListActions.onOpenSubscriptionDetail]. */
+    val onOpenSubscriptionDetail: (Long) -> Unit,
 )
 
 /**
@@ -152,6 +159,7 @@ internal fun ServersScreenContent(
                 onProfileSelected = actions.onProfileSelected,
                 onProfileEdit = actions.onProfileEdit,
                 onUpdateSubscription = actions.onUpdateSubscription,
+                onOpenSubscriptionDetail = actions.onOpenSubscriptionDetail,
             ),
             modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )

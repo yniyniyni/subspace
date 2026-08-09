@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles
 
+import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
@@ -158,6 +159,43 @@ internal interface ProfileSource {
      * seam only resolves precedence.
      */
     fun observeUserInfo(id: Long): Flow<String?>
+
+    /**
+     * Resolves [key] for [id] under spec D3's precedence (pin, else provider, else [default]),
+     * recomposing on every directive or pin change — see
+     * [SubscriptionRepository.observeEffective]. Task 15: the subscription detail screen's own
+     * `SettingRowState` rows.
+     */
+    fun observeEffective(
+        id: Long,
+        key: String,
+        default: String?,
+    ): Flow<EffectiveValue>
+
+    /** Pins [value] for [key] on [id], so no future provider update moves it — see [SubscriptionRepository.pin]. */
+    suspend fun pin(
+        id: Long,
+        key: String,
+        value: String,
+    )
+
+    /** Removes a pin, handing [key] back to the provider — see [SubscriptionRepository.unpin]. */
+    suspend fun unpin(
+        id: Long,
+        key: String,
+    )
+
+    /** Toggles the HWID header for [id] — see [SubscriptionRepository.setHwidEnabled]. */
+    suspend fun setHwidEnabled(
+        id: Long,
+        enabled: Boolean,
+    )
+
+    /** Sets or clears (`null`/blank) [id]'s User-Agent override — see [SubscriptionRepository.setUserAgentOverride]. */
+    suspend fun setUserAgentOverride(
+        id: Long,
+        userAgent: String?,
+    )
 }
 
 @Suppress("TooManyFunctions") // Implements ProfileSource — see that interface's own identical call.
@@ -224,4 +262,31 @@ constructor(
 
     override fun observeUserInfo(id: Long): Flow<String?> =
         subscriptionRepository.observeEffective(id, KEY_SUBSCRIPTION_USERINFO, default = null).map { it.value }
+
+    override fun observeEffective(
+        id: Long,
+        key: String,
+        default: String?,
+    ): Flow<EffectiveValue> = subscriptionRepository.observeEffective(id, key, default)
+
+    override suspend fun pin(
+        id: Long,
+        key: String,
+        value: String,
+    ) = subscriptionRepository.pin(id, key, value)
+
+    override suspend fun unpin(
+        id: Long,
+        key: String,
+    ) = subscriptionRepository.unpin(id, key)
+
+    override suspend fun setHwidEnabled(
+        id: Long,
+        enabled: Boolean,
+    ) = subscriptionRepository.setHwidEnabled(id, enabled)
+
+    override suspend fun setUserAgentOverride(
+        id: Long,
+        userAgent: String?,
+    ) = subscriptionRepository.setUserAgentOverride(id, userAgent)
 }

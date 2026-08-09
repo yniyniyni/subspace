@@ -47,6 +47,10 @@
     <string name="group_card_last_updated">Updated %1$s</string>
     <string name="group_card_update_description">Update %1$s</string>
 
+    <!-- Task 15: the overflow menu item that opens the subscription detail screen —
+         SUBSCRIPTION groups only, same gating as onUpdate/group_card_update_description above. -->
+    <string name="group_card_open_detail">Subscription details</string>
+
     <!-- QuotaBar (Task 14). %1$s/%2$s are already-formatted byte strings
          (e.g. "1.2 GB"), not raw numbers — see QuotaBar.kt's own
          toHumanReadableBytes(). -->

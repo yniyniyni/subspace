@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.add
 
+import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
@@ -223,6 +224,35 @@ class ImportViewModelTest {
         override fun observeSubscriptions(): Flow<List<StoredSubscription>> = MutableStateFlow(emptyList())
 
         override fun observeUserInfo(id: Long): Flow<String?> = MutableStateFlow(null)
+
+        // Not exercised here — same reasoning as observeUserInfo above. SubscriptionDetailViewModelTest
+        // (Task 15) owns real coverage of these five.
+        override fun observeEffective(
+            id: Long,
+            key: String,
+            default: String?,
+        ): Flow<EffectiveValue> = MutableStateFlow(EffectiveValue(key, default, null, isPinned = false))
+
+        override suspend fun pin(
+            id: Long,
+            key: String,
+            value: String,
+        ) = Unit
+
+        override suspend fun unpin(
+            id: Long,
+            key: String,
+        ) = Unit
+
+        override suspend fun setHwidEnabled(
+            id: Long,
+            enabled: Boolean,
+        ) = Unit
+
+        override suspend fun setUserAgentOverride(
+            id: Long,
+            userAgent: String?,
+        ) = Unit
     }
 
     @Before

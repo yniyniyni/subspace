@@ -235,4 +235,71 @@
         A profile with these settings already exists in this group. Change a setting — the
         address, port, or credential — or pick a different group, then save again.
     </string>
+
+    <!-- Task 15: the subscription detail screen. §5.6 applies throughout — the URL itself is
+         never interpolated (only SubscriptionDetailState.redactedUrl, already stripped down to
+         scheme+host), and neither is any directive VALUE beyond the bounded, user-typed pin
+         entries the user themselves just entered into the edit dialog below. -->
+    <string name="subscription_detail_back_description">Back</string>
+    <string name="subscription_detail_loading_description">Loading subscription</string>
+    <string name="subscription_detail_not_found_title">Subscription not found</string>
+    <string name="subscription_detail_not_found_body">This subscription no longer exists or was never saved.</string>
+    <string name="subscription_detail_not_found_back_button">Go back</string>
+
+    <string name="subscription_detail_url_label">Subscription URL</string>
+    <string name="subscription_detail_never_fetched">Never refreshed yet</string>
+    <!-- %1$s = a relative time, e.g. "3 hours ago" (DateUtils.getRelativeTimeSpanString, the
+         same formatter GroupCard's own last-fetched row already uses). -->
+    <string name="subscription_detail_last_fetched">Last refreshed %1$s</string>
+    <!-- %1$s = the same relative-time text as subscription_detail_last_fetched, describing the
+         last time a fetch DID succeed — shown alongside the current failure reason below. -->
+    <string name="subscription_detail_last_succeeded">Last successful refresh: %1$s</string>
+    <string name="subscription_detail_never_succeeded">Never successfully refreshed</string>
+    <string name="subscription_detail_refresh_action">Refresh now</string>
+    <string name="subscription_detail_refreshing_description">Refreshing</string>
+
+    <string name="subscription_detail_hwid_label">Device ID header</string>
+    <string name="subscription_detail_hwid_description">
+        Sends a hashed device identifier some providers require for device limits.
+    </string>
+
+    <string name="subscription_detail_user_agent_label">User-Agent override</string>
+    <string name="subscription_detail_user_agent_placeholder">Default</string>
+    <!-- %1$s is the provider's change-user-agent value; the editable field above is only the
+         user's per-subscription override. Showing both keeps precedence visible. -->
+    <string name="subscription_detail_user_agent_provider">Provider: %1$s</string>
+    <string name="subscription_detail_user_agent_save">Save</string>
+
+    <string name="subscription_detail_delete_action">Delete subscription</string>
+    <!-- %1$s = the group/subscription name — never the URL (§5.6). -->
+    <string name="subscription_detail_delete_confirm_title">Delete “%1$s”?</string>
+    <!-- %1$d = the subscription's real server count — this removes the group AND every server
+         in it, the same cascading-delete warning servers_delete_group_message gives. -->
+    <plurals name="subscription_detail_delete_confirm_body">
+        <item quantity="one">This removes %1$d server with it. This cannot be undone.</item>
+        <item quantity="other">This removes %1$d servers with it. This cannot be undone.</item>
+    </plurals>
+    <string name="subscription_detail_delete_confirm_action">Delete</string>
+    <string name="subscription_detail_delete_cancel_action">Cancel</string>
+
+    <!-- Directive row labels — the ones with an M4 consumer, per D3's precedence. -->
+    <string name="subscription_row_interval_label">Refresh interval</string>
+    <string name="subscription_row_timeout_label">Request timeout</string>
+    <string name="subscription_row_auto_update_label">Auto-update</string>
+    <string name="subscription_row_auto_update_open_label">Refresh when app opens</string>
+
+    <!-- %1$s = a plain integer, already resolved from SettingRowState.value/declinedProviderValue —
+         these two are unit suffixes, not full sentences, so they carry no quantity of their own. -->
+    <string name="subscription_row_value_hours">%1$s h</string>
+    <string name="subscription_row_value_seconds">%1$s s</string>
+    <string name="subscription_row_value_on">On</string>
+    <string name="subscription_row_value_off">Off</string>
+    <!-- %1$s/%2$s are already-formatted values (e.g. "6 h"/"24 h", or "Off"/"On") — spec D3's
+         required UI consequence, verbatim: "provider suggests 6 h · you pinned 24 h". -->
+    <string name="subscription_row_pinned_declined">Provider suggests %1$s · you pinned %2$s</string>
+    <string name="subscription_row_pin_action">Pin</string>
+    <string name="subscription_row_unpin_action">Use provider value</string>
+    <!-- %1$s = the row's own label above. -->
+    <string name="subscription_row_edit_description">Edit %1$s</string>
+    <string name="subscription_row_edit_dialog_cancel">Cancel</string>
 </resources>

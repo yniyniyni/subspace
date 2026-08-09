@@ -46,4 +46,12 @@ class DueSubscriptionsTest {
         nextDueAt(now + HOUR, listOf(DueCheck(1, now + 2 * HOUR), daily)) shouldBe
             now + 2 * HOUR
     }
+
+    @Test
+    fun `both scheduler gates disable arbitrary non-enabling pins`() {
+        scheduledAutoUpdateEnabled("0") shouldBe false
+        scheduledAutoUpdateEnabled("no") shouldBe false
+        openAutoUpdateEnabled("0") shouldBe false
+        openAutoUpdateEnabled("no") shouldBe false
+    }
 }

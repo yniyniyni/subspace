@@ -47,6 +47,12 @@ internal data class ServersGroupListActions(
      * `onUpdate` lambda in that case.
      */
     val onUpdateSubscription: (Long) -> Unit,
+    /**
+     * Task 15: `GroupCard`'s "Subscription details" overflow item — opens
+     * `SubscriptionDetail(subscriptionId)`. Same "only ever invoked for a
+     * `SUBSCRIPTION` group" reasoning as [onUpdateSubscription].
+     */
+    val onOpenSubscriptionDetail: (Long) -> Unit,
 )
 
 /**
@@ -97,6 +103,9 @@ internal fun ServersGroupList(
                 // null for a MANUAL group (subscriptionId is null there) —
                 // GroupCard draws no Update affordance without an id to sync.
                 onUpdate = group.subscriptionId?.let { id -> { actions.onUpdateSubscription(id) } },
+                // Task 15: same null-for-MANUAL reasoning as onUpdate just above — a MANUAL
+                // group has no subscription detail screen to open.
+                onOpenDetail = group.subscriptionId?.let { id -> { actions.onOpenSubscriptionDetail(id) } },
             ) {
                 group.profiles.forEach { row ->
                     ServerRowItem(

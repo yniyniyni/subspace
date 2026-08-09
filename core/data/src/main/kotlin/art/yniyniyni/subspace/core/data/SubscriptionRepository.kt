@@ -4,6 +4,9 @@ package art.yniyniyni.subspace.core.data
 import art.yniyniyni.subspace.core.data.db.SubscriptionDao
 import art.yniyniyni.subspace.core.data.db.SubscriptionEntity
 import art.yniyniyni.subspace.core.data.db.SubscriptionOverrideEntity
+import art.yniyniyni.subspace.core.parser.directive.DirectiveKind
+import art.yniyniyni.subspace.core.parser.directive.KindResult
+import art.yniyniyni.subspace.core.parser.directive.canonicalise
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -63,6 +66,34 @@ public data class EffectiveValue(
     // reasoning as the entities: it is closed registry vocabulary, safe to log.
     override fun toString(): String =
         "EffectiveValue(key=$key, value=<redacted>, providerValue=<redacted>, isPinned=$isPinned)"
+}
+
+/**
+ * ARCHITECTURE.md §A.1's boolean rule applied to this value's [EffectiveValue.value]: `true` or
+ * `1` enables; **any other value — including blank or absent — disables.**
+ *
+ * Delegates to `:core:parser`'s [DirectiveKind.Bool] canonicalisation, the exact predicate the
+ * provider path is already validated against, rather than a second hand-rolled check. Task 12
+ * review fix: `RefreshScheduler`'s two call sites (`dueChecks`'s `subscription-auto-update-enable`
+ * check and `openRefreshEnabled`'s `subscription-auto-update-open-enable` check) used
+ * `.value != "false"`, which reads an unrecognised value — including a pinned `"0"` or `"no"` —
+ * as *enabled*, backwards from this rule. The provider path was never at risk: `DirectiveValidator`
+ * already canonicalises every stored provider value to exactly `"true"`/`"false"` before it can
+ * reach [EffectiveValue.value]. The pin path was: [SubscriptionRepository.pin] takes an
+ * unvalidated `String`, and Task 15 is what gives it its first call site.
+ */
+public val EffectiveValue.isEnabled: Boolean get() = isDirectiveEnabled(value)
+
+/**
+ * ARCHITECTURE.md §A.1's boolean rule for a stored directive value: only `true` or `1` enables;
+ * every other value, including blank or absent, disables.
+ *
+ * This is the single predicate UI and scheduling code share, so a pinned `"1"` cannot be shown
+ * as Off while the worker treats it as enabled.
+ */
+public fun isDirectiveEnabled(value: String?): Boolean {
+    val result = value?.let { DirectiveKind.Bool.canonicalise(it) } ?: return false
+    return result is KindResult.Canonical && result.value == "true"
 }
 
 /**

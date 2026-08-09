@@ -7,6 +7,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
+import art.yniyniyni.subspace.core.data.isDirectiveEnabled
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import dagger.Module
 import dagger.Provides
@@ -94,6 +95,12 @@ internal fun nextDueAt(
 internal fun resolveIntervalHours(rawValue: String?): Int =
     rawValue?.toIntOrNull()?.coerceIn(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS) ?: DEFAULT_INTERVAL_HOURS
 
+/** The general `subscription-auto-update-enable` gate under §A.1's boolean rule. */
+internal fun scheduledAutoUpdateEnabled(value: String?): Boolean = isDirectiveEnabled(value)
+
+/** The launch-only `subscription-auto-update-open-enable` gate under §A.1's boolean rule. */
+internal fun openAutoUpdateEnabled(value: String?): Boolean = isDirectiveEnabled(value)
+
 /**
  * Keeps exactly one pending refresh job aimed at the earliest due subscription.
  *
@@ -170,7 +177,9 @@ constructor(
     }
 
     private suspend fun openRefreshEnabled(id: Long): Boolean =
-        subscriptions.effective(id, KEY_AUTO_UPDATE_OPEN, default = "true").value != "false"
+        openAutoUpdateEnabled(
+            subscriptions.effective(id, KEY_AUTO_UPDATE_OPEN, default = "true").value,
+        )
 
     /**
      * [nextDueAt] over [dueChecks], with a bounded fallback if [dueChecks] itself throws — a dead
@@ -196,9 +205,10 @@ constructor(
         subscriptions.observeSubscriptions().first().mapNotNull { subscription ->
             // A provider may disable auto-update entirely (spec §8). A user pin
             // overrides that — a provider cannot stop a user who pinned it on.
-            val enabled = subscriptions
-                .effective(subscription.id, KEY_AUTO_UPDATE, default = "true")
-                .value != "false"
+            val enabled =
+                scheduledAutoUpdateEnabled(
+                    subscriptions.effective(subscription.id, KEY_AUTO_UPDATE, default = "true").value,
+                )
             if (!enabled) return@mapNotNull null
 
             val intervalDefault = DEFAULT_INTERVAL_HOURS.toString()

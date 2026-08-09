@@ -67,8 +67,17 @@ internal fun SyncResult.toUserMessage(): UserMessage =
         is SyncResult.ReconciliationConflict -> UserMessage(R.string.subscription_error_server)
     }
 
-/** [SubscriptionSyncFailure]'s closed vocabulary, one distinct string per member (§10.4). */
-private fun SubscriptionSyncFailure.toUserMessage(): UserMessage =
+/**
+ * [SubscriptionSyncFailure]'s closed vocabulary, one distinct string per member (§10.4).
+ *
+ * `internal`, not `private`: the subscription detail screen (Task 15) renders this exact
+ * vocabulary for a *persisted* failure ([art.yniyniyni.subspace.core.data.StoredSubscription.lastFetchStatus],
+ * §7's taxonomy — see that module's `LastFetchState`/`toLastFetchState`) as well as this file's
+ * own ephemeral one. Sharing this eight-branch `when` is the point; re-deriving the same
+ * enum-to-string mapping a second time in that screen's own file would be exactly the drift
+ * [failureText]'s own KDoc warns `DetailField.labelRes` against for a different mapping.
+ */
+internal fun SubscriptionSyncFailure.toUserMessage(): UserMessage =
     when (this) {
         SubscriptionSyncFailure.HwidRequired -> UserMessage(R.string.subscription_error_hwid_required)
         SubscriptionSyncFailure.DeviceLimitReached -> UserMessage(R.string.subscription_error_device_limit)

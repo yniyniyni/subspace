@@ -21,6 +21,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import art.yniyniyni.subspace.core.ui.component.FloatingNavigationBar
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import io.kotest.matchers.shouldBe
@@ -219,6 +220,37 @@ class SubspaceNavHostTest {
         }
     }
 
+    /**
+     * Task 15, Step 4's own requirement: prove [SubscriptionDetail] carries a *real*
+     * subscription id, not the `Editor(profileId = 0L)` sentinel mistake this file's own
+     * [addingTheFirstServerReachesServersNotTheEditorNotFoundScreen] documents Task 16 making
+     * for a different route. A small local graph, same shape as that test and
+     * [selectedTopLevelValueIsNullOnlyForPushedRoutes] above — [SubscriptionDetail]'s
+     * `composable<...>` body here reads its own [entry][androidx.navigation.NavBackStackEntry]
+     * back via [toRoute] and renders the id, so the assertion below fails if the real id ever
+     * stopped round-tripping through the route's own [kotlinx.serialization.Serializable] args.
+     */
+    @Test
+    fun subscriptionDetailRouteCarriesTheRealSubscriptionId() {
+        lateinit var localNavController: NavHostController
+        composeRule.setContent {
+            localNavController = rememberNavController()
+            NavHost(navController = localNavController, startDestination = Servers) {
+                composable<Servers> { }
+                composable<SubscriptionDetail> { entry ->
+                    val route: SubscriptionDetail = entry.toRoute()
+                    Text("Subscription ${route.subscriptionId}")
+                }
+            }
+        }
+
+        composeRule.runOnIdle {
+            localNavController.navigate(SubscriptionDetail(subscriptionId = SUBSCRIPTION_TEST_ID))
+        }
+
+        composeRule.onNodeWithText("Subscription $SUBSCRIPTION_TEST_ID").assertExists()
+    }
+
     @Test
     fun selectingADestinationTwiceDoesNotStackDuplicates() {
         composeRule.setContent {
@@ -250,5 +282,6 @@ class SubspaceNavHostTest {
 
     private companion object {
         const val EDITOR_TEST_PROFILE_ID = 1L
+        const val SUBSCRIPTION_TEST_ID = 42L
     }
 }

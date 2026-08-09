@@ -3,7 +3,9 @@ package art.yniyniyni.subspace.sync
 
 import android.content.Context
 import android.util.Log
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import art.yniyniyni.subspace.core.data.StoredSubscription
@@ -177,6 +179,21 @@ constructor(
                     ExistingWorkPolicy.REPLACE,
                     OneTimeWorkRequestBuilder<SubscriptionRefreshWorker>()
                         .setInitialDelay(next - now, TimeUnit.MILLISECONDS)
+                        // Without this the job fires whether or not there is a network, the fetch
+                        // fails as Unreachable, and — since lastAttemptedAt deliberately advances
+                        // on failure to stop a failing subscription rebuilding the chain
+                        // immediately — the subscription then waits a FULL interval before trying
+                        // again. One offline moment therefore costs up to 12 hours of staleness at
+                        // the default interval. M4's device run caught exactly that: both
+                        // subscriptions attempted while the device had no connectivity and both
+                        // recorded Unreachable. Deferring on the constraint is what WorkManager is
+                        // for, and it leaves the anti-thrash pacing intact for real failures
+                        // (a 500, a timeout) that genuinely should back off.
+                        .setConstraints(
+                            Constraints.Builder()
+                                .setRequiredNetworkType(NetworkType.CONNECTED)
+                                .build(),
+                        )
                         .build(),
                 )
             }

@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.sync
 import android.content.Context
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.ListenableWorker
+import androidx.work.NetworkType
 import androidx.work.WorkManager
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
@@ -55,6 +56,23 @@ class SubscriptionRefreshWorkerTest {
     fun tearDown() {
         stack.close()
     }
+
+    @Test
+    fun theScheduledRefreshWaitsForANetwork() =
+        runTest {
+            // M4's device run: the work carried required_network_type = NOT_REQUIRED, so it fired
+            // while the device was offline, both fetches recorded Unreachable, and — because
+            // lastAttemptedAt advances on failure by design — each subscription then waited a full
+            // interval before retrying. At the 12h default that is half a day of staleness bought
+            // by one bad moment. Deferring on the constraint is what WorkManager is for.
+            stack.repository.add("https://example.com/sub", name = "Constrained")
+            val scheduler = RefreshScheduler(WorkManager.getInstance(context), stack.repository, stack.syncer)
+
+            scheduler.reschedule()
+
+            val work = WorkManager.getInstance(context).getWorkInfosForUniqueWork(REFRESH_WORK_NAME).get()
+            work.single().constraints.requiredNetworkType shouldBe NetworkType.CONNECTED
+        }
 
     @Test
     fun theWorkerSucceedsAndReschedulesWithNoSubscriptions() =

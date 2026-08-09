@@ -22,6 +22,14 @@ public enum class RejectionReason {
     TooLong,
     NotAnEnumMember,
     MalformedUrl,
+
+    /**
+     * Declared itself base64 with a `base64:` marker but did not decode to valid text.
+     *
+     * Distinct from [TooLong]: such a value is not kept as literal text, because storing the
+     * marker itself is what M4's device run found happening to `announce`.
+     */
+    NotBase64,
 }
 
 /** The outcome of canonicalising one value against its kind. */
@@ -134,12 +142,29 @@ private fun canonicaliseInteger(
     }
 }
 
+/** The marker Remnawave/Happ put in front of a base64-encoded directive value. */
+private const val BASE64_VALUE_PREFIX = "base64:"
+
+/** [String.removePrefix], case-insensitively — the marker's casing is not guaranteed by any spec. */
+private fun String.removePrefixIgnoringCase(prefix: String): String =
+    if (startsWith(prefix, ignoreCase = true)) substring(prefix.length) else this
+
 private fun canonicaliseText(
     trimmed: String,
     maxLength: Int,
     base64Allowed: Boolean,
 ): KindResult {
-    val decoded = if (base64Allowed) decodeBase64Text(trimmed) ?: trimmed else trimmed
+    // A value that announces itself as base64 but does not decode is not silently kept as
+    // literal text: falling back would store the `base64:…` marker itself, which is what M4's
+    // device run caught. Without the marker the decode stays a heuristic, so the fallback is
+    // still correct there — a plain-text title must survive unchanged.
+    val decoded =
+        when {
+            !base64Allowed -> trimmed
+            trimmed.startsWith(BASE64_VALUE_PREFIX, ignoreCase = true) ->
+                decodeBase64Text(trimmed) ?: return KindResult.Invalid(RejectionReason.NotBase64)
+            else -> decodeBase64Text(trimmed) ?: trimmed
+        }
     return if (decoded.length > maxLength) {
         KindResult.Invalid(RejectionReason.TooLong)
     } else {
@@ -189,11 +214,20 @@ private fun canonicaliseCsv(trimmed: String): KindResult {
  * clause would have returned.
  */
 private fun decodeBase64Text(value: String): String? {
+    // Remnawave (and Happ) mark an encoded value with a literal `base64:` prefix — every
+    // profile-title and announce arrives that way. It must be stripped before decoding, and
+    // stripping it is not optional: `getMimeDecoder()` silently ignores bytes outside the base64
+    // alphabet, but `b`,`a`,`s`,`e`,`6`,`4` are all *inside* it, so the prefix is not skipped —
+    // it is decoded as payload and corrupts the result. The fallback then stored the raw
+    // `base64:…` string: M4's device run found `announce` persisted as a 47-character blob
+    // (7 for the prefix + 40 of base64) and `profile-title` rejected as TooLong, because the
+    // encoded form blew past its 25-character budget while the decoded title was well under it.
+    val payload = value.removePrefixIgnoringCase(BASE64_VALUE_PREFIX)
     val bytes =
         runCatching {
             java.util.Base64
                 .getMimeDecoder()
-                .decode(value)
+                .decode(payload)
         }.getOrNull()
     return bytes?.takeIf { it.isNotEmpty() }?.let { nonEmpty ->
         val decoded = nonEmpty.toString(Charsets.UTF_8)

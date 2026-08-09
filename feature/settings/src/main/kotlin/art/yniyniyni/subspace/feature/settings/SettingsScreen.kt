@@ -33,6 +33,10 @@ import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADD
 import art.yniyniyni.subspace.core.ui.component.SectionHeader
 import art.yniyniyni.subspace.core.ui.component.SettingRow
 
+/** Aligns the HWID value with [SettingRow]'s label column: its 40.dp icon tile plus a 16.dp gap. */
+private val HWID_VALUE_START_PADDING = 56.dp
+private val HWID_VALUE_BOTTOM_PADDING = 8.dp
+
 /**
  * The Settings screen: Appearance, Device ID and About.
  *
@@ -176,17 +180,25 @@ private fun HwidControl(
         },
         modifier = modifier,
     )
+    // The HWID is 43 unbreakable monospace characters, so it cannot live in SettingRow's
+    // `trailing` slot: that slot is measured at its intrinsic width before the label column's
+    // weight(1f) is resolved, so the value claimed the whole row and squeezed the label to about
+    // one character, rendering it as a vertical stack of letters. Found on device. It is a
+    // full-width value, not a control — so it goes on its own line beneath the row.
+    SettingRow(
+        icon = Icons.Default.Lock,
+        label = stringResource(R.string.settings_hwid_value_title),
+        supportingText = stringResource(R.string.settings_hwid_value_summary),
+    )
     SelectionContainer {
-        SettingRow(
-            icon = Icons.Default.Lock,
-            label = stringResource(R.string.settings_hwid_value_title),
-            supportingText = stringResource(R.string.settings_hwid_value_summary),
-            trailing = {
-                Text(
-                    text = hwid,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                )
-            },
+        Text(
+            text = hwid,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(start = HWID_VALUE_START_PADDING, bottom = HWID_VALUE_BOTTOM_PADDING),
         )
     }
 }

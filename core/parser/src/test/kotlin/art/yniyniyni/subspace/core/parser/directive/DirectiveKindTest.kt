@@ -129,4 +129,61 @@ class DirectiveKindTest {
         canonical(DirectiveKind.Csv, "a.b.c,  d.e.f , ,g") shouldBe "a.b.c,d.e.f,g"
         reason(DirectiveKind.Csv, " , , ") shouldBe RejectionReason.BlankValue
     }
+
+    // The `base64:` marker. Every profile-title and announce Remnawave sends carries it
+    // (getUserProfileHeadersInfo builds both as `base64:${...}`), and M4's device run found the
+    // whole prefix going undecoded. The fixtures below are the real values from that run.
+
+    @Test
+    fun `the base64 marker prefix is stripped before decoding`() {
+        // "🔐 Trust VPN" — 27 characters encoded, which overran profile-title's 25-character
+        // budget and was rejected as TooLong, so the group kept its hostname fallback. Decoded
+        // it is 12 UTF-16 units, comfortably inside the same budget.
+        val kind = DirectiveKind.Text(maxLength = 25, base64Allowed = true)
+
+        canonical(kind, "base64:8J+UkCBUcnVzdCBWUE4=") shouldBe "🔐 Trust VPN"
+    }
+
+    @Test
+    fun `a marked value is measured after decoding, not before`() {
+        // The budget applies to what the user reads. 27 > 25 > 12.
+        val kind = DirectiveKind.Text(maxLength = 25, base64Allowed = true)
+
+        "base64:8J+UkCBUcnVzdCBWUE4=".length shouldBe 27
+        canonical(kind, "base64:8J+UkCBUcnVzdCBWUE4=")!!.length shouldBe 12
+    }
+
+    @Test
+    fun `the marker is recognised whatever its casing`() {
+        val kind = DirectiveKind.Text(maxLength = 25, base64Allowed = true)
+
+        canonical(kind, "BASE64:8J+UkCBUcnVzdCBWUE4=") shouldBe "🔐 Trust VPN"
+    }
+
+    @Test
+    fun `a multi-line announce decodes rather than being stored as a blob`() {
+        // Stored as a 47-character `base64:…` blob before this fix — 7 for the marker plus 40 of
+        // payload, which is exactly the length the device's database showed.
+        val kind = DirectiveKind.Text(maxLength = 200, base64Allowed = true)
+        val encoded = "base64:TmV3IEVyYSDwn4yNClN0YXkgVHJ1c3Qg8J+Ukg=="
+
+        encoded.length shouldBe 47
+        canonical(kind, encoded) shouldBe "New Era 🌍\nStay Trust 🔒"
+    }
+
+    @Test
+    fun `a value claiming to be base64 but isn't is rejected, not kept literally`() {
+        // Keeping it would store the marker itself — the defect this pair of tests exists for.
+        val kind = DirectiveKind.Text(maxLength = 200, base64Allowed = true)
+
+        reason(kind, "base64:!!!not valid!!!") shouldBe RejectionReason.NotBase64
+    }
+
+    @Test
+    fun `an unmarked plain-text title still survives unchanged`() {
+        // Without the marker the decode stays a heuristic, so the fallback must still hold.
+        val kind = DirectiveKind.Text(maxLength = 25, base64Allowed = true)
+
+        canonical(kind, "Trust VPN") shouldBe "Trust VPN"
+    }
 }

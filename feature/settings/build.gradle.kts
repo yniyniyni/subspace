@@ -31,4 +31,12 @@ dependencies {
     // Main dispatcher — same gap :feature:home's and :feature:profiles' own
     // build.gradle.kts document.
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // First Compose UI instrumented tests in this module (M4 device run: the HWID value was
+    // rendering as a vertical stack of single characters, which no JVM state test could see).
+    // Same additions feature/profiles/build.gradle.kts documents in full.
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.kotest.assertions)
+    debugImplementation(libs.compose.ui.test.manifest)
+    androidTestImplementation(libs.androidx.test.espresso.core)
 }

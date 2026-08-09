@@ -88,6 +88,9 @@ class EditorScreenTest {
             onRealitySpiderXChanged = {},
             onWsPathChanged = {},
             onGrpcServiceNameChanged = {},
+            onXhttpPathChanged = {},
+            onXhttpHostChanged = {},
+            onXhttpModeChanged = {},
             onSave = onSave,
         )
 

@@ -111,6 +111,32 @@
     <string name="import_detail_field_credential">Credential</string>
     <string name="import_detail_field_alter_id">Alter ID</string>
 
+    <!-- Task 13: the fifth AddServerSheet route, "From subscription URL"
+         (M3's plan Part 2 line 715 deferred it to M4). §5.6 applies here
+         too — the URL itself is never interpolated into any string below,
+         only the closed FetchFailure/SyncResult vocabulary UserMessage
+         carries (see SyncResult.toUserMessage() in ImportViewModel.kt). -->
+    <string name="add_subscription_title">From subscription URL</string>
+    <string name="add_subscription_hint">https://…</string>
+    <string name="add_subscription_action">Add subscription</string>
+    <!-- %1$d = ProfileRepository-equivalent rows actually written by the
+         first sync (SyncResult.Synced.added), never a count of servers the
+         provider's response merely listed — same "rows written, not parsed"
+         rule import_result_summary above follows. -->
+    <plurals name="subscription_added">
+        <item quantity="one">Added %1$d server</item>
+        <item quantity="other">Added %1$d servers</item>
+    </plurals>
+    <string name="subscription_error_hwid_required">This subscription requires a device ID. Enable it in Settings.</string>
+    <string name="subscription_error_device_limit">Device limit reached. Remove a device in your account.</string>
+    <string name="subscription_error_not_found">Subscription not found. Check the URL.</string>
+    <string name="subscription_error_unreachable">Could not reach the server.</string>
+    <string name="subscription_error_timed_out">The server did not respond in time.</string>
+    <string name="subscription_error_tls">Could not establish a secure connection.</string>
+    <string name="subscription_error_client">The server rejected the request.</string>
+    <string name="subscription_error_server">The server reported an error.</string>
+    <string name="subscription_error_no_servers">No servers in this subscription.</string>
+
     <!-- Task 20: QrScanScreen. §5.6 applies here too — nothing below may
          interpolate a decoded payload; only the fixed camera/permission
          vocabulary appears. -->

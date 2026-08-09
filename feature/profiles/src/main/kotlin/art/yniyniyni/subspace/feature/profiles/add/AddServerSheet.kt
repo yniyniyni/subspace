@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
@@ -61,6 +62,12 @@ internal const val IMPORT_BUSY_TEST_TAG = "import-busy"
  * own `contentTag` is.
  */
 internal const val IMPORT_PASTE_FIELD_TEST_TAG = "import-paste-field"
+
+/**
+ * Identifies the subscription URL [OutlinedTextField] to instrumented tests,
+ * the same reason [IMPORT_PASTE_FIELD_TEST_TAG] exists — Task 13.
+ */
+internal const val ADD_SUBSCRIPTION_FIELD_TEST_TAG = "add-subscription-field"
 
 /**
  * The only place in the app that turns pasted or imported text into a stored
@@ -166,13 +173,19 @@ private fun AddServerSheetBody(
             // has no NavController and does not know or care how scanning
             // is presented, only that tapping it should start.
             onScanClick = onScanQr,
+            // Task 13: the fifth route. Takes the URL directly (rather than
+            // an onSubscriptionUrlChanged + a no-arg click, the paste field's
+            // shape) because the URL field's own text lives in
+            // AddServerSheetContent's local composition state, not
+            // ImportState — see AddSubscriptionSection's KDoc for why.
+            onAddSubscription = viewModel::addSubscription,
         ),
         modifier = modifier,
     )
 }
 
 /**
- * [AddServerSheetContent]'s four callbacks, grouped for the same reason
+ * [AddServerSheetContent]'s five callbacks, grouped for the same reason
  * [art.yniyniyni.subspace.feature.profiles.list.ServersActions] is (both
  * pre-date and post-date detekt's `LongParameterList` threshold — this one
  * crossed it when Task 20 fix round 1 added [onScanClick]).
@@ -182,6 +195,7 @@ internal data class ImportActions(
     val onImportClick: () -> Unit,
     val onImportFromFileClick: () -> Unit,
     val onScanClick: () -> Unit,
+    val onAddSubscription: (String) -> Unit,
 )
 
 /**
@@ -236,6 +250,8 @@ internal fun AddServerSheetContent(
             Text(stringResource(R.string.import_scan_qr_button))
         }
 
+        AddSubscriptionSection(busy = state.busy, onAddSubscription = actions.onAddSubscription)
+
         if (state.busy) {
             CircularProgressIndicator(modifier = Modifier.testTag(IMPORT_BUSY_TEST_TAG))
         }
@@ -248,10 +264,81 @@ internal fun AddServerSheetContent(
             )
         }
 
+        state.subscriptionResult?.let { message ->
+            SubscriptionResultText(message)
+        }
+
         if (state.completed) {
             ImportResult(state = state)
         }
     }
+}
+
+/**
+ * The fifth [AddServerSheetContent] route — M3's plan Part 2 line 715
+ * deferred "From subscription URL" to M4; this is that entry.
+ *
+ * The URL field's own text is local composition state, not [ImportState]:
+ * [ImportActions.onAddSubscription] takes the URL directly (unlike the paste
+ * field's `onInputChanged` + no-arg `onImportClick` pair) precisely so this
+ * section needs no ViewModel round trip just to know what the user is
+ * typing — see [ImportActions]'s own KDoc. `remember`, not
+ * `rememberSaveable`: same reasoning [ImportState.input]'s KDoc gives for
+ * keeping pasted config text out of the Activity's saved-instance-state
+ * `Bundle` (§5.6) applies to a subscription URL too.
+ */
+@Composable
+private fun AddSubscriptionSection(
+    busy: Boolean,
+    onAddSubscription: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var url by remember { mutableStateOf("") }
+
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIELD_GAP)) {
+        Text(stringResource(R.string.add_subscription_title), style = MaterialTheme.typography.titleSmall)
+
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it },
+            label = { Text(stringResource(R.string.add_subscription_hint)) },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().testTag(ADD_SUBSCRIPTION_FIELD_TEST_TAG),
+        )
+
+        Button(
+            onClick = { onAddSubscription(url) },
+            enabled = !busy && url.isNotBlank(),
+        ) {
+            Text(stringResource(R.string.add_subscription_action))
+        }
+    }
+}
+
+/**
+ * Renders a [UserMessage] — a plural with [UserMessage.quantity] for the one
+ * success shape ([art.yniyniyni.subspace.core.data.sync.SyncResult.Synced]),
+ * a plain string in the app's default color otherwise (every failure
+ * variant, §12/§5.6: never the subscription's own URL or the provider's
+ * response, only this closed vocabulary).
+ */
+@Composable
+private fun SubscriptionResultText(
+    message: UserMessage,
+    modifier: Modifier = Modifier,
+) {
+    val quantity = message.quantity
+    Text(
+        text =
+        if (quantity != null) {
+            pluralStringResource(message.resId, quantity, quantity)
+        } else {
+            stringResource(message.resId)
+        },
+        color = if (quantity == null) MaterialTheme.colorScheme.error else Color.Unspecified,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = modifier,
+    )
 }
 
 @Composable

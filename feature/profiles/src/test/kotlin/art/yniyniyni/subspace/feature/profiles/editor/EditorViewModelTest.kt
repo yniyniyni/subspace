@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.editor
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
@@ -169,6 +170,18 @@ class EditorViewModelTest {
             stored[id]?.let { stored[id] = it.copy(name = name, address = outbound.address, port = outbound.port) }
             return true
         }
+
+        // Not exercised here — this fixture is EditorViewModelTest's own, and
+        // nothing in the editor screen touches subscriptions. See
+        // ImportViewModelTest's identical stub for the fuller rationale.
+        override suspend fun addSubscription(
+            url: String,
+            name: String,
+        ) = 0L
+
+        override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+
+        override suspend fun deleteSubscription(id: Long) = Unit
     }
 
     @Before

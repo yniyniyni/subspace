@@ -69,6 +69,9 @@ class AddServerSheetTest {
                         onImportClick = onImportClick,
                         onImportFromFileClick = onImportFromFileClick,
                         onScanClick = onScanClick,
+                        // Not this file's concern — AddServerSheetSubscriptionTest
+                        // (Task 13) owns the "From subscription URL" route.
+                        onAddSubscription = {},
                     ),
                 )
             }

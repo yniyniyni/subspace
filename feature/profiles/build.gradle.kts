@@ -10,6 +10,12 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    // Task 13: SubscriptionImportTest.kt and ImportViewModel.kt reference
+    // art.yniyniyni.subspace.core.network.FetchFailure directly — resolvable
+    // without a project(":core:network") edge of this module's own (which
+    // checkModuleBoundaries forbids, §4) because :core:data now exposes that
+    // dependency as `api`, not `implementation`. See core/data/build.gradle.kts's
+    // own comment on that line for the full reasoning.
     implementation(project(":core:data"))
     // AddServerSheet (Task 19) is the first thing in this module to call
     // SubscriptionParser — the same pure-JVM module :feature:home already

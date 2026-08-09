@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.list
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
@@ -215,6 +216,18 @@ class ServersViewModelTest {
             name: String,
             outbound: Outbound,
         ) = true
+
+        // Not exercised here — this fixture is ServersViewModelTest's own,
+        // and nothing on the Servers screen touches subscriptions. See
+        // ImportViewModelTest's identical stub for the fuller rationale.
+        override suspend fun addSubscription(
+            url: String,
+            name: String,
+        ) = 0L
+
+        override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+
+        override suspend fun deleteSubscription(id: Long) = Unit
     }
 
     private lateinit var source: FakeProfileSource

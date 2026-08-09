@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.add
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
@@ -167,6 +168,20 @@ class ImportViewModelTest {
             name: String,
             outbound: Outbound,
         ) = true
+
+        // Not exercised here — SubscriptionImportTest owns coverage of
+        // toUserMessage() as a pure function, and this fake has no real
+        // SubscriptionRepository/SubscriptionSyncer to model add-then-sync
+        // against (both have `internal` constructors scoped to :core:data;
+        // see ProfileSource's own KDoc for why this seam exists at all).
+        override suspend fun addSubscription(
+            url: String,
+            name: String,
+        ) = nextId++
+
+        override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+
+        override suspend fun deleteSubscription(id: Long) = Unit
     }
 
     @Before

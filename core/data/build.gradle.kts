@@ -33,7 +33,17 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:parser"))
-    implementation(project(":core:network"))
+    // api, not implementation: SyncResult.Failed.reason is FetchFailure, and
+    // SyncResult is part of :core:data's own public API (SubscriptionSyncer.sync's
+    // return type). Task 13 is the first caller that names FetchFailure directly
+    // (mapping it to a UserMessage in :feature:profiles) — with `implementation`,
+    // that module's own build.gradle.kts would need its own project(":core:network")
+    // edge to resolve the type, which checkModuleBoundaries forbids for every
+    // module but this one (§4: "only :core:data may depend on :core:network").
+    // `api` here keeps that edge singular — :feature:profiles declares no
+    // :core:network dependency of its own, it only sees the type transitively
+    // through this module's already-allowed one.
+    api(project(":core:network"))
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     implementation(libs.kotlinx.serialization.json)

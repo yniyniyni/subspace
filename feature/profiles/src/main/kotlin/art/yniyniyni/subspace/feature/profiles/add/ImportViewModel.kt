@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.add
 
+import androidx.annotation.PluralsRes
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
+import art.yniyniyni.subspace.core.data.sync.SyncResult
+import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.core.parser.ParseFailure
 import art.yniyniyni.subspace.core.parser.SubscriptionParser
+import art.yniyniyni.subspace.core.parser.directive.DirectiveKind
+import art.yniyniyni.subspace.core.parser.directive.KindResult
+import art.yniyniyni.subspace.core.parser.directive.canonicalise
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import art.yniyniyni.subspace.feature.profiles.R
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +24,60 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+/**
+ * A user-facing message as a resource reference rather than a string.
+ *
+ * §12 forbids hardcoded UI text, and this shape additionally keeps the
+ * [SyncResult] mapping unit-testable without a `Context`. [quantity] is
+ * non-null only for the plural success case; the failure branch carries no
+ * arguments at all, which is what guarantees no URL or body can be
+ * interpolated into a message (§5.6).
+ */
+internal data class UserMessage(
+    @param:StringRes @param:PluralsRes val resId: Int,
+    val quantity: Int? = null,
+)
+
+/**
+ * Maps a subscription sync outcome to what the user reads, without ever
+ * touching the subscription's own URL or the fetch response body (§5.6) —
+ * [SyncResult]'s four variants carry only counts and a closed
+ * [FetchFailure] vocabulary, never raw text from the provider.
+ *
+ * All four variants are handled explicitly: [SyncResult.NoServers] and
+ * [SyncResult.ReconciliationConflict] are easy to miss reading the plan text,
+ * which sometimes names only [SyncResult.Synced] and [SyncResult.Failed].
+ * [SyncResult.ReconciliationConflict] has no string of its own in the closed
+ * vocabulary Step 3 defines — spec-wise it is the same class of outcome as
+ * [FetchFailure.ServerError] (a write that could not be trusted to have
+ * landed cleanly, not something the URL or the user did wrong), so it reuses
+ * [R.string.subscription_error_server] rather than inventing a tenth string
+ * for a backstop [SubscriptionSyncer.sync] itself says should be rare.
+ */
+internal fun SyncResult.toUserMessage(): UserMessage =
+    when (this) {
+        is SyncResult.Synced -> UserMessage(R.plurals.subscription_added, added)
+        is SyncResult.Failed -> reason.toUserMessage()
+        is SyncResult.NoServers -> UserMessage(R.string.subscription_error_no_servers)
+        is SyncResult.ReconciliationConflict -> UserMessage(R.string.subscription_error_server)
+    }
+
+/** [FetchFailure]'s closed vocabulary, one distinct string per member (§10.4). */
+private fun FetchFailure.toUserMessage(): UserMessage =
+    when (this) {
+        FetchFailure.HwidRequired -> UserMessage(R.string.subscription_error_hwid_required)
+        FetchFailure.DeviceLimitReached -> UserMessage(R.string.subscription_error_device_limit)
+        FetchFailure.NotFound -> UserMessage(R.string.subscription_error_not_found)
+        FetchFailure.Unreachable -> UserMessage(R.string.subscription_error_unreachable)
+        FetchFailure.TimedOut -> UserMessage(R.string.subscription_error_timed_out)
+        FetchFailure.TlsFailure -> UserMessage(R.string.subscription_error_tls)
+        FetchFailure.ClientError -> UserMessage(R.string.subscription_error_client)
+        FetchFailure.ServerError -> UserMessage(R.string.subscription_error_server)
+    }
+
+/** True for an absolute `http`/`https` URL with a host — [DirectiveKind.Url]'s own rule. */
+private fun isSubscriptionUrl(url: String): Boolean = DirectiveKind.Url.canonicalise(url) is KindResult.Canonical
 
 /**
  * What [AddServerSheet] renders.
@@ -56,6 +119,15 @@ import javax.inject.Inject
  * permission revoked mid-flow. It carries nothing beyond the boolean itself:
  * an I/O exception's message can carry a path or provider detail, so it is
  * never read, let alone stored (§5.6).
+ *
+ * [subscriptionResult] is Task 13's fifth route, "From subscription URL" —
+ * the outcome of [ImportViewModel.addSubscription]'s call to
+ * [SubscriptionSyncer.sync], mapped through [toUserMessage] so it stays a
+ * [UserMessage] (resource id, never raw text) rather than a second copy of
+ * the paste path's [imported]/[parsed]/[failures] shape, which describes a
+ * parse, not a sync. [busy] is shared with the paste/file/QR routes rather
+ * than duplicated per route: only one of this sheet's operations can be in
+ * flight at a time, since they share this one [ImportViewModel].
  */
 internal data class ImportState(
     val input: String = "",
@@ -65,6 +137,7 @@ internal data class ImportState(
     val parsed: Int = 0,
     val failures: List<ParseFailure> = emptyList(),
     val fileReadFailed: Boolean = false,
+    val subscriptionResult: UserMessage? = null,
 ) {
     /** What was attempted, for the "of N" half of the summary — always [parsed], never [imported]. */
     val total: Int get() = parsed + failures.size
@@ -155,4 +228,55 @@ constructor(
             }
         }
     }
+
+    /**
+     * Adds a subscription from [url] and runs its first sync.
+     *
+     * [url] is validated with [DirectiveKind.Url]'s own scheme restriction —
+     * the same rule §A.1 applies to provider-supplied URL directives like
+     * `new-url`/`fallback-url`, reused rather than re-implemented, because a
+     * `file:` subscription URL typed by a user is the identical hazard in a
+     * different place. A URL that fails this check is a silent no-op: this
+     * sheet has no separate field to report the failure against, and §5.6
+     * forbids echoing the text itself back in a message.
+     *
+     * [ProfileSource.addSubscription] (backed by
+     * [art.yniyniyni.subspace.core.data.SubscriptionRepository.add]) is
+     * idempotent on [url] — adding an already-stored URL again re-syncs the
+     * existing row rather than creating a duplicate group, which is the
+     * repository's own documented contract, not a special case here.
+     *
+     * A first sync that does not land as [SyncResult.Synced] — a failure, no
+     * servers, or a reconciliation conflict — deletes the subscription again
+     * ([ProfileSource.deleteSubscription]): a row whose very first fetch did
+     * not succeed is a group the user did not ask for, and leaving it makes
+     * "add" look like it half-worked.
+     */
+    fun addSubscription(url: String) {
+        if (!isSubscriptionUrl(url)) return
+
+        viewModelScope.launch {
+            _state.update { ImportState(input = it.input, busy = true) }
+
+            val id = profileSource.addSubscription(url = url, name = subscriptionHostName(url))
+            val result = profileSource.syncSubscription(id)
+
+            if (result !is SyncResult.Synced) {
+                profileSource.deleteSubscription(id)
+            }
+
+            _state.update { it.copy(busy = false, subscriptionResult = result.toUserMessage()) }
+        }
+    }
 }
+
+/**
+ * The group name shown until the provider's own `profile-title` (if any)
+ * lands on the first sync. Always the URL's host, never the full URL — the
+ * path or query string is where a subscription token typically lives
+ * (§5.6). [ImportViewModel.addSubscription] only calls this after
+ * [isSubscriptionUrl] has already accepted the same URL, which guarantees a
+ * non-blank host (`DirectiveKind.Url`'s own rule) — `.orEmpty()` keeps this
+ * total without a `!!` for the case that can't actually happen.
+ */
+private fun subscriptionHostName(url: String): String = java.net.URI(url).host.orEmpty()

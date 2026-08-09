@@ -38,8 +38,30 @@
         <item quantity="other">%1$d servers</item>
     </plurals>
 
+    <!-- Task 14 fix round, Important 1/2: GroupCard's last-fetch age and
+         Update button, SUBSCRIPTION groups only. %1$s in
+         group_card_last_updated is android.text.format.DateUtils's own
+         relative-time string (e.g. "3 hours ago"), already localized by the
+         platform. %1$s in group_card_update_description is the group's name,
+         same pattern as group_card_overflow_description above. -->
+    <string name="group_card_last_updated">Updated %1$s</string>
+    <string name="group_card_update_description">Update %1$s</string>
+
     <!-- QuotaBar (Task 14). %1$s/%2$s are already-formatted byte strings
          (e.g. "1.2 GB"), not raw numbers — see QuotaBar.kt's own
          toHumanReadableBytes(). -->
     <string name="quota_bar_label">%1$s of %2$s used</string>
+
+    <!-- QuotaBar (Task 14 fix round, Important 3). Binary (1024-based) byte
+         units, indexed 0..5 by toHumanReadableBytes()'s magnitude — was a
+         hardcoded Kotlin list, moved here so M9 localisation has somewhere
+         to translate them from. -->
+    <string-array name="quota_bar_units">
+        <item>B</item>
+        <item>KB</item>
+        <item>MB</item>
+        <item>GB</item>
+        <item>TB</item>
+        <item>PB</item>
+    </string-array>
 </resources>

@@ -58,24 +58,43 @@ constructor(
         val filteredGroups =
             filters.flatMapLatest { f -> profileSource.observeGroups(f.query, f.protocol.toRawProtocolOrNull()) }
 
-        // Task 14: quota bar data. Which groups are SUBSCRIPTION-sourced is
-        // never asked directly — a group's presence in this map (keyed by
+        // Task 14: per-group subscription context (quota, last-fetch time, the
+        // id `onUpdateSubscription` needs). Which groups are SUBSCRIPTION-sourced
+        // is never asked directly — a group's presence in this map (keyed by
         // groupId, one entry per stored subscription) is itself the answer, so
-        // a MANUAL group's absence from it is what keeps GroupCard's quota
-        // params null for that group, with no separate "is this a
+        // a MANUAL group's absence from it is what keeps GroupCard's quota/
+        // update/age params null for that group, with no separate "is this a
         // subscription group" flag to keep in sync.
-        val quotaByGroupId = profileSource.observeSubscriptions().flatMapLatest { it.observeQuotaByGroupId() }
+        val subscriptionContextByGroupId =
+            profileSource.observeSubscriptions().flatMapLatest { it.observeSubscriptionContextByGroupId() }
 
         combine(
             allGroups,
             filteredGroups,
             filters,
             profileSource.activeProfileId,
-            quotaByGroupId,
-        ) { raw, filtered, f, activeId, quota -> buildState(raw, filtered, f, activeId, quota) }
+            subscriptionContextByGroupId,
+        ) { raw, filtered, f, activeId, context -> buildState(raw, filtered, f, activeId, context) }
             .onEach { _state.value = it }
             .launchIn(viewModelScope)
     }
+
+    /**
+     * What a `SUBSCRIPTION` group's [ServersGroup] fields are built from: the
+     * subscription's own id (fix round, Important 1 — [onUpdateSubscription]'s
+     * target), its parsed `subscription-userinfo` (the quota bar), and its
+     * [StoredSubscription.lastFetchedAt] (fix round, Important 2 — the age
+     * `GroupCard` renders). Everything [StoredSubscription] carries that a
+     * group's card can show lives here, in one place, precisely so nothing
+     * gets read off [StoredSubscription] in [observeSubscriptionContextByGroupId]
+     * and then silently dropped before reaching [ServersGroup] the way
+     * [lastFetchedAtEpochMillis] originally was.
+     */
+    private data class SubscriptionContext(
+        val subscriptionId: Long,
+        val userInfo: UserInfo?,
+        val lastFetchedAtEpochMillis: Long?,
+    )
 
     /**
      * Re-parses `subscription-userinfo` for every stored subscription
@@ -83,13 +102,17 @@ constructor(
      *
      * Receiver, not a parameter: keeps the call site above
      * (`profileSource.observeSubscriptions().flatMapLatest { ... }`) reading
-     * left-to-right as "subscriptions, then their quota", matching this
+     * left-to-right as "subscriptions, then their context", matching this
      * class's other `flatMapLatest` chain immediately above it.
      */
-    private fun List<StoredSubscription>.observeQuotaByGroupId(): Flow<Map<Long, UserInfo?>> {
+    private fun List<StoredSubscription>.observeSubscriptionContextByGroupId(): Flow<Map<Long, SubscriptionContext>> {
         if (isEmpty()) return flowOf(emptyMap())
         val perSubscription =
-            map { sub -> profileSource.observeUserInfo(sub.id).map { raw -> sub.groupId to raw?.let(::parseUserInfo) } }
+            map { sub ->
+                profileSource.observeUserInfo(sub.id).map { raw ->
+                    sub.groupId to SubscriptionContext(sub.id, raw?.let(::parseUserInfo), sub.lastFetchedAt)
+                }
+            }
         return combine(perSubscription) { pairs -> pairs.toMap() }
     }
 
@@ -122,6 +145,19 @@ constructor(
         viewModelScope.launch { profileSource.deleteGroup(id) }
     }
 
+    /**
+     * Runs one sync of the subscription owning a `SUBSCRIPTION` group right
+     * now — `GroupCard`'s Update button (fix round, Important 1). Fire-and-forget,
+     * same shape as [onRenameGroup]/[onDeleteGroup] above: the result isn't
+     * surfaced to the UI here (no designed success/failure affordance exists
+     * yet for this screen), but [ProfileSource.syncSubscription] still runs
+     * to completion and persists whatever it finds via [profileSource]'s own
+     * flows, which this screen already observes.
+     */
+    fun onUpdateSubscription(id: Long) {
+        viewModelScope.launch { profileSource.syncSubscription(id) }
+    }
+
     private data class Filters(val query: String, val protocol: String, val sort: SortOrder)
 
     private fun buildState(
@@ -129,12 +165,13 @@ constructor(
         filtered: List<ProfileGroup>,
         filters: Filters,
         activeProfileId: Long?,
-        quotaByGroupId: Map<Long, UserInfo?>,
+        subscriptionContextByGroupId: Map<Long, SubscriptionContext>,
     ): ServersState {
         val totalCountById = raw.associate { it.id to it.profiles.size }
         val groups =
             filtered.map { group ->
-                val quota = quotaByGroupId[group.id]
+                val context = subscriptionContextByGroupId[group.id]
+                val quota = context?.userInfo
                 ServersGroup(
                     id = group.id,
                     name = group.name,
@@ -148,6 +185,8 @@ constructor(
                     // rule against substituting a zero for an absent value.
                     quotaUsedBytes = quota?.takeIf { it.upload != null || it.download != null }?.usedBytes,
                     quotaTotalBytes = quota?.total,
+                    subscriptionId = context?.subscriptionId,
+                    lastFetchedAtEpochMillis = context?.lastFetchedAtEpochMillis,
                 )
             }
         return ServersState(

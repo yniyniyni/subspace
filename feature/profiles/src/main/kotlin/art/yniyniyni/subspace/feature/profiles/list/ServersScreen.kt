@@ -90,6 +90,7 @@ fun ServersScreen(
             onDeleteGroup = viewModel::onDeleteGroup,
             onAddProfile = { showAddSheet = true },
             onProfileEdit = onEditProfile,
+            onUpdateSubscription = viewModel::onUpdateSubscription,
         ),
         modifier = modifier,
     )
@@ -110,6 +111,8 @@ internal data class ServersActions(
     val onDeleteGroup: (Long) -> Unit,
     val onAddProfile: () -> Unit,
     val onProfileEdit: (Long) -> Unit,
+    /** Fix round, Important 1: forwarded to [ServersGroupListActions.onUpdateSubscription]. */
+    val onUpdateSubscription: (Long) -> Unit,
 )
 
 /**
@@ -148,6 +151,7 @@ internal fun ServersScreenContent(
                 onAddProfile = actions.onAddProfile,
                 onProfileSelected = actions.onProfileSelected,
                 onProfileEdit = actions.onProfileEdit,
+                onUpdateSubscription = actions.onUpdateSubscription,
             ),
             modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )

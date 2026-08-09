@@ -68,4 +68,25 @@ class UserInfoTest {
         parseUserInfo("download=-1")?.download.shouldBeNull()
         parseUserInfo("download=99999999999999999999")?.download.shouldBeNull()
     }
+
+    // Fix round, Minor 1: duplicate-key behaviour was previously undocumented
+    // and untested — pinned here against Iterable.toMap()'s own documented
+    // last-wins contract, which UserInfo.kt's KDoc now cites explicitly.
+    @Test
+    fun `a duplicate key keeps its last occurrence`() {
+        parseUserInfo("total=1;total=2")?.total shouldBe 2
+    }
+
+    // Fix round, Minor 2: these two hostile-input shapes were previously only
+    // exercised incidentally (as part of larger strings in other tests), not
+    // asserted on directly.
+    @Test
+    fun `a field present with an empty value is treated as absent`() {
+        parseUserInfo("total=;download=5")?.total.shouldBeNull()
+    }
+
+    @Test
+    fun `a key with no equals sign is ignored`() {
+        parseUserInfo("upload;download=5")?.upload.shouldBeNull()
+    }
 }

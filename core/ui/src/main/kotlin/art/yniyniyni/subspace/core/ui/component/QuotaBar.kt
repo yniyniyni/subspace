@@ -15,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import art.yniyniyni.subspace.core.ui.R
@@ -24,7 +25,6 @@ import kotlin.math.pow
 
 private val LABEL_TOP_PADDING = 4.dp
 private const val BYTES_PER_UNIT = 1024.0
-private val BYTE_UNITS = listOf("B", "KB", "MB", "GB", "TB", "PB")
 
 /**
  * A subscription's traffic quota: a proportion bar plus a formatted
@@ -60,12 +60,13 @@ fun QuotaBar(
     if (usedBytes == null || totalBytes == null) return
     if (usedBytes < 0 || totalBytes <= 0) return
 
+    val units = stringArrayResource(R.array.quota_bar_units)
     val fraction = (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
     val label =
         stringResource(
             R.string.quota_bar_label,
-            usedBytes.toHumanReadableBytes(),
-            totalBytes.toHumanReadableBytes(),
+            usedBytes.toHumanReadableBytes(units),
+            totalBytes.toHumanReadableBytes(units),
         )
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -89,10 +90,14 @@ fun QuotaBar(
  * locale — this project's other machine-generated values (addresses, ports)
  * are equally locale-independent, and [RobotoMonoFontFamily]'s own KDoc
  * names quota as one of them.
+ *
+ * [units] comes from `R.array.quota_bar_units` (fix round, Important 3): the
+ * unit abbreviations themselves are translatable resource text, not Kotlin
+ * literals — only the locale-stable *number* formatting above is pinned.
  */
-private fun Long.toHumanReadableBytes(): String {
-    if (this < BYTES_PER_UNIT) return "$this ${BYTE_UNITS[0]}"
-    val magnitude = (Math.log(toDouble()) / Math.log(BYTES_PER_UNIT)).toInt().coerceAtMost(BYTE_UNITS.size - 1)
+private fun Long.toHumanReadableBytes(units: Array<String>): String {
+    if (this < BYTES_PER_UNIT) return "$this ${units[0]}"
+    val magnitude = (Math.log(toDouble()) / Math.log(BYTES_PER_UNIT)).toInt().coerceAtMost(units.size - 1)
     val scaled = toDouble() / BYTES_PER_UNIT.pow(magnitude)
-    return String.format(Locale.US, "%.1f %s", scaled, BYTE_UNITS[magnitude])
+    return String.format(Locale.US, "%.1f %s", scaled, units[magnitude])
 }

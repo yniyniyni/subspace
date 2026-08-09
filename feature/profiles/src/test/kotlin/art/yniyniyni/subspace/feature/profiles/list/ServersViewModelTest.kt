@@ -150,6 +150,13 @@ class ServersViewModelTest {
         var lastDeletedGroup: Long? = null
             private set
 
+        // Fix round, Important 1: what onUpdateSubscription's wiring is
+        // verified against below.
+        var syncSubscriptionCallCount = 0
+            private set
+        var lastSyncedSubscriptionId: Long? = null
+            private set
+
         override fun observeGroups(
             query: String,
             protocol: String?,
@@ -229,7 +236,11 @@ class ServersViewModelTest {
             name: String,
         ) = 0L
 
-        override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+        override suspend fun syncSubscription(id: Long): SyncResult {
+            syncSubscriptionCallCount++
+            lastSyncedSubscriptionId = id
+            return SyncResult.Synced(0, 0, 0, 0, 0)
+        }
 
         override suspend fun deleteSubscription(id: Long) = Unit
 
@@ -362,6 +373,69 @@ class ServersViewModelTest {
         runTest {
             viewModel.state.value.groups.single().quotaUsedBytes.shouldBeNull()
             viewModel.state.value.groups.single().quotaTotalBytes.shouldBeNull()
+        }
+
+    // Fix round, Important 1/2: subscriptionId and lastFetchedAtEpochMillis
+    // must reach ServersGroup for a SUBSCRIPTION group, and stay null for a
+    // MANUAL one — the same "presence in the map is the signal" property the
+    // quota fields above already have.
+
+    @Test
+    fun `a manual group carries no subscriptionId or last-fetched time`() =
+        runTest {
+            val visibleGroup = viewModel.state.value.groups.single()
+            visibleGroup.subscriptionId.shouldBeNull()
+            visibleGroup.lastFetchedAtEpochMillis.shouldBeNull()
+        }
+
+    @Test
+    fun `a subscription group carries its subscriptionId and last-fetched time`() =
+        runTest {
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = 1_700_000_000_000L,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            val visibleGroup = subscribedViewModel.state.value.groups.single()
+            visibleGroup.subscriptionId shouldBe 9L
+            visibleGroup.lastFetchedAtEpochMillis shouldBe 1_700_000_000_000L
+        }
+
+    @Test
+    fun `updating a subscription group runs one sync of its own subscription id`() =
+        runTest {
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = null,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            subscribedViewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            subscribedSource.syncSubscriptionCallCount shouldBe 1
+            subscribedSource.lastSyncedSubscriptionId shouldBe 9L
         }
 
     @Test

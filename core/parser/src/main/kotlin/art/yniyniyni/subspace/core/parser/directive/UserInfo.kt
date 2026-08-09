@@ -46,6 +46,11 @@ public data class UserInfo(
  * dropped rather than kept — one bad field must not fail the whole header,
  * and a dropped field reads the same as one the provider never sent.
  *
+ * A duplicate key (e.g. `"total=1;total=2"`, malformed but not implausible
+ * for hostile input) keeps its **last** occurrence, matching
+ * [Iterable.toMap]'s own documented last-wins behaviour — this function does
+ * not re-implement or override it.
+ *
  * @return `null` when no field parsed at all (an empty or wholly garbage
  *   header carries no information), otherwise a [UserInfo] whose individual
  *   fields are `null` wherever the provider's value was absent, negative, or

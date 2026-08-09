@@ -2,8 +2,11 @@
 package art.yniyniyni.subspace.core.ui.component
 
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
+import io.kotest.matchers.shouldBe
 import org.junit.Rule
 import org.junit.Test
 
@@ -92,5 +95,77 @@ class QuotaBarTest {
             }
         }
         composeRule.onNodeWithText("1.0 GB of 5.0 GB used").assertExists()
+    }
+
+    // Fix round, Important 1/2: onUpdate/lastFetchedAtEpochMillis coverage.
+    // Same MANUAL-shaped call as groupCardWithNoQuotaBytesDrawsNoSubscriptionAffordances
+    // above, checking the other two subscription slots this time.
+
+    @Test
+    fun groupCardWithNoSubscriptionContextDrawsNoUpdateAffordance() {
+        composeRule.setContent {
+            SubspaceTheme {
+                GroupCard(
+                    name = "Local configs",
+                    profileCount = 1,
+                    expanded = false,
+                    actions =
+                    GroupCardActions(
+                        onToggleExpand = {},
+                        onRename = {},
+                        onDelete = {},
+                        onAddProfile = {},
+                    ),
+                ) {}
+            }
+        }
+        composeRule.onNodeWithContentDescription("Update Local configs").assertDoesNotExist()
+        composeRule.onNodeWithText("Updated", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun anUpdateCallbackRendersTheButtonAndInvokesItOnTap() {
+        var updated = false
+        composeRule.setContent {
+            SubspaceTheme {
+                GroupCard(
+                    name = "My subscription",
+                    profileCount = 2,
+                    expanded = false,
+                    actions =
+                    GroupCardActions(
+                        onToggleExpand = {},
+                        onRename = {},
+                        onDelete = {},
+                        onAddProfile = {},
+                    ),
+                    onUpdate = { updated = true },
+                ) {}
+            }
+        }
+        composeRule.onNodeWithContentDescription("Update My subscription").performClick()
+        updated shouldBe true
+    }
+
+    @Test
+    fun aLastFetchedTimestampRendersAnAgeText() {
+        composeRule.setContent {
+            SubspaceTheme {
+                GroupCard(
+                    name = "My subscription",
+                    profileCount = 2,
+                    expanded = false,
+                    actions =
+                    GroupCardActions(
+                        onToggleExpand = {},
+                        onRename = {},
+                        onDelete = {},
+                        onAddProfile = {},
+                    ),
+                    lastFetchedAtEpochMillis = System.currentTimeMillis() - 5_000L,
+                ) {}
+            }
+        }
+        composeRule.onNodeWithText("Updated", substring = true).assertExists()
     }
 }

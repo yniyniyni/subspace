@@ -73,6 +73,18 @@ internal data class ServersState(
  * @property quotaTotalBytes the same directive's `total` field, forwarded to
  *   `GroupCard`'s `quotaTotalBytes`. `null` under the same conditions as
  *   [quotaUsedBytes], or when the provider omitted `total` entirely.
+ * @property subscriptionId the id of the [art.yniyniyni.subspace.core.data.StoredSubscription]
+ *   that owns this group, or `null` for a `MANUAL` group. Fix round (code
+ *   review, three Important findings): this is what lets
+ *   [ServersGroupList][art.yniyniyni.subspace.feature.profiles.list.ServersGroupList]
+ *   wire `GroupCard`'s `onUpdate` to `syncSubscription(subscriptionId)` without
+ *   `ServersGroup` itself carrying a lambda — the id is data, the callback is
+ *   a Compose-layer concern built from it, same split [id]/[actions] already
+ *   draws between this group and [ServersGroupListActions].
+ * @property lastFetchedAtEpochMillis this group's subscription's
+ *   [art.yniyniyni.subspace.core.data.StoredSubscription.lastFetchedAt],
+ *   forwarded to `GroupCard`'s `lastFetchedAtEpochMillis`. `null` for a
+ *   `MANUAL` group or a subscription never yet successfully fetched.
  */
 internal data class ServersGroup(
     val id: Long,
@@ -81,6 +93,8 @@ internal data class ServersGroup(
     val profiles: List<ServerRow>,
     val quotaUsedBytes: Long? = null,
     val quotaTotalBytes: Long? = null,
+    val subscriptionId: Long? = null,
+    val lastFetchedAtEpochMillis: Long? = null,
 )
 
 /**

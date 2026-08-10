@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.data
 
+import androidx.room.withTransaction
 import art.yniyniyni.subspace.core.data.db.SubscriptionDao
 import art.yniyniyni.subspace.core.data.db.SubscriptionEntity
 import art.yniyniyni.subspace.core.data.db.SubscriptionOverrideEntity
+import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.parser.directive.DirectiveKind
 import art.yniyniyni.subspace.core.parser.directive.KindResult
 import art.yniyniyni.subspace.core.parser.directive.canonicalise
@@ -132,6 +134,7 @@ public class SubscriptionRepository
 internal constructor(
     private val dao: SubscriptionDao,
     private val profiles: ProfileRepository,
+    private val database: SubspaceDatabase,
 ) {
     // add() is a read (does this url exist?) followed by a conditional write,
     // the same shape ProfileRepository.defaultGroupId() guards — and the same
@@ -191,23 +194,39 @@ internal constructor(
         name: String,
     ): AddedSubscription =
         addMutex.withLock {
-            dao.subscriptionByUrl(url)?.let { return@withLock AddedSubscription(it.id, created = false) }
+            // One transaction, not two committed writes. The group insert and the subscription
+            // insert used to commit independently, so a failure or a cancellation between them
+            // left a `source = "SUBSCRIPTION"` group with no subscription behind it — a group the
+            // UI lists but cannot refresh, open or delete as a subscription. The foreign key
+            // cannot help: it cascades group -> subscription, never the direction that would undo
+            // a parent whose child never arrived.
+            //
+            // The Mutex above is a different guarantee and not a substitute: it serialises callers
+            // within one process and one repository instance, which is what stops two coroutines
+            // both reading "no such url" and racing into the unique index. It does not make two
+            // writes atomic. `withTransaction` does — room-ktx installs a transaction element in
+            // the coroutine context, so the suspend DAO calls inside this block run on that same
+            // transaction and roll back together.
+            database.withTransaction {
+                dao.subscriptionByUrl(url)?.let {
+                    return@withTransaction AddedSubscription(it.id, created = false)
+                }
 
-            val now = System.currentTimeMillis()
-            val groupId = profiles.createGroup(name, source = GROUP_SOURCE_SUBSCRIPTION)
-            dao.insertSubscription(
-                SubscriptionEntity(
-                    groupId = groupId,
-                    url = url,
-                    userAgentOverride = null,
-                    hwidEnabled = true,
-                    lastFetchedAt = null,
-                    lastAttemptedAt = null,
-                    lastFetchStatus = null,
-                    lastFetchDetail = null,
-                    createdAt = now,
-                ),
-            ).let { AddedSubscription(it, created = true) }
+                val groupId = profiles.createGroup(name, source = GROUP_SOURCE_SUBSCRIPTION)
+                dao.insertSubscription(
+                    SubscriptionEntity(
+                        groupId = groupId,
+                        url = url,
+                        userAgentOverride = null,
+                        hwidEnabled = true,
+                        lastFetchedAt = null,
+                        lastAttemptedAt = null,
+                        lastFetchStatus = null,
+                        lastFetchDetail = null,
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                ).let { AddedSubscription(it, created = true) }
+            }
         }
 
     /**

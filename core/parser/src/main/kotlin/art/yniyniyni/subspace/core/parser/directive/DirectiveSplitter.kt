@@ -17,12 +17,13 @@ public object DirectiveSplitter {
      *
      * **Precedence: a header wins over a `#`-line carrying the same key.**
      *
-     * This is UNVERIFIED (spec §6.2). The upstream documentation lists both
-     * transports for every key and states no precedence. Header-wins is chosen
-     * on the reasoning that a panel's headers are set by the panel itself while
-     * the body is usually template output, so the header is the more deliberate
-     * signal. A device-checklist line exists to settle it; if a real panel
-     * disagrees, this is the one place to change.
+     * **Verified on device during M4** (2026-08-09) and recorded in ARCHITECTURE.md §A.3.5. It was
+     * chosen as a guess — the upstream documentation lists both transports for every key and
+     * states no precedence, and header-wins was reasoned from a panel's headers being set by the
+     * panel itself while the body is usually template output — and it was then confirmed
+     * end to end against a real panel serving the same key on both transports with different
+     * values. The boundary the check established: it holds per key, so a key present only in the
+     * body is still read from the body even when other keys arrive as headers.
      *
      * Within the body alone, the **first** occurrence of a key wins, so a
      * template appending rather than replacing does not silently flip a value.

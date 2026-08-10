@@ -24,7 +24,8 @@ internal const val ALL_PROTOCOLS_SENTINEL = "All"
  * How [ServersScreen] orders each group's rows.
  *
  * Deliberately three entries, not four: a "Fastest" order needs a real
- * latency measurement, and latency testing is M4 (ARCHITECTURE.md's roadmap).
+ * latency measurement, and latency testing is M4.5 (ARCHITECTURE.md's roadmap —
+ * it was M4 when this was written, before the M4/M4.5 split).
  * [SortOrder.entries] is pinned by a test precisely so a future edit cannot
  * quietly add that fourth entry ahead of M4 actually having a number to sort
  * by — see ARCHITECTURE.md §10.1 on inventing numbers that look measured.

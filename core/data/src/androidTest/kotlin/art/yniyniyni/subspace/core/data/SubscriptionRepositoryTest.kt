@@ -2,11 +2,16 @@
 package art.yniyniyni.subspace.core.data
 
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.db.SubscriptionDirectiveEntity
+import art.yniyniyni.subspace.core.data.db.SubscriptionEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -29,14 +34,77 @@ class SubscriptionRepositoryTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             SubspaceDatabase::class.java,
         ).build()
-        repository = SubscriptionRepository(db.subscriptionDao(), ProfileRepository(db.profileDao()))
+        repository = SubscriptionRepository(db.subscriptionDao(), ProfileRepository(db.profileDao()), db)
     }
 
     @After fun tearDown() = db.close()
 
+    /**
+     * `add` used to commit the group and the subscription as two independent writes, so a failure
+     * or a cancellation between them left a `source = "SUBSCRIPTION"` group with no subscription:
+     * a row the Servers screen lists but which cannot be refreshed, opened or deleted as a
+     * subscription. The foreign key cannot undo it — it cascades group -> subscription, never the
+     * other way.
+     *
+     * The failure is a real foreign-key violation on the real schema rather than a mock, so what
+     * rolls back is genuine SQLite rollback and not a stubbed approximation of it.
+     *
+     * Honest about what this does and does not cover: it drives the transaction directly rather
+     * than through `add`, because `add`'s own failure window is not reachable from a test. The
+     * URL lookup returns early for a duplicate and the `Mutex` serialises the callers who could
+     * otherwise race into the unique index, so there is no input that makes `add` fail *between*
+     * its two writes. What is asserted is the property `add` now depends on — a group inserted
+     * earlier in the transaction does not survive a later failure in it — plus, in the sibling
+     * test below, that concurrent `add`s really do produce one subscription and one group.
+     */
+    @Test
+    fun aFailedSubscriptionInsertLeavesNoOrphanGroup() = runTest {
+        val groupsBefore = db.profileDao().observeGroups().first().size
+
+        // The group insert succeeds and the subscription insert then violates its foreign key, in
+        // one transaction — the exact shape `add` performs. Room's own rollback is what has to
+        // take the group with it.
+        runCatching {
+            db.withTransaction {
+                ProfileRepository(db.profileDao()).createGroup("Doomed", source = "SUBSCRIPTION")
+                db.subscriptionDao().insertSubscription(
+                    SubscriptionEntity(
+                        groupId = 999_999L, // no such group — FK violation
+                        url = "https://example.com/sub",
+                        userAgentOverride = null,
+                        hwidEnabled = true,
+                        lastFetchedAt = null,
+                        lastAttemptedAt = null,
+                        lastFetchStatus = null,
+                        lastFetchDetail = null,
+                        createdAt = 0L,
+                    ),
+                )
+            }
+        }.isFailure shouldBe true
+
+        val groups = db.profileDao().observeGroups().first()
+        groups.none { it.name == "Doomed" } shouldBe true
+        groups.size shouldBe groupsBefore
+        repository.observeSubscriptions().first().shouldBeEmpty()
+    }
+
+    @Test
+    fun addingTheSameUrlConcurrentlyCreatesExactlyOneSubscriptionAndOneGroup() = runTest {
+        val url = "https://example.com/sub"
+
+        val results =
+            (1..8).map { async { repository.add(url, name = "Provider $it") } }.awaitAll()
+
+        results.map { it.id }.distinct().size shouldBe 1
+        results.count { it.created } shouldBe 1
+        repository.observeSubscriptions().first().size shouldBe 1
+        db.profileDao().observeGroups().first().count { it.source == "SUBSCRIPTION" } shouldBe 1
+    }
+
     @Test
     fun addingASubscriptionCreatesASubscriptionSourcedGroup() = runTest {
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
 
         val stored = repository.observeSubscriptions().first().single()
         stored.id shouldBe id
@@ -51,8 +119,8 @@ class SubscriptionRepositoryTest {
 
     @Test
     fun addingTheSameUrlTwiceReturnsTheExistingSubscription() = runTest {
-        val first = repository.add("https://example.com/sub", name = "Provider")
-        val second = repository.add("https://example.com/sub", name = "Provider Again")
+        val first = repository.add("https://example.com/sub", name = "Provider").id
+        val second = repository.add("https://example.com/sub", name = "Provider Again").id
 
         second shouldBe first
         repository.observeSubscriptions().first().size shouldBe 1
@@ -60,7 +128,7 @@ class SubscriptionRepositoryTest {
 
     @Test
     fun theProviderValueIsEffectiveWhenNothingIsPinned() = runTest {
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
         db.subscriptionDao().putDirectives(
             listOf(SubscriptionDirectiveEntity(id, "profile-update-interval", "6", 0)),
         )
@@ -77,7 +145,7 @@ class SubscriptionRepositoryTest {
         // Spec D3's UI consequence: "provider suggests 6 h, you pinned 24 h"
         // must be renderable, or a pinned field looks like a subscription that
         // stopped updating.
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
         db.subscriptionDao().putDirectives(
             listOf(SubscriptionDirectiveEntity(id, "profile-update-interval", "6", 0)),
         )
@@ -92,7 +160,7 @@ class SubscriptionRepositoryTest {
 
     @Test
     fun aPinSurvivesADirectiveUpdateCarryingADifferentValue() = runTest {
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
         repository.pin(id, "profile-update-interval", "24")
 
         db.subscriptionDao().putDirectives(
@@ -104,7 +172,7 @@ class SubscriptionRepositoryTest {
 
     @Test
     fun unpinningFallsBackToTheProviderValue() = runTest {
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
         db.subscriptionDao().putDirectives(
             listOf(SubscriptionDirectiveEntity(id, "profile-update-interval", "6", 0)),
         )
@@ -116,7 +184,7 @@ class SubscriptionRepositoryTest {
 
     @Test
     fun theDefaultAppliesOnlyWhenThereIsNoProviderValueAndNoPin() = runTest {
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
 
         val effective = repository.effective(id, "profile-update-interval", default = "12")
 
@@ -128,7 +196,7 @@ class SubscriptionRepositoryTest {
     @Test
     fun deletingASubscriptionRemovesItsGroupAndItsServers() = runTest {
         // §A.1: deletion must cascade.
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
         val groupId = repository.observeSubscriptions().first().single().groupId
 
         repository.delete(id)
@@ -139,7 +207,7 @@ class SubscriptionRepositoryTest {
 
     @Test
     fun theHwidTogglePersists() = runTest {
-        val id = repository.add("https://example.com/sub", name = "Provider")
+        val id = repository.add("https://example.com/sub", name = "Provider").id
 
         repository.setHwidEnabled(id, false)
 
@@ -149,7 +217,7 @@ class SubscriptionRepositoryTest {
     @Test
     fun refreshScheduleChangesReEmitWhenAnIntervalPinLands() {
         runBlocking {
-            val id = repository.add("https://example.com/sub", name = "Provider")
+            val id = repository.add("https://example.com/sub", name = "Provider").id
 
             withTimeout(REEMIT_TIMEOUT_MS) {
                 val emissions = Channel<Unit>(Channel.UNLIMITED)
@@ -189,7 +257,7 @@ class SubscriptionRepositoryTest {
     @Test
     fun observeEffectiveReEmitsWhenAPinLands() {
         runBlocking {
-            val id = repository.add("https://example.com/sub", name = "Provider")
+            val id = repository.add("https://example.com/sub", name = "Provider").id
             db.subscriptionDao().putDirectives(
                 listOf(SubscriptionDirectiveEntity(id, "profile-update-interval", "6", 0)),
             )

@@ -11,17 +11,14 @@ class SettingsHwidTest {
         SettingsState().hwidEnabled shouldBe true
     }
 
-    @Test
-    fun displayedHwidIsTheValueThatWouldBeSent() {
-        SettingsState(hwid = "abc123").hwid shouldBe "abc123"
-    }
-
-    @Test
-    fun hwidIsNeverTruncatedForDisplay() {
-        val full = "K7dQ2mX9pL4nR8vT1yU3wA6sD5fG0hJ2kZ9xC4vB7nM"
-
-        SettingsState(hwid = full).hwid shouldBe full
-    }
+    // Two tests used to sit here — `displayedHwidIsTheValueThatWouldBeSent` and
+    // `hwidIsNeverTruncatedForDisplay` — each of which constructed SettingsState(hwid = x) and
+    // read `.hwid` straight back. `hwid` is a plain constructor val, so both were tautologies on
+    // Kotlin's data-class generation: they invoked no production code and would have stayed green
+    // with the entire HWID feature deleted. Their names claimed coverage of what is *sent* and of
+    // *display*, neither of which they touched. The real coverage lives where the behaviour does:
+    // SettingsHwidLayoutTest asserts the value renders untruncated on one line, and
+    // SubscriptionFetcherTest asserts the same value reaches the x-hwid header.
 
     @Test
     fun hwidIsRedactedFromDiagnosticStringification() {

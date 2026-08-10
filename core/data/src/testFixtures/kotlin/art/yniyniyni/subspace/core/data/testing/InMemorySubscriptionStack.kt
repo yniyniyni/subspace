@@ -43,7 +43,7 @@ public class InMemorySubscriptionStack(
     private val profiles = ProfileRepository(db.profileDao())
     private val settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
 
-    public val repository: SubscriptionRepository = SubscriptionRepository(db.subscriptionDao(), profiles)
+    public val repository: SubscriptionRepository = SubscriptionRepository(db.subscriptionDao(), profiles, db)
     public val syncer: SubscriptionSyncer =
         SubscriptionSyncer(
             db.subscriptionDao(),

@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import art.yniyniyni.subspace.sync.RefreshScheduler
+import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,19 +41,27 @@ private fun isMainProcess(): Boolean = !currentProcessName().endsWith(":bg")
 
 @HiltAndroidApp
 class SubspaceApplication : Application(), Configuration.Provider {
-    // Declaration order matters and is not enforced by the compiler: Hilt's generated
-    // member-injector assigns fields in the order they're declared, and RefreshScheduler's
-    // injected WorkManager is bound via WorkManager.getInstance(context) (WorkManagerModule),
-    // which reads workManagerConfiguration — and therefore hiltWorkerFactory — the first time
-    // it's called. hiltWorkerFactory must stay declared above refreshScheduler; swapping them
-    // (or a Hilt codegen change that stops honouring declaration order) surfaces as a
-    // `lateinit property hiltWorkerFactory has not been initialized` crash on launch, not a
-    // compile error.
     @Inject
     lateinit var hiltWorkerFactory: HiltWorkerFactory
 
+    /**
+     * Deliberately [Lazy], and this is a correctness requirement rather than a performance one.
+     *
+     * Constructing [RefreshScheduler] eagerly resolves its `WorkManager` binding, whose provider
+     * calls `WorkManager.getInstance(context)`; that reads [workManagerConfiguration] on first
+     * access, which dereferences [hiltWorkerFactory]. An eager field made that whole chain run
+     * *during* member injection, so startup only worked because Hilt's generated injector happens
+     * to assign fields in declaration order and this field happens to be declared second. A
+     * reorder — or a codegen change, or a second eager dependency that reaches WorkManager first —
+     * turns into `lateinit property hiltWorkerFactory has not been initialized` at launch, not a
+     * compile error.
+     *
+     * [Lazy] moves the resolution to the first `get()` inside [onCreate], after `super.onCreate()`
+     * has finished injecting. The invariant worth remembering: **nothing may call
+     * `WorkManager.getInstance` while this class's member injection is still in progress.**
+     */
     @Inject
-    internal lateinit var refreshScheduler: RefreshScheduler
+    internal lateinit var refreshScheduler: Lazy<RefreshScheduler>
 
     // Owned by this Application instance, not GlobalScope (§12) — it lives exactly as long as the
     // process does, which is what the launch-time refresh below needs.
@@ -67,8 +76,12 @@ class SubspaceApplication : Application(), Configuration.Provider {
         // Only in :main (see isMainProcess's KDoc) — :bg is TunnelService's process and has no
         // business refreshing subscriptions or touching WorkManager.
         if (isMainProcess()) {
-            applicationScope.launch { refreshScheduler.rescheduleOnChanges() }
-            registerActivityLifecycleCallbacks(ForegroundCallbacks(::onMovedToForeground))
+            // Resolved here, after super.onCreate() completed member injection — see the field's
+            // own KDoc. Captured once so the two call sites cannot disagree about which instance
+            // they are talking to.
+            val scheduler = refreshScheduler.get()
+            applicationScope.launch { scheduler.rescheduleOnChanges() }
+            registerActivityLifecycleCallbacks(ForegroundCallbacks { onMovedToForeground(scheduler) })
         }
     }
 
@@ -89,12 +102,12 @@ class SubspaceApplication : Application(), Configuration.Provider {
      * NonCancellable internally, so this holds even if [applicationScope] were cancelled
      * mid-refresh.
      */
-    private fun onMovedToForeground() {
+    private fun onMovedToForeground(scheduler: RefreshScheduler) {
         applicationScope.launch {
             try {
-                refreshScheduler.refreshDue(onOpen = true)
+                scheduler.refreshDue(onOpen = true)
             } finally {
-                refreshScheduler.reschedule()
+                scheduler.reschedule()
             }
         }
     }

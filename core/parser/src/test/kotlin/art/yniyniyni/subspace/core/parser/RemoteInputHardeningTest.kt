@@ -2,7 +2,6 @@
 package art.yniyniyni.subspace.core.parser
 
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import org.junit.Test
 
 /**
@@ -41,13 +40,18 @@ class RemoteInputHardeningTest {
 
     @Test
     fun `a BOM before Clash YAML still routes to the Clash branch`() {
-        val yaml = bom + "proxies:\n  - {name: a, type: vless, server: h, port: 443, uuid: u}"
+        val yaml =
+            bom + "proxies:\n  - {name: a, type: vless, server: example.com, port: 443, " +
+                "uuid: 11111111-1111-1111-1111-111111111111}"
 
-        // The failure, if any, must not be "malformed base64" — that would mean
-        // detection sent it down the wrong branch entirely (§10.4).
-        SubscriptionParser.parse(yaml).failures.forEach {
-            it.reason shouldNotBe ParseFailureReason.MalformedBase64
-        }
+        // Assert the positive outcome, not the absence of one wrong reason. The previous version
+        // of this test asserted only `reason != MalformedBase64` over `failures`, which could not
+        // fail: with the BOM strip deleted, `looksLikeClash` misses, the text is not JSON, base64
+        // decoding returns null, and `looksLikeBlob` is false because the fixture contains
+        // whitespace — so it lands in `parseLinkList`, which never emits MalformedBase64 at all.
+        // The one reason it excluded was the one reason the broken path could not produce, and
+        // `forEach` over an empty list asserts nothing either way.
+        SubscriptionParser.parse(yaml).profiles.size shouldBe 1
     }
 
     @Test

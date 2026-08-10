@@ -8,9 +8,11 @@ import java.util.Base64
  * The device identifier sent as `x-hwid` on subscription requests.
  *
  * ARCHITECTURE.md §A.4.1: when a provider enables the device limit the client
- * **must** send this header — Remnawave returns 404 without it and there is no
- * graceful degradation. Behind an interface so tests and the fetcher never
- * touch `Settings.Secure` directly.
+ * **must** send this header — without it the subscription cannot be added or refreshed at all,
+ * and there is no graceful degradation. The refusal arrives as a 200 with an empty body and the
+ * marker headers, not as an error status; this comment used to say 404, which is the belief that
+ * cost M4 a defect. Behind an interface so tests and the fetcher never touch `Settings.Secure`
+ * directly.
  */
 public fun interface HwidProvider {
     public fun hwid(): String

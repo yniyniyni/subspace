@@ -164,7 +164,19 @@ Rules:
   depend on it — `:feature:*`, `:service` and `:app` reach fetching through that
   module's repository, like every other data source.
 - `:core:data` may depend on `:core:parser` and `:core:network`. It is the only
-  module that depends on either.
+  module that may depend on **`:core:network`** — that restriction is the one
+  `checkModuleBoundaries` enforces, and the one that matters, because
+  `:core:network` is the I/O boundary and everything upstream of it must reach
+  fetching through a repository.
+
+  `:core:parser` is deliberately *not* restricted that way: it is a pure,
+  side-effect-free library, and `:core:xray`, `:feature:home` and
+  `:feature:profiles` legitimately depend on it — a feature module
+  canonicalising a user-entered pin against `DirectiveRegistry` is using the
+  same validation the data layer uses, not reaching around it. An earlier
+  version of this bullet claimed `:core:data` was the only module depending on
+  *either*, which was simply false when written: three modules already declared
+  `:core:parser` and the checker never enforced it.
 
 ---
 
@@ -945,9 +957,16 @@ not work with those providers at all. Split the surface accordingly.
 ### A.4.1 HWID headers — required, build in Tier 1
 
 When a provider enables the device limit, the client **must** send an HWID
-header on the subscription request. Remnawave returns **404** when the
-header is missing — the user simply cannot add or refresh the subscription.
-There is no graceful degradation. This is not an optional nicety.
+header on the subscription request. Without it the user simply cannot add or
+refresh the subscription — there is no graceful degradation, and this is not an
+optional nicety.
+
+What the refusal *looks like* is covered below, and it is not what this
+paragraph originally claimed. Remnawave does **not** answer with a 404: it
+returns an ordinary **200** carrying an empty body and the marker headers.
+Believing the 404 story cost M4 a defect in shipped code — see "Neither
+condition arrives as an error status" further down this section, which is the
+authoritative version.
 
 Headers sent on the subscription request:
 

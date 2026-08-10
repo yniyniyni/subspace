@@ -60,6 +60,16 @@ public data class StoredProfile(
      */
     val droppedFromSubscriptionAt: Long? = null,
 ) {
+    // §5.6: this is the type that crosses out of :core:data carrying a server address, an
+    // Outbound (UUID and REALITY key material) and the raw config, so the redaction has to hold
+    // here as well as on the entity it was mapped from — exactly the reasoning StoredSubscription
+    // already applies to its URL.
+    override fun toString(): String =
+        "StoredProfile(id=$id, groupId=$groupId, kind=$kind, name=$name, protocol=$protocol, " +
+            "address=<redacted>, port=$port, transport=$transport, outbound=<redacted>, " +
+            "rawJson=<redacted>, lastConnectedAt=$lastConnectedAt, lastError=$lastError, " +
+            "droppedFromSubscriptionAt=$droppedFromSubscriptionAt)"
+
     /** RAW_JSON runs through the typed projection in M3 (§6). */
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
 

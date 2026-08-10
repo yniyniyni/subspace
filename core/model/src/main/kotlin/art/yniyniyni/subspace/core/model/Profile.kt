@@ -43,6 +43,13 @@ public sealed interface Outbound {
     public val port: Int
 }
 
+// §5.6: server addresses, UUIDs, passwords and REALITY key material are secrets, and these five
+// classes are where they actually live. Kotlin generates a toString() that prints every one of them
+// verbatim, so a single `Log.d("$outbound")` — or any exception message that interpolates a profile
+// — leaks the whole credential set. `:core:data` already guards its own entities this way; these
+// were missed, which left the redaction one careless string template away from being bypassed by
+// the classes holding the most sensitive fields of all. Port and transport shape stay visible:
+// they are what makes a redacted line still useful for debugging.
 public data class VlessOutbound(
     override val address: String,
     override val port: Int,
@@ -50,7 +57,9 @@ public data class VlessOutbound(
     /** XTLS flow control, e.g. `xtls-rprx-vision`. Null when unset. */
     val flow: String?,
     val stream: StreamSettings,
-) : Outbound
+) : Outbound {
+    override fun toString(): String = "VlessOutbound(port=$port, flow=$flow, stream=$stream, secrets=<redacted>)"
+}
 
 public data class VmessOutbound(
     override val address: String,
@@ -61,14 +70,18 @@ public data class VmessOutbound(
     /** `auto`, `aes-128-gcm`, `chacha20-poly1305`, `none`. */
     val security: String,
     val stream: StreamSettings,
-) : Outbound
+) : Outbound {
+    override fun toString(): String = "VmessOutbound(port=$port, alterId=$alterId, secrets=<redacted>)"
+}
 
 public data class TrojanOutbound(
     override val address: String,
     override val port: Int,
     val password: String,
     val stream: StreamSettings,
-) : Outbound
+) : Outbound {
+    override fun toString(): String = "TrojanOutbound(port=$port, stream=$stream, secrets=<redacted>)"
+}
 
 public data class ShadowsocksOutbound(
     override val address: String,
@@ -76,14 +89,18 @@ public data class ShadowsocksOutbound(
     /** e.g. `aes-256-gcm`, `chacha20-ietf-poly1305`, `2022-blake3-aes-256-gcm`. */
     val method: String,
     val password: String,
-) : Outbound
+) : Outbound {
+    override fun toString(): String = "ShadowsocksOutbound(port=$port, method=$method, secrets=<redacted>)"
+}
 
 public data class SocksOutbound(
     override val address: String,
     override val port: Int,
     val username: String?,
     val password: String?,
-) : Outbound
+) : Outbound {
+    override fun toString(): String = "SocksOutbound(port=$port, secrets=<redacted>)"
+}
 
 public data class StreamSettings(
     /** Xray transport: `tcp`, `ws`, `grpc`, … M1 exercises `tcp`. */

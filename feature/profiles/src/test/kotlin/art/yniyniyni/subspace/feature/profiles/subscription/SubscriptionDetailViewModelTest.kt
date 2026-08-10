@@ -57,6 +57,7 @@ class SubscriptionDetailViewModelTest {
         var syncCalls = 0
             private set
         var syncGate: CompletableDeferred<Unit>? = null
+        var deleteGate: CompletableDeferred<Unit>? = null
         val syncStarted = CompletableDeferred<Unit>()
 
         override fun observeGroups(query: String, protocol: String?): Flow<List<ProfileGroup>> = groups
@@ -80,6 +81,7 @@ class SubscriptionDetailViewModelTest {
             return SyncResult.Synced(0, 0, 0, 0, 0)
         }
         override suspend fun deleteSubscription(id: Long) {
+            deleteGate?.await()
             deletedId = id
             subscriptions.value = emptyList()
         }
@@ -153,8 +155,18 @@ class SubscriptionDetailViewModelTest {
     @Test
     fun deleteMarksTheScreenAsDeletedOnlyAfterTheSourceDeletesIt() =
         runTest {
+            // "Only after" is an ordering claim, and asserting both facts after advanceUntilIdle()
+            // could not check it: a ViewModel that set deleted = true *before* awaiting
+            // deleteSubscription — the exact bug the name describes — passed identically. The gate
+            // holds the source mid-delete so the intermediate state is observable.
+            source.deleteGate = CompletableDeferred()
             viewModel.load(SUBSCRIPTION_ID)
             viewModel.onDelete()
+            advanceUntilIdle()
+
+            viewModel.state.value.deleted shouldBe false
+
+            source.deleteGate?.complete(Unit)
             advanceUntilIdle()
 
             source.deletedId shouldBe SUBSCRIPTION_ID
@@ -191,14 +203,34 @@ class SubscriptionDetailViewModelTest {
         }
 
     @Test
+    fun aValidUserAgentOverrideReachesTheSource() =
+        runTest {
+            // The positive case this file was missing entirely. Without it,
+            // `invalidUserAgentOverridesAreNotPersisted` below asserts that a field the fixtures
+            // never drive non-null is still null — which passes with onUserAgentOverrideChanged
+            // implemented as an empty body.
+            viewModel.load(SUBSCRIPTION_ID)
+            viewModel.onUserAgentOverrideChanged("v2rayNG/1.8.5")
+            advanceUntilIdle()
+
+            source.userAgentOverride shouldBe "v2rayNG/1.8.5"
+        }
+
+    @Test
     fun invalidUserAgentOverridesAreNotPersisted() =
         runTest {
+            // Starts from a *persisted* override, so "not persisted" means "the bad value did not
+            // replace the good one" rather than "the field is still at its initial null". The
+            // earlier version could not tell those apart.
             viewModel.load(SUBSCRIPTION_ID)
+            viewModel.onUserAgentOverrideChanged("v2rayNG/1.8.5")
+            advanceUntilIdle()
+
             viewModel.onUserAgentOverrideChanged("a".repeat(257))
             viewModel.onUserAgentOverrideChanged("Agent\nInjected")
             advanceUntilIdle()
 
-            source.userAgentOverride shouldBe null
+            source.userAgentOverride shouldBe "v2rayNG/1.8.5"
         }
 
     @Test

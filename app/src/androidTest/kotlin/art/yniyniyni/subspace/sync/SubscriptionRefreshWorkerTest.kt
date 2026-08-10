@@ -65,7 +65,7 @@ class SubscriptionRefreshWorkerTest {
             // lastAttemptedAt advances on failure by design — each subscription then waited a full
             // interval before retrying. At the 12h default that is half a day of staleness bought
             // by one bad moment. Deferring on the constraint is what WorkManager is for.
-            stack.repository.add("https://example.com/sub", name = "Constrained")
+            stack.repository.add("https://example.com/sub", name = "Constrained").id
             val scheduler = RefreshScheduler(WorkManager.getInstance(context), stack.repository, stack.syncer)
 
             scheduler.reschedule()
@@ -122,7 +122,7 @@ class SubscriptionRefreshWorkerTest {
                     },
                 )
             try {
-                hangingStack.repository.add("https://example.com/sub", name = "Cancel me mid-fetch")
+                hangingStack.repository.add("https://example.com/sub", name = "Cancel me mid-fetch").id
                 val scheduler =
                     RefreshScheduler(
                         WorkManager.getInstance(context),
@@ -175,7 +175,7 @@ class SubscriptionRefreshWorkerTest {
     @Test
     fun aSubscriptionThatOptsOutOfOpenRefreshIsSkippedOnlyOnTheOpenTrigger() =
         runTest {
-            val id = stack.repository.add("https://example.com/sub", name = "Open-disabled")
+            val id = stack.repository.add("https://example.com/sub", name = "Open-disabled").id
             stack.repository.pin(id, "subscription-auto-update-open-enable", "false")
             val scheduler = RefreshScheduler(WorkManager.getInstance(context), stack.repository, stack.syncer)
 
@@ -203,7 +203,7 @@ class SubscriptionRefreshWorkerTest {
     @Test
     fun theOpenTriggerSyncsASubscriptionThatIsNowhereNearDue() =
         runTest {
-            val id = stack.repository.add("https://example.com/sub", name = "Not due for a day")
+            val id = stack.repository.add("https://example.com/sub", name = "Not due for a day").id
             stack.repository.pin(id, "profile-update-interval", "24")
 
             // A first sync stamps lastAttemptedAt, putting the next interval-driven refresh a full
@@ -228,7 +228,7 @@ class SubscriptionRefreshWorkerTest {
     @Test
     fun theOpenTriggerDoesNotRefetchOnEveryAppSwitch() =
         runTest {
-            val id = stack.repository.add("https://example.com/sub", name = "Bounced in and out")
+            val id = stack.repository.add("https://example.com/sub", name = "Bounced in and out").id
 
             scheduler.refreshDue(onOpen = true)
             val firstAttempt =

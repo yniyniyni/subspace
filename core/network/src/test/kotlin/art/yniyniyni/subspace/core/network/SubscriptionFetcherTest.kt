@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.core.network
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
@@ -216,9 +217,23 @@ class SubscriptionFetcherTest {
     }
 
     @Test
-    fun `no failure carries the url or the body`() {
-        // §5.6. FetchFailure is an enum with no payload, so this is structural.
-        FetchFailure.entries.forEach { it.name.contains("http") shouldBe false }
+    fun `a failure never carries the url, the host or the body`() = runTest {
+        // This test used to assert `FetchFailure.entries.forEach { it.name.contains("http") ==
+        // false }` — enum *constant names*, which cannot fail short of someone declaring a member
+        // called `httpSomething`. Its comment justified that with "FetchFailure is an enum with no
+        // payload, so this is structural", and that premise stopped being true when
+        // FetchOutcome.Failed gained a free-text `detail`. The invariant worth guarding is that
+        // the payload which now exists cannot carry any of it.
+        val host = "leak-canary-9f3a1c.example"
+        server.enqueue(MockResponse(code = 500, body = "vless://11111111-1111-1111-1111-111111111111@$host:443"))
+
+        val outcome = fetcher().fetch(request())
+
+        outcome.shouldBeInstanceOf<FetchOutcome.Failed>()
+        val rendered = outcome.toString() + outcome.detail.orEmpty()
+        rendered shouldNotContain host
+        rendered shouldNotContain "vless://"
+        rendered shouldNotContain server.url("/sub").toString()
     }
 
     @Test

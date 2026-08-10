@@ -13,13 +13,26 @@ package art.yniyniyni.subspace.core.network
  * members are the entire reason this type is not a boolean.
  */
 public enum class FetchFailure {
-    /** 404 with `x-hwid-not-supported` — the subscription needs a device ID. */
+    /**
+     * `x-hwid-not-supported` — the subscription needs a device ID.
+     *
+     * Classified on the header alone, **never** on the status: Remnawave answers a device-limit
+     * refusal with an ordinary 200 and an empty body (§A.4.1). Requiring a 404 here, as this
+     * comment once described, made the outcome unreachable in production and reported a
+     * device-limited fetch as an empty server list.
+     */
     HwidRequired,
 
-    /** 404 without it — a wrong URL. A different problem with a different fix. */
+    /** A 404 with no HWID marker — a wrong URL. A different problem with a different fix. */
     NotFound,
 
-    /** `x-hwid-max-devices-reached` or `x-hwid-limit` — at the device cap. */
+    /**
+     * `x-hwid-max-devices-reached` — at the device cap.
+     *
+     * Not `x-hwid-limit`, despite the name. That one is a fixed v2rayTUN compatibility marker the
+     * panel sets whenever HWID enforcement is engaged, including on successful responses; reading
+     * it as "limit reached" turned every fetch from such a panel into a spurious failure (§A.4.1).
+     */
     DeviceLimitReached,
 
     Unreachable,

@@ -78,7 +78,7 @@ class SubscriptionSyncerTest {
             SubspaceDatabase::class.java,
         ).build()
         profiles = ProfileRepository(db.profileDao())
-        subscriptions = SubscriptionRepository(db.subscriptionDao(), profiles)
+        subscriptions = SubscriptionRepository(db.subscriptionDao(), profiles, db)
         settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
         responseForRequest = { response }
     }
@@ -86,7 +86,7 @@ class SubscriptionSyncerTest {
     @After fun tearDown() = db.close()
 
     private suspend fun addSubscription() =
-        subscriptions.add("https://example.com/sub", name = "Provider")
+        subscriptions.add("https://example.com/sub", name = "Provider").id
 
     @Test
     fun aFirstSyncInsertsEveryServer() = runTest {

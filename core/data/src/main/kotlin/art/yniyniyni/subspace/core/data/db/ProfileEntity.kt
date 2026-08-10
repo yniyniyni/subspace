@@ -78,4 +78,16 @@ internal data class ProfileEntity(
     val createdAt: Long,
     val subscriptionKey: String? = null,
     val droppedFromSubscriptionAt: Long? = null,
-)
+) {
+    // §5.6, same structural guard the subscription entities carry: address, outbound and rawJson
+    // are the server address, the serialized credential set (UUID, REALITY key material) and the
+    // raw config. subscriptionKey is derived from provider-supplied fields and is redacted with
+    // them; identityHash is a hash, and ids, kind, protocol, port and timestamps are shape rather
+    // than content, so they stay readable — a redacted line still has to be useful.
+    override fun toString(): String =
+        "ProfileEntity(id=$id, groupId=$groupId, kind=$kind, identityHash=$identityHash, " +
+            "name=$name, protocol=$protocol, address=<redacted>, port=$port, " +
+            "transport=$transport, outbound=<redacted>, rawJson=<redacted>, position=$position, " +
+            "lastConnectedAt=$lastConnectedAt, lastError=$lastError, createdAt=$createdAt, " +
+            "subscriptionKey=<redacted>, droppedFromSubscriptionAt=$droppedFromSubscriptionAt)"
+}

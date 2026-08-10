@@ -58,7 +58,8 @@ internal const val SERVERS_UPDATE_RESULT_TEST_TAG = "servers-update-result"
  * Search and protocol filtering run in SQL over [art.yniyniyni.subspace.core.data.db.ProfileEntity]'s
  * shadow columns ([ServersViewModel]), not by deserializing every row in
  * memory. Sort ([SortOrder]) has only three entries — a "Fastest" order needs
- * a real latency measurement, and latency testing is M4, so it is absent
+ * a real latency measurement, and latency testing is M4.5 (it was M4 when this
+ * was written, before the M4/M4.5 split), so it is absent
  * rather than backed by an invented number (ARCHITECTURE.md §10.1).
  *
  * The empty state and every group's overflow "Add profile" item open

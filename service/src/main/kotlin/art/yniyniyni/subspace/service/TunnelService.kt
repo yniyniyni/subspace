@@ -10,13 +10,22 @@ import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
+import art.yniyniyni.subspace.core.model.LatencyOptions
+import art.yniyniyni.subspace.core.model.LatencyOutcome
+import art.yniyniyni.subspace.core.model.LatencyResult
+import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
 import art.yniyniyni.subspace.core.xray.ConfigResult
+import art.yniyniyni.subspace.core.xray.LibXrayPingApi
+import art.yniyniyni.subspace.core.xray.ProxyHeadProbe
 import art.yniyniyni.subspace.core.xray.SocketProtector
+import art.yniyniyni.subspace.core.xray.TcpProbe
+import art.yniyniyni.subspace.core.xray.TcpSocketProtector
 import art.yniyniyni.subspace.core.xray.TunnelSettings
 import art.yniyniyni.subspace.core.xray.XrayConfigGenerator
 import art.yniyniyni.subspace.core.xray.XrayController
@@ -98,6 +107,24 @@ class TunnelService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
     private val callbacks = RemoteCallbackList<ITunnelCallback>()
+
+    /**
+     * Latency measurement lives in `:bg` because §5.1's protector does.
+     *
+     * `by lazy` rather than an initialiser: it captures [scope] and reaches
+     * [profileRepository], which Hilt field-injects during `super.onCreate()`.
+     * A measurement run is also the one thing this service does that needs no
+     * TUN, no VPN permission and no foreground notification — `onBind` hands out
+     * this binder for any action but `SERVICE_INTERFACE`, so `:main` can bind,
+     * measure, and unbind while disconnected.
+     */
+    private val latencyRunner by lazy {
+        LatencyRunner<StoredProfile>(
+            measure = { profile, options -> measureOne(profile, options) },
+            loadProfile = { id -> profileRepository.profile(id) },
+            scope = scope,
+        )
+    }
 
     private val lock = Any()
 
@@ -556,6 +583,47 @@ class TunnelService : VpnService() {
         super.onDestroy()
     }
 
+    // ── Latency measurement ─────────────────────────────────────────────────
+
+    /**
+     * Measures one server, in whichever mode the run asked for.
+     *
+     * §5.1 is the whole reason this runs in `:bg`: this is the only place a live
+     * `VpnService` exists to protect the socket. While a session is up, an
+     * unprotected measurement is routed back into the TUN and times the server
+     * *through* the tunnel rather than timing the server. While no session is up
+     * `protect` is a harmless no-op — there is nothing to escape.
+     *
+     * `ping` builds its own core through libXray's `StartXray`, which never
+     * touches the `coreServer` singleton `runXray`/`stopXray` guard, so this does
+     * not disturb a running tunnel. That is read from upstream source and is the
+     * central claim the device checklist exists to confirm.
+     */
+    private suspend fun measureOne(
+        profile: StoredProfile,
+        options: LatencyOptions,
+    ): LatencyResult =
+        when (options.mode) {
+            PingMode.TCP ->
+                TcpProbe(protector = TcpSocketProtector { socket -> protect(socket) })
+                    .measure(profile.address, profile.port, options.timeoutSeconds)
+
+            PingMode.PROXY_HEAD -> {
+                val outbound = profile.outbound
+                if (outbound == null) {
+                    // A RAW_JSON row whose outbound could not be projected. Not a
+                    // network failure, and saying "unreachable" would send the user
+                    // looking for a problem with their server.
+                    LatencyResult.failed(LatencyOutcome.UNSUPPORTED)
+                } else {
+                    ProxyHeadProbe(LibXrayPingApi(), cacheDir).measure(
+                        Profile(id = profile.id.toString(), name = profile.name, outbound = outbound),
+                        options,
+                    )
+                }
+            }
+        }
+
     // ── IPC ─────────────────────────────────────────────────────────────────
 
     private val binder =
@@ -596,7 +664,54 @@ class TunnelService : VpnService() {
             override fun unregisterCallback(callback: ITunnelCallback) {
                 callbacks.unregister(callback)
             }
+
+            override fun startLatencyRun(
+                runId: Long,
+                profileIds: LongArray?,
+                options: LatencyOptionsParcel?,
+                callback: ILatencyCallback?,
+            ) {
+                // Any of the three being null means a caller on the other side of
+                // the binder sent something malformed. Nothing to report and
+                // nobody to report it to, so drop the run rather than guess.
+                val ids = profileIds
+                val resolved = options?.toOptions()
+                val target = callback
+                if (ids == null || resolved == null || target == null) {
+                    Log.w(TAG, "latency run refused: incomplete request")
+                    return
+                }
+                latencyRunner.start(
+                    runId = runId,
+                    profileIds = ids,
+                    options = resolved,
+                    onResult = { id, profileId, result ->
+                        deliverLatency { target.onResult(id, profileId, result.delayMillis, result.outcome.ordinal) }
+                    },
+                    onFinished = { id -> deliverLatency { target.onFinished(id) } },
+                )
+            }
+
+            override fun cancelLatencyRun(runId: Long) {
+                latencyRunner.cancel(runId)
+            }
         }
+
+    /**
+     * A dead `:main` is ordinary here, not an error — the user navigated away or
+     * the UI process was reclaimed while a measurement was still running. The
+     * exception is swallowed without its message for §5.6: a `DeadObjectException`
+     * from this path carries nothing useful, and logging binder failures around
+     * latency would produce a line per row on every backgrounded run.
+     */
+    @Suppress("SwallowedException")
+    private inline fun deliverLatency(send: () -> Unit) {
+        try {
+            send()
+        } catch (e: android.os.RemoteException) {
+            // :main went away. The run continues; nobody is listening.
+        }
+    }
 
     /**
      * The system binds with [SERVICE_INTERFACE] for always-on VPN and must get

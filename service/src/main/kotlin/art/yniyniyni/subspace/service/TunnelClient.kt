@@ -8,6 +8,9 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
 import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.model.LatencyOptions
+import art.yniyniyni.subspace.core.model.LatencyOutcome
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Profile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -120,6 +123,85 @@ public class TunnelClient @Inject constructor(
             service?.disconnect()
         } catch (e: android.os.RemoteException) {
             Log.e(TAG, "disconnect failed: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Held so the binder callback is not collected mid-run.
+     *
+     * `ILatencyCallback.Stub` is a strong reference only from here; a local would
+     * become unreachable as soon as [startLatencyRun] returned, and the results
+     * would stop arriving somewhere between the first and last row.
+     */
+    private var latencyCallback: ILatencyCallback.Stub? = null
+
+    /**
+     * Measures [profileIds] in `:bg`, reporting each result as it lands.
+     *
+     * Deliberately does **not** call `startForegroundService`, unlike [connect]:
+     * a measurement must not outlive the UI that asked for it, and it needs no
+     * TUN, no VPN permission and no notification. Binding alone is enough —
+     * `TunnelService.onBind` hands out the AIDL binder for any action other than
+     * `SERVICE_INTERFACE`.
+     *
+     * If nothing is bound yet the run is dropped and [onFinished] still fires, so
+     * the caller's rows return to idle instead of sitting on "testing" forever.
+     */
+    public fun startLatencyRun(
+        runId: Long,
+        profileIds: List<Long>,
+        options: LatencyOptions,
+        onResult: (Long, LatencyResult) -> Unit,
+        onFinished: () -> Unit,
+    ) {
+        val stub =
+            object : ILatencyCallback.Stub() {
+                override fun onResult(
+                    id: Long,
+                    profileId: Long,
+                    delayMillis: Int,
+                    outcome: Int,
+                ) {
+                    // Second fence, after :bg's own. A result stamped with a
+                    // superseded run must not overwrite a row the current run is
+                    // retesting — and an ordinal from a future version degrades to
+                    // a failure rather than throwing on an out-of-range index.
+                    if (id != runId) return
+                    val resolved = LatencyOutcome.entries.getOrNull(outcome) ?: LatencyOutcome.UNREACHABLE
+                    onResult(profileId, LatencyResult(delayMillis, resolved))
+                }
+
+                override fun onFinished(id: Long) {
+                    if (id == runId) onFinished()
+                }
+            }
+        latencyCallback = stub
+        val bound = service
+        if (bound == null) {
+            Log.w(TAG, "latency run dropped: not bound")
+            onFinished()
+            return
+        }
+        try {
+            bound.startLatencyRun(runId, profileIds.toLongArray(), LatencyOptionsParcel.from(options), stub)
+        } catch (e: android.os.RemoteException) {
+            Log.w(TAG, "latency run failed: ${e.javaClass.simpleName}")
+            onFinished()
+        }
+    }
+
+    /**
+     * Stops scheduling for [runId].
+     *
+     * Not instantaneous: a measurement already inside libXray's blocking ping
+     * finishes on its own. Callers put their rows back to idle rather than
+     * showing a result that never arrived.
+     */
+    public fun cancelLatencyRun(runId: Long) {
+        try {
+            service?.cancelLatencyRun(runId)
+        } catch (e: android.os.RemoteException) {
+            Log.w(TAG, "latency cancel failed: ${e.javaClass.simpleName}")
         }
     }
 }

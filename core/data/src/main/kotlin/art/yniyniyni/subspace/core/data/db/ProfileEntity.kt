@@ -25,6 +25,24 @@ import androidx.room.PrimaryKey
  * a single id — fine for re-import dedup, silent data loss at an upsert.
  *
  * [lastConnectedAt] and [lastError] are the only columns `:bg` writes.
+ *
+ * [subscriptionKey] is the provider's own identity for a server within its
+ * subscription, and it is what refresh keys on — **not** [identityHash]. The M3
+ * spec's handoff note is the reason: because [identityHash] covers the whole
+ * outbound, a provider changing a server's SNI produces a *new* row rather than
+ * an update, orphaning the old one along with its connection history. NULL for
+ * every hand-imported profile; SQLite treats NULLs as distinct in a unique
+ * index, so any number of manual rows coexist and only subscription-backed rows
+ * are constrained.
+ *
+ * [droppedFromSubscriptionAt] is spec D4's "kept and flagged" marker: set when
+ * a sync finds this row's [subscriptionKey] active (the tunnel is using it) but
+ * absent from the provider's response, so the row survives instead of being
+ * deleted. Null otherwise. Cleared back to null the moment the row's
+ * `subscriptionKey` reappears in a response — see
+ * `SubscriptionDao.upsertBySubscriptionKey`. Added directly to the v2 schema
+ * (Task 11 review fix) rather than as a v3 migration: v2 has not shipped, so
+ * there is no installed database whose migration path would need to change.
  */
 @Entity(
     tableName = "profiles",
@@ -38,6 +56,7 @@ import androidx.room.PrimaryKey
     ],
     indices = [
         Index(value = ["groupId", "identityHash"], unique = true),
+        Index(value = ["groupId", "subscriptionKey"], unique = true),
         Index(value = ["groupId", "position"]),
     ],
 )
@@ -57,4 +76,18 @@ internal data class ProfileEntity(
     val lastConnectedAt: Long?,
     val lastError: String?,
     val createdAt: Long,
-)
+    val subscriptionKey: String? = null,
+    val droppedFromSubscriptionAt: Long? = null,
+) {
+    // §5.6, same structural guard the subscription entities carry: address, outbound and rawJson
+    // are the server address, the serialized credential set (UUID, REALITY key material) and the
+    // raw config. subscriptionKey is derived from provider-supplied fields and is redacted with
+    // them; identityHash is a hash, and ids, kind, protocol, port and timestamps are shape rather
+    // than content, so they stay readable — a redacted line still has to be useful.
+    override fun toString(): String =
+        "ProfileEntity(id=$id, groupId=$groupId, kind=$kind, identityHash=$identityHash, " +
+            "name=$name, protocol=$protocol, address=<redacted>, port=$port, " +
+            "transport=$transport, outbound=<redacted>, rawJson=<redacted>, position=$position, " +
+            "lastConnectedAt=$lastConnectedAt, lastError=$lastError, createdAt=$createdAt, " +
+            "subscriptionKey=<redacted>, droppedFromSubscriptionAt=$droppedFromSubscriptionAt)"
+}

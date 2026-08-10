@@ -52,7 +52,24 @@ public data class StoredProfile(
     val rawJson: String?,
     val lastConnectedAt: Long?,
     val lastError: String?,
+    /**
+     * Spec D4's "kept and flagged" marker (Task 11 review fix, Important 4): non-null when this
+     * row's provider stopped offering it while it was the active profile, so it was kept rather
+     * than deleted. Part 2's UI is the intended reader — "no longer offered by this provider,
+     * since <this timestamp>" — nothing in `:core:data` reads it back.
+     */
+    val droppedFromSubscriptionAt: Long? = null,
 ) {
+    // §5.6: this is the type that crosses out of :core:data carrying a server address, an
+    // Outbound (UUID and REALITY key material) and the raw config, so the redaction has to hold
+    // here as well as on the entity it was mapped from — exactly the reasoning StoredSubscription
+    // already applies to its URL.
+    override fun toString(): String =
+        "StoredProfile(id=$id, groupId=$groupId, kind=$kind, name=$name, protocol=$protocol, " +
+            "address=<redacted>, port=$port, transport=$transport, outbound=<redacted>, " +
+            "rawJson=<redacted>, lastConnectedAt=$lastConnectedAt, lastError=$lastError, " +
+            "droppedFromSubscriptionAt=$droppedFromSubscriptionAt)"
+
     /** RAW_JSON runs through the typed projection in M3 (§6). */
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
 
@@ -173,13 +190,23 @@ internal constructor(
                 )
         }
 
-    /** Creates a new manual group, appended after every existing group. */
-    public suspend fun createGroup(name: String): Long {
+    /**
+     * Creates a new group, appended after every existing group.
+     *
+     * [source] defaults to `"MANUAL"` for every pre-existing caller.
+     * [SubscriptionRepository.add] (Task 10) passes `"SUBSCRIPTION"` instead,
+     * reusing this same insert rather than duplicating it — the M4 seam
+     * [ProfileGroupEntity]'s KDoc describes.
+     */
+    public suspend fun createGroup(
+        name: String,
+        source: String = GROUP_SOURCE_MANUAL,
+    ): Long {
         val position = dao.observeGroups().first().size
         return dao.insertGroup(
             ProfileGroupEntity(
                 name = name,
-                source = GROUP_SOURCE_MANUAL,
+                source = source,
                 position = position,
                 createdAt = System.currentTimeMillis(),
             ),
@@ -294,6 +321,17 @@ internal constructor(
      *   in its message, so it is caught and turned into a plain `false` here rather than
      *   let propagate: nothing above `:core:data` may see a config value inside a
      *   diagnostic (§5.6). `true` otherwise.
+     *
+     * **Undocumented until Task 11 review round 2, recorded now:** nothing stops [toGroupId]
+     * from being a subscription-sourced group. A hand-imported profile moved there keeps
+     * `subscriptionKey = null`, so `SubscriptionDao.subscriptionProfiles` — the query
+     * `SubscriptionSyncer.reconcile` diffs a response against — never sees it: it is not
+     * matched, not deleted, not protected the way a kept-active row's `identityHash` is. A
+     * later sync's insert or update can still collide with its `identityHash`, in which case
+     * `SubscriptionSyncer` catches the resulting `SQLiteConstraintException` and returns
+     * `SyncResult.ReconciliationConflict` — the sync fails cleanly rather than crashing — but
+     * the moved-in row itself is simply outside spec §6.5's reconciliation for as long as it
+     * stays in that group.
      */
     public suspend fun move(
         profileId: Long,
@@ -405,11 +443,17 @@ internal constructor(
             rawJson = rawJson,
             lastConnectedAt = lastConnectedAt,
             lastError = lastError,
+            droppedFromSubscriptionAt = droppedFromSubscriptionAt,
         )
 }
 
-/** The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`). */
-private fun Outbound.protocolName(): String =
+/**
+ * The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`).
+ *
+ * `internal`, not `private`: `SubscriptionSyncer` (Task 11) builds [ProfileEntity] rows from
+ * parsed [Profile]s the same way [import] does and reuses this rather than re-deriving it.
+ */
+internal fun Outbound.protocolName(): String =
     when (this) {
         is VlessOutbound -> "vless"
         is VmessOutbound -> "vmess"
@@ -425,8 +469,11 @@ private fun Outbound.protocolName(): String =
  * A **display** value only: it exists so search matches what the user can see, and nothing
  * ever reads it back into a config. [ShadowsocksOutbound] and [SocksOutbound] carry no
  * [art.yniyniyni.subspace.core.model.StreamSettings] at all — they summarise as plain `tcp`.
+ *
+ * `internal`, not `private`: shared with `SubscriptionSyncer` for the same reason as
+ * [protocolName].
  */
-private fun Outbound.transportSummary(): String {
+internal fun Outbound.transportSummary(): String {
     val stream =
         when (this) {
             is VlessOutbound -> stream

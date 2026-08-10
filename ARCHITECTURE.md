@@ -138,6 +138,7 @@ compile error.
 :app                    Application, DI wiring, navigation host
 :core:model             Pure Kotlin data classes. No Android imports.
 :core:data              Room, DataStore, repositories
+:core:network           HTTP: subscription fetch, HWID, User-Agent
 :core:parser            Subscription and share-link parsing. Pure, heavily tested.
 :core:ui                Design system: theme, tokens, shared Compose components
 :core:xray              Config JSON generation, libXray lifecycle wrapper
@@ -158,6 +159,24 @@ Rules:
   `:service` and `:core:parser` may not. It exists because `:feature:*` modules
   cannot depend on each other and `:app` sits downstream of them, so shared UI
   has nowhere else to live.
+- `:core:network` depends on `:core:model` only. It returns a body and a header
+  set; deciding what they mean belongs to `:core:parser`. Only `:core:data` may
+  depend on it — `:feature:*`, `:service` and `:app` reach fetching through that
+  module's repository, like every other data source.
+- `:core:data` may depend on `:core:parser` and `:core:network`. It is the only
+  module that may depend on **`:core:network`** — that restriction is the one
+  `checkModuleBoundaries` enforces, and the one that matters, because
+  `:core:network` is the I/O boundary and everything upstream of it must reach
+  fetching through a repository.
+
+  `:core:parser` is deliberately *not* restricted that way: it is a pure,
+  side-effect-free library, and `:core:xray`, `:feature:home` and
+  `:feature:profiles` legitimately depend on it — a feature module
+  canonicalising a user-entered pin against `DirectiveRegistry` is using the
+  same validation the data layer uses, not reaching around it. An earlier
+  version of this bullet claimed `:core:data` was the only module depending on
+  *either*, which was simply false when written: three modules already declared
+  `:core:parser` and the checker never enforced it.
 
 ---
 
@@ -474,6 +493,20 @@ Read this section twice.
 | Compose screens | Compose UI tests for state rendering |
 | Tunnel, DNS, per-app, network transitions | **Manual, on device, every time** |
 
+`:core:data`'s repositories (`ProfileRepository`, `SubscriptionRepository`,
+`SubscriptionSyncer`, ...) take their DAO/`SubspaceDatabase` dependencies
+through `internal` constructors on purpose — production code reaches them only
+through Hilt, never by hand. A test in a *different* module that legitimately
+needs a real instance (not a fake) over an in-memory database — introduced by
+Task 12's `SubscriptionRefreshWorkerTest` in `:app` — cannot call those
+constructors itself (`internal` does not cross a Gradle module boundary) and
+must not add a dependency on `:core:network` just to supply one constructor
+argument (§4: only `:core:data` may depend on it). `:core:data`'s `testFixtures`
+source set (`android { testFixtures { enable = true } }`) is the sanctioned
+way out: it compiles with the same access `:core:data`'s own `androidTest`
+has, and exposes only the already-public repository/syncer types outward. See
+`InMemorySubscriptionStack` in `core/data/src/testFixtures/`.
+
 Manual smoke checklist before any release:
 
 - [ ] Connect, load a page, verify exit IP changed
@@ -699,6 +732,23 @@ Same key set, two transports. Both must be supported. Boolean directives use
 `true` or `1` to enable; **any other non-empty value disables** (`0`,
 `false`, anything).
 
+**When a key arrives on both transports, the header wins**, and the body line
+is consumed rather than left for the config parser to choke on. M4's device run
+settled what was previously a §10.5 guess, in two parts:
+
+- **Remnawave never emits body directives at all.** Every directive is an HTTP
+  header (`getUserProfileHeadersInfo`), and none of the five body generators
+  — clash, mihomo, singbox, xray-json, xray — writes a `#` line. The conflict
+  cannot arise from this panel, which is what bounds the risk here.
+- **The implemented rule is header-wins**, verified end to end against a
+  response that set `profile-title` and `profile-update-interval` both ways:
+  the header value was the one stored *and* the one applied (the group took the
+  header's name), and the body lines were stripped from the config text.
+
+What remains unverified is only what a provider that emits *both* intends by
+it, since no such provider is known in the target set. Treat this as settled for
+Remnawave and as a documented, tested choice elsewhere — not as an upstream fact.
+
 ### Architectural consequences
 
 - The subscription fetcher is **not** a parser that returns a server list.
@@ -748,9 +798,9 @@ Mandatory rules:
 - [ ] Multi-subscription, multi-profile management, grouping, collapse/expand
 - [ ] Latency testing with selectable mode: `proxy` (GET), `proxy-head`,
       `tcp`, and a configurable check URL. **`icmp` is not implementable on
-      unrooted Android** — raw sockets require root. Either omit the mode or
-      shell out to `/system/bin/ping` and parse it, which is fragile across
-      OEMs. Recommendation: ship `tcp` and `proxy`, drop `icmp`.
+      unrooted Android** — raw sockets require root. M4 records the decision:
+      accept `proxy`, `proxy-head` and `tcp`; reject `icmp`. M4.5 owns the
+      latency implementation and must not revive the rejected mode.
 - [ ] Server sorting: as-delivered, by ping, alphabetical
 - [ ] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
 - [ ] Per-app proxy: off / include-list / bypass-list
@@ -907,9 +957,16 @@ not work with those providers at all. Split the surface accordingly.
 ### A.4.1 HWID headers — required, build in Tier 1
 
 When a provider enables the device limit, the client **must** send an HWID
-header on the subscription request. Remnawave returns **404** when the
-header is missing — the user simply cannot add or refresh the subscription.
-There is no graceful degradation. This is not an optional nicety.
+header on the subscription request. Without it the user simply cannot add or
+refresh the subscription — there is no graceful degradation, and this is not an
+optional nicety.
+
+What the refusal *looks like* is covered below, and it is not what this
+paragraph originally claimed. Remnawave does **not** answer with a 404: it
+returns an ordinary **200** carrying an empty body and the marker headers.
+Believing the 404 story cost M4 a defect in shipped code — see "Neither
+condition arrives as an error status" further down this section, which is the
+authoritative version.
 
 Headers sent on the subscription request:
 
@@ -934,7 +991,9 @@ Requirements:
       does not survive reinstall, which silently burns a slot from the
       user's device limit every time they reinstall — a support nightmare.
       Hash the value before sending so the raw platform ID never leaves the
-      device.
+      device. The panel accepts only `/^[a-zA-Z0-9=-]{10,64}$/`: standard
+      base64's `+` and `/`, and base64url's `_`, are therefore not valid wire
+      encodings even though they are common hash renderings.
 - [ ] Send it by default. Happ sends by default; Throne ships it as a
       toggle disabled by default and consequently breaks against
       limit-enabled providers out of the box.
@@ -951,11 +1010,28 @@ into distinct, actionable UI states rather than a generic fetch failure:
 | `x-hwid-active` | Always `true` when the device limit is on |
 | `x-hwid-not-supported` | `true` when the limit is on but the client sent no `x-hwid` |
 | `x-hwid-max-devices-reached` | `true` when the user is at their device cap |
-| `x-hwid-limit` | Duplicate of the above, kept for v2RayTun compatibility |
+| `x-hwid-limit` | **Not a failure signal.** A fixed v2RayTun compatibility marker, set whenever HWID enforcement is engaged — including on successful responses |
+
+`x-hwid-not-supported` and `x-hwid-max-devices-reached` are the only two
+signals; the panel makes them mutually exclusive. `x-hwid-limit` must never be
+read as "limit reached" despite its name: on one of the panel's two response
+paths that assignment sits outside the not-allowed branch, so it rides along on
+ordinary successes. M4 shipped a classifier that treated it as a failure and
+turned every fetch from such a panel into a spurious "device limit reached";
+this table's earlier "duplicate of the above" wording is what it was written
+against.
+
+**Neither condition arrives as an error status.** The panel answers a refused
+fetch with an ordinary `200` — empty body, or a fallback-remarks template when
+`isShowCustomRemarks` is on — plus the marker headers. Classify on the headers
+alone, never on the status. M4's first implementation keyed the HWID case off
+`404`, which made it unreachable in production; the device run caught it. §10.5
+applies to this whole table: it is now checked against the panel source
+(`subscription.service.ts`, `checkHwidDeviceLimit`), not inferred.
 
 "Device limit reached — remove a device in your account" and "this
 subscription requires HWID, enable it in settings" are different problems
-with different fixes. A 404 with no explanation is the worst outcome and is
+with different fixes. A refusal with no explanation is the worst outcome and is
 exactly what the user gets today from most clients.
 
 Remnawave can also return a **provider ID** in response headers, letting a

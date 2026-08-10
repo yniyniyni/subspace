@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.data
 
 import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SettingEntity
+import art.yniyniyni.subspace.core.network.HwidProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -13,6 +14,7 @@ import javax.inject.Singleton
 // table directly. No other module is meant to know these strings.
 private const val KEY_THEME = "theme"
 private const val KEY_ACTIVE_PROFILE = "active_profile_id"
+private const val KEY_HWID_ENABLED = "hwid_enabled"
 
 /** The app's display theme. */
 public enum class ThemePreference { System, Light, Dark }
@@ -29,6 +31,7 @@ public class SettingsRepository
 @Inject
 internal constructor(
     private val dao: SettingDao,
+    private val hwidProvider: HwidProvider,
 ) {
     /** The current theme preference, defaulting to [ThemePreference.System] until set. */
     public val theme: Flow<ThemePreference> =
@@ -58,5 +61,21 @@ internal constructor(
      */
     public suspend fun setActiveProfile(id: Long?) {
         dao.put(SettingEntity(key = KEY_ACTIVE_PROFILE, value = id?.toString().orEmpty()))
+    }
+
+    /** Whether the global Device ID header gate is enabled; defaults to on for provider compatibility. */
+    public val hwidEnabled: Flow<Boolean> =
+        dao.observe(KEY_HWID_ENABLED).map { stored ->
+            // A value this repository writes is always "true" or "false". Preserve the safe,
+            // compatible default if a hand-edited/future value cannot be interpreted.
+            stored?.toBooleanStrictOrNull() ?: true
+        }
+
+    /** The stable, hashed identifier the fetcher sends as `x-hwid`; never the raw Android ID. */
+    public fun hwid(): String = hwidProvider.hwid()
+
+    /** Sets the global Device ID gate. Individual subscriptions may still opt out separately. */
+    public suspend fun setHwidEnabled(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_HWID_ENABLED, value = enabled.toString()))
     }
 }

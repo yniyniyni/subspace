@@ -28,7 +28,7 @@ private val LIST_TOP_PADDING = 8.dp
 private val GROUP_GAP = 8.dp
 
 /**
- * [ServersGroupList]'s five callbacks, grouped for the same reason
+ * [ServersGroupList]'s callbacks, grouped for the same reason
  * [ServersActions] is.
  */
 internal data class ServersGroupListActions(
@@ -39,6 +39,20 @@ internal data class ServersGroupListActions(
     val onProfileSelected: (Long) -> Unit,
     /** Task 21: the row's edit icon — opens `Editor(profileId)`, distinct from [onProfileSelected]. */
     val onProfileEdit: (Long) -> Unit,
+    /**
+     * Fix round, Important 1: `GroupCard`'s Update button — runs one sync of
+     * the subscription id [ServersGroup.subscriptionId] names. Only ever
+     * invoked for a `SUBSCRIPTION` group, since [subscriptionId] is null for
+     * a `MANUAL` one and the call site below never builds a `GroupCard`
+     * `onUpdate` lambda in that case.
+     */
+    val onUpdateSubscription: (Long) -> Unit,
+    /**
+     * Task 15: `GroupCard`'s "Subscription details" overflow item — opens
+     * `SubscriptionDetail(subscriptionId)`. Same "only ever invoked for a
+     * `SUBSCRIPTION` group" reasoning as [onUpdateSubscription].
+     */
+    val onOpenSubscriptionDetail: (Long) -> Unit,
 )
 
 /**
@@ -83,6 +97,15 @@ internal fun ServersGroupList(
                     onDelete = { actions.onDelete(group) },
                     onAddProfile = actions.onAddProfile,
                 ),
+                quotaUsedBytes = group.quotaUsedBytes,
+                quotaTotalBytes = group.quotaTotalBytes,
+                lastFetchedAtEpochMillis = group.lastFetchedAtEpochMillis,
+                // null for a MANUAL group (subscriptionId is null there) —
+                // GroupCard draws no Update affordance without an id to sync.
+                onUpdate = group.subscriptionId?.let { id -> { actions.onUpdateSubscription(id) } },
+                // Task 15: same null-for-MANUAL reasoning as onUpdate just above — a MANUAL
+                // group has no subscription detail screen to open.
+                onOpenDetail = group.subscriptionId?.let { id -> { actions.onOpenSubscriptionDetail(id) } },
             ) {
                 group.profiles.forEach { row ->
                     ServerRowItem(

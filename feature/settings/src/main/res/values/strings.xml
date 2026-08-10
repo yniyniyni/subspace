@@ -7,6 +7,7 @@
     <string name="settings_title">Settings</string>
 
     <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_section_device_id">Device ID</string>
     <!-- The three choices Appearance's segmented control offers. Each
          doubles as its own accessible label — "System", "Light", "Dark" —
          and %1$s below names which one is currently selected. -->
@@ -15,6 +16,11 @@
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_theme_option_description">%1$s theme</string>
     <string name="settings_theme_option_selected_description">%1$s theme, selected</string>
+
+    <string name="settings_hwid_title">Send device ID</string>
+    <string name="settings_hwid_summary">Some providers limit how many devices can use one subscription. Turning this off will stop those subscriptions from loading.</string>
+    <string name="settings_hwid_value_title">Your device ID</string>
+    <string name="settings_hwid_value_summary">Providers may ask for this when you contact support.</string>
 
     <string name="settings_section_about">About</string>
     <string name="settings_about_app_version_label">App version</string>

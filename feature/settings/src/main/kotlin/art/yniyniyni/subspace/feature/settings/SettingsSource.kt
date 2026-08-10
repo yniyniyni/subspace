@@ -24,8 +24,17 @@ internal interface SettingsSource {
     /** The current theme preference. See [SettingsRepository.theme]. */
     val theme: Flow<ThemePreference>
 
+    /** Whether Device ID headers are globally permitted. See [SettingsRepository.hwidEnabled]. */
+    val hwidEnabled: Flow<Boolean>
+
+    /** The hashed Device ID providers see. See [SettingsRepository.hwid]. */
+    val hwid: String
+
     /** Persists the theme preference. See [SettingsRepository.setTheme]. */
     suspend fun setTheme(preference: ThemePreference)
+
+    /** Persists the global Device ID gate. See [SettingsRepository.setHwidEnabled]. */
+    suspend fun setHwidEnabled(enabled: Boolean)
 }
 
 @Singleton
@@ -35,6 +44,10 @@ constructor(
     private val settingsRepository: SettingsRepository,
 ) : SettingsSource {
     override val theme: Flow<ThemePreference> = settingsRepository.theme
+    override val hwidEnabled: Flow<Boolean> = settingsRepository.hwidEnabled
+    override val hwid: String = settingsRepository.hwid()
 
     override suspend fun setTheme(preference: ThemePreference) = settingsRepository.setTheme(preference)
+
+    override suspend fun setHwidEnabled(enabled: Boolean) = settingsRepository.setHwidEnabled(enabled)
 }

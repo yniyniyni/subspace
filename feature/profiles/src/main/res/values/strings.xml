@@ -31,6 +31,7 @@
          this build. Deliberately doesn't say "protocol" — it must stay honest for
          both reasons a row can land here. -->
     <string name="servers_not_connectable">Not supported by this build yet</string>
+    <string name="servers_no_longer_offered">No longer offered by this provider</string>
 
     <!-- %1$s = server name, %2$s = protocol (e.g. "VLESS"), %3$s = transport
          summary (e.g. "ws · tls · 443") — never an address, uuid, or key. -->
@@ -110,6 +111,42 @@
     <string name="import_detail_field_yaml_body">YAML body</string>
     <string name="import_detail_field_credential">Credential</string>
     <string name="import_detail_field_alter_id">Alter ID</string>
+
+    <!-- Task 13: the fifth AddServerSheet route, "From subscription URL"
+         (M3's plan Part 2 line 715 deferred it to M4). §5.6 applies here
+         too — the URL itself is never interpolated into any string below,
+         only the closed FetchFailure/SyncResult vocabulary UserMessage
+         carries (see SyncResult.toUserMessage() in ImportViewModel.kt). -->
+    <string name="add_subscription_title">From subscription URL</string>
+    <string name="add_subscription_hint">https://…</string>
+    <string name="add_subscription_action">Add subscription</string>
+    <!-- %1$d = ProfileRepository-equivalent rows actually written by the
+         first sync (SyncResult.Synced.added), never a count of servers the
+         provider's response merely listed — same "rows written, not parsed"
+         rule import_result_summary above follows. -->
+    <plurals name="subscription_added">
+        <item quantity="one">Added %1$d server</item>
+        <item quantity="other">Added %1$d servers</item>
+    </plurals>
+    <plurals name="subscription_refreshed">
+        <item quantity="one">Up to date — %1$d server</item>
+        <item quantity="other">Up to date — %1$d servers</item>
+    </plurals>
+    <plurals name="subscription_removed">
+        <item quantity="one">Removed %1$d server</item>
+        <item quantity="other">Removed %1$d servers</item>
+    </plurals>
+    <string name="subscription_up_to_date">Up to date</string>
+    <string name="subscription_error_hwid_required">This subscription requires a device ID. Enable it in Settings.</string>
+    <string name="subscription_detail_hwid_disabled_globally">Disabled globally in Settings. Turn on Send device ID there to use this subscription preference.</string>
+    <string name="subscription_error_device_limit">Device limit reached. Remove a device in your account.</string>
+    <string name="subscription_error_not_found">Subscription not found. Check the URL.</string>
+    <string name="subscription_error_unreachable">Could not reach the server.</string>
+    <string name="subscription_error_timed_out">The server did not respond in time.</string>
+    <string name="subscription_error_tls">Could not establish a secure connection.</string>
+    <string name="subscription_error_client">The server rejected the request.</string>
+    <string name="subscription_error_server">The server reported an error.</string>
+    <string name="subscription_error_no_servers">No servers in this subscription.</string>
 
     <!-- Task 20: QrScanScreen. §5.6 applies here too — nothing below may
          interpolate a decoded payload; only the fixed camera/permission
@@ -209,4 +246,71 @@
         A profile with these settings already exists in this group. Change a setting — the
         address, port, or credential — or pick a different group, then save again.
     </string>
+
+    <!-- Task 15: the subscription detail screen. §5.6 applies throughout — the URL itself is
+         never interpolated (only SubscriptionDetailState.redactedUrl, already stripped down to
+         scheme+host), and neither is any directive VALUE beyond the bounded, user-typed pin
+         entries the user themselves just entered into the edit dialog below. -->
+    <string name="subscription_detail_back_description">Back</string>
+    <string name="subscription_detail_loading_description">Loading subscription</string>
+    <string name="subscription_detail_not_found_title">Subscription not found</string>
+    <string name="subscription_detail_not_found_body">This subscription no longer exists or was never saved.</string>
+    <string name="subscription_detail_not_found_back_button">Go back</string>
+
+    <string name="subscription_detail_url_label">Subscription URL</string>
+    <string name="subscription_detail_never_fetched">Never refreshed yet</string>
+    <!-- %1$s = a relative time, e.g. "3 hours ago" (DateUtils.getRelativeTimeSpanString, the
+         same formatter GroupCard's own last-fetched row already uses). -->
+    <string name="subscription_detail_last_fetched">Last refreshed %1$s</string>
+    <!-- %1$s = the same relative-time text as subscription_detail_last_fetched, describing the
+         last time a fetch DID succeed — shown alongside the current failure reason below. -->
+    <string name="subscription_detail_last_succeeded">Last successful refresh: %1$s</string>
+    <string name="subscription_detail_never_succeeded">Never successfully refreshed</string>
+    <string name="subscription_detail_refresh_action">Refresh now</string>
+    <string name="subscription_detail_refreshing_description">Refreshing</string>
+
+    <string name="subscription_detail_hwid_label">Device ID header</string>
+    <string name="subscription_detail_hwid_description">
+        Sends a hashed device identifier some providers require for device limits.
+    </string>
+
+    <string name="subscription_detail_user_agent_label">User-Agent override</string>
+    <string name="subscription_detail_user_agent_placeholder">Default</string>
+    <!-- %1$s is the provider's change-user-agent value; the editable field above is only the
+         user's per-subscription override. Showing both keeps precedence visible. -->
+    <string name="subscription_detail_user_agent_provider">Provider: %1$s</string>
+    <string name="subscription_detail_user_agent_save">Save</string>
+
+    <string name="subscription_detail_delete_action">Delete subscription</string>
+    <!-- %1$s = the group/subscription name — never the URL (§5.6). -->
+    <string name="subscription_detail_delete_confirm_title">Delete “%1$s”?</string>
+    <!-- %1$d = the subscription's real server count — this removes the group AND every server
+         in it, the same cascading-delete warning servers_delete_group_message gives. -->
+    <plurals name="subscription_detail_delete_confirm_body">
+        <item quantity="one">This removes %1$d server with it. This cannot be undone.</item>
+        <item quantity="other">This removes %1$d servers with it. This cannot be undone.</item>
+    </plurals>
+    <string name="subscription_detail_delete_confirm_action">Delete</string>
+    <string name="subscription_detail_delete_cancel_action">Cancel</string>
+
+    <!-- Directive row labels — the ones with an M4 consumer, per D3's precedence. -->
+    <string name="subscription_row_interval_label">Refresh interval</string>
+    <string name="subscription_row_timeout_label">Request timeout</string>
+    <string name="subscription_row_auto_update_label">Auto-update</string>
+    <string name="subscription_row_auto_update_open_label">Refresh when app opens</string>
+
+    <!-- %1$s = a plain integer, already resolved from SettingRowState.value/declinedProviderValue —
+         these two are unit suffixes, not full sentences, so they carry no quantity of their own. -->
+    <string name="subscription_row_value_hours">%1$s h</string>
+    <string name="subscription_row_value_seconds">%1$s s</string>
+    <string name="subscription_row_value_on">On</string>
+    <string name="subscription_row_value_off">Off</string>
+    <!-- %1$s/%2$s are already-formatted values (e.g. "6 h"/"24 h", or "Off"/"On") — spec D3's
+         required UI consequence, verbatim: "provider suggests 6 h · you pinned 24 h". -->
+    <string name="subscription_row_pinned_declined">Provider suggests %1$s · you pinned %2$s</string>
+    <string name="subscription_row_pin_action">Pin</string>
+    <string name="subscription_row_unpin_action">Use provider value</string>
+    <!-- %1$s = the row's own label above. -->
+    <string name="subscription_row_edit_description">Edit %1$s</string>
+    <string name="subscription_row_edit_dialog_cancel">Cancel</string>
 </resources>

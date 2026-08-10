@@ -5,12 +5,21 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [ProfileGroupEntity::class, ProfileEntity::class, SettingEntity::class],
-    version = 1,
+    entities = [
+        ProfileGroupEntity::class,
+        ProfileEntity::class,
+        SettingEntity::class,
+        SubscriptionEntity::class,
+        SubscriptionDirectiveEntity::class,
+        SubscriptionOverrideEntity::class,
+    ],
+    version = 2,
     exportSchema = true,
 )
 internal abstract class SubspaceDatabase : RoomDatabase() {
     abstract fun profileDao(): ProfileDao
 
     abstract fun settingDao(): SettingDao
+
+    abstract fun subscriptionDao(): SubscriptionDao
 }

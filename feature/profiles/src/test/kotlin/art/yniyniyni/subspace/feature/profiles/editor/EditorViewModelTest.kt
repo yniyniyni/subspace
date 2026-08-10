@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.editor
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
+import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
@@ -122,6 +126,7 @@ class EditorViewModelTest {
         ): Flow<List<ProfileGroup>> = MutableStateFlow(groups)
 
         override val activeProfileId: StateFlow<Long?> = MutableStateFlow<Long?>(null).asStateFlow()
+        override val globalHwidEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 
         override suspend fun setActiveProfile(id: Long?) = Unit
 
@@ -169,6 +174,53 @@ class EditorViewModelTest {
             stored[id]?.let { stored[id] = it.copy(name = name, address = outbound.address, port = outbound.port) }
             return true
         }
+
+        // Not exercised here — this fixture is EditorViewModelTest's own, and
+        // nothing in the editor screen touches subscriptions. See
+        // ImportViewModelTest's identical stub for the fuller rationale.
+        override suspend fun addSubscription(
+            url: String,
+            name: String,
+        ) = AddedSubscription(0L, created = true)
+
+        override suspend fun syncSubscription(id: Long): SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+
+        override suspend fun deleteSubscription(id: Long) = Unit
+
+        // Not exercised — same reasoning as addSubscription above. Task 14's
+        // real coverage lives in ServersViewModelTest.
+        override fun observeSubscriptions(): Flow<List<StoredSubscription>> = MutableStateFlow(emptyList())
+
+        override fun observeUserInfo(id: Long): Flow<String?> = MutableStateFlow(null)
+
+        // Not exercised — same reasoning as addSubscription above. SubscriptionDetailViewModelTest
+        // (Task 15) owns real coverage of these five.
+        override fun observeEffective(
+            id: Long,
+            key: String,
+            default: String?,
+        ): Flow<EffectiveValue> = MutableStateFlow(EffectiveValue(key, default, null, isPinned = false))
+
+        override suspend fun pin(
+            id: Long,
+            key: String,
+            value: String,
+        ) = Unit
+
+        override suspend fun unpin(
+            id: Long,
+            key: String,
+        ) = Unit
+
+        override suspend fun setHwidEnabled(
+            id: Long,
+            enabled: Boolean,
+        ) = Unit
+
+        override suspend fun setUserAgentOverride(
+            id: Long,
+            userAgent: String?,
+        ) = Unit
     }
 
     @Before

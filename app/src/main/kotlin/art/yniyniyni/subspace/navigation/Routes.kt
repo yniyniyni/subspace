@@ -41,3 +41,19 @@ data class Editor(val profileId: Long)
  */
 @Serializable
 data object QrScan
+
+/**
+ * The subscription detail screen, pushed on top of the top-level destinations. The pill hides
+ * while this is on screen, same reasoning as [Editor].
+ *
+ * M3's plan Part 2 line 438 deliberately left this route undeclared: *"Subscription detail and
+ * Per-app proxy are not declared. They are M4 and M5, and a route to a screen that does not
+ * exist is an invitation to build it early."* Task 15 (M4) is what builds the screen this
+ * declares.
+ *
+ * @param subscriptionId the row id of the subscription being inspected — unlike [Editor]'s
+ *   `profileId`, there is no "create new" sentinel here: this route is only ever reached from a
+ *   `GroupCard` that already names a real, stored subscription.
+ */
+@Serializable
+data class SubscriptionDetail(val subscriptionId: Long)

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:name=".SubspaceApplication"
@@ -8,6 +9,30 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Subspace">
+
+        <!-- SubspaceApplication implements Configuration.Provider (Task 12) and supplies its own
+             HiltWorkerFactory on demand, so WorkManager's default ContentProvider-based auto-init
+             must be removed — otherwise it initializes WorkManager with the default Configuration
+             before SubspaceApplication.workManagerConfiguration is ever read.
+
+             Remove WorkManager's *initializer*, not the provider that hosts it. `tools:node="remove"`
+             on InitializationProvider itself deleted every App Startup component discovered through
+             the shared provider, not just WorkManager's: the merged manifest also carries
+             EmojiCompatInitializer, ProcessLifecycleInitializer and ProfileInstallerInitializer,
+             and none of them could be discovered with the provider gone. That is the documented
+             WorkManager 2.6+ shape for apps using Configuration.Provider — see
+             developer.android.com "Custom WorkManager configuration and initialization" and
+             App Startup's "disable an individual component", both accessed 2026-08-10. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
         <activity
             android:name=".MainActivity"

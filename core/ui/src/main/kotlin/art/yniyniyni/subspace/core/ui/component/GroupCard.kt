@@ -7,6 +7,7 @@
 
 package art.yniyniyni.subspace.core.ui.component
 
+import android.text.format.DateUtils
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -56,11 +58,24 @@ private const val CARET_ROTATION_EXPANDED = 180f
  * profile count, an expand/collapse caret, and an overflow menu for rename,
  * delete and adding a profile.
  *
- * Deliberately does **not** render a quota bar, a provider notice, or
- * Support/Update buttons — those need a subscription's own metadata, which is
- * M4, and a `MANUAL` group has no provider to quote in the first place. Nor
- * does it render an age/last-synced timestamp, for the same reason. This is
- * the container only; [content] supplies the node rows.
+ * Renders a [QuotaBar] beneath the header when [quotaUsedBytes]/
+ * [quotaTotalBytes] are given and measurable — a `SUBSCRIPTION` group whose
+ * provider sent a usable `subscription-userinfo`. Below that, a last-fetch
+ * age (from [lastFetchedAtEpochMillis]) and an Update button (from
+ * [onUpdate]) render independently of each other and of the quota bar —
+ * each is `null`-defaulted on its own, so a group can show any subset. Every
+ * pre-existing `MANUAL`-group call site is unchanged (every one of these
+ * four defaults to `null`), and a `MANUAL` group — which has no subscription
+ * to quote in the first place — simply never passes any of them. [QuotaBar]'s
+ * own contract (not a check duplicated here) already renders nothing for an
+ * absent or unlimited total, so this card does not need to re-derive that
+ * condition.
+ *
+ * A provider notice is still unrendered: `DirectiveRegistry` gates
+ * `announce`/`sub-info-text` (the only real content source for one) to a
+ * later milestone (`Consumer.M9`), so M4 has nothing to put in one without
+ * inventing content — left for the task that consumes those directives. This
+ * is the container only; [content] supplies the node rows.
  *
  * @param name the group's display name — never a server address, so nothing
  *   here needs §5.6's redaction care.
@@ -72,12 +87,27 @@ private const val CARET_ROTATION_EXPANDED = 180f
  *   component), matching [SubspaceBottomSheet]'s `open` convention.
  * @param actions the three overflow-menu callbacks, plus the header's own
  *   expand/collapse toggle — grouped into one carrier the same way
- *   [art.yniyniyni.subspace.feature.home.HomeActions] is. That leaves `name`,
- *   `profileCount`, `expanded`, `actions`, `modifier` and `content`: five
- *   orthogonal, independently-necessary parameters plus the idiomatic
- *   `modifier` slot every composable in this module carries — nothing left to
- *   fold without inventing an artificial grouping, hence the suppression
- *   below rather than a sixth carrier class.
+ *   [art.yniyniyni.subspace.feature.home.HomeActions] is.
+ * @param quotaUsedBytes bytes already consumed, forwarded to [QuotaBar] —
+ *   `null` for a `MANUAL` group or a `SUBSCRIPTION` group whose provider sent
+ *   no measurable usage.
+ * @param quotaTotalBytes the plan's cap in bytes, forwarded to [QuotaBar] —
+ *   `null` for a `MANUAL` group or a `SUBSCRIPTION` group whose provider sent
+ *   no `total` field.
+ * @param lastFetchedAtEpochMillis when this group's subscription was last
+ *   successfully fetched, rendered as a relative time (`"3 hours ago"`, via
+ *   [DateUtils.getRelativeTimeSpanString] — the same platform formatter
+ *   [art.yniyniyni.subspace.feature.home.HomeScreen] already uses for a
+ *   related need, so this deliberately does not invent a second one). `null`
+ *   for a `MANUAL` group or a subscription never yet successfully fetched.
+ * @param onUpdate invoked when the Update button is tapped — runs one sync of
+ *   this group's subscription right now. `null` renders no Update button; a
+ *   `MANUAL` group has no subscription to sync, so its call site never
+ *   supplies this.
+ * @param onOpenDetail Task 15: invoked when "Subscription details" is chosen from the overflow
+ *   menu — opens the subscription detail screen. `null` renders no such item, same "a `MANUAL`
+ *   group has nothing to open" reasoning [onUpdate] documents; its call site never supplies this
+ *   for a `MANUAL` group either.
  * @param content the group's node rows, rendered only while [expanded].
  */
 @Suppress("LongParameterList")
@@ -88,58 +118,43 @@ fun GroupCard(
     expanded: Boolean,
     actions: GroupCardActions,
     modifier: Modifier = Modifier,
+    quotaUsedBytes: Long? = null,
+    quotaTotalBytes: Long? = null,
+    lastFetchedAtEpochMillis: Long? = null,
+    onUpdate: (() -> Unit)? = null,
+    onOpenDetail: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val toggleDescription =
-        stringResource(
-            if (expanded) R.string.group_card_collapse_description else R.string.group_card_expand_description,
-            name,
-            profileCount,
-        )
-    val caretRotation by
-        animateFloatAsState(
-            targetValue = if (expanded) CARET_ROTATION_EXPANDED else CARET_ROTATION_COLLAPSED,
-            label = "group-card-caret-rotation",
-        )
-
     Surface(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(GROUP_CARD_PADDING)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier =
-                    Modifier
-                        .weight(1f)
-                        .clickable(role = Role.Button, onClick = actions.onToggleExpand)
-                        .semantics { contentDescription = toggleDescription },
-                    horizontalArrangement = Arrangement.spacedBy(GROUP_CARD_HEADER_GAP),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column {
-                        Text(text = name, style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            text = pluralStringResource(R.plurals.group_card_profile_count, profileCount, profileCount),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        // Decorative: the Row's own semantics above already
-                        // names the expand/collapse action once.
-                        contentDescription = null,
-                        modifier = Modifier.graphicsLayer { rotationZ = caretRotation },
-                    )
-                }
+            GroupCardHeader(
+                state =
+                GroupCardHeaderState(
+                    name = name,
+                    profileCount = profileCount,
+                    expanded = expanded,
+                    onOpenDetail = onOpenDetail,
+                ),
+                actions = actions,
+            )
 
-                GroupCardOverflowMenu(groupName = name, actions = actions)
+            QuotaBar(
+                usedBytes = quotaUsedBytes,
+                totalBytes = quotaTotalBytes,
+                modifier = Modifier.padding(top = GROUP_CARD_CONTENT_TOP_PADDING),
+            )
+
+            if (lastFetchedAtEpochMillis != null || onUpdate != null) {
+                GroupCardUpdateRow(
+                    groupName = name,
+                    lastFetchedAtEpochMillis = lastFetchedAtEpochMillis,
+                    onUpdate = onUpdate,
+                    modifier = Modifier.padding(top = GROUP_CARD_CONTENT_TOP_PADDING),
+                )
             }
 
             AnimatedVisibility(visible = expanded, enter = expandVertically(), exit = shrinkVertically()) {
@@ -148,6 +163,81 @@ fun GroupCard(
         }
     }
 }
+
+/**
+ * The name/count/caret/overflow-menu row — split out of [GroupCard] itself
+ * (fix round: adding the quota/update slots pushed that function past
+ * detekt's `LongMethod` line budget) so this is purely an extraction, not a
+ * behaviour change; every line below is unmodified from [GroupCard]'s
+ * previous body.
+ */
+@Composable
+private fun GroupCardHeader(
+    state: GroupCardHeaderState,
+    actions: GroupCardActions,
+    modifier: Modifier = Modifier,
+) {
+    val toggleDescription =
+        stringResource(
+            if (state.expanded) R.string.group_card_collapse_description else R.string.group_card_expand_description,
+            state.name,
+            state.profileCount,
+        )
+    val caretRotation by
+        animateFloatAsState(
+            targetValue = if (state.expanded) CARET_ROTATION_EXPANDED else CARET_ROTATION_COLLAPSED,
+            label = "group-card-caret-rotation",
+        )
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            modifier =
+            Modifier
+                .weight(1f)
+                .clickable(role = Role.Button, onClick = actions.onToggleExpand)
+                .semantics { contentDescription = toggleDescription },
+            horizontalArrangement = Arrangement.spacedBy(GROUP_CARD_HEADER_GAP),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text(text = state.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = pluralStringResource(
+                        R.plurals.group_card_profile_count,
+                        state.profileCount,
+                        state.profileCount,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowDown,
+                // Decorative: the Row's own semantics above already
+                // names the expand/collapse action once.
+                contentDescription = null,
+                modifier = Modifier.graphicsLayer { rotationZ = caretRotation },
+            )
+        }
+
+        GroupCardOverflowMenu(
+            groupName = state.name,
+            actions = actions,
+            onOpenDetail = state.onOpenDetail,
+        )
+    }
+}
+
+private data class GroupCardHeaderState(
+    val name: String,
+    val profileCount: Int,
+    val expanded: Boolean,
+    val onOpenDetail: (() -> Unit)?,
+)
 
 /**
  * [GroupCard]'s four callbacks, grouped into one carrier — see [GroupCard]'s
@@ -168,10 +258,59 @@ data class GroupCardActions(
     val onAddProfile: () -> Unit,
 )
 
+/**
+ * The last-fetch age and Update button row — fix round, Important 1/2.
+ * Either half renders independently: [lastFetchedAtEpochMillis] `null` hides
+ * the age text, [onUpdate] `null` hides the button, and (per [GroupCard]'s
+ * own call site) this whole row is skipped when both are `null`.
+ *
+ * [lastFetchedAtEpochMillis] is formatted with the platform's own
+ * [DateUtils.getRelativeTimeSpanString] rather than a bespoke "N hours ago"
+ * implementation — deliberately minimal per this fix round's own guidance,
+ * and the same formatter [art.yniyniyni.subspace.feature.home.HomeScreen]
+ * already uses for connected-uptime, so this is not a second one-off.
+ */
+@Composable
+private fun GroupCardUpdateRow(
+    groupName: String,
+    lastFetchedAtEpochMillis: Long?,
+    onUpdate: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (lastFetchedAtEpochMillis != null) {
+            val relative =
+                DateUtils.getRelativeTimeSpanString(
+                    lastFetchedAtEpochMillis,
+                    System.currentTimeMillis(),
+                    DateUtils.MINUTE_IN_MILLIS,
+                ).toString()
+            Text(
+                text = stringResource(R.string.group_card_last_updated, relative),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (onUpdate != null) {
+            IconButton(onClick = onUpdate) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.group_card_update_description, groupName),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun GroupCardOverflowMenu(
     groupName: String,
     actions: GroupCardActions,
+    onOpenDetail: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -205,6 +344,15 @@ private fun GroupCardOverflowMenu(
                     actions.onAddProfile()
                 },
             )
+            if (onOpenDetail != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.group_card_open_detail)) },
+                    onClick = {
+                        menuOpen = false
+                        onOpenDetail()
+                    },
+                )
+            }
         }
     }
 }

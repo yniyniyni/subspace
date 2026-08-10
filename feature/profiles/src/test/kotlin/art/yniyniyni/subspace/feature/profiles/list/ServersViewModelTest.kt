@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.list
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
+import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
+import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
+import art.yniyniyni.subspace.feature.profiles.R
+import art.yniyniyni.subspace.feature.profiles.add.UserMessage
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -61,6 +69,7 @@ class ServersViewModelTest {
         transport: String,
         kind: ProfileKind = ProfileKind.TYPED,
         lastConnectedAt: Long? = null,
+        droppedFromSubscriptionAt: Long? = null,
     ): StoredProfile =
         StoredProfile(
             id = id,
@@ -75,6 +84,7 @@ class ServersViewModelTest {
             rawJson = null,
             lastConnectedAt = lastConnectedAt,
             lastError = null,
+            droppedFromSubscriptionAt = droppedFromSubscriptionAt,
         )
 
     // Frankfurt: VLESS, matches the search query "cdn.example" via its address.
@@ -134,9 +144,12 @@ class ServersViewModelTest {
      */
     private class FakeProfileSource(
         private val allGroups: List<ProfileGroup>,
+        private val subscriptions: List<StoredSubscription> = emptyList(),
+        private val userInfoBySubscriptionId: Map<Long, String?> = emptyMap(),
     ) : ProfileSource {
         private val _activeProfileId = MutableStateFlow<Long?>(null)
         override val activeProfileId: StateFlow<Long?> = _activeProfileId.asStateFlow()
+        override val globalHwidEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
 
         var lastActiveSet: Long? = null
             private set
@@ -144,6 +157,19 @@ class ServersViewModelTest {
             private set
         var lastDeletedGroup: Long? = null
             private set
+
+        // Fix round, Important 1: what onUpdateSubscription's wiring is
+        // verified against below.
+        var syncSubscriptionCallCount = 0
+            private set
+        var lastSyncedSubscriptionId: Long? = null
+            private set
+
+        /**
+         * Settable so a test can drive the failure branch. A fake that only ever succeeds is why
+         * the discarded-[SyncResult] bug survived to the device run: nothing here could fail.
+         */
+        var syncResultToReturn: SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
 
         override fun observeGroups(
             query: String,
@@ -215,6 +241,60 @@ class ServersViewModelTest {
             name: String,
             outbound: Outbound,
         ) = true
+
+        // Not exercised here — this fixture is ServersViewModelTest's own,
+        // and nothing on the Servers screen touches subscriptions. See
+        // ImportViewModelTest's identical stub for the fuller rationale.
+        override suspend fun addSubscription(
+            url: String,
+            name: String,
+        ) = AddedSubscription(0L, created = true)
+
+        override suspend fun syncSubscription(id: Long): SyncResult {
+            syncSubscriptionCallCount++
+            lastSyncedSubscriptionId = id
+            return syncResultToReturn
+        }
+
+        override suspend fun deleteSubscription(id: Long) = Unit
+
+        // Task 14: ServersViewModel's init block subscribes to this
+        // immediately. Most tests in this file construct FakeProfileSource
+        // with no subscriptions at all, so the default keeps every one of
+        // them exercising exactly the MANUAL-group (no quota) path; the
+        // quota-specific tests below pass a real list.
+        override fun observeSubscriptions(): Flow<List<StoredSubscription>> = MutableStateFlow(subscriptions)
+
+        override fun observeUserInfo(id: Long): Flow<String?> = MutableStateFlow(userInfoBySubscriptionId[id])
+
+        // Not exercised — nothing on the Servers screen pins a directive or touches HWID/UA.
+        // SubscriptionDetailViewModelTest (Task 15) owns real coverage of these five.
+        override fun observeEffective(
+            id: Long,
+            key: String,
+            default: String?,
+        ): Flow<EffectiveValue> = MutableStateFlow(EffectiveValue(key, default, null, isPinned = false))
+
+        override suspend fun pin(
+            id: Long,
+            key: String,
+            value: String,
+        ) = Unit
+
+        override suspend fun unpin(
+            id: Long,
+            key: String,
+        ) = Unit
+
+        override suspend fun setHwidEnabled(
+            id: Long,
+            enabled: Boolean,
+        ) = Unit
+
+        override suspend fun setUserAgentOverride(
+            id: Long,
+            userAgent: String?,
+        ) = Unit
     }
 
     private lateinit var source: FakeProfileSource
@@ -266,6 +346,17 @@ class ServersViewModelTest {
         runTest {
             val trojan = viewModel.state.value.groups.flatMap { it.profiles }.single { it.protocol == "trojan" }
             trojan.connectable shouldBe false
+        }
+
+    @Test
+    fun `a server kept after provider removal is visibly marked`() =
+        runTest {
+            val removed = frankfurt.copy(droppedFromSubscriptionAt = 1_000L)
+            val source = FakeProfileSource(listOf(group.copy(profiles = listOf(removed))))
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.state.value.groups.single().profiles.single().droppedFromSubscriptionAt shouldBe 1_000L
         }
 
     // Beyond the brief's five: proves the filter/sort/selection plumbing this
@@ -324,5 +415,209 @@ class ServersViewModelTest {
             val visibleGroup = viewModel.state.value.groups.single()
             visibleGroup.profiles.map { it.name } shouldBe listOf("Tokyo")
             visibleGroup.totalProfileCount shouldBe group.profiles.size
+        }
+
+    // Task 14: quota data. A MANUAL group (every test above this point) never
+    // appears in FakeProfileSource.observeSubscriptions(), so its absence
+    // from the quota map — not a separate "is this SUBSCRIPTION" flag — is
+    // what already keeps quotaUsedBytes/quotaTotalBytes null there.
+
+    @Test
+    fun `a group with no matching subscription renders no quota`() =
+        runTest {
+            viewModel.state.value.groups.single().quotaUsedBytes.shouldBeNull()
+            viewModel.state.value.groups.single().quotaTotalBytes.shouldBeNull()
+        }
+
+    // Fix round, Important 1/2: subscriptionId and lastFetchedAtEpochMillis
+    // must reach ServersGroup for a SUBSCRIPTION group, and stay null for a
+    // MANUAL one — the same "presence in the map is the signal" property the
+    // quota fields above already have.
+
+    @Test
+    fun `a manual group carries no subscriptionId or last-fetched time`() =
+        runTest {
+            val visibleGroup = viewModel.state.value.groups.single()
+            visibleGroup.subscriptionId.shouldBeNull()
+            visibleGroup.lastFetchedAtEpochMillis.shouldBeNull()
+        }
+
+    @Test
+    fun `a subscription group carries its subscriptionId and last-fetched time`() =
+        runTest {
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = 1_700_000_000_000L,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            val visibleGroup = subscribedViewModel.state.value.groups.single()
+            visibleGroup.subscriptionId shouldBe 9L
+            visibleGroup.lastFetchedAtEpochMillis shouldBe 1_700_000_000_000L
+        }
+
+    @Test
+    fun `updating a subscription group runs one sync of its own subscription id`() =
+        runTest {
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = null,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            subscribedViewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            subscribedSource.syncSubscriptionCallCount shouldBe 1
+            subscribedSource.lastSyncedSubscriptionId shouldBe 9L
+        }
+
+    @Test
+    fun `a failed update surfaces its reason instead of failing silently`() =
+        runTest {
+            // M4's device run: the HWID toggle was off, the panel refused the fetch, and the
+            // Servers screen said nothing at all because onUpdateSubscription discarded its
+            // SyncResult. HwidRequired specifically, because telling it apart from
+            // DeviceLimitReached is the milestone's exit criterion.
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            viewModel.state.value.updateResult shouldBe
+                UserMessage(R.string.subscription_error_hwid_required)
+        }
+
+    @Test
+    fun `a successful update reports the rows written`() =
+        runTest {
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Synced(added = 3, 0, 0, 0, 0)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            viewModel.state.value.updateResult shouldBe UserMessage(R.plurals.subscription_added, quantity = 3)
+        }
+
+    @Test
+    fun `the update result survives the state rebuild the sync itself triggers`() =
+        runTest {
+            // buildState() does not know about updateResult, and a sync writes to the tables the
+            // state flow observes — so a naive assignment erases the message at exactly the moment
+            // it becomes relevant.
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+            viewModel.onQueryChanged("anything") // forces the combine to rebuild the whole state
+            advanceUntilIdle()
+
+            viewModel.state.value.updateResult shouldBe
+                UserMessage(R.string.subscription_error_hwid_required)
+        }
+
+    @Test
+    fun `dismissing the update result clears it`() =
+        runTest {
+            val source = FakeProfileSource(allGroups = emptyList())
+            source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ServersViewModel(source)
+            advanceUntilIdle()
+            viewModel.onUpdateSubscription(9L)
+            advanceUntilIdle()
+
+            viewModel.onDismissUpdateResult()
+
+            viewModel.state.value.updateResult shouldBe null
+        }
+
+    @Test
+    fun `quota is parsed from the subscription-userinfo directive of the subscription owning this group`() =
+        runTest {
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = null,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(
+                    allGroups = listOf(group),
+                    subscriptions = listOf(subscription),
+                    userInfoBySubscriptionId = mapOf(9L to "upload=3; download=7; total=100"),
+                )
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            val visibleGroup = subscribedViewModel.state.value.groups.single()
+            visibleGroup.quotaUsedBytes shouldBe 10L
+            visibleGroup.quotaTotalBytes shouldBe 100L
+        }
+
+    @Test
+    fun `a provider that sent neither upload nor download draws no used-bytes figure`() =
+        runTest {
+            // §A.1's anti-fabrication rule: UserInfo.usedBytes defaults an
+            // absent counter to zero, which is correct when only one of the
+            // two is missing but would be a fabricated "0 B used" if the
+            // provider sent neither — see ServersViewModel.buildState's own
+            // comment on this exclusion.
+            val subscription =
+                StoredSubscription(
+                    id = 9L,
+                    groupId = group.id,
+                    url = "https://example.com/sub",
+                    userAgentOverride = null,
+                    hwidEnabled = true,
+                    lastFetchedAt = null,
+                    lastFetchStatus = null,
+                    lastFetchDetail = null,
+                )
+            val subscribedSource =
+                FakeProfileSource(
+                    allGroups = listOf(group),
+                    subscriptions = listOf(subscription),
+                    userInfoBySubscriptionId = mapOf(9L to "total=100"),
+                )
+            val subscribedViewModel = ServersViewModel(subscribedSource)
+            advanceUntilIdle()
+
+            val visibleGroup = subscribedViewModel.state.value.groups.single()
+            visibleGroup.quotaUsedBytes.shouldBeNull()
+            visibleGroup.quotaTotalBytes shouldBe 100L
         }
 }

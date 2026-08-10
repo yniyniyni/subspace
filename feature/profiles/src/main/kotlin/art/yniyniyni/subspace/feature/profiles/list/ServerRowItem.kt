@@ -98,7 +98,7 @@ internal fun ServerRowItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (row.compatibilityMode || !row.connectable) {
+            if (row.compatibilityMode || !row.connectable || row.droppedFromSubscriptionAt != null) {
                 RowNotices(row = row)
             }
         }
@@ -146,6 +146,13 @@ private fun RowNotices(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
+        }
+        if (row.droppedFromSubscriptionAt != null) {
+            Text(
+                text = stringResource(R.string.servers_no_longer_offered),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }
@@ -198,6 +205,7 @@ private fun ServerRow.contentDescription(): String {
         buildList {
             if (compatibilityMode) add(stringResource(R.string.servers_compatibility_mode))
             if (!connectable) add(stringResource(R.string.servers_not_connectable))
+            if (droppedFromSubscriptionAt != null) add(stringResource(R.string.servers_no_longer_offered))
         }
     return if (notices.isEmpty()) base else "$base, ${notices.joinToString(", ")}"
 }

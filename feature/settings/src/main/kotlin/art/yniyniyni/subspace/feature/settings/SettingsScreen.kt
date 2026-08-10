@@ -6,14 +6,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -29,14 +33,18 @@ import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADD
 import art.yniyniyni.subspace.core.ui.component.SectionHeader
 import art.yniyniyni.subspace.core.ui.component.SettingRow
 
+/** Aligns the HWID value with [SettingRow]'s label column: its 40.dp icon tile plus a 16.dp gap. */
+private val HWID_VALUE_START_PADDING = 56.dp
+private val HWID_VALUE_BOTTOM_PADDING = 8.dp
+
 /**
- * The Settings screen: Appearance and About, deliberately nothing else.
+ * The Settings screen: Appearance, Device ID and About.
  *
  * **Not drawn**, each because a later milestone owns it, not because it was
  * forgotten:
  *  - Always-on VPN and a log viewer — M7.
  *  - Per-app proxy and routing rules — M5.
- *  - Subscriptions, HWID, ping-on-connect and a refresh interval — M4.
+ *  - Subscriptions, ping-on-connect and a refresh interval — M4.
  *
  * None of these get a stub, a disabled row, or a "coming soon" entry — an
  * empty control that looks like a feature is worse than no control at all.
@@ -55,6 +63,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     SettingsScreenContent(
         state = state,
         onThemeChanged = viewModel::onThemeChanged,
+        onHwidEnabledChanged = viewModel::onHwidEnabledChanged,
         modifier = modifier,
     )
 }
@@ -69,6 +78,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 internal fun SettingsScreenContent(
     state: SettingsState,
     onThemeChanged: (ThemePreference) -> Unit,
+    onHwidEnabledChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -86,6 +96,13 @@ internal fun SettingsScreenContent(
 
         SectionHeader(stringResource(R.string.settings_section_appearance))
         AppearanceControl(selected = state.theme, onThemeChanged = onThemeChanged)
+
+        SectionHeader(stringResource(R.string.settings_section_device_id))
+        HwidControl(
+            enabled = state.hwidEnabled,
+            hwid = state.hwid,
+            onEnabledChanged = onHwidEnabledChanged,
+        )
 
         SectionHeader(stringResource(R.string.settings_section_about))
         SettingRow(
@@ -139,6 +156,50 @@ private fun AppearanceControl(
                 label = { Text(stringResource(option.labelRes())) },
             )
         }
+    }
+}
+
+@Composable
+private fun HwidControl(
+    enabled: Boolean,
+    hwid: String,
+    onEnabledChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val title = stringResource(R.string.settings_hwid_title)
+    SettingRow(
+        icon = Icons.Default.Lock,
+        label = title,
+        supportingText = stringResource(R.string.settings_hwid_summary),
+        trailing = {
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChanged,
+                modifier = Modifier.semantics { contentDescription = title },
+            )
+        },
+        modifier = modifier,
+    )
+    // The HWID is 43 unbreakable monospace characters, so it cannot live in SettingRow's
+    // `trailing` slot: that slot is measured at its intrinsic width before the label column's
+    // weight(1f) is resolved, so the value claimed the whole row and squeezed the label to about
+    // one character, rendering it as a vertical stack of letters. Found on device. It is a
+    // full-width value, not a control — so it goes on its own line beneath the row.
+    SettingRow(
+        icon = Icons.Default.Lock,
+        label = stringResource(R.string.settings_hwid_value_title),
+        supportingText = stringResource(R.string.settings_hwid_value_summary),
+    )
+    SelectionContainer {
+        Text(
+            text = hwid,
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(start = HWID_VALUE_START_PADDING, bottom = HWID_VALUE_BOTTOM_PADDING),
+        )
     }
 }
 

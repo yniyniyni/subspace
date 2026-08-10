@@ -1,29 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
+import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
+import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.data.SubscriptionRepository
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
+import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** `DirectiveRegistry`'s key for the quota/usage header Task 14's `GroupCard` renders. */
+private const val KEY_SUBSCRIPTION_USERINFO = "subscription-userinfo"
+
 /**
- * The [ProfileRepository] and [SettingsRepository] surface `:feature:profiles`
- * needs, folded into one seam.
+ * The [ProfileRepository], [SettingsRepository], [SubscriptionRepository] and
+ * [SubscriptionSyncer] surface `:feature:profiles` needs, folded into one seam.
  *
- * Both repositories have `internal` constructors scoped to `:core:data` (§3
- * keeps settings behind a typed repository, not a key/value table any module
- * can poke), so this module cannot build a real instance of either to test
- * against — the same reason [art.yniyniyni.subspace.feature.home.ActiveProfileSource]
- * exists for `:feature:home`. [BoundProfileSource] is the one place that
- * touches the real repositories; every screen in this module (the Servers
- * list now, the editor and subscription management later) goes through this
- * interface instead, so a plain JVM test can exercise them against a fake.
+ * All four have `internal` constructors scoped to `:core:data` (§3 keeps
+ * settings and subscriptions behind typed repositories, not a key/value
+ * table any module can poke), so this module cannot build a real instance of
+ * any of them to test against — the same reason
+ * [art.yniyniyni.subspace.feature.home.ActiveProfileSource] exists for
+ * `:feature:home`. [BoundProfileSource] is the one place that touches the
+ * real repositories; every screen in this module (the Servers list, the
+ * editor, and Task 13's subscription-add route) goes through this interface
+ * instead, so a plain JVM test can exercise them against a fake.
  */
+// One seam over four repositories on purpose — see ProfileRepository's own identical suppression.
+@Suppress("TooManyFunctions")
 internal interface ProfileSource {
     /**
      * Every group, in display order, filtered to the profiles matching
@@ -39,6 +52,9 @@ internal interface ProfileSource {
 
     /** The profile [SettingsRepository.activeProfileId] currently names, or `null`. */
     val activeProfileId: Flow<Long?>
+
+    /** Whether the Settings-level Device ID gate permits any subscription to send its ID. */
+    val globalHwidEnabled: Flow<Boolean>
 
     /** Sets the active profile, or clears it when [id] is `null`. */
     suspend fun setActiveProfile(id: Long?)
@@ -113,14 +129,88 @@ internal interface ProfileSource {
         name: String,
         outbound: Outbound,
     ): Boolean
+
+    /**
+     * Adds a subscription and the group that holds its servers — see
+     * [SubscriptionRepository.add]. Task 13:
+     * [ImportViewModel][art.yniyniyni.subspace.feature.profiles.add.ImportViewModel]'s
+     * "From subscription URL" route.
+     */
+    suspend fun addSubscription(
+        url: String,
+        name: String,
+    ): AddedSubscription
+
+    /** Runs one sync of [id] — see [SubscriptionSyncer.sync]. */
+    suspend fun syncSubscription(id: Long): SyncResult
+
+    /** Deletes a subscription and its group — see [SubscriptionRepository.delete]. */
+    suspend fun deleteSubscription(id: Long)
+
+    /**
+     * Every stored subscription — Task 14: lets the Servers screen map a
+     * `SUBSCRIPTION`-sourced [ProfileGroup] (via [StoredSubscription.groupId])
+     * to the provider metadata it owns.
+     */
+    fun observeSubscriptions(): Flow<List<StoredSubscription>>
+
+    /**
+     * The raw `subscription-userinfo` value [id]'s provider last sent — pin,
+     * else provider, else `null`, per [SubscriptionRepository.observeEffective].
+     * `null` when the provider has sent no usable value; parsing the raw
+     * semicolon-separated header is the caller's job
+     * ([art.yniyniyni.subspace.core.parser.directive.parseUserInfo]), this
+     * seam only resolves precedence.
+     */
+    fun observeUserInfo(id: Long): Flow<String?>
+
+    /**
+     * Resolves [key] for [id] under spec D3's precedence (pin, else provider, else [default]),
+     * recomposing on every directive or pin change — see
+     * [SubscriptionRepository.observeEffective]. Task 15: the subscription detail screen's own
+     * `SettingRowState` rows.
+     */
+    fun observeEffective(
+        id: Long,
+        key: String,
+        default: String?,
+    ): Flow<EffectiveValue>
+
+    /** Pins [value] for [key] on [id], so no future provider update moves it — see [SubscriptionRepository.pin]. */
+    suspend fun pin(
+        id: Long,
+        key: String,
+        value: String,
+    )
+
+    /** Removes a pin, handing [key] back to the provider — see [SubscriptionRepository.unpin]. */
+    suspend fun unpin(
+        id: Long,
+        key: String,
+    )
+
+    /** Toggles the HWID header for [id] — see [SubscriptionRepository.setHwidEnabled]. */
+    suspend fun setHwidEnabled(
+        id: Long,
+        enabled: Boolean,
+    )
+
+    /** Sets or clears (`null`/blank) [id]'s User-Agent override — see [SubscriptionRepository.setUserAgentOverride]. */
+    suspend fun setUserAgentOverride(
+        id: Long,
+        userAgent: String?,
+    )
 }
 
+@Suppress("TooManyFunctions") // Implements ProfileSource — see that interface's own identical call.
 @Singleton
 internal class BoundProfileSource
 @Inject
 constructor(
     private val profileRepository: ProfileRepository,
     private val settingsRepository: SettingsRepository,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val subscriptionSyncer: SubscriptionSyncer,
 ) : ProfileSource {
     override fun observeGroups(
         query: String,
@@ -128,6 +218,8 @@ constructor(
     ): Flow<List<ProfileGroup>> = profileRepository.observeGroups(query, protocol)
 
     override val activeProfileId: Flow<Long?> = settingsRepository.activeProfileId
+
+    override val globalHwidEnabled: Flow<Boolean> = settingsRepository.hwidEnabled
 
     override suspend fun setActiveProfile(id: Long?) = settingsRepository.setActiveProfile(id)
 
@@ -162,4 +254,45 @@ constructor(
         name: String,
         outbound: Outbound,
     ): Boolean = profileRepository.update(id, name, outbound)
+
+    override suspend fun addSubscription(
+        url: String,
+        name: String,
+    ): AddedSubscription = subscriptionRepository.add(url, name)
+
+    override suspend fun syncSubscription(id: Long): SyncResult = subscriptionSyncer.sync(id)
+
+    override suspend fun deleteSubscription(id: Long) = subscriptionRepository.delete(id)
+
+    override fun observeSubscriptions(): Flow<List<StoredSubscription>> = subscriptionRepository.observeSubscriptions()
+
+    override fun observeUserInfo(id: Long): Flow<String?> =
+        subscriptionRepository.observeEffective(id, KEY_SUBSCRIPTION_USERINFO, default = null).map { it.value }
+
+    override fun observeEffective(
+        id: Long,
+        key: String,
+        default: String?,
+    ): Flow<EffectiveValue> = subscriptionRepository.observeEffective(id, key, default)
+
+    override suspend fun pin(
+        id: Long,
+        key: String,
+        value: String,
+    ) = subscriptionRepository.pin(id, key, value)
+
+    override suspend fun unpin(
+        id: Long,
+        key: String,
+    ) = subscriptionRepository.unpin(id, key)
+
+    override suspend fun setHwidEnabled(
+        id: Long,
+        enabled: Boolean,
+    ) = subscriptionRepository.setHwidEnabled(id, enabled)
+
+    override suspend fun setUserAgentOverride(
+        id: Long,
+        userAgent: String?,
+    ) = subscriptionRepository.setUserAgentOverride(id, userAgent)
 }

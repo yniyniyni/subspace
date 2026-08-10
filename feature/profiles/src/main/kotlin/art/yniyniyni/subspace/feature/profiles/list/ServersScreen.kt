@@ -6,6 +6,7 @@
 
 package art.yniyniyni.subspace.feature.profiles.list
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,15 +34,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.feature.profiles.R
 import art.yniyniyni.subspace.feature.profiles.add.AddServerSheet
+import art.yniyniyni.subspace.feature.profiles.add.UserMessage
+import art.yniyniyni.subspace.feature.profiles.add.userMessageText
 
 private val CONTENT_HORIZONTAL_PADDING = 16.dp
 private val FILTER_CHIP_GAP = 8.dp
+
+/** Identifies the group-card update result banner to instrumented tests. */
+internal const val SERVERS_UPDATE_RESULT_TEST_TAG = "servers-update-result"
 
 /**
  * The Servers screen: pick which stored profile Home connects to, manage the
@@ -50,7 +58,8 @@ private val FILTER_CHIP_GAP = 8.dp
  * Search and protocol filtering run in SQL over [art.yniyniyni.subspace.core.data.db.ProfileEntity]'s
  * shadow columns ([ServersViewModel]), not by deserializing every row in
  * memory. Sort ([SortOrder]) has only three entries — a "Fastest" order needs
- * a real latency measurement, and latency testing is M4, so it is absent
+ * a real latency measurement, and latency testing is M4.5 (it was M4 when this
+ * was written, before the M4/M4.5 split), so it is absent
  * rather than backed by an invented number (ARCHITECTURE.md §10.1).
  *
  * The empty state and every group's overflow "Add profile" item open
@@ -67,11 +76,15 @@ private val FILTER_CHIP_GAP = 8.dp
  * @param onEditProfile a row's edit icon (Task 21) — forwarded verbatim to
  *   `SubspaceNavHost`, which navigates to `Editor(profileId)`. Same reason
  *   [onScanQr] is a callback rather than this screen owning a `NavController`.
+ * @param onOpenSubscriptionDetail Task 15: a `GroupCard`'s "Subscription details" overflow item
+ *   — forwarded verbatim to `SubspaceNavHost`, which navigates to
+ *   `SubscriptionDetail(subscriptionId)`. Same reason [onEditProfile] is a callback.
  */
 @Composable
 fun ServersScreen(
     onScanQr: () -> Unit,
     onEditProfile: (Long) -> Unit,
+    onOpenSubscriptionDetail: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: ServersViewModel = hiltViewModel()
@@ -90,6 +103,9 @@ fun ServersScreen(
             onDeleteGroup = viewModel::onDeleteGroup,
             onAddProfile = { showAddSheet = true },
             onProfileEdit = onEditProfile,
+            onUpdateSubscription = viewModel::onUpdateSubscription,
+            onDismissUpdateResult = viewModel::onDismissUpdateResult,
+            onOpenSubscriptionDetail = onOpenSubscriptionDetail,
         ),
         modifier = modifier,
     )
@@ -98,7 +114,7 @@ fun ServersScreen(
 }
 
 /**
- * [ServersScreenContent]'s eight callbacks, grouped for the same reason
+ * [ServersScreenContent]'s nine callbacks, grouped for the same reason
  * [art.yniyniyni.subspace.feature.home.HomeActions] is.
  */
 internal data class ServersActions(
@@ -110,6 +126,12 @@ internal data class ServersActions(
     val onDeleteGroup: (Long) -> Unit,
     val onAddProfile: () -> Unit,
     val onProfileEdit: (Long) -> Unit,
+    /** Fix round, Important 1: forwarded to [ServersGroupListActions.onUpdateSubscription]. */
+    val onUpdateSubscription: (Long) -> Unit,
+    /** Dismisses [ServersState.updateResult] once read. */
+    val onDismissUpdateResult: () -> Unit,
+    /** Task 15: forwarded to [ServersGroupListActions.onOpenSubscriptionDetail]. */
+    val onOpenSubscriptionDetail: (Long) -> Unit,
 )
 
 /**
@@ -135,6 +157,10 @@ internal fun ServersScreenContent(
 
         ServersFilters(state = state, actions = actions)
 
+        state.updateResult?.let { message ->
+            UpdateResultBanner(message = message, onDismiss = actions.onDismissUpdateResult)
+        }
+
         ServersGroupList(
             groups = state.groups,
             expandedGroups = expandedGroups,
@@ -148,6 +174,8 @@ internal fun ServersScreenContent(
                 onAddProfile = actions.onAddProfile,
                 onProfileSelected = actions.onProfileSelected,
                 onProfileEdit = actions.onProfileEdit,
+                onUpdateSubscription = actions.onUpdateSubscription,
+                onOpenSubscriptionDetail = actions.onOpenSubscriptionDetail,
             ),
             modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )
@@ -169,6 +197,32 @@ internal fun ServersScreenContent(
             },
             onDeleteDismiss = { deleteTarget = null },
         ),
+    )
+}
+
+/**
+ * The outcome of the most recent `GroupCard` update press. Tapping it dismisses it; there is no
+ * auto-dismiss timer, for the reason the subscription detail screen's own banner gives — a
+ * failure reason the user did not get to read defeats the point of showing it.
+ *
+ * A `quantity` of `null` marks the failure messages, which is what the error colour keys off.
+ */
+@Composable
+private fun UpdateResultBanner(
+    message: UserMessage,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = userMessageText(message),
+        color = if (message.quantity == null) MaterialTheme.colorScheme.error else Color.Unspecified,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier =
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = CONTENT_HORIZONTAL_PADDING)
+            .clickable(onClick = onDismiss)
+            .testTag(SERVERS_UPDATE_RESULT_TEST_TAG),
     )
 }
 

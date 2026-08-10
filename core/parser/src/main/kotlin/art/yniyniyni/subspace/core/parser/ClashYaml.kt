@@ -41,6 +41,16 @@ import com.charleskorn.kaml.YamlScalar
  */
 @Suppress("ReturnCount")
 internal fun parseClashYaml(text: String): ParseOutcome {
+    if (yamlNestsTooDeep(text)) {
+        val failure =
+            parseFailure(
+                0,
+                ParseFailureReason.MalformedYaml,
+                FailureDetail.Malformed(DetailField.YamlBody),
+            )
+        return ParseOutcome(emptyList(), listOf(failure))
+    }
+
     val root = parseYamlMap(text)
     if (root == null) {
         val failure =

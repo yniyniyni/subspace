@@ -27,6 +27,7 @@ import art.yniyniyni.subspace.feature.home.HomeScreen
 import art.yniyniyni.subspace.feature.profiles.editor.EditorScreen
 import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
+import art.yniyniyni.subspace.feature.profiles.subscription.SubscriptionDetailScreen
 import art.yniyniyni.subspace.feature.settings.SettingsScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
 
@@ -123,6 +124,12 @@ fun SubspaceNavHost(
                 ServersScreen(
                     onScanQr = { navController.navigate(QrScan) },
                     onEditProfile = { id -> navController.navigate(Editor(profileId = id)) },
+                    // Task 15: GroupCard's new "subscription details" overflow item, for a
+                    // SUBSCRIPTION-sourced group only — see ServersGroupList's own wiring for
+                    // why a MANUAL group never reaches this callback at all.
+                    onOpenSubscriptionDetail = { id ->
+                        navController.navigate(SubscriptionDetail(subscriptionId = id))
+                    },
                 )
             }
             composable<Settings> {
@@ -160,6 +167,16 @@ fun SubspaceNavHost(
                 val serversEntry = remember(entry) { navController.getBackStackEntry(Servers) }
                 QrScanRoute(
                     serversBackStackEntry = serversEntry,
+                    onDone = { navController.popBackStack() },
+                )
+            }
+            composable<SubscriptionDetail> { entry ->
+                // Task 15: SubscriptionDetailScreen replaces the previously-undeclared route —
+                // the same "no later task owns this" treatment ServersScreen, QrScanScreen,
+                // EditorScreen and SettingsScreen already got.
+                val route: SubscriptionDetail = entry.toRoute()
+                SubscriptionDetailScreen(
+                    subscriptionId = route.subscriptionId,
                     onDone = { navController.popBackStack() },
                 )
             }

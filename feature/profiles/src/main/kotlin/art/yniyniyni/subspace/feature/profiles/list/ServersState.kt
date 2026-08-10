@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.profiles.list
 
 import art.yniyniyni.subspace.core.data.ProfileKind
+import art.yniyniyni.subspace.feature.profiles.add.UserMessage
 
 /**
  * The domain sentinel for "no protocol filter" — always [ServersState.availableProtocols]'
@@ -23,7 +24,8 @@ internal const val ALL_PROTOCOLS_SENTINEL = "All"
  * How [ServersScreen] orders each group's rows.
  *
  * Deliberately three entries, not four: a "Fastest" order needs a real
- * latency measurement, and latency testing is M4 (ARCHITECTURE.md's roadmap).
+ * latency measurement, and latency testing is M4.5 (ARCHITECTURE.md's roadmap —
+ * it was M4 when this was written, before the M4/M4.5 split).
  * [SortOrder.entries] is pinned by a test precisely so a future edit cannot
  * quietly add that fourth entry ahead of M4 actually having a number to sort
  * by — see ARCHITECTURE.md §10.1 on inventing numbers that look measured.
@@ -46,6 +48,15 @@ internal enum class SortOrder { Alphabetical, AsListed, LastUsed }
  * @property availableProtocols the protocol chips to render, derived from what
  *   is actually stored (never a hardcoded protocol list) and always led by
  *   [ALL_PROTOCOLS_SENTINEL].
+ * @property updateResult the outcome of the most recent
+ *   [GroupCard][art.yniyniyni.subspace.core.ui.component.GroupCard] update
+ *   button press, or `null` when there is nothing to report. M4's device run
+ *   found [ServersViewModel.onUpdateSubscription] discarding its [SyncResult][
+ *   art.yniyniyni.subspace.core.data.sync.SyncResult] entirely, so a refresh
+ *   that failed — including the HWID cases the milestone exists to
+ *   distinguish — left the screen completely silent. The detail screen's
+ *   `refreshResult` already did this; the card's button is the path that did
+ *   not.
  */
 internal data class ServersState(
     val groups: List<ServersGroup> = emptyList(),
@@ -53,6 +64,7 @@ internal data class ServersState(
     val protocolFilter: String = ALL_PROTOCOLS_SENTINEL,
     val sort: SortOrder = SortOrder.AsListed,
     val availableProtocols: List<String> = listOf(ALL_PROTOCOLS_SENTINEL),
+    val updateResult: UserMessage? = null,
 )
 
 /**
@@ -64,12 +76,37 @@ internal data class ServersState(
  *   list with a search never understates how many profiles a delete removes.
  * @property profiles the rows currently visible under [ServersState.query]/[ServersState.protocolFilter],
  *   ordered by [ServersState.sort].
+ * @property quotaUsedBytes Task 14: this group's subscription's parsed
+ *   `subscription-userinfo` usage, forwarded to
+ *   [GroupCard][art.yniyniyni.subspace.core.ui.component.GroupCard]'s
+ *   `quotaUsedBytes`. `null` for a `MANUAL` group (it has no subscription to
+ *   own one) and for a `SUBSCRIPTION` group whose provider has sent no
+ *   measurable usage — never a substituted zero.
+ * @property quotaTotalBytes the same directive's `total` field, forwarded to
+ *   `GroupCard`'s `quotaTotalBytes`. `null` under the same conditions as
+ *   [quotaUsedBytes], or when the provider omitted `total` entirely.
+ * @property subscriptionId the id of the [art.yniyniyni.subspace.core.data.StoredSubscription]
+ *   that owns this group, or `null` for a `MANUAL` group. Fix round (code
+ *   review, three Important findings): this is what lets
+ *   [ServersGroupList][art.yniyniyni.subspace.feature.profiles.list.ServersGroupList]
+ *   wire `GroupCard`'s `onUpdate` to `syncSubscription(subscriptionId)` without
+ *   `ServersGroup` itself carrying a lambda — the id is data, the callback is
+ *   a Compose-layer concern built from it, same split [id]/[actions] already
+ *   draws between this group and [ServersGroupListActions].
+ * @property lastFetchedAtEpochMillis this group's subscription's
+ *   [art.yniyniyni.subspace.core.data.StoredSubscription.lastFetchedAt],
+ *   forwarded to `GroupCard`'s `lastFetchedAtEpochMillis`. `null` for a
+ *   `MANUAL` group or a subscription never yet successfully fetched.
  */
 internal data class ServersGroup(
     val id: Long,
     val name: String,
     val totalProfileCount: Int,
     val profiles: List<ServerRow>,
+    val quotaUsedBytes: Long? = null,
+    val quotaTotalBytes: Long? = null,
+    val subscriptionId: Long? = null,
+    val lastFetchedAtEpochMillis: Long? = null,
 )
 
 /**
@@ -93,6 +130,9 @@ internal data class ServersGroup(
  *   transport list of its own.
  * @property isActive whether this is the profile [art.yniyniyni.subspace.core.data.SettingsRepository.activeProfileId]
  *   currently names.
+ * @property droppedFromSubscriptionAt non-null when this active server was retained after its
+ *   provider stopped offering it. The row renders a warning instead of silently making the
+ *   orphaned server look current (spec D4).
  */
 internal data class ServerRow(
     val id: Long,
@@ -104,4 +144,5 @@ internal data class ServerRow(
     val compatibilityMode: Boolean,
     val connectable: Boolean,
     val isActive: Boolean,
+    val droppedFromSubscriptionAt: Long? = null,
 )

@@ -13,6 +13,8 @@
 //   - :service and :core:parser never depend on :core:ui (§4: :core:ui is
 //     Compose, for :feature:* and :app only)
 //   - :core:ui depends on :core:model only (§4)
+//   - only :core:data may depend on :core:network (§4)
+//   - :core:network depends on :core:model only (§4)
 // The fourth rule ("zero Android dependencies for :core:model and :core:parser")
 // needs no check: those modules apply subspace.jvm, the plain Kotlin/JVM plugin,
 // so an Android import fails to compile. That is a stronger guarantee than a
@@ -109,6 +111,36 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
         if (path == ":core:ui") {
             projectDeps.filter { it != ":core:model" }.forEach {
                 violations += "$path depends on $it — :core:ui may depend on :core:model only (§4)"
+            }
+        }
+
+        // :core:network is the HTTP client. Only :core:data may reach it —
+        // everything else goes through that module's repository, like every
+        // other data source. Without this, a ViewModel fetching a subscription
+        // directly is a compile success and an architecture regression (§4).
+        //
+        // Deliberately an allowlist (path != ":core:data"), not a denylist of
+        // :feature:*/:service/:app: a denylist silently stops protecting the
+        // moment an eleventh module is added, whereas "everyone except
+        // :core:data" is what "only :core:data may depend on it" (ARCHITECTURE.md
+        // §4) actually means. path != ":core:network" excludes the module's own
+        // self-reference (see the comment on projectDeps above — self-deps are
+        // never a violation). The root build.gradle.kts only applies this
+        // plugin inside subprojects {}, and build-logic is a separate included
+        // build that never applies it at all — so root and build-logic never
+        // run this check and the allowlist only ever needs to reason about
+        // this build's real subprojects.
+        if (path != ":core:data" && path != ":core:network") {
+            projectDeps.filter { it == ":core:network" }.forEach {
+                violations += "$path depends on $it — only :core:data may depend on :core:network (§4)"
+            }
+        }
+
+        // :core:network returns a body and a header set; deciding what they
+        // mean is not its job (§4).
+        if (path == ":core:network") {
+            projectDeps.filter { it != ":core:model" }.forEach {
+                violations += "$path depends on $it — :core:network may depend on :core:model only (§4)"
             }
         }
 

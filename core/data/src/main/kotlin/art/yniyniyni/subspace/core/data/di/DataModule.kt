@@ -3,8 +3,10 @@ package art.yniyniyni.subspace.core.data.di
 
 import android.content.Context
 import androidx.room.Room
+import art.yniyniyni.subspace.core.data.db.MIGRATION_1_2
 import art.yniyniyni.subspace.core.data.db.ProfileDao
 import art.yniyniyni.subspace.core.data.db.SettingDao
+import art.yniyniyni.subspace.core.data.db.SubscriptionDao
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import dagger.Module
 import dagger.Provides
@@ -42,6 +44,7 @@ internal fun subspaceDatabase(
     Room
         .databaseBuilder(context.applicationContext, SubspaceDatabase::class.java, name)
         .enableMultiInstanceInvalidation()
+        .addMigrations(MIGRATION_1_2)
         .build()
 
 /**
@@ -65,4 +68,7 @@ internal object DataModule {
 
     @Provides
     fun settingDao(database: SubspaceDatabase): SettingDao = database.settingDao()
+
+    @Provides
+    fun subscriptionDao(database: SubspaceDatabase): SubscriptionDao = database.subscriptionDao()
 }

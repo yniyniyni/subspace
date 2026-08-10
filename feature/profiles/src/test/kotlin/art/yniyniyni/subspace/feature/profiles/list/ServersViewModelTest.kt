@@ -9,10 +9,12 @@ import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SyncResult
+import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import art.yniyniyni.subspace.feature.profiles.R
 import art.yniyniyni.subspace.feature.profiles.add.UserMessage
@@ -823,5 +825,68 @@ class ServersViewModelTest {
             advanceUntilIdle()
 
             model.state.value.groups.single().profiles.take(2).map { it.id } shouldBe listOf(4L, 1L)
+        }
+
+    @Test
+    fun `showing the list measures every group once, then not again`() =
+        runTest {
+            advanceUntilIdle()
+
+            viewModel.onServersShown()
+            advanceUntilIdle()
+            val afterFirst = tester.testCallCount
+
+            // Navigating away and back must not re-run it — the device checklist
+            // checks exactly this.
+            viewModel.onServersShown()
+            advanceUntilIdle()
+
+            afterFirst shouldBe 1
+            tester.testCallCount shouldBe 1
+        }
+
+    @Test
+    fun `showing the list measures a manual group with no provider at all`() =
+        runTest {
+            advanceUntilIdle()
+
+            viewModel.onServersShown()
+            advanceUntilIdle()
+
+            // The fixture group is MANUAL: no subscription, so no directive could
+            // ever have enabled this. Ours does.
+            tester.testedIds shouldBe listOf(1L, 2L, 3L, 4L)
+        }
+
+    @Test
+    fun `a metered network suppresses the launch run but leaves the manual action`() =
+        runTest {
+            tester.metered = true
+            advanceUntilIdle()
+
+            viewModel.onServersShown()
+            advanceUntilIdle()
+            tester.testCallCount shouldBe 0
+
+            viewModel.onTestGroup(group.id)
+            advanceUntilIdle()
+            tester.testCallCount shouldBe 1
+        }
+
+    @Test
+    fun `a connect in flight defers the launch run rather than cancelling it`() =
+        runTest {
+            tester.state = ConnectionState.Connecting(StartupStage.StartingCore)
+            advanceUntilIdle()
+
+            viewModel.onServersShown()
+            advanceUntilIdle()
+            tester.testCallCount shouldBe 0
+
+            // Once the connect settles, the group's one launch run is still available.
+            tester.state = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 10800)
+            viewModel.onServersShown()
+            advanceUntilIdle()
+            tester.testCallCount shouldBe 1
         }
 }

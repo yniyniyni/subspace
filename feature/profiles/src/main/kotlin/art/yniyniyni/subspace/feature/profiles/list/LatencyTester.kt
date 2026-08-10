@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.list
 
+import android.content.Context
+import android.net.ConnectivityManager
 import art.yniyniyni.subspace.core.data.LatencyCache
 import art.yniyniyni.subspace.core.data.SettingsRepository
+import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOptions
 import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.service.TunnelClient
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -55,6 +59,21 @@ internal interface LatencyTester {
 
     /** Whether ping-on-launch may run while the active network is metered. */
     val pingOnLaunchMetered: Flow<Boolean>
+
+    /**
+     * Whether the active network is metered right now.
+     *
+     * On this seam rather than injected into the screen so `:feature:profiles`'
+     * unit tests need no `Context` — the same reason the rest of this interface
+     * exists.
+     */
+    fun isMetered(): Boolean
+
+    /**
+     * The tunnel's current state, so a launch run can stay out of the way of an
+     * in-flight connect (§5.3).
+     */
+    fun connectionState(): ConnectionState
 }
 
 @Singleton
@@ -64,6 +83,7 @@ constructor(
     private val cache: LatencyCache,
     private val tunnel: TunnelClient,
     private val settings: SettingsRepository,
+    @ApplicationContext private val context: Context,
 ) : LatencyTester {
     override val results: StateFlow<Map<Long, LatencyResult>> = cache.results
     override val testing: StateFlow<Set<Long>> = cache.testing
@@ -108,4 +128,14 @@ constructor(
     }
 
     override fun claimLaunchRun(groupId: Long): Boolean = cache.claimLaunchRun(groupId)
+
+    /**
+     * Read at the moment a launch run is considered, not cached: the user may
+     * have moved off Wi-Fi since the app started, and this is the gate that keeps
+     * an unprompted forty-server run off their cellular data.
+     */
+    override fun isMetered(): Boolean =
+        context.getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered ?: false
+
+    override fun connectionState(): ConnectionState = tunnel.state.value
 }

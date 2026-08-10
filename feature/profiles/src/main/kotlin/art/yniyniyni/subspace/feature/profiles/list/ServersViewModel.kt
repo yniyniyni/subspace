@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
@@ -53,6 +54,16 @@ constructor(
 
     private val _state = MutableStateFlow(ServersState())
     val state: StateFlow<ServersState> = _state.asStateFlow()
+
+    /**
+     * Each group's `subscription-ping-onopen-enabled`, refreshed whenever state
+     * is rebuilt.
+     *
+     * Kept beside the state rather than inside it because it is not something the
+     * screen renders — it only decides whether [onServersShown] measures a group.
+     * A `MANUAL` group is simply absent, which leaves our own setting in charge.
+     */
+    private var providerPingOnOpen: Map<Long, String?> = emptyMap()
 
     init {
         // Unfiltered: the source availableProtocols is derived from (every
@@ -256,6 +267,35 @@ constructor(
         latencyTester.cancel()
     }
 
+    private val launchPinger =
+        LaunchPinger(
+            tester = latencyTester,
+            isMetered = { latencyTester.isMetered() },
+            connectionState = { latencyTester.connectionState() },
+        )
+
+    /**
+     * Called by the screen once it has groups to show.
+     *
+     * Every group is offered on every call; [LaunchPinger] decides, and its
+     * once-per-session claim is what makes calling this on each recomposition
+     * safe. Tied to first view of the list rather than to process start so that a
+     * user who launches into Home and connects never pays for measurements they
+     * did not look at, and so `:bg` is not started for a run nobody will see.
+     */
+    fun onServersShown() {
+        viewModelScope.launch {
+            val enabled = latencyTester.pingOnLaunch.first()
+            val allowMetered = latencyTester.pingOnLaunchMetered.first()
+            _state.value.groups.forEach { group ->
+                val providerValue = providerPingOnOpen[group.id]
+                if (launchPinger.shouldRun(group.id, enabled, allowMetered, providerValue)) {
+                    onTestGroup(group.id)
+                }
+            }
+        }
+    }
+
     /**
      * The user's own order for one group, outranking that group's provider.
      *
@@ -281,6 +321,8 @@ constructor(
     ): ServersState {
         val filters = presentation.filters
         val totalCountById = raw.associate { it.id to it.profiles.size }
+        providerPingOnOpen =
+            subscriptionContextByGroupId.mapValues { (_, context) -> context.pingOnOpen }
         val groups =
             filtered.map { group ->
                 val context = subscriptionContextByGroupId[group.id]

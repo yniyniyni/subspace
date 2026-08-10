@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.list
 
+import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,16 @@ internal class FakeLatencyTester(
 
     override val pingOnLaunch: Flow<Boolean> = MutableStateFlow(true)
     override val pingOnLaunchMetered: Flow<Boolean> = MutableStateFlow(false)
+
+    /** Settable so a test can drive the metered gate without a real network. */
+    var metered: Boolean = false
+
+    /** Settable so a test can put a launch run behind an in-flight connect. */
+    var state: ConnectionState = ConnectionState.Disconnected
+
+    override fun isMetered(): Boolean = metered
+
+    override fun connectionState(): ConnectionState = state
 
     var resultFor: (Long) -> LatencyResult = { LatencyResult.ok(DEFAULT_DELAY_MS) }
 

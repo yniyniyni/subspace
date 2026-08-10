@@ -49,5 +49,26 @@ public sealed interface FetchOutcome {
             "Success(body=<redacted, ${body.length} chars>, headers=${headers.keys})"
     }
 
-    public data class Failed(val reason: FetchFailure) : FetchOutcome
+    /**
+     * @property detail the *cause* behind [reason], when one is known — the throwable's simple
+     *   class name (`SSLHandshakeException`, `ConnectException`, ...), never its message.
+     *
+     *   M4's device run is the argument for this field existing. One host alternated between
+     *   [FetchFailure.TlsFailure] and [FetchFailure.Unreachable] minutes apart and recovered on
+     *   its own; answering "is this a reset in the path, an expired certificate, or a protocol
+     *   mismatch?" took four probes from outside the app, because every one of those collapses
+     *   to the same taxonomy member and the exception was discarded at the catch. The category
+     *   is what the *user* is told (§7 is deliberately closed); this is what a log or a bug
+     *   report needs.
+     *
+     *   The message is excluded on purpose, not overlooked: TLS and DNS exception messages
+     *   routinely embed the hostname (`Hostname x.example not verified`, `Unable to resolve
+     *   host "x.example"`), and a subscription URL's host is a secret under §5.6. A JDK/OkHttp
+     *   class name is shape, not content — the same line [FetchOutcome.Success.toString] draws
+     *   between header keys and header values.
+     */
+    public data class Failed(
+        val reason: FetchFailure,
+        val detail: String? = null,
+    ) : FetchOutcome
 }

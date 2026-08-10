@@ -107,7 +107,7 @@ internal constructor(
             )
 
         return when (outcome) {
-            is FetchOutcome.Failed -> recordFailure(subscription.id, outcome.reason)
+            is FetchOutcome.Failed -> recordFailure(subscription.id, outcome.reason, outcome.detail)
             is FetchOutcome.Success -> applySuccess(subscription, outcome, activeProfileId)
         }
     }
@@ -122,11 +122,24 @@ internal constructor(
     private suspend fun recordFailure(
         subscriptionId: Long,
         reason: FetchFailure,
+        detail: String?,
     ): SyncResult {
-        // The stored status/detail columns stay FetchFailure.name — SubscriptionEntity's own
-        // storage, internal to :core:data, is unaffected by the SyncResult.Failed boundary
-        // translation below (SubscriptionSyncFailure's own KDoc explains why that exists).
-        dao.recordFetchFailure(subscriptionId, reason.name, reason.name, System.currentTimeMillis())
+        // The stored status column stays FetchFailure.name — SubscriptionEntity's own storage,
+        // internal to :core:data, is unaffected by the SyncResult.Failed boundary translation
+        // below (SubscriptionSyncFailure's own KDoc explains why that exists).
+        //
+        // The detail column used to be a second copy of that same name, carrying no information
+        // at all. It now holds the cause when the fetcher knows one — see
+        // FetchOutcome.Failed.detail, which also explains why that value is safe to store and to
+        // log while the exception's message is not. It falls back to the status name only when
+        // the failure came from a response rather than a throwable (a 404, a 500), where there is
+        // no cause to name beyond the status itself.
+        val stored = detail ?: reason.name
+        dao.recordFetchFailure(subscriptionId, reason.name, stored, System.currentTimeMillis())
+        // Deliberately W, and deliberately only the two closed-vocabulary names: no URL, no host,
+        // no body. This is the line whose absence made M4's device run need four out-of-app
+        // probes to tell one network failure from another.
+        Log.w(TAG, "subscription $subscriptionId fetch failed reason=${reason.name} cause=$stored")
         return SyncResult.Failed(reason.toSyncFailure())
     }
 

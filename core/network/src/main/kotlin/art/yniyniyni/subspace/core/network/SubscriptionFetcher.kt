@@ -95,13 +95,13 @@ constructor(
                         .associate { it.lowercase() to response.headers[it].orEmpty() }
                     response.toOutcome(headers)
                 }
-            } catch (ignoredTimeout: SocketTimeoutException) {
-                FetchOutcome.Failed(FetchFailure.TimedOut)
-            } catch (ignoredTls: SSLException) {
-                FetchOutcome.Failed(FetchFailure.TlsFailure)
-            } catch (ignoredHost: UnknownHostException) {
-                FetchOutcome.Failed(FetchFailure.Unreachable)
-            } catch (ignoredCallTimeout: InterruptedIOException) {
+            } catch (timeout: SocketTimeoutException) {
+                FetchOutcome.Failed(FetchFailure.TimedOut, timeout.causeName())
+            } catch (tls: SSLException) {
+                FetchOutcome.Failed(FetchFailure.TlsFailure, tls.causeName())
+            } catch (host: UnknownHostException) {
+                FetchOutcome.Failed(FetchFailure.Unreachable, host.causeName())
+            } catch (callTimeout: InterruptedIOException) {
                 // OkHttp's callTimeout — the one that actually fires here — throws a plain
                 // InterruptedIOException("timeout"), NOT SocketTimeoutException. All three
                 // timeouts are set to the same duration and callTimeout spans the whole call,
@@ -109,13 +109,13 @@ constructor(
                 // the generic IOException below and was reported as "could not reach the
                 // server". M4's device run caught it against a deliberately hanging server:
                 // the SocketTimeoutException branch above is real but almost never reached.
-                FetchOutcome.Failed(FetchFailure.TimedOut)
-            } catch (ignoredIo: IOException) {
+                FetchOutcome.Failed(FetchFailure.TimedOut, callTimeout.causeName())
+            } catch (io: IOException) {
                 // Deliberately last and deliberately broad-ish: the three above
                 // are the cases worth naming to the user, and everything else is
                 // "the network did not work". §10.4 wants a specific diagnosis
                 // where one exists, not an invented one where it does not.
-                FetchOutcome.Failed(FetchFailure.Unreachable)
+                FetchOutcome.Failed(FetchFailure.Unreachable, io.causeName())
             }
         }
 
@@ -183,6 +183,32 @@ private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
             ?: FetchOutcome.Failed(FetchFailure.ServerError)
     }
 }
+
+/**
+ * This throwable's class name, plus its root cause's when that differs — never any message.
+ *
+ * See [FetchOutcome.Failed.detail] for why the message is excluded and why the class name alone is
+ * safe under §5.6. The root cause is included because OkHttp wraps: the interesting half of a
+ * failed handshake is usually the `EOFException`/`ConnectException` underneath a generic
+ * `SSLException`, and "SSLException" on its own would leave this field almost as uninformative as
+ * the taxonomy member it accompanies.
+ *
+ * The cause chain is walked with a bounded loop rather than recursion — a self-referencing or
+ * cyclic `cause` is rare but constructible, and this runs on every network failure.
+ */
+private fun Throwable.causeName(): String {
+    var root: Throwable = this
+    var hops = 0
+    while (hops < MAX_CAUSE_HOPS) {
+        root = root.cause ?: break
+        hops++
+    }
+    val outer = javaClass.simpleName
+    val inner = root.javaClass.simpleName
+    return if (root === this || inner == outer) outer else "$outer<-$inner"
+}
+
+private const val MAX_CAUSE_HOPS = 8
 
 /**
  * Reads the body as text, or `null` if it exceeds [maxBytes].

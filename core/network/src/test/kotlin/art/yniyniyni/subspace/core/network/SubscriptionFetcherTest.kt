@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.network
 
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
@@ -108,8 +110,17 @@ class SubscriptionFetcherTest {
         // "could not reach the server".
         server.enqueue(MockResponse.Builder().headersDelay(30, TimeUnit.SECONDS).build())
 
-        fetcher().fetch(request().copy(timeoutSeconds = 1)) shouldBe
-            FetchOutcome.Failed(FetchFailure.TimedOut)
+        val outcome = fetcher().fetch(request().copy(timeoutSeconds = 1))
+
+        outcome.shouldBeInstanceOf<FetchOutcome.Failed>()
+        outcome.reason shouldBe FetchFailure.TimedOut
+        // The detail is what tells the two timeout paths apart in a log. Which one fires is a
+        // genuine race — callTimeout and readTimeout are set to the same duration, so this
+        // alternates between runs between `SocketTimeoutException` and
+        // `InterruptedIOException<-SocketException` — and asserting either exact string would be
+        // a flaky test. What must hold is that a timeout names a timeout, and that the branch
+        // taken is recorded at all.
+        outcome.detail.shouldNotBeNull().shouldContain("Timeout|Interrupted".toRegex())
     }
 
     @Test
@@ -199,13 +210,49 @@ class SubscriptionFetcherTest {
             ),
         )
 
-        outcome shouldBe FetchOutcome.Failed(FetchFailure.Unreachable)
+        outcome.shouldBeInstanceOf<FetchOutcome.Failed>()
+        outcome.reason shouldBe FetchFailure.Unreachable
+        outcome.detail shouldBe "ConnectException"
     }
 
     @Test
     fun `no failure carries the url or the body`() {
         // §5.6. FetchFailure is an enum with no payload, so this is structural.
         FetchFailure.entries.forEach { it.name.contains("http") shouldBe false }
+    }
+
+    @Test
+    fun `a failure detail names the exception and never quotes its message`() = runTest {
+        // §5.6, and the reason FetchOutcome.Failed.detail carries a class name rather than the
+        // message: DNS and TLS exception messages routinely embed the host, and a subscription
+        // URL's host is a secret. This host does not resolve, so the message would contain it.
+        val host = "no-such-host-b7f2a1.invalid"
+        val outcome = fetcher().fetch(
+            SubscriptionRequest(
+                url = "https://$host/sub",
+                hwidEnabled = true,
+                userAgentOverride = null,
+                timeoutSeconds = 5,
+            ),
+        )
+
+        outcome.shouldBeInstanceOf<FetchOutcome.Failed>()
+        outcome.reason shouldBe FetchFailure.Unreachable
+        outcome.detail shouldBe "UnknownHostException"
+        outcome.detail?.contains(host) shouldBe false
+    }
+
+    @Test
+    fun `a response-derived failure has no exception to name`() = runTest {
+        // Nothing was thrown, so there is no cause beyond the status itself; the syncer falls
+        // back to the reason's own name rather than inventing one.
+        server.enqueue(MockResponse(code = 500))
+
+        val outcome = fetcher().fetch(request())
+
+        outcome.shouldBeInstanceOf<FetchOutcome.Failed>()
+        outcome.reason shouldBe FetchFailure.ServerError
+        outcome.detail shouldBe null
     }
 
     @Test

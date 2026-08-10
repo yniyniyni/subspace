@@ -118,6 +118,8 @@ class TunnelService : VpnService() {
      * this binder for any action but `SERVICE_INTERFACE`, so `:main` can bind,
      * measure, and unbind while disconnected.
      */
+    private val underlyingNetwork by lazy { UnderlyingNetwork(applicationContext) }
+
     private val latencyRunner by lazy {
         LatencyRunner<StoredProfile>(
             measure = { profile, options -> measureOne(profile, options) },
@@ -604,9 +606,7 @@ class TunnelService : VpnService() {
         options: LatencyOptions,
     ): LatencyResult =
         when (options.mode) {
-            PingMode.TCP ->
-                TcpProbe(protector = TcpSocketProtector { socket -> protect(socket) })
-                    .measure(profile.address, profile.port, options.timeoutSeconds)
+            PingMode.TCP -> measureTcp(profile, options)
 
             PingMode.PROXY_HEAD -> {
                 val outbound = profile.outbound
@@ -623,6 +623,26 @@ class TunnelService : VpnService() {
                 }
             }
         }
+
+    /**
+     * Underlying network first, `protect` only as a fallback.
+     *
+     * `protect()` exempts a socket from **our** tunnel and nothing else — the
+     * platform does not let one VPN app punch through another's. Under a
+     * different client's VPN it therefore leaves the measurement going through
+     * that client, which is how a Singapore server came to report 1 ms on a
+     * device run. Binding to a `NOT_VPN` network is the only thing that measures
+     * the server itself; `protect` still covers the case where we are the VPN and
+     * no separate transport was resolvable.
+     */
+    private suspend fun measureTcp(
+        profile: StoredProfile,
+        options: LatencyOptions,
+    ): LatencyResult {
+        val protector = TcpSocketProtector { socket -> underlyingNetwork.bind(socket) || protect(socket) }
+        return TcpProbe(protector = protector)
+            .measure(profile.address, profile.port, options.timeoutSeconds)
+    }
 
     // ── IPC ─────────────────────────────────────────────────────────────────
 

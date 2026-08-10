@@ -69,6 +69,23 @@ public class TcpProbe(
                 }
 
             Socket().use { socket ->
+                // Bind first, and this is load-bearing rather than tidiness.
+                //
+                // `VpnService.protect(Socket)` resolves the socket's file
+                // descriptor to mark it. A bare `Socket()` is unbound and the JDK
+                // creates that fd lazily — on bind or connect — so protecting one
+                // here marks nothing and silently succeeds at doing nothing.
+                // Binding to an ephemeral local port forces the fd to exist.
+                //
+                // Observed, not theorised: without this, a measurement taken while
+                // the tunnel was up reported 1–6 ms for servers in Amsterdam,
+                // Newark and Singapore. The unprotected connect went into the TUN,
+                // where tun2socks accepts locally and returns immediately — so the
+                // number was the round trip to the phone itself. §5.1's exact
+                // signature, and SocketProtector's KDoc warns that a failed
+                // protect surfaces only as a symptom.
+                socket.bind(InetSocketAddress(0))
+
                 // Before connect, never after: an unprotected connect is already
                 // inside the TUN by the time it returns (§5.1).
                 protector?.protect(socket)

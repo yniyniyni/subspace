@@ -20,16 +20,25 @@ public enum class PingMode { TCP, PROXY_HEAD }
 /**
  * Maps a `ping-type` directive value, or a stored setting, onto a [PingMode].
  *
- * Anything unrecognised — including null — falls back to [PingMode.PROXY_HEAD],
- * the mode that actually proves the proxy carries traffic rather than merely
- * that the port accepts a connection.
+ * Anything unrecognised — including null — falls back to [PingMode.TCP].
+ *
+ * TCP is the default because it is the number a user can check against anything
+ * else. A device run compared it against Happ and Speedtest across five servers
+ * on three continents and it agreed within a few milliseconds each time
+ * (Amsterdam 38/39, Stockholm 20/19/20, Frankfurt 42/41, Newark 121/124,
+ * Singapore 196/204). It is also seconds rather than a minute for a large group,
+ * and costs no measurable data.
+ *
+ * What it gives up: a server that accepts the TCP connection and then rejects
+ * the handshake still reads fast. [PROXY_HEAD] is the mode that proves the proxy
+ * actually carries traffic, and the settings copy says so at the point of choice.
  */
 public fun pingModeFrom(value: String?): PingMode =
     when (value) {
         "tcp" -> PingMode.TCP
         // The alias. `proxy` means GET, which v26.7.11 cannot issue.
         "proxy", "proxy-head" -> PingMode.PROXY_HEAD
-        else -> PingMode.PROXY_HEAD
+        else -> PingMode.TCP
     }
 
 /**

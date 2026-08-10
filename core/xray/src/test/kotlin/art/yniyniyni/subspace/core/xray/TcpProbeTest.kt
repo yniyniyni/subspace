@@ -45,15 +45,39 @@ class TcpProbeTest {
     @Test
     fun `the protector is offered the socket before connect`() =
         runTest {
-            var offered = false
+            var connectedWhenOffered = true
             val protector =
-                TcpSocketProtector { _ ->
-                    offered = true
+                TcpSocketProtector { socket ->
+                    connectedWhenOffered = socket.isConnected
                     true
                 }
             ServerSocket(0).use { server ->
                 TcpProbe(protector = protector).measure("127.0.0.1", server.localPort, timeoutSeconds = 2)
             }
-            offered shouldBe true
+            connectedWhenOffered shouldBe false
+        }
+
+    @Test
+    fun `the socket is bound before the protector sees it, so it has an fd to protect`() =
+        runTest {
+            // The regression guard for the §5.1 defect a device run exposed:
+            // VpnService.protect(Socket) resolves the socket's file descriptor,
+            // and an unbound socket has none yet — so protecting one marks
+            // nothing and quietly reports success. The symptom was a measurement
+            // taken with the tunnel up reading 1 ms to Singapore, because the
+            // unprotected connect terminated at tun2socks on the phone.
+            //
+            // isBound is the observable proxy for "an fd exists": false here
+            // means protect is a no-op, whatever it returns.
+            var boundWhenOffered = false
+            val protector =
+                TcpSocketProtector { socket ->
+                    boundWhenOffered = socket.isBound
+                    true
+                }
+            ServerSocket(0).use { server ->
+                TcpProbe(protector = protector).measure("127.0.0.1", server.localPort, timeoutSeconds = 2)
+            }
+            boundWhenOffered shouldBe true
         }
 }

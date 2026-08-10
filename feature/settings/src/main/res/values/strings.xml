@@ -37,8 +37,8 @@
          `ping-type: proxy` resolves to this. Do not shorten to "Proxy" — that
          would promise a request this build cannot make. -->
     <string name="settings_ping_mode_proxy_head">Proxy (HEAD)</string>
-    <string name="settings_ping_mode_tcp_summary">Times a TCP connection. Works for every protocol, but a server that accepts the connection and then rejects the handshake still looks fast.</string>
-    <string name="settings_ping_mode_proxy_head_summary">Sends a request through the proxy. Slower, and proves the server actually carries traffic.</string>
+    <string name="settings_ping_mode_tcp_summary">Real round-trip to the server. Fast, works for every protocol, and comparable with other clients. Does not prove the proxy itself works.</string>
+    <string name="settings_ping_mode_proxy_head_summary">Sends a request through the proxy. Much slower, and proves the server actually carries traffic.</string>
     <string name="settings_ping_check_url">Check URL</string>
     <string name="settings_ping_check_url_summary">Fetched through the proxy when testing. A 204 endpoint returns no content.</string>
     <string name="settings_ping_timeout">Timeout</string>

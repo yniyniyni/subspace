@@ -23,7 +23,7 @@ internal data class SettingsState(
      * therefore resolves to [PingMode.PROXY_HEAD], which is why the UI label for
      * it says "(HEAD)" rather than a bare "Proxy".
      */
-    val pingMode: PingMode = PingMode.PROXY_HEAD,
+    val pingMode: PingMode = PingMode.TCP,
     val pingCheckUrl: String = "",
     val pingTimeoutSeconds: Int = 5,
     val pingOnLaunch: Boolean = true,

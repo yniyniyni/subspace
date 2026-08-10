@@ -101,8 +101,9 @@ internal constructor(
     }
 
     /**
-     * How latency is measured, defaulting to the mode that proves the proxy
-     * carries traffic rather than merely that the port accepts a connection.
+     * How latency is measured, defaulting to [PingMode.TCP] — see [pingModeFrom]
+     * for why that is the default rather than the mode that proves the proxy
+     * works.
      *
      * [pingModeFrom] also absorbs a stored `proxy`, which is the documented alias
      * for `proxy-head` — libXray v26.7.11 cannot issue the GET that `proxy`

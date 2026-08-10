@@ -60,7 +60,7 @@ class SettingsViewModelTest {
             _hwidEnabled.value = enabled
         }
 
-        private val _pingMode = MutableStateFlow(PingMode.PROXY_HEAD)
+        private val _pingMode = MutableStateFlow(PingMode.TCP)
         private val _pingCheckUrl = MutableStateFlow("https://www.gstatic.com/generate_204")
         private val _pingTimeoutSeconds = MutableStateFlow(DEFAULT_TIMEOUT)
         private val _pingOnLaunch = MutableStateFlow(true)
@@ -207,11 +207,11 @@ class SettingsViewModelTest {
         SettingsViewModel(source, FakeXraySource(), FakeAppVersionSource())
 
     @Test
-    fun `latency defaults are proxy-head, five seconds, launch testing on`() =
+    fun `latency defaults are tcp, five seconds, launch testing on`() =
         runTest {
             val state = viewModel(FakeSettingsSource()).state.value
 
-            state.pingMode shouldBe PingMode.PROXY_HEAD
+            state.pingMode shouldBe PingMode.TCP
             state.pingTimeoutSeconds shouldBe 5
             state.pingOnLaunch shouldBe true
             // Off by default: a large list measured on cellular is real data.
@@ -222,10 +222,10 @@ class SettingsViewModelTest {
     fun `the ping mode survives a viewmodel restart`() =
         runTest {
             val source = FakeSettingsSource()
-            viewModel(source).onPingModeChanged(PingMode.TCP)
+            viewModel(source).onPingModeChanged(PingMode.PROXY_HEAD)
             advanceUntilIdle()
 
-            viewModel(source).state.value.pingMode shouldBe PingMode.TCP
+            viewModel(source).state.value.pingMode shouldBe PingMode.PROXY_HEAD
         }
 
     @Test

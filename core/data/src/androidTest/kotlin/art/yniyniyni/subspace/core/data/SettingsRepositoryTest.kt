@@ -31,9 +31,11 @@ class SettingsRepositoryTest {
     fun tearDown() = db.close()
 
     @Test
-    fun latencyDefaultsAreProxyHeadFiveSecondsAndLaunchPingOn() =
+    fun latencyDefaultsAreTcpFiveSecondsAndLaunchPingOn() =
         runTest {
-            repository.pingMode.first() shouldBe PingMode.PROXY_HEAD
+            // TCP by default: it is the figure a user can check against another
+            // client or a speed test, and it costs no measurable data.
+            repository.pingMode.first() shouldBe PingMode.TCP
             repository.pingTimeoutSeconds.first() shouldBe 5
             repository.pingCheckUrl.first() shouldBe "https://www.gstatic.com/generate_204"
             // Ours, on by default — the session-scoped cache is empty at every cold
@@ -54,13 +56,13 @@ class SettingsRepositoryTest {
         }
 
     @Test
-    fun anUninterpretableStoredModeFallsBackToProxyHead() =
+    fun anUninterpretableStoredModeFallsBackToTheDefault() =
         runTest {
             // A hand-edited or future-version row. `icmp` is specifically the one
             // that must never come back to life — raw sockets need root.
             db.settingDao().put(SettingEntity(key = "ping_mode", value = "icmp"))
 
-            repository.pingMode.first() shouldBe PingMode.PROXY_HEAD
+            repository.pingMode.first() shouldBe PingMode.TCP
         }
 
     @Test

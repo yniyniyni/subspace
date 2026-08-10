@@ -3,6 +3,14 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Declared explicitly rather than inherited from a dependency's manifest,
+      because two things now depend on it deliberately: the metered-network gate
+      on ping-on-launch, and UnderlyingNetwork, which binds a measurement socket
+      to a NOT_VPN transport so a latency reading is not routed through whichever
+      VPN happens to hold the default route.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- §14.1: VPN apps are an enumerated criterion for systemExempted. A
          non-qualifying type throws ForegroundServiceTypeNotAllowedException at

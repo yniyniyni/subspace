@@ -40,4 +40,13 @@
     <string name="failure_revoked">VPN permission was revoked</string>
     <string name="failure_protocol_not_supported">This protocol is not supported yet</string>
     <string name="failure_profile_decode">This profile could not be read</string>
+    <string name="home_latency_label">Latency</string>
+    <!-- An em-dash, not "0 ms": nothing has been measured, and a substituted
+         number would look measured (ARCHITECTURE.md §10.1). -->
+    <string name="home_latency_none">—</string>
+    <string name="home_latency_ms">%1$d ms</string>
+    <string name="home_latency_testing">…</string>
+    <string name="home_latency_failed">No response</string>
+    <string name="home_latency_unsupported">Not testable</string>
+    <string name="home_latency_test_description">Latency. Tap to test the active server.</string>
 </resources>

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
@@ -33,14 +34,32 @@ internal class HomeViewModel @Inject constructor(
             tunnel.state,
             profileSource.activeProfile,
             profileSource.hasAnyProfile,
-        ) { connection, activeProfile, hasAnyProfile ->
+            tunnel.latencies,
+            tunnel.measuring,
+        ) { connection, activeProfile, hasAnyProfile, latencies, measuring ->
             HomeState(
                 connection = connection,
                 activeProfile = activeProfile,
                 hasAnyProfile = hasAnyProfile,
+                // Keyed on the active profile: switching servers must not carry
+                // the previous one's number across, which would be the wrong
+                // measurement rather than merely a stale one.
+                latency = activeProfile?.let { latencies[it.id] },
+                isMeasuringLatency = activeProfile != null && activeProfile.id in measuring,
             )
         }.onEach { _state.value = it }
             .launchIn(viewModelScope)
+    }
+
+    /**
+     * Measures the active profile.
+     *
+     * A no-op with nothing selected — there is no server to measure, and the tile
+     * offers no affordance in that state either.
+     */
+    fun onTestLatency() {
+        val profileId = _state.value.activeProfile?.id ?: return
+        viewModelScope.launch { tunnel.measure(profileId) }
     }
 
     /**

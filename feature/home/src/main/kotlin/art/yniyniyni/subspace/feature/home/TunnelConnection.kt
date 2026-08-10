@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.home
 
 import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Profile
 import kotlinx.coroutines.flow.StateFlow
 
@@ -31,4 +32,30 @@ internal interface TunnelConnection {
     )
 
     fun disconnect()
+
+    /**
+     * This session's measurements, keyed by profile id.
+     *
+     * Absence means never measured, and renders an em-dash — never `0 ms`.
+     *
+     * Home reads the same session-scoped store the Servers list writes to, so a
+     * server measured there already shows a number here. `:feature:*` modules
+     * cannot depend on each other (§4), which is why this arrives through this
+     * seam rather than through the Servers screen's own.
+     */
+    val latencies: StateFlow<Map<Long, LatencyResult>>
+
+    /** Profile ids with a measurement in flight. */
+    val measuring: StateFlow<Set<Long>>
+
+    /**
+     * Measures one profile — a one-element run, the same path the Servers list
+     * takes.
+     *
+     * Nothing calls this automatically. M4.5 deliberately adds no measurement to
+     * the connect path and no periodic re-measure, so the tunnel start sequence
+     * is untouched by this milestone and no timer wakes the device to spin up an
+     * Xray instance while the screen is off.
+     */
+    suspend fun measure(profileId: Long)
 }

@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.feature.home
 
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.model.LatencyResult
 
 /**
  * What [HomeScreen] renders.
@@ -25,6 +26,19 @@ internal data class HomeState(
     val connection: ConnectionState = ConnectionState.Disconnected,
     val activeProfile: StoredProfile? = null,
     val hasAnyProfile: Boolean = false,
+    /**
+     * The active profile's measured latency, or `null` when nothing has been
+     * measured for it this session.
+     *
+     * Null renders an em-dash, never `0 ms`. Filled only when the user asks:
+     * M4.5 deliberately adds no measurement to the connect path and no periodic
+     * refresh, so the tunnel start sequence is untouched and nothing wakes the
+     * device to measure while the screen is off — the §11 six-hour case is hard
+     * enough already, and it belongs to M7.
+     */
+    val latency: LatencyResult? = null,
+    /** True while the active profile's measurement is in flight. */
+    val isMeasuringLatency: Boolean = false,
 ) {
     /**
      * Whether tapping the connect control should attempt a connection.

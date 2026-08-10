@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.home
 
+import art.yniyniyni.subspace.core.data.LatencyCache
+import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.model.ConnectionState
+import art.yniyniyni.subspace.core.model.LatencyOptions
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.service.TunnelClient
 import dagger.Module
@@ -9,6 +13,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,8 +26,14 @@ import javax.inject.Singleton
 @Singleton
 internal class BoundTunnelConnection @Inject constructor(
     private val client: TunnelClient,
+    private val cache: LatencyCache,
+    private val settings: SettingsRepository,
 ) : TunnelConnection {
     override val state: StateFlow<ConnectionState> get() = client.state
+
+    override val latencies: StateFlow<Map<Long, LatencyResult>> get() = cache.results
+
+    override val measuring: StateFlow<Set<Long>> get() = cache.testing
 
     override fun connect(
         profile: Profile,
@@ -30,6 +41,31 @@ internal class BoundTunnelConnection @Inject constructor(
     ) = client.connect(profile, rowId)
 
     override fun disconnect() = client.disconnect()
+
+    /**
+     * The run id is derived from the profile, not from a shared counter.
+     *
+     * `:feature:profiles` runs its own counter, and the two screens never
+     * measure at once from a user's point of view — but a negative id keeps
+     * Home's runs out of that sequence entirely, so neither side can fence away
+     * the other's results by coincidence.
+     */
+    override suspend fun measure(profileId: Long) {
+        val options =
+            LatencyOptions(
+                mode = settings.pingMode.first(),
+                timeoutSeconds = settings.pingTimeoutSeconds.first(),
+                checkUrl = settings.pingCheckUrl.first(),
+            )
+        cache.markTesting(listOf(profileId))
+        client.startLatencyRun(
+            runId = -profileId,
+            profileIds = listOf(profileId),
+            options = options,
+            onResult = { id, result -> cache.put(id, result) },
+            onFinished = { cache.finish(listOf(profileId)) },
+        )
+    }
 }
 
 @Module

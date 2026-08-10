@@ -160,6 +160,10 @@ class HomeViewModelTest {
         private val _measuring = MutableStateFlow<Set<Long>>(emptySet())
         override val measuring: StateFlow<Set<Long>> = _measuring.asStateFlow()
 
+        /** Off by default here so existing tests keep their "nothing measured yet" baseline. */
+        var launchPingEnabled: Boolean = false
+        override val pingOnLaunch: Flow<Boolean> get() = MutableStateFlow(launchPingEnabled)
+
         /** Settable so a test can drive the failure branch, not only the happy one. */
         var resultToReturn: LatencyResult = LatencyResult.ok(42)
 
@@ -416,6 +420,54 @@ class HomeViewModelTest {
 
             tunnel.measuredIds shouldBe emptyList()
             viewModel.state.value.isMeasuringLatency shouldBe false
+        }
+
+    @Test
+    fun `showing home measures the active profile when launch testing is on`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.launchPingEnabled = true
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+
+            // Before this, Home sat at an em-dash until the user visited Servers
+            // and came back, because ping-on-launch fired only from that list.
+            viewModel.state.value.latency shouldBe LatencyResult.ok(42)
+        }
+
+    @Test
+    fun `showing home again does not re-measure a profile that already has a reading`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.launchPingEnabled = true
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+
+            // Once per session, with no second claim to keep in step with
+            // LatencyCache's — "already has a reading" is the whole condition.
+            tunnel.measuredIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun `showing home measures nothing when launch testing is off`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.launchPingEnabled = false
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+
+            tunnel.measuredIds shouldBe emptyList()
         }
 
     @Test

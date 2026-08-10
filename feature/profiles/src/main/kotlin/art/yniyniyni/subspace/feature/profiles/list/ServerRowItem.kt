@@ -167,6 +167,8 @@ private fun LatencyLabel(
                 stringResource(R.string.servers_latency_ms, latency.delayMillis)
             latency.outcome == LatencyOutcome.UNSUPPORTED ->
                 stringResource(R.string.servers_latency_unsupported)
+            latency.outcome == LatencyOutcome.FOREIGN_VPN ->
+                stringResource(R.string.servers_latency_foreign_vpn)
             else -> stringResource(R.string.servers_latency_failed)
         }
     val measured = latency?.outcome == LatencyOutcome.OK

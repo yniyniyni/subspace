@@ -108,6 +108,9 @@ class TunnelService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
     private val callbacks = RemoteCallbackList<ITunnelCallback>()
 
+    /** Guards measurement against another app's VPN holding the route — see [ForeignVpn]. */
+    private val foreignVpn by lazy { ForeignVpn(applicationContext) }
+
     /**
      * Latency measurement lives in `:bg` because §5.1's protector does.
      *
@@ -118,8 +121,6 @@ class TunnelService : VpnService() {
      * this binder for any action but `SERVICE_INTERFACE`, so `:main` can bind,
      * measure, and unbind while disconnected.
      */
-    private val underlyingNetwork by lazy { UnderlyingNetwork(applicationContext) }
-
     private val latencyRunner by lazy {
         LatencyRunner<StoredProfile>(
             measure = { profile, options -> measureOne(profile, options) },
@@ -605,44 +606,56 @@ class TunnelService : VpnService() {
         profile: StoredProfile,
         options: LatencyOptions,
     ): LatencyResult =
-        when (options.mode) {
-            PingMode.TCP -> measureTcp(profile, options)
+        // Checked before either mode runs: under another client's VPN neither can
+        // reach the server, and both would return a number timing that client's
+        // local endpoint instead (§10.1).
+        if (foreignVpn.holdsDefaultRoute(ownTunnelActive())) {
+            LatencyResult.failed(LatencyOutcome.FOREIGN_VPN)
+        } else {
+            when (options.mode) {
+                PingMode.TCP -> measureTcp(profile, options)
 
-            PingMode.PROXY_HEAD -> {
-                val outbound = profile.outbound
-                if (outbound == null) {
-                    // A RAW_JSON row whose outbound could not be projected. Not a
-                    // network failure, and saying "unreachable" would send the user
-                    // looking for a problem with their server.
-                    LatencyResult.failed(LatencyOutcome.UNSUPPORTED)
-                } else {
-                    ProxyHeadProbe(LibXrayPingApi(), cacheDir).measure(
-                        Profile(id = profile.id.toString(), name = profile.name, outbound = outbound),
-                        options,
-                    )
+                PingMode.PROXY_HEAD -> {
+                    val outbound = profile.outbound
+                    if (outbound == null) {
+                        // A RAW_JSON row whose outbound could not be projected. Not
+                        // a network failure, and saying "unreachable" would send the
+                        // user looking for a problem with their server.
+                        LatencyResult.failed(LatencyOutcome.UNSUPPORTED)
+                    } else {
+                        ProxyHeadProbe(LibXrayPingApi(), cacheDir).measure(
+                            Profile(id = profile.id.toString(), name = profile.name, outbound = outbound),
+                            options,
+                        )
+                    }
                 }
             }
         }
 
     /**
-     * Underlying network first, `protect` only as a fallback.
+     * `protect` keeps the socket out of **our** tunnel, which is what makes
+     * measuring while connected report the server's real RTT — confirmed on a
+     * device run, and only working at all because `TcpProbe` binds the socket
+     * first so there is a file descriptor to mark.
      *
-     * `protect()` exempts a socket from **our** tunnel and nothing else — the
-     * platform does not let one VPN app punch through another's. Under a
-     * different client's VPN it therefore leaves the measurement going through
-     * that client, which is how a Singapore server came to report 1 ms on a
-     * device run. Binding to a `NOT_VPN` network is the only thing that measures
-     * the server itself; `protect` still covers the case where we are the VPN and
-     * no separate transport was resolvable.
+     * It does nothing about another app's VPN; [ForeignVpn] is checked before
+     * this is reached, and refuses rather than returning the meaningless number
+     * such a measurement would produce.
      */
     private suspend fun measureTcp(
         profile: StoredProfile,
         options: LatencyOptions,
     ): LatencyResult {
-        val protector = TcpSocketProtector { socket -> underlyingNetwork.bind(socket) || protect(socket) }
+        val protector = TcpSocketProtector { socket -> protect(socket) }
         return TcpProbe(protector = protector)
             .measure(profile.address, profile.port, options.timeoutSeconds)
     }
+
+    /** True while this service holds a session, in any state but a settled down one. */
+    private fun ownTunnelActive(): Boolean =
+        synchronized(lock) {
+            currentState !is ConnectionState.Disconnected && currentState !is ConnectionState.Failed
+        }
 
     // ── IPC ─────────────────────────────────────────────────────────────────
 

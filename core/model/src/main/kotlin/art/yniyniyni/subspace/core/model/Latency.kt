@@ -48,7 +48,25 @@ public fun pingModeFrom(value: String?): PingMode =
  * that produced them, which carries the server address, UUID and REALITY key
  * (§5.6). The UI renders its own text from `strings.xml` off this enum.
  */
-public enum class LatencyOutcome { OK, TIMEOUT, UNREACHABLE, UNSUPPORTED, CANCELLED }
+public enum class LatencyOutcome {
+    OK,
+    TIMEOUT,
+    UNREACHABLE,
+    UNSUPPORTED,
+    CANCELLED,
+
+    /**
+     * Another app's VPN holds the default route, so nothing measurable can be
+     * obtained — the socket would enter that tunnel and time the route to it.
+     *
+     * A distinct outcome rather than a failure, because it is neither the
+     * server's fault nor something a retry fixes, and because the alternative is
+     * rendering the number we *can* get: a device run under another client's
+     * proxy produced 1 ms for Singapore. Appended last on purpose — these
+     * ordinals cross the AIDL boundary, so inserting one would renumber the rest.
+     */
+    FOREIGN_VPN,
+}
 
 /**
  * One measurement.

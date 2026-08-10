@@ -26,6 +26,10 @@
     <string name="servers_latency_testing">…</string>
     <string name="servers_latency_failed">No response</string>
     <string name="servers_latency_unsupported">Not testable</string>
+    <!-- Shown instead of a reading when another app's VPN holds the route. The
+         number obtainable in that state times that app's local endpoint, not the
+         server — a device run produced 1 ms for Singapore. -->
+    <string name="servers_latency_foreign_vpn">Another VPN</string>
     <string name="servers_latency_description">%1$s latency</string>
     <string name="servers_test_one">Test %1$s</string>
     <string name="servers_test_group">Test all</string>

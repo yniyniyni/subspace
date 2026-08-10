@@ -76,6 +76,10 @@ fun HomeScreen(
     val viewModel: HomeViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    // Keyed on the active profile: switching servers should measure the new one,
+    // and onHomeShown is a no-op for a profile that already has a reading.
+    LaunchedEffect(state.activeProfile?.id) { viewModel.onHomeShown() }
+
     HomeScreenContent(
         state = state,
         actions =
@@ -292,6 +296,7 @@ private fun LatencyStat(
             latency == null -> stringResource(R.string.home_latency_none)
             latency.outcome == LatencyOutcome.OK -> stringResource(R.string.home_latency_ms, latency.delayMillis)
             latency.outcome == LatencyOutcome.UNSUPPORTED -> stringResource(R.string.home_latency_unsupported)
+            latency.outcome == LatencyOutcome.FOREIGN_VPN -> stringResource(R.string.home_latency_foreign_vpn)
             else -> stringResource(R.string.home_latency_failed)
         }
     val hint = stringResource(R.string.home_latency_test_description)

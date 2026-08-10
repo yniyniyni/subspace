@@ -48,5 +48,6 @@
     <string name="home_latency_testing">…</string>
     <string name="home_latency_failed">No response</string>
     <string name="home_latency_unsupported">Not testable</string>
+    <string name="home_latency_foreign_vpn">Another VPN</string>
     <string name="home_latency_test_description">Latency. Tap to test the active server.</string>
 </resources>

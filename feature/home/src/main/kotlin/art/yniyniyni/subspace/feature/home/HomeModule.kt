@@ -12,6 +12,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -34,6 +35,8 @@ internal class BoundTunnelConnection @Inject constructor(
     override val latencies: StateFlow<Map<Long, LatencyResult>> get() = cache.results
 
     override val measuring: StateFlow<Set<Long>> get() = cache.testing
+
+    override val pingOnLaunch: Flow<Boolean> get() = settings.pingOnLaunch
 
     override fun connect(
         profile: Profile,

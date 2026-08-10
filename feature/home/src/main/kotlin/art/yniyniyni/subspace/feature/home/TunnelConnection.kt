@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.home
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Profile
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -48,14 +49,18 @@ internal interface TunnelConnection {
     /** Profile ids with a measurement in flight. */
     val measuring: StateFlow<Set<Long>>
 
+    /** The user's ping-on-launch setting, so Home can join that run rather than sit empty. */
+    val pingOnLaunch: Flow<Boolean>
+
     /**
      * Measures one profile — a one-element run, the same path the Servers list
      * takes.
      *
-     * Nothing calls this automatically. M4.5 deliberately adds no measurement to
-     * the connect path and no periodic re-measure, so the tunnel start sequence
-     * is untouched by this milestone and no timer wakes the device to spin up an
-     * Xray instance while the screen is off.
+     * Called by the tile's tap, and once per session by [HomeViewModel.onHomeShown]
+     * when ping-on-launch is on. Nothing else: M4.5 deliberately adds no
+     * measurement to the connect path and no periodic re-measure, so the tunnel
+     * start sequence is untouched by this milestone and no timer wakes the device
+     * to spin up an Xray instance while the screen is off.
      */
     suspend fun measure(profileId: Long)
 }

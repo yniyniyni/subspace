@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +36,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import art.yniyniyni.subspace.core.model.LatencyOutcome
+import art.yniyniyni.subspace.core.ui.theme.RobotoMonoFontFamily
 import art.yniyniyni.subspace.feature.profiles.R
 import java.text.BreakIterator
 import java.util.Locale
@@ -48,13 +51,20 @@ private val BADGE_PADDING_VERTICAL = 2.dp
 
 /**
  * One stored server. Renders a code tile (initials from [ServerRow.name]),
- * the name, protocol badge, transport, an active check, and — as of Task 21
- * — an edit button. Deliberately no ping value (M4) and no address, since an
- * address is a secret (§5.6, see [ServerRow]'s own KDoc for why this
- * projection carries no address field to begin with).
+ * the name, protocol badge, transport, its measured latency, an active check, a
+ * test button and an edit button.
+ *
+ * Still deliberately no address: an address is a secret (§5.6, and see
+ * [ServerRow]'s own KDoc for why this projection carries no address field at
+ * all). The latency slot was empty until M4.5 for a different reason — there was
+ * no measurement to put in it, and a placeholder would have been an invented
+ * number (§10.1). There is one now.
  *
  * @param onSelect the row body itself — sets this profile active (unchanged
  *   since Task 18).
+ * @param onTest measures this one server. A separate control from [onSelect] for
+ *   the same reason [onEdit] is: testing a server you are not currently using is
+ *   exactly what a user comparing servers wants to do.
  * @param onEdit the edit icon specifically — opens the profile editor
  *   (`Editor(profileId)`, Task 21). A separate control from [onSelect] rather
  *   than overloading the row tap: "make this the active server" and "change
@@ -68,6 +78,7 @@ internal fun ServerRowItem(
     row: ServerRow,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
+    onTest: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val description = row.contentDescription()
@@ -103,8 +114,17 @@ internal fun ServerRowItem(
             }
         }
 
+        LatencyLabel(row = row)
+
         if (row.isActive) {
             Icon(imageVector = Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        }
+
+        IconButton(onClick = onTest) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = stringResource(R.string.servers_test_one, row.name),
+            )
         }
 
         IconButton(onClick = onEdit) {
@@ -114,6 +134,50 @@ internal fun ServerRowItem(
             )
         }
     }
+}
+
+/**
+ * This row's measurement, or an em-dash when it has none.
+ *
+ * The branch order is the point. `delayMillis` is read **only** on the `OK`
+ * branch: on every other outcome it is a placeholder zero, and libXray reports a
+ * failed ping as a `10000`/`11000` sentinel — so a version of this that formatted
+ * `delayMillis` unconditionally would put an invented measurement on screen,
+ * which is exactly what ARCHITECTURE.md §10.1 is about.
+ *
+ * Timeout, unreachable and cancelled collapse into one message deliberately:
+ * they are one thing to a user — it did not answer — and the split between them
+ * only exists at all for `tcp` mode (`ProxyHeadProbe` cannot recover it without
+ * parsing an error string that quotes the config, §5.6).
+ *
+ * [RobotoMonoFontFamily] matches `StatTile` and `Type.kt`'s convention for every
+ * machine-generated value in this design system.
+ */
+@Composable
+private fun LatencyLabel(
+    row: ServerRow,
+    modifier: Modifier = Modifier,
+) {
+    val latency = row.latency
+    val text =
+        when {
+            row.isTesting -> stringResource(R.string.servers_latency_testing)
+            latency == null -> stringResource(R.string.servers_latency_none)
+            latency.outcome == LatencyOutcome.OK ->
+                stringResource(R.string.servers_latency_ms, latency.delayMillis)
+            latency.outcome == LatencyOutcome.UNSUPPORTED ->
+                stringResource(R.string.servers_latency_unsupported)
+            else -> stringResource(R.string.servers_latency_failed)
+        }
+    val measured = latency?.outcome == LatencyOutcome.OK
+    val label = stringResource(R.string.servers_latency_description, text)
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        fontFamily = RobotoMonoFontFamily,
+        color = if (measured) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.semantics { contentDescription = label },
+    )
 }
 
 @Composable

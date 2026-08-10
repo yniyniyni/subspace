@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,11 +57,18 @@ internal const val SERVERS_UPDATE_RESULT_TEST_TAG = "servers-update-result"
  * groups that hold them, and — as of Task 19 — add new ones.
  *
  * Search and protocol filtering run in SQL over [art.yniyniyni.subspace.core.data.db.ProfileEntity]'s
- * shadow columns ([ServersViewModel]), not by deserializing every row in
- * memory. Sort ([SortOrder]) has only three entries — a "Fastest" order needs
- * a real latency measurement, and latency testing is M4.5 (it was M4 when this
- * was written, before the M4/M4.5 split), so it is absent
- * rather than backed by an invented number (ARCHITECTURE.md §10.1).
+ * shadow columns ([ServersViewModel]), not by deserializing every row in memory.
+ *
+ * Sort is resolved **per group**, not per screen. The control here sets
+ * [ServersState.defaultSort]; a group whose subscription sent
+ * `subscriptions-sort-type`, or whose order the user has overridden, uses its own
+ * ([ServersGroup.sort]). §A.1 scopes a directive to the subscription that
+ * delivered it, so a single screen-wide order would let one provider rearrange
+ * another provider's rows.
+ *
+ * [SortOrder.Fastest] arrived with M4.5, which supplied the measurement it needs;
+ * before that it was deliberately absent rather than backed by an invented
+ * number (ARCHITECTURE.md §10.1).
  *
  * The empty state and every group's overflow "Add profile" item open
  * [AddServerSheet] in place, rather than navigating away — before this task
@@ -106,6 +114,11 @@ fun ServersScreen(
             onUpdateSubscription = viewModel::onUpdateSubscription,
             onDismissUpdateResult = viewModel::onDismissUpdateResult,
             onOpenSubscriptionDetail = onOpenSubscriptionDetail,
+            onTestProfile = viewModel::onTestProfile,
+            onTestGroup = viewModel::onTestGroup,
+            onCancelTests = viewModel::onCancelTests,
+            onGroupSortChanged = viewModel::onGroupSortChanged,
+            onServersShown = viewModel::onServersShown,
         ),
         modifier = modifier,
     )
@@ -132,6 +145,22 @@ internal data class ServersActions(
     val onDismissUpdateResult: () -> Unit,
     /** Task 15: forwarded to [ServersGroupListActions.onOpenSubscriptionDetail]. */
     val onOpenSubscriptionDetail: (Long) -> Unit,
+    /** M4.5: a row's test button. */
+    val onTestProfile: (Long) -> Unit,
+    /** M4.5: a group's "Test all". */
+    val onTestGroup: (Long) -> Unit,
+    /** M4.5: stops the run in flight. */
+    val onCancelTests: () -> Unit,
+    /** M4.5: this group's own order, outranking its provider's (§A.1). */
+    val onGroupSortChanged: (Long, SortOrder) -> Unit,
+    /**
+     * M4.5: the screen has groups to show.
+     *
+     * Called on every composition with a non-empty list; `LaunchPinger`'s
+     * once-per-session claim is what makes that safe, and is why this does not
+     * need a `LaunchedEffect` key that tries to guess "first time".
+     */
+    val onServersShown: () -> Unit,
 )
 
 /**
@@ -147,6 +176,15 @@ internal fun ServersScreenContent(
     var expandedGroups by rememberSaveable { mutableStateOf<Set<Long>>(emptySet()) }
     var renameTarget by remember { mutableStateOf<ServersGroup?>(null) }
     var deleteTarget by remember { mutableStateOf<ServersGroup?>(null) }
+
+    // Keyed on the group ids rather than on Unit, so groups that arrive after the
+    // first composition — the ordinary case, since the list comes from Room —
+    // still get offered. Re-running is harmless: LaunchPinger claims each group
+    // once per session, which is what makes this "once per app start" rather than
+    // "once per navigation".
+    LaunchedEffect(state.groups.map { it.id }) {
+        if (state.groups.isNotEmpty()) actions.onServersShown()
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -176,6 +214,10 @@ internal fun ServersScreenContent(
                 onProfileEdit = actions.onProfileEdit,
                 onUpdateSubscription = actions.onUpdateSubscription,
                 onOpenSubscriptionDetail = actions.onOpenSubscriptionDetail,
+                onTestProfile = actions.onTestProfile,
+                onTestGroup = actions.onTestGroup,
+                onCancelTests = actions.onCancelTests,
+                onGroupSortChanged = actions.onGroupSortChanged,
             ),
             modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )
@@ -323,7 +365,7 @@ private fun String.protocolFilterChipLabel(): String =
     if (this == ALL_PROTOCOLS_SENTINEL) stringResource(R.string.servers_protocol_filter_all) else this
 
 @Composable
-private fun SortControl(
+internal fun SortControl(
     sort: SortOrder,
     onSortChanged: (SortOrder) -> Unit,
     modifier: Modifier = Modifier,

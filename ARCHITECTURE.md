@@ -615,6 +615,17 @@ Note `testXray` — use it to satisfy the "validate before starting" rule in §6
 It takes a **file path**, not a config string, so the generated config must be
 written to disk before it can be validated.
 
+`ping` is worth one note beyond the table, because M4.5 depends on it. It runs
+`StartXray`, **not** `RunXray`, so it builds an independent core instance and
+never touches the `coreServer` singleton that `runXray`/`stopXray`/`getXrayState`
+share. Measuring latency therefore does not disturb a running tunnel, and
+`getXrayState` cannot see a measurement in progress. It also means every
+measurement needs its own config file and its own free port — §10.6 applies per
+measurement, not once per app run — and that a failed ping returns
+`success:false` *with* a sentinel `delay` of `10000`/`11000` in `data`, which
+`LibXrayInvoke` discards so it can never be rendered as a measurement (§10.1).
+Full source: `docs/agent/research/2026-08-10-libxray-ping-semantics.md`.
+
 **Full verbatim signatures, and every place reality differed from the plan, are
 in `docs/agent/research/libxray-api.md`. Read it before writing `:core:xray`.**
 
@@ -796,12 +807,25 @@ Mandatory rules:
 - [ ] Raw JSON config profiles (passthrough mode — the config runs as
       written, app-level routing rules are **not** applied to it)
 - [ ] Multi-subscription, multi-profile management, grouping, collapse/expand
-- [ ] Latency testing with selectable mode: `proxy` (GET), `proxy-head`,
-      `tcp`, and a configurable check URL. **`icmp` is not implementable on
-      unrooted Android** — raw sockets require root. M4 records the decision:
-      accept `proxy`, `proxy-head` and `tcp`; reject `icmp`. M4.5 owns the
-      latency implementation and must not revive the rejected mode.
-- [ ] Server sorting: as-delivered, by ping, alphabetical
+- [x] Latency testing with selectable mode: **`tcp` and `proxy-head`**, and a
+      configurable check URL.
+
+      Two modes, not four, and both exclusions are load-bearing. **`icmp` is not
+      implementable on unrooted Android** — raw sockets require root; M4 recorded
+      that and M4.5 kept it. **`proxy` (GET) is not implementable against libXray
+      v26.7.11**: `nodep.MeasureDelay` hardcodes `http.NewRequest("HEAD", …)`, and
+      `xray.Ping` closes its throwaway instance via `defer` before a caller could
+      borrow its SOCKS port to issue a GET itself. M4.5 therefore maps an incoming
+      `ping-type: proxy` onto `proxy-head` and labels it "Proxy (HEAD)" in the UI,
+      so the alias is visible rather than silent. Revisit if libXray ever
+      parameterises the method — source and reasoning in
+      `docs/agent/research/2026-08-10-libxray-ping-semantics.md`.
+- [x] Server sorting: as-delivered, by ping, alphabetical (plus last-used).
+      Resolved **per group**, not per screen: `subscriptions-sort-type` is scoped
+      to the subscription that delivered it (§A.1), so a single screen-wide order
+      would let one provider rearrange another provider's rows. Precedence is
+      user override, then provider, then the screen default, and a group ordered
+      by its provider says so on the card.
 - [ ] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
 - [ ] Per-app proxy: off / include-list / bypass-list
 - [ ] Traffic counters, live log viewer

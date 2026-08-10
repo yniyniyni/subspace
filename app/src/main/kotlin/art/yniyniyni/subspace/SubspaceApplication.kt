@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace
 
+import android.app.Activity
 import android.app.Application
 import android.os.Build
+import android.os.Bundle
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import art.yniyniyni.subspace.sync.RefreshScheduler
@@ -66,26 +68,78 @@ class SubspaceApplication : Application(), Configuration.Provider {
         // business refreshing subscriptions or touching WorkManager.
         if (isMainProcess()) {
             applicationScope.launch { refreshScheduler.rescheduleOnChanges() }
-            applicationScope.launch {
-                // Spec §8's "on launch" trigger: refreshDue() already only syncs subscriptions
-                // whose own interval has elapsed, so this call covers both "refresh what's overdue
-                // right now" and re-establishes the one pending job for whatever's next.
-                // onOpen = true: this is specifically the on-launch trigger, so it additionally
-                // honours subscription-auto-update-open-enable (distinct from the general
-                // subscription-auto-update-enable switch dueChecks() already applies) — a provider
-                // can ask not to be refreshed on open without disabling interval refresh entirely.
-                //
-                // reschedule() runs in a finally for the same reason SubscriptionRefreshWorker.doWork()
-                // does: a crash mid-sync here must not leave the one pending job unscheduled — that
-                // would silently strand the whole feature until the app is opened again. reschedule()
-                // itself is NonCancellable internally, so this holds even if applicationScope were ever
-                // cancelled mid-refresh.
-                try {
-                    refreshScheduler.refreshDue(onOpen = true)
-                } finally {
-                    refreshScheduler.reschedule()
-                }
+            registerActivityLifecycleCallbacks(ForegroundCallbacks(::onMovedToForeground))
+        }
+    }
+
+    /**
+     * Spec §8's on-open trigger.
+     *
+     * This used to run from [onCreate], which is *process* creation, not app open. Every warm
+     * start — back from recents, back from the launcher, back from another app — reuses a live
+     * process and never called it. Combined with the interval gate that
+     * [RefreshScheduler.refreshDue] used to apply first, that made the "Refresh when app opens"
+     * row inert in both halves at once: it could not fire on most opens, and on the opens where
+     * it did fire it could only suppress a refresh the interval trigger was already doing.
+     * M4's device run reported it as "doesn't work at all", which was accurate.
+     *
+     * reschedule() runs in a finally for the same reason [art.yniyniyni.subspace.sync.SubscriptionRefreshWorker]'s
+     * doWork() does: a crash mid-sync must not leave the one pending job unscheduled — that would
+     * silently strand the whole feature until the app is opened again. reschedule() is
+     * NonCancellable internally, so this holds even if [applicationScope] were cancelled
+     * mid-refresh.
+     */
+    private fun onMovedToForeground() {
+        applicationScope.launch {
+            try {
+                refreshScheduler.refreshDue(onOpen = true)
+            } finally {
+                refreshScheduler.reschedule()
             }
         }
     }
+}
+
+/**
+ * Calls [onForeground] each time the app becomes visible, and not once per activity.
+ *
+ * Counting started activities is what distinguishes "the user opened the app" from "the app
+ * rotated" or "one screen handed off to the next": a configuration change or an in-app navigation
+ * stops one activity and starts another, so the count dips to zero only when the app actually
+ * leaves the foreground. The 0 -> 1 edge therefore fires on cold start *and* on every return from
+ * background, which is exactly the set of moments the on-open trigger means.
+ *
+ * `androidx.lifecycle:lifecycle-process` offers `ProcessLifecycleOwner` for this, and is
+ * deliberately not used: it is a new dependency (§10.7 justification, THIRD_PARTY.md entry) for
+ * one callback the platform already provides, and its ON_START is debounced by a 700 ms handler
+ * delay this code has no need to reason about.
+ */
+private class ForegroundCallbacks(
+    private val onForeground: () -> Unit,
+) : Application.ActivityLifecycleCallbacks {
+    private var startedActivities = 0
+
+    override fun onActivityStarted(activity: Activity) {
+        if (startedActivities++ == 0) onForeground()
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        if (startedActivities > 0) startedActivities--
+    }
+
+    override fun onActivityCreated(
+        activity: Activity,
+        savedInstanceState: Bundle?,
+    ) = Unit
+
+    override fun onActivityResumed(activity: Activity) = Unit
+
+    override fun onActivityPaused(activity: Activity) = Unit
+
+    override fun onActivitySaveInstanceState(
+        activity: Activity,
+        outState: Bundle,
+    ) = Unit
+
+    override fun onActivityDestroyed(activity: Activity) = Unit
 }

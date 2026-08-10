@@ -185,4 +185,63 @@ class SubscriptionRefreshWorkerTest {
             scheduler.refreshDue(onOpen = false)
             stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt shouldNotBe null
         }
+
+    /**
+     * The on-open trigger must ignore the refresh interval entirely.
+     *
+     * Before this, `refreshDue(onOpen = true)` applied the interval gate *first* and consulted
+     * `subscription-auto-update-open-enable` only on what survived it. No path existed in which
+     * enabling the toggle caused a fetch — it could only suppress one the interval trigger was
+     * already going to do — so a user with a 12-hour provider interval saw a row labelled
+     * "Refresh when app opens" do nothing, however many times they opened the app. M4's device
+     * run reported exactly that.
+     *
+     * `now` is passed explicitly rather than slept for: the trigger's own throttle
+     * ([OPEN_REFRESH_MIN_GAP_MILLIS]) would otherwise skip a subscription synced moments ago, and
+     * a five-minute sleep in an instrumented test is not a test.
+     */
+    @Test
+    fun theOpenTriggerSyncsASubscriptionThatIsNowhereNearDue() =
+        runTest {
+            val id = stack.repository.add("https://example.com/sub", name = "Not due for a day")
+            stack.repository.pin(id, "profile-update-interval", "24")
+
+            // A first sync stamps lastAttemptedAt, putting the next interval-driven refresh a full
+            // day out.
+            scheduler.refreshDue()
+            val firstAttempt =
+                stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt
+            firstAttempt shouldNotBe null
+
+            // The interval trigger agrees there is nothing to do.
+            scheduler.refreshDue()
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt shouldBe
+                firstAttempt
+
+            // The open trigger disagrees, which is the whole point of it being a separate switch.
+            scheduler.refreshDue(onOpen = true, now = System.currentTimeMillis() + 10 * MILLIS_PER_MINUTE)
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt shouldNotBe
+                firstAttempt
+        }
+
+    /** Opening the app twice in a minute must not mean two fetches — [OPEN_REFRESH_MIN_GAP_MILLIS]. */
+    @Test
+    fun theOpenTriggerDoesNotRefetchOnEveryAppSwitch() =
+        runTest {
+            val id = stack.repository.add("https://example.com/sub", name = "Bounced in and out")
+
+            scheduler.refreshDue(onOpen = true)
+            val firstAttempt =
+                stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt
+            firstAttempt shouldNotBe null
+
+            scheduler.refreshDue(onOpen = true)
+            stack.repository.observeSubscriptions().first().single { it.id == id }.lastAttemptedAt shouldBe
+                firstAttempt
+        }
+
+    private val scheduler: RefreshScheduler
+        get() = RefreshScheduler(WorkManager.getInstance(context), stack.repository, stack.syncer)
 }
+
+private const val MILLIS_PER_MINUTE = 60_000L

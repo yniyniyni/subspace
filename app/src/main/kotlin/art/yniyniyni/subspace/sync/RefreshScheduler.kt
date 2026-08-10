@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.isDirectiveEnabled
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import dagger.Module
 import dagger.Provides
@@ -56,6 +57,22 @@ private const val KEY_AUTO_UPDATE_OPEN = "subscription-auto-update-open-enable"
  */
 private const val FALLBACK_RETRY_MILLIS = 15 * MILLIS_PER_MINUTE
 
+/** The floor, and the whole cost, of a transient failure that clears immediately. */
+private const val MIN_RETRY_MILLIS = 15 * MILLIS_PER_MINUTE
+
+/** Retry delay is this fraction of how overdue a subscription already is — see [retryDelayMillis]. */
+private const val BACKOFF_DIVISOR = 4
+
+/**
+ * How recently a subscription must have been attempted for the on-open trigger to skip it.
+ *
+ * The interval gate does not apply on open (spec §8's trigger is "the app opened", not "the
+ * interval elapsed"), so this is the only thing standing between the user and a fetch per
+ * app-switch. Small enough that opening the app after breakfast refreshes, large enough that
+ * bouncing to the browser and back does not.
+ */
+internal const val OPEN_REFRESH_MIN_GAP_MILLIS = 5 * MILLIS_PER_MINUTE
+
 /**
  * Provides the singleton [WorkManager] instance [RefreshScheduler] injects.
  *
@@ -100,16 +117,99 @@ internal fun resolveIntervalHours(rawValue: String?): Int =
     rawValue?.toIntOrNull()?.coerceIn(MIN_INTERVAL_HOURS, MAX_INTERVAL_HOURS) ?: DEFAULT_INTERVAL_HOURS
 
 /**
- * The next refresh deadline for one subscription. [lastAttemptedAt] deliberately includes a
- * failure or an empty response, so those outcomes wait for their normal provider interval rather
- * than immediately rebuilding a one-shot work chain. [lastFetchedAt] is intentionally absent:
- * it remains the last server-bearing success for UI reporting.
+ * Whether [status] describes a condition the very next attempt could plausibly find gone.
+ *
+ * The distinction earns its keep because the two halves want opposite pacing. A wrong URL, a
+ * subscription the provider has revoked, or a device at its HWID cap will answer identically in
+ * fifteen minutes and in twelve hours, so retrying them quickly is pure noise against the
+ * provider. A reset handshake or a 503 is weather.
+ *
+ * M4's device run is the evidence. One subscription went `TlsFailure` → `Unreachable` → success
+ * across eighteen minutes on one unchanged host, while a second subscription on the same link
+ * never faltered; the failure had cleared itself long before the next attempt was allowed. Pacing
+ * that outcome at a full provider interval cost ten hours of staleness for a fault that lasted
+ * minutes.
+ *
+ * Names are matched through [SubscriptionSyncFailure] rather than string literals so a rename of
+ * the taxonomy breaks the build here instead of silently reclassifying every failure as permanent.
+ * A status this cannot parse — `NoServers`, or anything a future version writes — is treated as
+ * permanent on purpose: the conservative direction is the one that does not hammer a provider.
+ */
+internal fun isTransientFailure(status: String?): Boolean =
+    when (runCatching { status?.let(SubscriptionSyncFailure::valueOf) }.getOrNull()) {
+        SubscriptionSyncFailure.Unreachable,
+        SubscriptionSyncFailure.TimedOut,
+        SubscriptionSyncFailure.TlsFailure,
+        SubscriptionSyncFailure.ServerError,
+        -> true
+
+        SubscriptionSyncFailure.HwidRequired,
+        SubscriptionSyncFailure.NotFound,
+        SubscriptionSyncFailure.DeviceLimitReached,
+        SubscriptionSyncFailure.ClientError,
+        null,
+        -> false
+    }
+
+/**
+ * How long to wait before re-attempting a subscription that has been failing transiently, given
+ * how far past its own refresh deadline it already is.
+ *
+ * Backs off geometrically without storing an attempt counter: each retry pushes [overdueBy] up by
+ * the delay it just waited, so the next delay is `1 + 1/[BACKOFF_DIVISOR]` times the last. A blip
+ * costs [MIN_RETRY_MILLIS] and no more; a genuinely dead host settles at the provider's own
+ * interval rather than polling forever. Deriving it from the clock instead of a counter is what
+ * keeps this a pure function and off the Room schema.
+ */
+internal fun retryDelayMillis(
+    overdueBy: Long,
+    intervalMillis: Long,
+): Long =
+    (overdueBy / BACKOFF_DIVISOR)
+        .coerceIn(MIN_RETRY_MILLIS, maxOf(MIN_RETRY_MILLIS, intervalMillis))
+
+/**
+ * The next refresh deadline for one subscription.
+ *
+ * `lastAttemptedAt` — not `lastFetchedAt` — is the base in every branch: retry pacing follows
+ * every attempt, while the last server-bearing success remains UI history. What the status
+ * changes is the *step*, per [isTransientFailure]: a permanent failure and a success both wait
+ * the provider's full interval, and only a transient failure gets [retryDelayMillis].
+ *
+ * `lastFetchedAt` does appear in the transient branch, as the anchor for "how overdue is this
+ * already": a subscription that has never once succeeded has no such anchor, which is why
+ * [StoredSubscription.createdAt] stands in for it there.
  */
 internal fun nextAttemptDueAt(
     now: Long,
-    lastAttemptedAt: Long?,
+    subscription: StoredSubscription,
     intervalHours: Int,
-): Long = lastAttemptedAt?.plus(intervalHours * HOUR_MILLIS) ?: now
+): Long {
+    val lastAttemptedAt = subscription.lastAttemptedAt ?: return now
+    val intervalMillis = intervalHours * HOUR_MILLIS
+    // Single-expression `step` rather than an early return per branch: detekt's ReturnCount caps
+    // functions at two, and the guard-clause form this started from used three.
+    val step =
+        if (isTransientFailure(subscription.lastFetchStatus)) {
+            val healthyUntil = (subscription.lastFetchedAt ?: subscription.createdAt) + intervalMillis
+            retryDelayMillis((lastAttemptedAt - healthyUntil).coerceAtLeast(0), intervalMillis)
+        } else {
+            intervalMillis
+        }
+    return lastAttemptedAt + step
+}
+
+/**
+ * The on-open trigger's only rate limit: has this subscription been left alone long enough?
+ *
+ * Deliberately *not* the refresh interval — see [RefreshScheduler.refreshDue]'s `onOpen` path for
+ * why applying that gate here is what made the switch inert. A subscription that has never been
+ * attempted always passes.
+ */
+internal fun openTriggerAllows(
+    now: Long,
+    lastAttemptedAt: Long?,
+): Boolean = lastAttemptedAt == null || now - lastAttemptedAt >= OPEN_REFRESH_MIN_GAP_MILLIS
 
 /** Turns one stored subscription row into the scheduler input used by [dueChecks]. */
 internal fun dueCheckFor(
@@ -119,7 +219,7 @@ internal fun dueCheckFor(
 ): DueCheck =
     DueCheck(
         subscriptionId = subscription.id,
-        dueAtEpochMillis = nextAttemptDueAt(now, subscription.lastAttemptedAt, intervalHours),
+        dueAtEpochMillis = nextAttemptDueAt(now, subscription, intervalHours),
     )
 
 /** The general `subscription-auto-update-enable` gate under §A.1's boolean rule. */
@@ -221,13 +321,48 @@ constructor(
      *   both triggers. A user pin on either key overrides the provider (spec §8), the same
      *   precedence [dueChecks] already gives the general switch.
      */
-    suspend fun refreshDue(onOpen: Boolean = false) {
-        val now = System.currentTimeMillis()
-        dueChecks(now)
-            .filter { it.dueAtEpochMillis <= now }
-            .filter { !onOpen || openRefreshEnabled(it.subscriptionId) }
-            .forEach { syncer.sync(it.subscriptionId) }
+    suspend fun refreshDue(
+        onOpen: Boolean = false,
+        now: Long = System.currentTimeMillis(),
+    ) {
+        val targets =
+            if (onOpen) {
+                openTriggerTargets(now)
+            } else {
+                dueChecks(now).filter { it.dueAtEpochMillis <= now }.map { it.subscriptionId }
+            }
+        targets.forEach { syncer.sync(it) }
     }
+
+    /**
+     * The subscriptions the on-open trigger should sync — **ignoring the refresh interval.**
+     *
+     * This is the whole point of `subscription-auto-update-open-enable` being a separate switch
+     * from `subscription-auto-update-enable`, and getting it wrong made the switch inert. When the
+     * interval gate ran first and the toggle merely filtered what survived it, no path existed in
+     * which turning the toggle *on* caused a fetch: it could only ever subtract one the interval
+     * trigger was already going to do. A user with a 12-hour provider interval could open the app
+     * fifty times and watch a row labelled "Refresh when app opens" do nothing — M4's device run,
+     * reported exactly that way.
+     *
+     * The general kill switch still applies: a provider that disabled auto-update entirely
+     * disabled it for both triggers, and [dueChecks] applies the same gate on the interval path.
+     * [OPEN_REFRESH_MIN_GAP_MILLIS] replaces the interval as the only rate limit here.
+     */
+    private suspend fun openTriggerTargets(now: Long): List<Long> =
+        subscriptions.observeSubscriptions().first().mapNotNull { subscription ->
+            val id = subscription.id
+            id.takeIf {
+                openTriggerAllows(now, subscription.lastAttemptedAt) &&
+                    autoUpdateEnabled(id) &&
+                    openRefreshEnabled(id)
+            }
+        }
+
+    private suspend fun autoUpdateEnabled(id: Long): Boolean =
+        scheduledAutoUpdateEnabled(
+            subscriptions.effective(id, KEY_AUTO_UPDATE, default = "true").value,
+        )
 
     private suspend fun openRefreshEnabled(id: Long): Boolean =
         openAutoUpdateEnabled(
@@ -258,11 +393,7 @@ constructor(
         subscriptions.observeSubscriptions().first().mapNotNull { subscription ->
             // A provider may disable auto-update entirely (spec §8). A user pin
             // overrides that — a provider cannot stop a user who pinned it on.
-            val enabled =
-                scheduledAutoUpdateEnabled(
-                    subscriptions.effective(subscription.id, KEY_AUTO_UPDATE, default = "true").value,
-                )
-            if (!enabled) return@mapNotNull null
+            if (!autoUpdateEnabled(subscription.id)) return@mapNotNull null
 
             val intervalDefault = DEFAULT_INTERVAL_HOURS.toString()
             val intervalValue = subscriptions.effective(subscription.id, KEY_INTERVAL, intervalDefault).value

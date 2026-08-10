@@ -36,6 +36,12 @@ public data class StoredSubscription(
     val lastAttemptedAt: Long? = null,
     val lastFetchStatus: String?,
     val lastFetchDetail: String?,
+    /**
+     * When this subscription was added. The scheduler's retry backoff needs a starting point for
+     * a subscription that has never once succeeded, where [lastFetchedAt] is null and there is
+     * therefore no "healthy until" moment to measure staleness from.
+     */
+    val createdAt: Long = 0L,
 ) {
     // §5.6: url is a secret, same treatment as SubscriptionEntity.toString() —
     // this type is what crosses out of :core:data, so the redaction has to
@@ -286,4 +292,5 @@ private fun SubscriptionEntity.toStored() =
         lastAttemptedAt = lastAttemptedAt,
         lastFetchStatus = lastFetchStatus,
         lastFetchDetail = lastFetchDetail,
+        createdAt = createdAt,
     )

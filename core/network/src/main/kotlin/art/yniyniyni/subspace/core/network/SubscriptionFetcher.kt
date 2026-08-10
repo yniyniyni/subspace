@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.network
 
 import art.yniyniyni.subspace.core.network.di.AppVersion
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -21,6 +22,27 @@ private const val HTTP_NOT_FOUND = 404
 private const val HTTP_CLIENT_ERROR_FLOOR = 400
 private const val HTTP_SERVER_ERROR_FLOOR = 500
 private const val HEADER_TRUE = "true"
+
+/** How long to wait before the single retry [SubscriptionFetcher.fetch] makes. */
+private const val RETRY_DELAY_MILLIS = 400L
+
+/**
+ * Whether this outcome means "the connection died before the server said anything".
+ *
+ * The retry is for connections, not for answers. A 404, a 500 and an HWID marker are all replies —
+ * asking again doubles the load on the provider and returns the same thing, and re-asking a panel
+ * that just reported a device at its cap makes it re-count that device.
+ *
+ * [FetchFailure.TimedOut] is excluded for a different reason: the budget is already spent. A
+ * second attempt would double the worst case the user waits through, for a server that has
+ * already shown it will not answer in time. The scheduler's own backoff covers that case.
+ *
+ * [FetchFailure.NotFound] can arrive from a malformed URL rather than a response, and is excluded
+ * with the rest of the answers — a URL that could not be parsed will not parse on a second pass.
+ */
+private fun FetchOutcome.isWorthRetrying(): Boolean =
+    this is FetchOutcome.Failed &&
+        (reason == FetchFailure.Unreachable || reason == FetchFailure.TlsFailure)
 
 /**
  * Upper bound on a subscription response body, in bytes.
@@ -64,60 +86,93 @@ constructor(
 ) : SubscriptionSource {
     private val baseClient = OkHttpClient.Builder().build()
 
-    /** Fetches [request]. Always on [Dispatchers.IO] (§5.3). */
+    /**
+     * Fetches [request], retrying once if the connection died before any answer arrived. Always on
+     * [Dispatchers.IO] (§5.3).
+     *
+     * M4's device run turned up a reproducible habit: a refresh reports "could not reach the
+     * server", and tapping refresh again immediately succeeds. Three things make that this
+     * class's problem rather than the network's. The host resolves to a single `A` record with no
+     * `AAAA`, and the device had no IPv6 route, so OkHttp has exactly **one** route to that
+     * provider; OkHttp's own recovery works by advancing to the next route, which leaves a
+     * connection-level failure on a single-route host terminal inside the call; and this method
+     * made exactly one attempt. The user tapping again was performing, by hand, a retry the app
+     * never attempted.
+     *
+     * What kills that first connection is not pinned down and does not need to be — a stale NAT
+     * mapping on the gateway, a reset injected in the path, and Wi-Fi power-save all produce the
+     * same shape, and one immediate retry answers all three. What is pinned down is the shape: the
+     * device recorded `Unreachable`/`SocketException`, and a MockWebServer that closes the first
+     * connection reproduces that pair exactly.
+     *
+     * Only [FetchOutcome.Failed.isWorthRetrying] failures get the second chance. A server that
+     * answered — a 404, a 500, an HWID marker — has said something, and asking again would double
+     * the load without changing the reply.
+     */
     override suspend fun fetch(request: SubscriptionRequest): FetchOutcome =
         withContext(Dispatchers.IO) {
-            // Client construction (the timeout chain) and call construction
-            // (URL parsing) both throw on bad input rather than returning a
-            // Result — confirmed empirically, not assumed: an out-of-range
-            // duration throws IllegalStateException from OkHttp's own
-            // duration check, and a malformed URL throws IllegalArgumentException
-            // from Request.Builder.url(String). Sharing one runCatching over
-            // both keeps the class's "never throws" guarantee absolute rather
-            // than relying on the caller-side contract (§7 directive validation
-            // keeps timeoutSeconds in 5-15) never being violated. Both failure
-            // causes collapse onto NotFound: neither produced a request that
-            // could reach a server, the same "we could not even form a call"
-            // case a malformed URL already mapped to before this fix widened
-            // the guard to cover client construction too.
-            val call = runCatching {
-                baseClient.newBuilder()
-                    .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                    .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                    .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                    .build()
-                    .newCall(request.toOkHttpRequest())
-            }.getOrNull() ?: return@withContext FetchOutcome.Failed(FetchFailure.NotFound)
+            val first = attempt(request)
+            if (!first.isWorthRetrying()) return@withContext first
 
-            try {
-                call.execute().use { response ->
-                    val headers = response.headers.names()
-                        .associate { it.lowercase() to response.headers[it].orEmpty() }
-                    response.toOutcome(headers)
-                }
-            } catch (timeout: SocketTimeoutException) {
-                FetchOutcome.Failed(FetchFailure.TimedOut, timeout.causeName())
-            } catch (tls: SSLException) {
-                FetchOutcome.Failed(FetchFailure.TlsFailure, tls.causeName())
-            } catch (host: UnknownHostException) {
-                FetchOutcome.Failed(FetchFailure.Unreachable, host.causeName())
-            } catch (callTimeout: InterruptedIOException) {
-                // OkHttp's callTimeout — the one that actually fires here — throws a plain
-                // InterruptedIOException("timeout"), NOT SocketTimeoutException. All three
-                // timeouts are set to the same duration and callTimeout spans the whole call,
-                // so it wins the race, and without this branch every timeout fell through to
-                // the generic IOException below and was reported as "could not reach the
-                // server". M4's device run caught it against a deliberately hanging server:
-                // the SocketTimeoutException branch above is real but almost never reached.
-                FetchOutcome.Failed(FetchFailure.TimedOut, callTimeout.causeName())
-            } catch (io: IOException) {
-                // Deliberately last and deliberately broad-ish: the three above
-                // are the cases worth naming to the user, and everything else is
-                // "the network did not work". §10.4 wants a specific diagnosis
-                // where one exists, not an invented one where it does not.
-                FetchOutcome.Failed(FetchFailure.Unreachable, io.causeName())
-            }
+            // A brief pause rather than an instant re-dial: every mechanism above involves state
+            // somewhere in the path that has to fall over before a fresh connection can replace
+            // it, and hammering the same millisecond tends to reproduce the same failure.
+            delay(RETRY_DELAY_MILLIS)
+            attempt(request)
         }
+
+    private fun attempt(request: SubscriptionRequest): FetchOutcome {
+        // Client construction (the timeout chain) and call construction
+        // (URL parsing) both throw on bad input rather than returning a
+        // Result — confirmed empirically, not assumed: an out-of-range
+        // duration throws IllegalStateException from OkHttp's own
+        // duration check, and a malformed URL throws IllegalArgumentException
+        // from Request.Builder.url(String). Sharing one runCatching over
+        // both keeps the class's "never throws" guarantee absolute rather
+        // than relying on the caller-side contract (§7 directive validation
+        // keeps timeoutSeconds in 5-15) never being violated. Both failure
+        // causes collapse onto NotFound: neither produced a request that
+        // could reach a server, the same "we could not even form a call"
+        // case a malformed URL already mapped to before this fix widened
+        // the guard to cover client construction too.
+        val call = runCatching {
+            baseClient.newBuilder()
+                .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .build()
+                .newCall(request.toOkHttpRequest())
+        }.getOrNull() ?: return FetchOutcome.Failed(FetchFailure.NotFound)
+
+        return try {
+            call.execute().use { response ->
+                val headers = response.headers.names()
+                    .associate { it.lowercase() to response.headers[it].orEmpty() }
+                response.toOutcome(headers)
+            }
+        } catch (timeout: SocketTimeoutException) {
+            FetchOutcome.Failed(FetchFailure.TimedOut, timeout.causeName())
+        } catch (tls: SSLException) {
+            FetchOutcome.Failed(FetchFailure.TlsFailure, tls.causeName())
+        } catch (host: UnknownHostException) {
+            FetchOutcome.Failed(FetchFailure.Unreachable, host.causeName())
+        } catch (callTimeout: InterruptedIOException) {
+            // OkHttp's callTimeout — the one that actually fires here — throws a plain
+            // InterruptedIOException("timeout"), NOT SocketTimeoutException. All three
+            // timeouts are set to the same duration and callTimeout spans the whole call,
+            // so it wins the race, and without this branch every timeout fell through to
+            // the generic IOException below and was reported as "could not reach the
+            // server". M4's device run caught it against a deliberately hanging server:
+            // the SocketTimeoutException branch above is real but almost never reached.
+            FetchOutcome.Failed(FetchFailure.TimedOut, callTimeout.causeName())
+        } catch (io: IOException) {
+            // Deliberately last and deliberately broad-ish: the three above
+            // are the cases worth naming to the user, and everything else is
+            // "the network did not work". §10.4 wants a specific diagnosis
+            // where one exists, not an invented one where it does not.
+            FetchOutcome.Failed(FetchFailure.Unreachable, io.causeName())
+        }
+    }
 
     private fun SubscriptionRequest.toOkHttpRequest(): Request =
         Request.Builder()

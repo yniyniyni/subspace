@@ -31,8 +31,16 @@ class SettingsHwidLayoutTest {
             SubspaceTheme {
                 SettingsScreenContent(
                     state = SettingsState(hwid = hwid, hwidEnabled = true),
-                    onThemeChanged = {},
-                    onHwidEnabledChanged = {},
+                    actions =
+                    SettingsActions(
+                        onThemeChanged = {},
+                        onHwidEnabledChanged = {},
+                        onPingModeChanged = {},
+                        onPingCheckUrlChanged = {},
+                        onPingTimeoutChanged = {},
+                        onPingOnLaunchChanged = {},
+                        onPingOnLaunchMeteredChanged = {},
+                    ),
                 )
             }
         }

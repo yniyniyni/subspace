@@ -18,6 +18,7 @@
     <string name="servers_sort_alphabetical">A–Z</string>
     <string name="servers_sort_as_listed">As listed</string>
     <string name="servers_sort_last_used">Recently used</string>
+    <string name="servers_sort_fastest">Fastest</string>
 
     <string name="servers_empty_title">No servers yet</string>
     <string name="servers_empty_body">Import a subscription or paste a config to add your first server.</string>

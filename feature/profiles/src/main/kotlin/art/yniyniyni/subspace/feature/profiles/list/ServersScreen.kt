@@ -350,4 +350,5 @@ private fun SortOrder.labelRes(): Int =
         SortOrder.Alphabetical -> R.string.servers_sort_alphabetical
         SortOrder.AsListed -> R.string.servers_sort_as_listed
         SortOrder.LastUsed -> R.string.servers_sort_last_used
+        SortOrder.Fastest -> R.string.servers_sort_fastest
     }

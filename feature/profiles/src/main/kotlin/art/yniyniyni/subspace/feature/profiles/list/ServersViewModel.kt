@@ -190,7 +190,7 @@ constructor(
                     id = group.id,
                     name = group.name,
                     totalProfileCount = totalCountById[group.id] ?: group.profiles.size,
-                    profiles = group.profiles.sortedFor(filters.sort).map { it.toRow(activeProfileId) },
+                    profiles = group.profiles.sortedFor(filters.sort, emptyMap()).map { it.toRow(activeProfileId) },
                     // UserInfo.usedBytes defaults an absent upload/download to
                     // zero (its own KDoc); that is correct for "one of the two
                     // was sent" but would draw a fabricated "0 B used" if the
@@ -212,17 +212,6 @@ constructor(
         )
     }
 }
-
-private fun List<StoredProfile>.sortedFor(order: SortOrder): List<StoredProfile> =
-    when (order) {
-        // Already ORDER BY position, id from the DAO — the user's own arrangement.
-        SortOrder.AsListed -> this
-        SortOrder.Alphabetical -> sortedBy { it.name.lowercase() }
-        // Never-connected rows have no lastConnectedAt; MIN_VALUE sorts them
-        // last rather than first among ties, which is a stable sort — so two
-        // never-connected rows keep their relative AsListed order.
-        SortOrder.LastUsed -> sortedByDescending { it.lastConnectedAt ?: Long.MIN_VALUE }
-    }
 
 private fun StoredProfile.toRow(activeProfileId: Long?): ServerRow =
     ServerRow(

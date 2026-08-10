@@ -329,9 +329,13 @@ class ServersViewModelTest {
         }
 
     @Test
-    fun `sort cycles alphabetical, as-listed and last-used only`() =
+    fun `sort offers alphabetical, as-listed, last-used and fastest`() =
         runTest {
-            SortOrder.entries.map { it.name } shouldBe listOf("Alphabetical", "AsListed", "LastUsed")
+            // Fastest arrived with M4.5, which supplied the measurement it needs.
+            // The set stays pinned so a fifth entry is again a deliberate act —
+            // see SortOrder's KDoc and §10.1.
+            SortOrder.entries.map { it.name } shouldBe
+                listOf("Alphabetical", "AsListed", "LastUsed", "Fastest")
         }
 
     @Test

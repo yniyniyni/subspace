@@ -21,16 +21,20 @@ import art.yniyniyni.subspace.feature.profiles.add.UserMessage
 internal const val ALL_PROTOCOLS_SENTINEL = "All"
 
 /**
- * How [ServersScreen] orders each group's rows.
+ * How a group's rows are ordered.
  *
- * Deliberately three entries, not four: a "Fastest" order needs a real
- * latency measurement, and latency testing is M4.5 (ARCHITECTURE.md's roadmap —
- * it was M4 when this was written, before the M4/M4.5 split).
- * [SortOrder.entries] is pinned by a test precisely so a future edit cannot
- * quietly add that fourth entry ahead of M4 actually having a number to sort
- * by — see ARCHITECTURE.md §10.1 on inventing numbers that look measured.
+ * [Fastest] was deliberately absent until M4.5. A "Fastest" order needs a real
+ * latency measurement, and inventing one is exactly the failure ARCHITECTURE.md
+ * §10.1 describes; the pinned `SortOrder.entries` test existed so that entry
+ * could not appear before a number existed to sort by. M4.5 supplied the
+ * measurement, so it exists now — and the test still pins the set, so adding a
+ * *fifth* remains a deliberate act rather than a silent one.
+ *
+ * Ordering is resolved per group, not per screen: `subscriptions-sort-type` is
+ * scoped to the subscription that delivered it (§A.1), so one global order would
+ * let one provider rearrange another provider's rows.
  */
-internal enum class SortOrder { Alphabetical, AsListed, LastUsed }
+internal enum class SortOrder { Alphabetical, AsListed, LastUsed, Fastest }
 
 /**
  * What [ServersScreen] renders.

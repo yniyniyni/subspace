@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.add
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
@@ -12,6 +13,7 @@ import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import art.yniyniyni.subspace.feature.profiles.R
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -200,13 +202,17 @@ class ImportViewModelTest {
             private set
         val deletedSubscriptionIds = mutableListOf<Long>()
 
+        /** Non-null makes the fake behave like `add` on a URL the user already has. */
+        var existingSubscriptionId: Long? = null
+
         override suspend fun addSubscription(
             url: String,
             name: String,
-        ): Long {
+        ): AddedSubscription {
             addSubscriptionCallCount++
             lastAddSubscriptionUrl = url
-            return nextId++
+            return existingSubscriptionId?.let { AddedSubscription(it, created = false) }
+                ?: AddedSubscription(nextId++, created = true)
         }
 
         override suspend fun syncSubscription(id: Long): SyncResult {
@@ -458,6 +464,45 @@ class ImportViewModelTest {
     // proves SyncResult.toUserMessage() is a correct pure function; these
     // prove ImportViewModel actually calls the sequence that function's
     // input comes from.
+
+    @Test
+    fun readdingAnExistingUrlNeverDeletesItWhenTheSyncFails() =
+        runTest {
+            // The branch's worst defect, and it was composed from two individually reasonable
+            // behaviours: `add` is idempotent on URL and hands back the EXISTING id, and a first
+            // sync that does not land as Synced deletes the row again to avoid a half-added group.
+            // Together they meant that pasting a subscription you already have, at a moment the
+            // provider happened to be unreachable, deleted that subscription — and with it, via
+            // the cascade §A.1 requires, its servers, its stored directives and every pin you had
+            // set. Both halves were documented; nothing looked at them together.
+            val repository = FakeProfileSource()
+            repository.existingSubscriptionId = 42L
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.Unreachable)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds.shouldBeEmpty()
+        }
+
+    @Test
+    fun aSubscriptionThisAddActuallyCreatedIsStillCleanedUpOnAFailedFirstSync() =
+        runTest {
+            // The other half of the rule: the cleanup must still happen for a genuinely new row,
+            // or a failed add leaves an empty group the user never asked for. Without this test
+            // the fix above could be "never delete", which passes the first test and breaks this.
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.Unreachable)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe listOf(1L)
+        }
 
     @Test
     fun addSubscriptionAddsThenSyncsTheNewSubscription() =

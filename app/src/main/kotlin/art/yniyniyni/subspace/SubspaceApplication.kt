@@ -103,29 +103,36 @@ class SubspaceApplication : Application(), Configuration.Provider {
 /**
  * Calls [onForeground] each time the app becomes visible, and not once per activity.
  *
- * Counting started activities is what distinguishes "the user opened the app" from "the app
- * rotated" or "one screen handed off to the next": a configuration change or an in-app navigation
- * stops one activity and starts another, so the count dips to zero only when the app actually
- * leaves the foreground. The 0 -> 1 edge therefore fires on cold start *and* on every return from
- * background, which is exactly the set of moments the on-open trigger means.
+ * Counting started activities distinguishes "the user opened the app" from "one screen handed off
+ * to the next" — in an A -> B navigation `B.onStart` precedes `A.onStop`, so the count never
+ * reaches zero. **A configuration change is not that shape**, and an earlier version of this class
+ * claimed it was. Android tears the activity down and rebuilds it strictly sequentially —
+ * `onPause -> onStop -> onDestroy -> onCreate -> onStart -> onResume` — with no overlap, so the
+ * count really does dip to zero and come back. This app makes that the *only* case that matters:
+ * `AndroidManifest.xml` declares exactly one activity and no `android:configChanges`, so there is
+ * never a second activity to hold the count up, and a rotation, a light/dark switch, a font-size
+ * or locale change, or entering split-screen each fired a full refresh and an
+ * `enqueueUniqueWork(REPLACE)`.
  *
- * `androidx.lifecycle:lifecycle-process` offers `ProcessLifecycleOwner` for this, and is
- * deliberately not used: it is a new dependency (§10.7 justification, THIRD_PARTY.md entry) for
- * one callback the platform already provides, and its ON_START is debounced by a 700 ms handler
- * delay this code has no need to reason about.
+ * [Activity.isChangingConfigurations] is what tells the two apart: it is true during the `onStop`
+ * of an activity the framework is about to recreate. Such a stop is remembered and consumed by the
+ * matching `onStart`, which therefore reports no foreground event.
+ *
+ * `androidx.lifecycle:lifecycle-process` offers `ProcessLifecycleOwner` for this, and is still not
+ * used — a new dependency (§10.7 justification, THIRD_PARTY.md entry) for one callback the
+ * platform already provides. Its 700 ms `ON_START` debounce exists to bridge exactly this
+ * destroy/recreate gap, which is why dropping the dependency meant having to handle the gap here
+ * rather than being free to ignore it.
  */
 private class ForegroundCallbacks(
-    private val onForeground: () -> Unit,
+    onForeground: () -> Unit,
 ) : Application.ActivityLifecycleCallbacks {
-    private var startedActivities = 0
+    private val tracker = ForegroundTracker(onForeground)
 
-    override fun onActivityStarted(activity: Activity) {
-        if (startedActivities++ == 0) onForeground()
-    }
+    override fun onActivityStarted(activity: Activity) = tracker.started()
 
-    override fun onActivityStopped(activity: Activity) {
-        if (startedActivities > 0) startedActivities--
-    }
+    override fun onActivityStopped(activity: Activity) =
+        tracker.stopped(isChangingConfigurations = activity.isChangingConfigurations)
 
     override fun onActivityCreated(
         activity: Activity,

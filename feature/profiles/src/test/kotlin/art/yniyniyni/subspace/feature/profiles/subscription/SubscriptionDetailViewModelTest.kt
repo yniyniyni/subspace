@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.subscription
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.StoredProfile
@@ -70,7 +71,8 @@ class SubscriptionDetailViewModelTest {
         override suspend fun rename(id: Long, name: String) = Unit
         override suspend fun move(id: Long, toGroupId: Long): Boolean = true
         override suspend fun update(id: Long, name: String, outbound: Outbound): Boolean = true
-        override suspend fun addSubscription(url: String, name: String): Long = SUBSCRIPTION_ID
+        override suspend fun addSubscription(url: String, name: String): AddedSubscription =
+            AddedSubscription(SUBSCRIPTION_ID, created = true)
         override suspend fun syncSubscription(id: Long): SyncResult {
             syncCalls++
             syncStarted.complete(Unit)

@@ -5,6 +5,7 @@ import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import art.yniyniyni.subspace.core.data.sync.SyncResult
@@ -285,6 +286,14 @@ constructor(
      * ([ProfileSource.deleteSubscription]): a row whose very first fetch did
      * not succeed is a group the user did not ask for, and leaving it makes
      * "add" look like it half-worked.
+     *
+     * That cleanup applies **only to a row this call actually created**
+     * ([AddedSubscription.created]), and the distinction is the difference between tidying up and
+     * destroying data. Because `add` is idempotent, re-pasting a URL the user already has returns
+     * their existing subscription; deleting it on a failed sync would take its servers, its stored
+     * directives and its pins with it, through the cascade §A.1 requires for a genuine delete. A
+     * momentarily unreachable provider was enough to trigger it. The two behaviours were each
+     * documented and individually reasonable, and nothing looked at them together.
      */
     fun addSubscription(url: String) {
         if (!isSubscriptionUrl(url)) return
@@ -292,11 +301,11 @@ constructor(
         viewModelScope.launch {
             _state.update { ImportState(input = it.input, busy = true) }
 
-            val id = profileSource.addSubscription(url = url, name = subscriptionHostName(url))
-            val result = profileSource.syncSubscription(id)
+            val added = profileSource.addSubscription(url = url, name = subscriptionHostName(url))
+            val result = profileSource.syncSubscription(added.id)
 
-            if (result !is SyncResult.Synced) {
-                profileSource.deleteSubscription(id)
+            if (result !is SyncResult.Synced && added.created) {
+                profileSource.deleteSubscription(added.id)
             }
 
             _state.update { it.copy(busy = false, subscriptionResult = result.toUserMessage()) }

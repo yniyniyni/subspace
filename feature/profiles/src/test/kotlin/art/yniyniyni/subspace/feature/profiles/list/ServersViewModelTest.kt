@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles.list
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
@@ -247,7 +248,7 @@ class ServersViewModelTest {
         override suspend fun addSubscription(
             url: String,
             name: String,
-        ) = 0L
+        ) = AddedSubscription(0L, created = true)
 
         override suspend fun syncSubscription(id: Long): SyncResult {
             syncSubscriptionCallCount++

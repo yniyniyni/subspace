@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.profiles
 
+import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileRepository
@@ -138,7 +139,7 @@ internal interface ProfileSource {
     suspend fun addSubscription(
         url: String,
         name: String,
-    ): Long
+    ): AddedSubscription
 
     /** Runs one sync of [id] — see [SubscriptionSyncer.sync]. */
     suspend fun syncSubscription(id: Long): SyncResult
@@ -257,7 +258,7 @@ constructor(
     override suspend fun addSubscription(
         url: String,
         name: String,
-    ): Long = subscriptionRepository.add(url, name)
+    ): AddedSubscription = subscriptionRepository.add(url, name)
 
     override suspend fun syncSubscription(id: Long): SyncResult = subscriptionSyncer.sync(id)
 

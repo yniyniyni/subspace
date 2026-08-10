@@ -2,12 +2,15 @@
 package art.yniyniyni.subspace.sync
 
 import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.Test
 
 private const val HOUR = 3_600_000L
 private const val MINUTE = 60_000L
+private const val SECOND = 1_000L
 
 class DueSubscriptionsTest {
     @Test
@@ -154,10 +157,69 @@ class DueSubscriptionsTest {
 
         // Not the interval — a 12-hour subscription refreshed six minutes ago is nowhere near
         // due, and the on-open trigger still takes it. That is the entire point of the switch.
-        openTriggerAllows(now, lastAttemptedAt = now - 6 * MINUTE) shouldBe true
-        openTriggerAllows(now, lastAttemptedAt = now - 4 * MINUTE) shouldBe false
-        openTriggerAllows(now, lastAttemptedAt = now - 5 * MINUTE) shouldBe true
-        openTriggerAllows(now, lastAttemptedAt = null) shouldBe true
+        openTriggerAllows(now, now - 6 * MINUTE, null) shouldBe true
+        openTriggerAllows(now, now - 4 * MINUTE, null) shouldBe false
+        openTriggerAllows(now, now - 5 * MINUTE, null) shouldBe true
+        openTriggerAllows(now, null, null) shouldBe true
+    }
+
+    @Test
+    fun `a failed attempt gets a shorter floor than a successful one`() {
+        // lastAttemptedAt advances on failure too, so one floor for both punishes the user for a
+        // blip: fail in a lift at 10:00, step out at 10:01, and reopening the app would refuse
+        // until 10:05 — the only manual lever, dead, for a fault that lasted a minute.
+        val now = 100 * HOUR
+        val twoMinutesAgo = now - 2 * MINUTE
+
+        openTriggerAllows(now, twoMinutesAgo, "Unreachable") shouldBe true
+        openTriggerAllows(now, twoMinutesAgo, null) shouldBe false
+    }
+
+    @Test
+    fun `even a failing subscription is not refetched on every app switch`() {
+        val now = 100 * HOUR
+
+        openTriggerAllows(now, now - 30 * SECOND, "Unreachable") shouldBe false
+        openTriggerAllows(now, now - MINUTE, "Unreachable") shouldBe true
+    }
+
+    @Test
+    fun `a timestamp in the future does not lock the subscription out`() {
+        // The clock moved — a correction, a timezone change, a bad NTP sync. Without this,
+        // `now - lastAttemptedAt` stays negative and BOTH triggers refuse the subscription until
+        // real time catches up, which for a day-long jump means a day with no refresh and no way
+        // out from inside the app.
+        val now = 100 * HOUR
+
+        openTriggerAllows(now, now + 24 * HOUR, null) shouldBe true
+        openTriggerAllows(now, now + 24 * HOUR, "Unreachable") shouldBe true
+    }
+
+    @Test
+    fun `a future attempt stamp does not push the interval schedule a day out`() {
+        val now = 100 * HOUR
+        val subscription =
+            subscription(lastFetchedAt = now, lastAttemptedAt = now + 24 * HOUR, status = null)
+
+        // Clamped to now, so the next attempt is one interval away — not twenty-five.
+        dueCheckFor(subscription, now = now, intervalHours = 12).dueAtEpochMillis shouldBe
+            now + 12 * HOUR
+    }
+
+    @Test
+    fun `every name this classifies is a name the taxonomy actually has`() {
+        // isTransientFailure parses a persisted string into SubscriptionSyncFailure, so a string
+        // it treats as transient must be a real member — otherwise the classification is dead code
+        // that quietly returns false. `:app` cannot see FetchFailure (§4: only :core:data may
+        // depend on :core:network), so the other half of this — that the persisted string really
+        // is one of these names — is guarded in :core:data by
+        // SubscriptionSyncFailureTest.theTwoFailureVocabulariesCannotDrift.
+        val names = SubscriptionSyncFailure.entries.map { it.name }
+
+        listOf("Unreachable", "TimedOut", "TlsFailure", "ServerError").forEach { transient ->
+            names shouldContain transient
+            isTransientFailure(transient) shouldBe true
+        }
     }
 
     private fun subscription(

@@ -54,6 +54,18 @@ public data class StoredSubscription(
 }
 
 /**
+ * The outcome of [SubscriptionRepository.add].
+ *
+ * @property created `false` when [id] names a subscription that was already stored — `add` is
+ *   idempotent on URL. Callers that undo a failed first sync must check this before deleting;
+ *   see [SubscriptionRepository.add]'s own KDoc for what happened when they could not.
+ */
+public data class AddedSubscription(
+    val id: Long,
+    val created: Boolean,
+)
+
+/**
  * A resolved setting, with enough context for the UI to explain itself.
  *
  * Spec D3: the provider wins by default, a pin survives every update. Both
@@ -163,6 +175,13 @@ internal constructor(
      * Idempotent on [url]: adding the same URL twice returns the existing id
      * rather than creating a second group of the same servers.
      *
+     * [AddedSubscription.created] is what tells those two cases apart, and it is not decoration.
+     * A caller that cleans up after a failed first sync — [ImportViewModel][
+     * art.yniyniyni.subspace.feature.profiles.add.ImportViewModel] does — must delete only a row
+     * it actually caused to exist. Returning a bare id let "add a URL you already have, while the
+     * provider happens to be unreachable" delete that subscription along with its servers, its
+     * directives and the user's pins, through the same cascade §A.1 requires for a real delete.
+     *
      * HWID defaults to **on** — §A.4.1 and §A.5. Happ sends by default; Throne
      * ships it off by default and consequently breaks limit-enabled providers
      * out of the box. Do the opposite.
@@ -170,9 +189,9 @@ internal constructor(
     public suspend fun add(
         url: String,
         name: String,
-    ): Long =
+    ): AddedSubscription =
         addMutex.withLock {
-            dao.subscriptionByUrl(url)?.let { return@withLock it.id }
+            dao.subscriptionByUrl(url)?.let { return@withLock AddedSubscription(it.id, created = false) }
 
             val now = System.currentTimeMillis()
             val groupId = profiles.createGroup(name, source = GROUP_SOURCE_SUBSCRIPTION)
@@ -188,7 +207,7 @@ internal constructor(
                     lastFetchDetail = null,
                     createdAt = now,
                 ),
-            )
+            ).let { AddedSubscription(it, created = true) }
         }
 
     /**

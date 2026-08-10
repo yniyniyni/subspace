@@ -74,6 +74,13 @@ private const val BACKOFF_DIVISOR = 4
 internal const val OPEN_REFRESH_MIN_GAP_MILLIS = 5 * MILLIS_PER_MINUTE
 
 /**
+ * The same floor after a failed attempt. Short, because reopening the app is the user's way of
+ * saying "try again" and the previous attempt fetched nothing — but not absent, so a provider that
+ * is genuinely down is not asked again on every single app switch.
+ */
+internal const val OPEN_REFRESH_RETRY_GAP_MILLIS = MILLIS_PER_MINUTE
+
+/**
  * Provides the singleton [WorkManager] instance [RefreshScheduler] injects.
  *
  * [WorkManager] itself has no `@Inject` constructor — it is obtained from [WorkManager.getInstance]
@@ -130,10 +137,18 @@ internal fun resolveIntervalHours(rawValue: String?): Int =
  * that outcome at a full provider interval cost ten hours of staleness for a fault that lasted
  * minutes.
  *
- * Names are matched through [SubscriptionSyncFailure] rather than string literals so a rename of
- * the taxonomy breaks the build here instead of silently reclassifying every failure as permanent.
  * A status this cannot parse — `NoServers`, or anything a future version writes — is treated as
  * permanent on purpose: the conservative direction is the one that does not hammer a provider.
+ *
+ * Matching through [SubscriptionSyncFailure] rather than string literals is **not** a compile-time
+ * guard, and an earlier version of this comment wrongly claimed it was. The persisted string is
+ * `FetchFailure.name`, and the two enums are bridged by an exhaustive `when`; renaming a
+ * `FetchFailure` member still compiles, because that `when` simply maps the new name onto the
+ * unchanged `SubscriptionSyncFailure` member. What would actually happen is silent: the stored
+ * string stops parsing, `runCatching` yields null, and every network failure is reclassified as
+ * permanent — back to a full interval of staleness, with nothing failing to announce it. The
+ * `runCatching` that makes this robust against unknown strings is exactly what makes that quiet.
+ * `DueSubscriptionsTest.theTwoFailureTaxonomiesShareOneVocabulary` is the real guard.
  */
 internal fun isTransientFailure(status: String?): Boolean =
     when (runCatching { status?.let(SubscriptionSyncFailure::valueOf) }.getOrNull()) {
@@ -185,7 +200,11 @@ internal fun nextAttemptDueAt(
     subscription: StoredSubscription,
     intervalHours: Int,
 ): Long {
-    val lastAttemptedAt = subscription.lastAttemptedAt ?: return now
+    // Clamped to now for the same clock-movement reason openTriggerAllows passes a future stamp:
+    // an attempt stamped in the future would otherwise schedule the next one that far out again,
+    // and the interval trigger's `dueAtEpochMillis <= now` filter would never pass until the clock
+    // caught up. Clamping bounds the damage at one interval instead of one clock error.
+    val lastAttemptedAt = (subscription.lastAttemptedAt ?: return now).coerceAtMost(now)
     val intervalMillis = intervalHours * HOUR_MILLIS
     // Single-expression `step` rather than an early return per branch: detekt's ReturnCount caps
     // functions at two, and the guard-clause form this started from used three.
@@ -205,11 +224,30 @@ internal fun nextAttemptDueAt(
  * Deliberately *not* the refresh interval — see [RefreshScheduler.refreshDue]'s `onOpen` path for
  * why applying that gate here is what made the switch inert. A subscription that has never been
  * attempted always passes.
+ *
+ * The floor is shorter after a failure ([OPEN_REFRESH_RETRY_GAP_MILLIS]) than after a success
+ * ([OPEN_REFRESH_MIN_GAP_MILLIS]), because `lastAttemptedAt` advances on failure too and a single
+ * floor keyed on it punishes the user for a blip. Concretely: open the app in a lift with no
+ * signal, every subscription fails and stamps the time; step out a minute later and reopen, and a
+ * flat five-minute floor refuses — the one manual lever the user has is dead until the interval
+ * path comes round. That is a weaker form of the staleness `349452b` fixed, on the one path
+ * WorkManager's network constraint cannot cover.
+ *
+ * A stamp in the *future* passes unconditionally. It means the clock moved (a correction, a
+ * timezone change, a bad NTP sync), not that the subscription was just refreshed; without this,
+ * `now - lastAttemptedAt` stays negative and both triggers refuse the subscription until the clock
+ * catches up — up to a day of no refresh with no in-app way out.
  */
 internal fun openTriggerAllows(
     now: Long,
     lastAttemptedAt: Long?,
-): Boolean = lastAttemptedAt == null || now - lastAttemptedAt >= OPEN_REFRESH_MIN_GAP_MILLIS
+    lastFetchStatus: String?,
+): Boolean {
+    val elapsed = lastAttemptedAt?.let { now - it } ?: return true
+    val floor =
+        if (lastFetchStatus == null) OPEN_REFRESH_MIN_GAP_MILLIS else OPEN_REFRESH_RETRY_GAP_MILLIS
+    return elapsed < 0 || elapsed >= floor
+}
 
 /** Turns one stored subscription row into the scheduler input used by [dueChecks]. */
 internal fun dueCheckFor(
@@ -353,7 +391,7 @@ constructor(
         subscriptions.observeSubscriptions().first().mapNotNull { subscription ->
             val id = subscription.id
             id.takeIf {
-                openTriggerAllows(now, subscription.lastAttemptedAt) &&
+                openTriggerAllows(now, subscription.lastAttemptedAt, subscription.lastFetchStatus) &&
                     autoUpdateEnabled(id) &&
                     openRefreshEnabled(id)
             }

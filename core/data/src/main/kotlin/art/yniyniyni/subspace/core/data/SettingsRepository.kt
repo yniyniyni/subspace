@@ -3,6 +3,8 @@ package art.yniyniyni.subspace.core.data
 
 import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SettingEntity
+import art.yniyniyni.subspace.core.model.PingMode
+import art.yniyniyni.subspace.core.model.pingModeFrom
 import art.yniyniyni.subspace.core.network.HwidProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -15,6 +17,25 @@ import javax.inject.Singleton
 private const val KEY_THEME = "theme"
 private const val KEY_ACTIVE_PROFILE = "active_profile_id"
 private const val KEY_HWID_ENABLED = "hwid_enabled"
+private const val KEY_PING_MODE = "ping_mode"
+private const val KEY_PING_CHECK_URL = "ping_check_url"
+private const val KEY_PING_TIMEOUT_SECONDS = "ping_timeout_seconds"
+private const val KEY_PING_ON_LAUNCH = "ping_on_launch"
+private const val KEY_PING_ON_LAUNCH_METERED = "ping_on_launch_metered"
+
+/**
+ * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
+ * check never pulls content the user did not ask for.
+ */
+private const val DEFAULT_CHECK_URL = "https://www.gstatic.com/generate_204"
+
+private const val DEFAULT_TIMEOUT_SECONDS = 5
+private const val MIN_TIMEOUT_SECONDS = 1
+private const val MAX_TIMEOUT_SECONDS = 15
+
+/** The two wire values [PingMode] round-trips through; `proxy` is accepted on read as an alias. */
+private const val MODE_TCP = "tcp"
+private const val MODE_PROXY_HEAD = "proxy-head"
 
 /** The app's display theme. */
 public enum class ThemePreference { System, Light, Dark }
@@ -77,5 +98,86 @@ internal constructor(
     /** Sets the global Device ID gate. Individual subscriptions may still opt out separately. */
     public suspend fun setHwidEnabled(enabled: Boolean) {
         dao.put(SettingEntity(key = KEY_HWID_ENABLED, value = enabled.toString()))
+    }
+
+    /**
+     * How latency is measured, defaulting to the mode that proves the proxy
+     * carries traffic rather than merely that the port accepts a connection.
+     *
+     * [pingModeFrom] also absorbs a stored `proxy`, which is the documented alias
+     * for `proxy-head` — libXray v26.7.11 cannot issue the GET that `proxy`
+     * means. Anything else, including a hand-edited `icmp`, falls back rather
+     * than reviving a mode Appendix D cut.
+     */
+    public val pingMode: Flow<PingMode> = dao.observe(KEY_PING_MODE).map { stored -> pingModeFrom(stored) }
+
+    public suspend fun setPingMode(mode: PingMode) {
+        val wire = if (mode == PingMode.TCP) MODE_TCP else MODE_PROXY_HEAD
+        dao.put(SettingEntity(key = KEY_PING_MODE, value = wire))
+    }
+
+    /**
+     * The URL a `proxy-head` measurement fetches.
+     *
+     * User-owned, never provider-set. `check-url-via-proxy` is `Danger.Dangerous`
+     * / `Consumer.None` in `DirectiveRegistry`: it would let whoever controls a
+     * subscription URL choose what this device fetches through the tunnel, and
+     * §A.1 mandates explicit confirmation for that class of directive. This
+     * setting is what satisfies the roadmap's "a configurable check URL".
+     */
+    public val pingCheckUrl: Flow<String> =
+        dao.observe(KEY_PING_CHECK_URL).map { stored ->
+            stored?.takeIf { it.isNotBlank() } ?: DEFAULT_CHECK_URL
+        }
+
+    public suspend fun setPingCheckUrl(url: String) {
+        dao.put(SettingEntity(key = KEY_PING_CHECK_URL, value = url))
+    }
+
+    /**
+     * Clamped on read as well as on write, not only on write: this value reaches
+     * libXray as **seconds**, where an out-of-range number is a measurement that
+     * effectively never returns. A hand-edited or future-version row must not be
+     * able to produce one.
+     */
+    public val pingTimeoutSeconds: Flow<Int> =
+        dao.observe(KEY_PING_TIMEOUT_SECONDS).map { stored ->
+            (stored?.toIntOrNull() ?: DEFAULT_TIMEOUT_SECONDS).coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
+        }
+
+    public suspend fun setPingTimeoutSeconds(seconds: Int) {
+        val clamped = seconds.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
+        dao.put(SettingEntity(key = KEY_PING_TIMEOUT_SECONDS, value = clamped.toString()))
+    }
+
+    /**
+     * Whether every group is measured once when the server list is first shown.
+     *
+     * **Ours, and on by default.** Latency results are session-scoped, so a cold
+     * start has none and a "Fastest" sort would be empty until the user tapped
+     * something. This is what refills it, for every group including a `MANUAL`
+     * one with no provider at all. `subscription-ping-onopen-enabled` can
+     * override this for a single subscription's group; it does not own the
+     * feature.
+     */
+    public val pingOnLaunch: Flow<Boolean> =
+        dao.observe(KEY_PING_ON_LAUNCH).map { stored -> stored?.toBooleanStrictOrNull() ?: true }
+
+    public suspend fun setPingOnLaunch(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_PING_ON_LAUNCH, value = enabled.toString()))
+    }
+
+    /**
+     * Whether ping-on-launch may run on a metered network.
+     *
+     * Off by default: a large list measured with `proxy-head` starts one Xray
+     * instance per server, and doing that unprompted on cellular is real data and
+     * real battery. The manual test action is unaffected by this.
+     */
+    public val pingOnLaunchMetered: Flow<Boolean> =
+        dao.observe(KEY_PING_ON_LAUNCH_METERED).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    public suspend fun setPingOnLaunchMetered(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_PING_ON_LAUNCH_METERED, value = enabled.toString()))
     }
 }

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
 import art.yniyniyni.subspace.core.ui.component.SectionHeader
 import art.yniyniyni.subspace.core.ui.component.SettingRow
@@ -62,25 +63,50 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
     SettingsScreenContent(
         state = state,
-        onThemeChanged = viewModel::onThemeChanged,
-        onHwidEnabledChanged = viewModel::onHwidEnabledChanged,
+        actions =
+        SettingsActions(
+            onThemeChanged = viewModel::onThemeChanged,
+            onHwidEnabledChanged = viewModel::onHwidEnabledChanged,
+            onPingModeChanged = viewModel::onPingModeChanged,
+            onPingCheckUrlChanged = viewModel::onPingCheckUrlChanged,
+            onPingTimeoutChanged = viewModel::onPingTimeoutChanged,
+            onPingOnLaunchChanged = viewModel::onPingOnLaunchChanged,
+            onPingOnLaunchMeteredChanged = viewModel::onPingOnLaunchMeteredChanged,
+        ),
         modifier = modifier,
     )
 }
 
 /**
+ * This screen's callbacks, grouped for the same reason
+ * [HomeActions][art.yniyniyni.subspace.feature.home.HomeActions] is.
+ *
+ * A carrier only became worth it with M4.5: two callbacks were fine as
+ * parameters, seven would be a `LongParameterList` finding and would leave every
+ * call site positional.
+ */
+internal data class SettingsActions(
+    val onThemeChanged: (ThemePreference) -> Unit,
+    val onHwidEnabledChanged: (Boolean) -> Unit,
+    val onPingModeChanged: (PingMode) -> Unit,
+    val onPingCheckUrlChanged: (String) -> Unit,
+    val onPingTimeoutChanged: (Int) -> Unit,
+    val onPingOnLaunchChanged: (Boolean) -> Unit,
+    val onPingOnLaunchMeteredChanged: (Boolean) -> Unit,
+)
+
+/**
  * The stateless half — see [art.yniyniyni.subspace.feature.home.HomeScreenContent]'s
- * KDoc for why this split exists. A single callback ([onThemeChanged]) needs
- * no [HomeActions][art.yniyniyni.subspace.feature.home.HomeActions]-style
- * carrier — there is nothing to group it with.
+ * KDoc for why this split exists.
  */
 @Composable
 internal fun SettingsScreenContent(
     state: SettingsState,
-    onThemeChanged: (ThemePreference) -> Unit,
-    onHwidEnabledChanged: (Boolean) -> Unit,
+    actions: SettingsActions,
     modifier: Modifier = Modifier,
 ) {
+    val onThemeChanged = actions.onThemeChanged
+    val onHwidEnabledChanged = actions.onHwidEnabledChanged
     Column(
         modifier =
         modifier
@@ -103,6 +129,9 @@ internal fun SettingsScreenContent(
             hwid = state.hwid,
             onEnabledChanged = onHwidEnabledChanged,
         )
+
+        SectionHeader(stringResource(R.string.settings_latency_section))
+        LatencyControls(state = state, actions = actions)
 
         SectionHeader(stringResource(R.string.settings_section_about))
         SettingRow(

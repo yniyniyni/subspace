@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.PingMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -48,6 +49,26 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(hwidEnabled = enabled, hwid = settingsSource.hwid) } }
             .launchIn(viewModelScope)
 
+        settingsSource.pingMode
+            .onEach { mode -> _state.update { it.copy(pingMode = mode) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.pingCheckUrl
+            .onEach { url -> _state.update { it.copy(pingCheckUrl = url) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.pingTimeoutSeconds
+            .onEach { seconds -> _state.update { it.copy(pingTimeoutSeconds = seconds) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.pingOnLaunch
+            .onEach { enabled -> _state.update { it.copy(pingOnLaunch = enabled) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.pingOnLaunchMetered
+            .onEach { enabled -> _state.update { it.copy(pingOnLaunchMetered = enabled) } }
+            .launchIn(viewModelScope)
+
         viewModelScope.launch {
             val version = xraySource.version()
             _state.update {
@@ -71,5 +92,31 @@ constructor(
 
     fun onHwidEnabledChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setHwidEnabled(enabled) }
+    }
+
+    fun onPingModeChanged(mode: PingMode) {
+        viewModelScope.launch { settingsSource.setPingMode(mode) }
+    }
+
+    fun onPingCheckUrlChanged(url: String) {
+        viewModelScope.launch { settingsSource.setPingCheckUrl(url) }
+    }
+
+    /**
+     * The repository clamps to 1–15 on both write and read, so a value from a
+     * stepper that runs away — or from a hand-edited row — cannot reach libXray,
+     * where this is **seconds** and a large number is a measurement that never
+     * returns.
+     */
+    fun onPingTimeoutChanged(seconds: Int) {
+        viewModelScope.launch { settingsSource.setPingTimeoutSeconds(seconds) }
+    }
+
+    fun onPingOnLaunchChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setPingOnLaunch(enabled) }
+    }
+
+    fun onPingOnLaunchMeteredChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setPingOnLaunchMetered(enabled) }
     }
 }

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.settings
 
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,6 +58,49 @@ class SettingsViewModelTest {
 
         override suspend fun setHwidEnabled(enabled: Boolean) {
             _hwidEnabled.value = enabled
+        }
+
+        private val _pingMode = MutableStateFlow(PingMode.PROXY_HEAD)
+        private val _pingCheckUrl = MutableStateFlow("https://www.gstatic.com/generate_204")
+        private val _pingTimeoutSeconds = MutableStateFlow(DEFAULT_TIMEOUT)
+        private val _pingOnLaunch = MutableStateFlow(true)
+        private val _pingOnLaunchMetered = MutableStateFlow(false)
+
+        override val pingMode: Flow<PingMode> = _pingMode.asStateFlow()
+        override val pingCheckUrl: Flow<String> = _pingCheckUrl.asStateFlow()
+        override val pingTimeoutSeconds: Flow<Int> = _pingTimeoutSeconds.asStateFlow()
+        override val pingOnLaunch: Flow<Boolean> = _pingOnLaunch.asStateFlow()
+        override val pingOnLaunchMetered: Flow<Boolean> = _pingOnLaunchMetered.asStateFlow()
+
+        override suspend fun setPingMode(mode: PingMode) {
+            _pingMode.value = mode
+        }
+
+        override suspend fun setPingCheckUrl(url: String) {
+            _pingCheckUrl.value = url
+        }
+
+        /**
+         * Clamps like the real repository does. A fake that stored whatever it
+         * was handed would let a test pass on a value that cannot actually reach
+         * libXray, where this is seconds.
+         */
+        override suspend fun setPingTimeoutSeconds(seconds: Int) {
+            _pingTimeoutSeconds.value = seconds.coerceIn(MIN_TIMEOUT, MAX_TIMEOUT)
+        }
+
+        override suspend fun setPingOnLaunch(enabled: Boolean) {
+            _pingOnLaunch.value = enabled
+        }
+
+        override suspend fun setPingOnLaunchMetered(enabled: Boolean) {
+            _pingOnLaunchMetered.value = enabled
+        }
+
+        private companion object {
+            const val DEFAULT_TIMEOUT = 5
+            const val MIN_TIMEOUT = 1
+            const val MAX_TIMEOUT = 15
         }
     }
 
@@ -155,5 +199,73 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.xrayVersion shouldBe XrayVersionState.Unavailable
+        }
+
+    // ── M4.5: latency settings ──────────────────────────────────────────────
+
+    private fun viewModel(source: FakeSettingsSource) =
+        SettingsViewModel(source, FakeXraySource(), FakeAppVersionSource())
+
+    @Test
+    fun `latency defaults are proxy-head, five seconds, launch testing on`() =
+        runTest {
+            val state = viewModel(FakeSettingsSource()).state.value
+
+            state.pingMode shouldBe PingMode.PROXY_HEAD
+            state.pingTimeoutSeconds shouldBe 5
+            state.pingOnLaunch shouldBe true
+            // Off by default: a large list measured on cellular is real data.
+            state.pingOnLaunchMetered shouldBe false
+        }
+
+    @Test
+    fun `the ping mode survives a viewmodel restart`() =
+        runTest {
+            val source = FakeSettingsSource()
+            viewModel(source).onPingModeChanged(PingMode.TCP)
+            advanceUntilIdle()
+
+            viewModel(source).state.value.pingMode shouldBe PingMode.TCP
+        }
+
+    @Test
+    fun `the check url round-trips`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onPingCheckUrlChanged("https://example.invalid/204")
+            advanceUntilIdle()
+
+            model.state.value.pingCheckUrl shouldBe "https://example.invalid/204"
+        }
+
+    @Test
+    fun `the timeout cannot be stepped out of range`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            repeat(20) { model.onPingTimeoutChanged(model.state.value.pingTimeoutSeconds + 1) }
+            advanceUntilIdle()
+            model.state.value.pingTimeoutSeconds shouldBe 15
+
+            repeat(30) { model.onPingTimeoutChanged(model.state.value.pingTimeoutSeconds - 1) }
+            advanceUntilIdle()
+            model.state.value.pingTimeoutSeconds shouldBe 1
+        }
+
+    @Test
+    fun `the launch testing switches round-trip`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onPingOnLaunchChanged(false)
+            model.onPingOnLaunchMeteredChanged(true)
+            advanceUntilIdle()
+
+            model.state.value.pingOnLaunch shouldBe false
+            model.state.value.pingOnLaunchMetered shouldBe true
         }
 }

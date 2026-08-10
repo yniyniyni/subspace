@@ -9,6 +9,8 @@ import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncFailure
 import art.yniyniyni.subspace.core.data.sync.SyncResult
+import art.yniyniyni.subspace.core.model.LatencyOutcome
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
@@ -269,11 +271,21 @@ class ServersViewModelTest {
 
         // Not exercised — nothing on the Servers screen pins a directive or touches HWID/UA.
         // SubscriptionDetailViewModelTest (Task 15) owns real coverage of these five.
+        /**
+         * Provider directives by subscription id. Settable so a test can drive
+         * the per-group sort path — a fake that always reports "no directive"
+         * cannot tell a provider-set order from the screen default.
+         */
+        val directives: MutableMap<Long, MutableMap<String, String>> = mutableMapOf()
+
         override fun observeEffective(
             id: Long,
             key: String,
             default: String?,
-        ): Flow<EffectiveValue> = MutableStateFlow(EffectiveValue(key, default, null, isPinned = false))
+        ): Flow<EffectiveValue> {
+            val provider = directives[id]?.get(key)
+            return MutableStateFlow(EffectiveValue(key, provider ?: default, provider, isPinned = false))
+        }
 
         override suspend fun pin(
             id: Long,
@@ -298,13 +310,15 @@ class ServersViewModelTest {
     }
 
     private lateinit var source: FakeProfileSource
+    private lateinit var tester: FakeLatencyTester
     private lateinit var viewModel: ServersViewModel
 
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         source = FakeProfileSource(listOf(group))
-        viewModel = ServersViewModel(source)
+        tester = FakeLatencyTester()
+        viewModel = ServersViewModel(source, tester)
     }
 
     @After
@@ -357,7 +371,7 @@ class ServersViewModelTest {
         runTest {
             val removed = frankfurt.copy(droppedFromSubscriptionAt = 1_000L)
             val source = FakeProfileSource(listOf(group.copy(profiles = listOf(removed))))
-            val viewModel = ServersViewModel(source)
+            val viewModel = ServersViewModel(source, tester)
             advanceUntilIdle()
 
             viewModel.state.value.groups.single().profiles.single().droppedFromSubscriptionAt shouldBe 1_000L
@@ -462,7 +476,7 @@ class ServersViewModelTest {
                 )
             val subscribedSource =
                 FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
-            val subscribedViewModel = ServersViewModel(subscribedSource)
+            val subscribedViewModel = ServersViewModel(subscribedSource, tester)
             advanceUntilIdle()
 
             val visibleGroup = subscribedViewModel.state.value.groups.single()
@@ -486,7 +500,7 @@ class ServersViewModelTest {
                 )
             val subscribedSource =
                 FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
-            val subscribedViewModel = ServersViewModel(subscribedSource)
+            val subscribedViewModel = ServersViewModel(subscribedSource, tester)
             advanceUntilIdle()
 
             subscribedViewModel.onUpdateSubscription(9L)
@@ -505,7 +519,7 @@ class ServersViewModelTest {
             // DeviceLimitReached is the milestone's exit criterion.
             val source = FakeProfileSource(allGroups = emptyList())
             source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
-            val viewModel = ServersViewModel(source)
+            val viewModel = ServersViewModel(source, tester)
             advanceUntilIdle()
 
             viewModel.onUpdateSubscription(9L)
@@ -520,7 +534,7 @@ class ServersViewModelTest {
         runTest {
             val source = FakeProfileSource(allGroups = emptyList())
             source.syncResultToReturn = SyncResult.Synced(added = 3, 0, 0, 0, 0)
-            val viewModel = ServersViewModel(source)
+            val viewModel = ServersViewModel(source, tester)
             advanceUntilIdle()
 
             viewModel.onUpdateSubscription(9L)
@@ -537,7 +551,7 @@ class ServersViewModelTest {
             // it becomes relevant.
             val source = FakeProfileSource(allGroups = emptyList())
             source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
-            val viewModel = ServersViewModel(source)
+            val viewModel = ServersViewModel(source, tester)
             advanceUntilIdle()
 
             viewModel.onUpdateSubscription(9L)
@@ -554,7 +568,7 @@ class ServersViewModelTest {
         runTest {
             val source = FakeProfileSource(allGroups = emptyList())
             source.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
-            val viewModel = ServersViewModel(source)
+            val viewModel = ServersViewModel(source, tester)
             advanceUntilIdle()
             viewModel.onUpdateSubscription(9L)
             advanceUntilIdle()
@@ -584,7 +598,7 @@ class ServersViewModelTest {
                     subscriptions = listOf(subscription),
                     userInfoBySubscriptionId = mapOf(9L to "upload=3; download=7; total=100"),
                 )
-            val subscribedViewModel = ServersViewModel(subscribedSource)
+            val subscribedViewModel = ServersViewModel(subscribedSource, tester)
             advanceUntilIdle()
 
             val visibleGroup = subscribedViewModel.state.value.groups.single()
@@ -617,11 +631,197 @@ class ServersViewModelTest {
                     subscriptions = listOf(subscription),
                     userInfoBySubscriptionId = mapOf(9L to "total=100"),
                 )
-            val subscribedViewModel = ServersViewModel(subscribedSource)
+            val subscribedViewModel = ServersViewModel(subscribedSource, tester)
             advanceUntilIdle()
 
             val visibleGroup = subscribedViewModel.state.value.groups.single()
             visibleGroup.quotaUsedBytes.shouldBeNull()
             visibleGroup.quotaTotalBytes shouldBe 100L
+        }
+
+    // ── M4.5: latency and per-group sort ────────────────────────────────────
+
+    private fun subscriptionFor(id: Long = 9L) =
+        StoredSubscription(
+            id = id,
+            groupId = group.id,
+            url = "https://example.com/sub",
+            userAgentOverride = null,
+            hwidEnabled = true,
+            lastFetchedAt = null,
+            lastFetchStatus = null,
+            lastFetchDetail = null,
+        )
+
+    private fun rowsOf(model: ServersViewModel) = model.state.value.groups.flatMap { it.profiles }
+
+    @Test
+    fun `an unmeasured row reports no latency rather than a zero`() =
+        runTest {
+            advanceUntilIdle()
+
+            // Absent, not 0 ms: a substituted number is §10.1's failure mode.
+            rowsOf(viewModel).forEach { it.latency.shouldBeNull() }
+        }
+
+    @Test
+    fun `a measured row carries its latency and stops showing as testing`() =
+        runTest {
+            viewModel.onTestProfile(1L)
+            advanceUntilIdle()
+
+            val row = rowsOf(viewModel).single { it.id == 1L }
+            row.latency shouldBe LatencyResult.ok(42)
+            row.isTesting shouldBe false
+        }
+
+    @Test
+    fun `testing a group measures every visible row, not every stored row`() =
+        runTest {
+            viewModel.onQueryChanged("cdn.example")
+            advanceUntilIdle()
+            viewModel.onTestGroup(group.id)
+            advanceUntilIdle()
+
+            // Only Frankfurt matches the query; measuring the filtered-out rows
+            // would spend the user's battery on servers they cannot see.
+            tester.testedIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun `a failed measurement is recorded as a failure, not dropped`() =
+        runTest {
+            tester.resultFor = { LatencyResult.failed(LatencyOutcome.UNREACHABLE) }
+            viewModel.onTestProfile(2L)
+            advanceUntilIdle()
+
+            rowsOf(viewModel).single { it.id == 2L }.latency shouldBe
+                LatencyResult.failed(LatencyOutcome.UNREACHABLE)
+        }
+
+    @Test
+    fun `a row is marked testing while its measurement is in flight`() =
+        runTest {
+            val pending = FakeLatencyTester(autoComplete = false)
+            val model = ServersViewModel(source, pending)
+            advanceUntilIdle()
+
+            model.onTestProfile(1L)
+            advanceUntilIdle()
+
+            rowsOf(model).single { it.id == 1L }.isTesting shouldBe true
+        }
+
+    @Test
+    fun `cancelling returns testing rows to idle without inventing a result`() =
+        runTest {
+            val pending = FakeLatencyTester(autoComplete = false)
+            val model = ServersViewModel(source, pending)
+            advanceUntilIdle()
+            model.onTestProfile(1L)
+            advanceUntilIdle()
+
+            model.onCancelTests()
+            advanceUntilIdle()
+
+            val row = rowsOf(model).single { it.id == 1L }
+            row.isTesting shouldBe false
+            // No result: a cancelled measurement produced no number, and even a
+            // recorded failure would claim a test that did not happen.
+            row.latency.shouldBeNull()
+        }
+
+    @Test
+    fun `testing an empty group does not start a run`() =
+        runTest {
+            viewModel.onQueryChanged("matches-nothing")
+            advanceUntilIdle()
+            viewModel.onTestGroup(group.id)
+            advanceUntilIdle()
+
+            tester.testCallCount shouldBe 0
+        }
+
+    @Test
+    fun `a group with no provider sort follows the screen default`() =
+        runTest {
+            viewModel.onSortChanged(SortOrder.Alphabetical)
+            advanceUntilIdle()
+
+            val visible = viewModel.state.value.groups.single()
+            visible.sort shouldBe SortOrder.Alphabetical
+            visible.sortFromProvider shouldBe false
+        }
+
+    @Test
+    fun `a group whose provider set a sort uses it and is marked as provider-set`() =
+        runTest {
+            val subscription = subscriptionFor()
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            subscribedSource.directives[subscription.id] = mutableMapOf("subscriptions-sort-type" to "alphabet")
+            val model = ServersViewModel(subscribedSource, tester)
+            advanceUntilIdle()
+
+            val visible = model.state.value.groups.single()
+            visible.sort shouldBe SortOrder.Alphabetical
+            // §A.1 requires provider-versus-user precedence to be visible.
+            visible.sortFromProvider shouldBe true
+        }
+
+    @Test
+    fun `a user override beats the provider sort and clears the marker`() =
+        runTest {
+            val subscription = subscriptionFor()
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            subscribedSource.directives[subscription.id] = mutableMapOf("subscriptions-sort-type" to "alphabet")
+            val model = ServersViewModel(subscribedSource, tester)
+            advanceUntilIdle()
+
+            model.onGroupSortChanged(group.id, SortOrder.Fastest)
+            advanceUntilIdle()
+
+            val visible = model.state.value.groups.single()
+            visible.sort shouldBe SortOrder.Fastest
+            visible.sortFromProvider shouldBe false
+        }
+
+    @Test
+    fun `an unrecognised provider sort falls back to the screen default unmarked`() =
+        runTest {
+            val subscription = subscriptionFor()
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            subscribedSource.directives[subscription.id] = mutableMapOf("subscriptions-sort-type" to "nonsense")
+            val model = ServersViewModel(subscribedSource, tester)
+            advanceUntilIdle()
+            model.onSortChanged(SortOrder.LastUsed)
+            advanceUntilIdle()
+
+            val visible = model.state.value.groups.single()
+            visible.sort shouldBe SortOrder.LastUsed
+            visible.sortFromProvider shouldBe false
+        }
+
+    @Test
+    fun `a provider sort of ping orders that group by measured latency`() =
+        runTest {
+            val subscription = subscriptionFor()
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            subscribedSource.directives[subscription.id] = mutableMapOf("subscriptions-sort-type" to "ping")
+            val model = ServersViewModel(subscribedSource, tester)
+            advanceUntilIdle()
+
+            // Amsterdam fastest, Frankfurt slower, the rest unmeasured.
+            tester.resultFor = { id -> if (id == 4L) LatencyResult.ok(10) else LatencyResult.ok(300) }
+            model.onTestProfile(4L)
+            advanceUntilIdle()
+            tester.resultFor = { LatencyResult.ok(300) }
+            model.onTestProfile(1L)
+            advanceUntilIdle()
+
+            model.state.value.groups.single().profiles.take(2).map { it.id } shouldBe listOf(4L, 1L)
         }
 }

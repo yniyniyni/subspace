@@ -251,7 +251,10 @@ private fun ServersFilters(
         )
 
         SortControl(
-            sort = state.sort,
+            // The screen-level default. A group whose provider set
+            // `subscriptions-sort-type`, or whose order the user overrode, uses
+            // its own — see ServersGroup.sort.
+            sort = state.defaultSort,
             onSortChanged = actions.onSortChanged,
             modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )

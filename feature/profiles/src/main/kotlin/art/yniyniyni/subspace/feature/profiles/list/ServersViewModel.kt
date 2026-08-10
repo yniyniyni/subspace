@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.data.StoredSubscription
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.parser.directive.UserInfo
 import art.yniyniyni.subspace.core.parser.directive.parseUserInfo
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
@@ -27,14 +28,28 @@ import javax.inject.Inject
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
+// One handler per user action on a screen that carries search, protocol filter,
+// screen-level sort, per-group sort, group rename/delete, subscription update,
+// and M4.5's three measurement actions. Collapsing any of them into a shared
+// "onEvent(Action)" would trade a legible call site for an enum — the same
+// judgement ProfileRepository and ProfileSource already record.
+@Suppress("TooManyFunctions")
 internal class ServersViewModel
 @Inject
 constructor(
     private val profileSource: ProfileSource,
+    private val latencyTester: LatencyTester,
 ) : ViewModel() {
     private val query = MutableStateFlow("")
     private val protocolFilter = MutableStateFlow(ALL_PROTOCOLS_SENTINEL)
     private val sort = MutableStateFlow(SortOrder.AsListed)
+
+    /**
+     * The user's own order for a specific group, which outranks that group's
+     * provider directive and the screen default alike (§A.1's precedence, made
+     * visible by [ServersGroup.sortFromProvider]).
+     */
+    private val groupSortOverrides = MutableStateFlow<Map<Long, SortOrder>>(emptyMap())
 
     private val _state = MutableStateFlow(ServersState())
     val state: StateFlow<ServersState> = _state.asStateFlow()
@@ -69,13 +84,26 @@ constructor(
         val subscriptionContextByGroupId =
             profileSource.observeSubscriptions().flatMapLatest { it.observeSubscriptionContextByGroupId() }
 
+        // Folded into one upstream because the outer combine is already at the
+        // typed overload's five-argument limit. These four change together from
+        // the screen's point of view — they are all "how the rows are presented",
+        // as opposed to what the rows are.
+        val presentation =
+            combine(
+                filters,
+                groupSortOverrides,
+                latencyTester.results,
+                latencyTester.testing,
+                ::Presentation,
+            )
+
         combine(
             allGroups,
             filteredGroups,
-            filters,
+            presentation,
             profileSource.activeProfileId,
             subscriptionContextByGroupId,
-        ) { raw, filtered, f, activeId, context -> buildState(raw, filtered, f, activeId, context) }
+        ) { raw, filtered, p, activeId, context -> buildState(raw, filtered, p, activeId, context) }
             // buildState knows nothing about updateResult, and a sync writes to the very tables
             // this flow observes — so assigning its output wholesale would erase the message on
             // the re-emission the sync itself triggers, which is exactly when it must be visible.
@@ -98,6 +126,24 @@ constructor(
         val subscriptionId: Long,
         val userInfo: UserInfo?,
         val lastFetchedAtEpochMillis: Long?,
+        /**
+         * This subscription's `subscriptions-sort-type`, or null when its
+         * provider sent none. Resolved here, per subscription, because §A.1
+         * scopes a directive to the subscription that delivered it — reading it
+         * once into a screen-wide value would let one provider reorder another's
+         * rows.
+         */
+        val sortType: String?,
+        /** This subscription's `subscription-ping-onopen-enabled`, or null when unset. */
+        val pingOnOpen: String?,
+    )
+
+    /** How the rows are presented, as opposed to what the rows are. */
+    private data class Presentation(
+        val filters: Filters,
+        val groupSortOverrides: Map<Long, SortOrder>,
+        val latencies: Map<Long, LatencyResult>,
+        val testing: Set<Long>,
     )
 
     /**
@@ -113,8 +159,19 @@ constructor(
         if (isEmpty()) return flowOf(emptyMap())
         val perSubscription =
             map { sub ->
-                profileSource.observeUserInfo(sub.id).map { raw ->
-                    sub.groupId to SubscriptionContext(sub.id, raw?.let(::parseUserInfo), sub.lastFetchedAt)
+                combine(
+                    profileSource.observeUserInfo(sub.id),
+                    profileSource.observeEffective(sub.id, KEY_SUBSCRIPTIONS_SORT_TYPE, default = null),
+                    profileSource.observeEffective(sub.id, KEY_PING_ON_OPEN, default = null),
+                ) { raw, sortType, pingOnOpen ->
+                    sub.groupId to
+                        SubscriptionContext(
+                            subscriptionId = sub.id,
+                            userInfo = raw?.let(::parseUserInfo),
+                            lastFetchedAtEpochMillis = sub.lastFetchedAt,
+                            sortType = sortType.value,
+                            pingOnOpen = pingOnOpen.value,
+                        )
                 }
             }
         return combine(perSubscription) { pairs -> pairs.toMap() }
@@ -172,25 +229,77 @@ constructor(
         _state.value = _state.value.copy(updateResult = null)
     }
 
+    /** Measures one server. A one-element run — the same path a group run takes. */
+    fun onTestProfile(profileId: Long) {
+        viewModelScope.launch { latencyTester.test(listOf(profileId)) }
+    }
+
+    /**
+     * Measures every row currently visible in [groupId].
+     *
+     * Visible, not every stored row: measuring what a search has filtered out
+     * would spend a minute of the user's battery on servers they cannot see.
+     */
+    fun onTestGroup(groupId: Long) {
+        val ids = _state.value.groups.firstOrNull { it.id == groupId }?.profiles?.map { it.id }.orEmpty()
+        viewModelScope.launch { latencyTester.test(ids) }
+    }
+
+    /**
+     * Stops scheduling.
+     *
+     * In-flight measurements finish in `:bg` and their results are discarded by
+     * run id; the affected rows go back to idle rather than to an invented
+     * result.
+     */
+    fun onCancelTests() {
+        latencyTester.cancel()
+    }
+
+    /**
+     * The user's own order for one group, outranking that group's provider.
+     *
+     * Per group rather than per screen: §A.1 scopes `subscriptions-sort-type` to
+     * the subscription that delivered it, so overriding it has to be scoped the
+     * same way.
+     */
+    fun onGroupSortChanged(
+        groupId: Long,
+        order: SortOrder,
+    ) {
+        groupSortOverrides.value = groupSortOverrides.value + (groupId to order)
+    }
+
     private data class Filters(val query: String, val protocol: String, val sort: SortOrder)
 
     private fun buildState(
         raw: List<ProfileGroup>,
         filtered: List<ProfileGroup>,
-        filters: Filters,
+        presentation: Presentation,
         activeProfileId: Long?,
         subscriptionContextByGroupId: Map<Long, SubscriptionContext>,
     ): ServersState {
+        val filters = presentation.filters
         val totalCountById = raw.associate { it.id to it.profiles.size }
         val groups =
             filtered.map { group ->
                 val context = subscriptionContextByGroupId[group.id]
                 val quota = context?.userInfo
+                val (effectiveSort, fromProvider) =
+                    resolveSort(
+                        override = presentation.groupSortOverrides[group.id],
+                        providerValue = context?.sortType,
+                        default = filters.sort,
+                    )
+                val rows =
+                    group.profiles
+                        .sortedFor(effectiveSort, presentation.latencies)
+                        .map { it.toRow(activeProfileId, presentation.latencies, presentation.testing) }
                 ServersGroup(
                     id = group.id,
                     name = group.name,
                     totalProfileCount = totalCountById[group.id] ?: group.profiles.size,
-                    profiles = group.profiles.sortedFor(filters.sort, emptyMap()).map { it.toRow(activeProfileId) },
+                    profiles = rows,
                     // UserInfo.usedBytes defaults an absent upload/download to
                     // zero (its own KDoc); that is correct for "one of the two
                     // was sent" but would draw a fabricated "0 B used" if the
@@ -201,19 +310,50 @@ constructor(
                     quotaTotalBytes = quota?.total,
                     subscriptionId = context?.subscriptionId,
                     lastFetchedAtEpochMillis = context?.lastFetchedAtEpochMillis,
+                    sort = effectiveSort,
+                    sortFromProvider = fromProvider,
                 )
             }
         return ServersState(
             groups = groups,
             query = filters.query,
             protocolFilter = filters.protocol,
-            sort = filters.sort,
+            defaultSort = filters.sort,
             availableProtocols = raw.availableProtocolLabels(),
         )
     }
+
+    /**
+     * §A.1's precedence for one group's order: **the user's own choice, else the
+     * provider's, else the screen default.**
+     *
+     * The second component is what [ServersGroup.sortFromProvider] renders. §A.1
+     * requires provider-versus-user precedence to be visible, so a group the
+     * provider is ordering says so, and a user override clears the marker.
+     */
+    private fun resolveSort(
+        override: SortOrder?,
+        providerValue: String?,
+        default: SortOrder,
+    ): Pair<SortOrder, Boolean> {
+        val fromProvider = sortOrderFromDirective(providerValue)
+        return when {
+            override != null -> override to false
+            fromProvider != null -> fromProvider to true
+            else -> default to false
+        }
+    }
 }
 
-private fun StoredProfile.toRow(activeProfileId: Long?): ServerRow =
+/** `DirectiveRegistry` keys this screen resolves per subscription. */
+private const val KEY_SUBSCRIPTIONS_SORT_TYPE = "subscriptions-sort-type"
+private const val KEY_PING_ON_OPEN = "subscription-ping-onopen-enabled"
+
+private fun StoredProfile.toRow(
+    activeProfileId: Long?,
+    latencies: Map<Long, LatencyResult>,
+    testing: Set<Long>,
+): ServerRow =
     ServerRow(
         id = id,
         name = name,
@@ -225,6 +365,9 @@ private fun StoredProfile.toRow(activeProfileId: Long?): ServerRow =
         connectable = connectable,
         isActive = id == activeProfileId,
         droppedFromSubscriptionAt = droppedFromSubscriptionAt,
+        // Absent stays absent: an unmeasured row renders an em-dash, never a zero.
+        latency = latencies[id],
+        isTesting = id in testing,
     )
 
 private fun List<ProfileGroup>.availableProtocolLabels(): List<String> =

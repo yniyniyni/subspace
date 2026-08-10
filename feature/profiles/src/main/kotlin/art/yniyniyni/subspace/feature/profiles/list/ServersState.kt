@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.profiles.list
 
 import art.yniyniyni.subspace.core.data.ProfileKind
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.feature.profiles.add.UserMessage
 
 /**
@@ -48,7 +49,12 @@ internal enum class SortOrder { Alphabetical, AsListed, LastUsed, Fastest }
  *   address and transport (never shown itself — see [ServerRow] for why
  *   address is not part of what a row exposes to the UI).
  * @property protocolFilter the selected chip label, one of [availableProtocols].
- * @property sort the selected ordering.
+ * @property defaultSort the screen-level ordering control. A group uses this
+ *   only when neither the user nor its provider has chosen an order for that
+ *   group specifically — see [ServersGroup.sort]. It is per group rather than
+ *   per screen because `subscriptions-sort-type` is scoped to the subscription
+ *   that delivered it (§A.1), and one global order would let provider A
+ *   rearrange provider B's rows.
  * @property availableProtocols the protocol chips to render, derived from what
  *   is actually stored (never a hardcoded protocol list) and always led by
  *   [ALL_PROTOCOLS_SENTINEL].
@@ -66,7 +72,7 @@ internal data class ServersState(
     val groups: List<ServersGroup> = emptyList(),
     val query: String = "",
     val protocolFilter: String = ALL_PROTOCOLS_SENTINEL,
-    val sort: SortOrder = SortOrder.AsListed,
+    val defaultSort: SortOrder = SortOrder.AsListed,
     val availableProtocols: List<String> = listOf(ALL_PROTOCOLS_SENTINEL),
     val updateResult: UserMessage? = null,
 )
@@ -111,6 +117,17 @@ internal data class ServersGroup(
     val quotaTotalBytes: Long? = null,
     val subscriptionId: Long? = null,
     val lastFetchedAtEpochMillis: Long? = null,
+    /**
+     * This group's effective order: the user's own choice for it, else its
+     * provider's `subscriptions-sort-type`, else [ServersState.defaultSort].
+     */
+    val sort: SortOrder = SortOrder.AsListed,
+    /**
+     * True when [sort] came from this group's subscription rather than from the
+     * user. §A.1 requires provider-versus-user precedence to be *visible*, so the
+     * card renders a marker for it; a user override clears it.
+     */
+    val sortFromProvider: Boolean = false,
 )
 
 /**
@@ -149,4 +166,13 @@ internal data class ServerRow(
     val connectable: Boolean,
     val isActive: Boolean,
     val droppedFromSubscriptionAt: Long? = null,
+    /**
+     * This session's measurement, or `null` when this row has never been
+     * measured. Null renders an em-dash — **never `0 ms`**. Callers must branch
+     * on [art.yniyniyni.subspace.core.model.LatencyResult.outcome] before showing
+     * `delayMillis`, which is a placeholder zero on every outcome but `OK`.
+     */
+    val latency: LatencyResult? = null,
+    /** True while a measurement for this row is in flight. */
+    val isTesting: Boolean = false,
 )

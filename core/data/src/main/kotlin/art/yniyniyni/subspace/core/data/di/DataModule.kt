@@ -4,7 +4,9 @@ package art.yniyniyni.subspace.core.data.di
 import android.content.Context
 import androidx.room.Room
 import art.yniyniyni.subspace.core.data.db.MIGRATION_1_2
+import art.yniyniyni.subspace.core.data.db.MIGRATION_2_3
 import art.yniyniyni.subspace.core.data.db.ProfileDao
+import art.yniyniyni.subspace.core.data.db.RoutingRuleSetDao
 import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SubscriptionDao
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
@@ -44,7 +46,7 @@ internal fun subspaceDatabase(
     Room
         .databaseBuilder(context.applicationContext, SubspaceDatabase::class.java, name)
         .enableMultiInstanceInvalidation()
-        .addMigrations(MIGRATION_1_2)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
         .build()
 
 /**
@@ -71,4 +73,7 @@ internal object DataModule {
 
     @Provides
     fun subscriptionDao(database: SubspaceDatabase): SubscriptionDao = database.subscriptionDao()
+
+    @Provides
+    fun routingRuleSetDao(database: SubspaceDatabase): RoutingRuleSetDao = database.routingRuleSetDao()
 }

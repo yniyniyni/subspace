@@ -126,6 +126,9 @@ class TunnelService : VpnService() {
             measure = { profile, options -> measureOne(profile, options) },
             loadProfile = { id -> profileRepository.profile(id) },
             scope = scope,
+            // §10.4: a swallowed failure still gets a line. The class name only —
+            // a Room or libXray message can quote a stored config value (§5.6).
+            onMeasurementError = { name -> Log.w(TAG, "measurement failed: $name") },
         )
     }
 

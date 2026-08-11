@@ -18,8 +18,13 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -62,13 +67,26 @@ internal fun LatencyControls(
         // stays unwired precisely because a provider choosing what this device
         // fetches through the tunnel is §A.1's threat model, and honouring it
         // would need the explicit-confirmation step that milestone did not build.
+        // Edited locally and committed on focus loss, rather than written on every
+        // keystroke. The repository maps a stored blank back to the default, so a
+        // per-keystroke write meant select-all-delete instantly repopulated the
+        // field and the user could never type a replacement from scratch. It also
+        // put a Room write plus a full flow round-trip between every character.
+        var draft by remember(state.pingCheckUrl) { mutableStateOf(state.pingCheckUrl) }
         OutlinedTextField(
-            value = state.pingCheckUrl,
-            onValueChange = actions.onPingCheckUrlChanged,
+            value = draft,
+            onValueChange = { typed -> draft = typed },
             label = { Text(stringResource(R.string.settings_ping_check_url)) },
             supportingText = { Text(stringResource(R.string.settings_ping_check_url_summary)) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier =
+            Modifier
+                .fillMaxWidth()
+                .onFocusChanged { focus ->
+                    if (!focus.hasFocus && draft != state.pingCheckUrl) {
+                        actions.onPingCheckUrlChanged(draft)
+                    }
+                },
         )
 
         TimeoutStepper(

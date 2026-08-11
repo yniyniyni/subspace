@@ -79,6 +79,13 @@ public class LibXrayPingApi(
                     .put("url", url)
                     .put("proxy", proxy)
             val data = LibXrayInvoke.call("ping", payload)
-            data?.optInt("delay") ?: throw XrayException("libXray returned no delay")
+            // `optInt` returns 0 for a missing or non-numeric field, which would
+            // surface as a measured "0 ms" — the one thing every other branch on
+            // this path refuses to do (§10.1). The research file says libXray never
+            // emits that shape, so this is belt-and-braces rather than a live bug;
+            // it costs nothing and closes the last unguarded route from upstream to
+            // a fabricated number.
+            if (data == null || !data.has("delay")) throw XrayException("libXray returned no delay")
+            data.getInt("delay")
         }
 }

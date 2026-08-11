@@ -61,6 +61,13 @@ internal class BoundTunnelConnection @Inject constructor(
                 timeoutSeconds = settings.pingTimeoutSeconds.first(),
                 checkUrl = settings.pingCheckUrl.first(),
             )
+        // Both this and BoundLatencyTester drive the same single-run-at-a-time
+        // LatencyRunner and write to the same LatencyCache, so starting here
+        // supersedes a Servers run — whose onFinished is then fenced away, leaving
+        // its rows on "…" for the session. LatencyTester's KDoc states this as a
+        // requirement for implementations; the fix had been applied to only one of
+        // the two paths that can supersede.
+        cache.finish(cache.testing.value)
         cache.markTesting(listOf(profileId))
         client.startLatencyRun(
             runId = -profileId,

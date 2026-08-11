@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.service
 import art.yniyniyni.subspace.core.model.LatencyOptions
 import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.LatencyResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -33,6 +34,20 @@ internal class LatencyRunner<T>(
     private val loadProfile: suspend (Long) -> T?,
     private val scope: CoroutineScope,
     private val concurrency: Int = DEFAULT_CONCURRENCY,
+    /**
+     * Reports a swallowed measurement failure.
+     *
+     * A hook rather than a direct `android.util.Log` call, for two reasons. This
+     * class is deliberately free of Android types so its scheduling and fencing
+     * logic is testable on the JVM — and `Log` is a stub off-device that *throws*,
+     * so calling it from the catch below would have let the very exception this
+     * guard exists to contain escape after all. The test that found that is the
+     * one asserting nothing reaches the scope's handler.
+     *
+     * Takes a class name, never a message: a Room or libXray error can quote a
+     * stored config value (§5.6).
+     */
+    private val onMeasurementError: (String) -> Unit = {},
 ) {
     private val lock = Any()
 
@@ -40,6 +55,14 @@ internal class LatencyRunner<T>(
     private var job: Job? = null
     private var activeRunId: Long = NO_RUN
 
+    // The broad catch inside is deliberate and is the whole point of the guard:
+    // `scope` belongs to TunnelService and carries the start-sequence exception
+    // handler, so *any* escaping type — Room's SQLiteException, an
+    // IllegalArgumentException from a stored enum name, a socket failure under fd
+    // pressure — publishes a fabricated tunnel failure and corrupts connection
+    // state. Naming individual types would leave exactly the gaps this exists to
+    // close. CancellationException is rethrown so supersession still works.
+    @Suppress("TooGenericExceptionCaught")
     fun start(
         runId: Long,
         profileIds: LongArray,
@@ -64,14 +87,34 @@ internal class LatencyRunner<T>(
                     .mapIndexed { index, profileId ->
                         async {
                             gate.withPermit {
+                                // A measurement must never be able to fail this
+                                // coroutine. `scope` belongs to TunnelService and
+                                // carries the start-sequence CoroutineExceptionHandler,
+                                // so an escaping throw published a fabricated
+                                // `CoreStartFailed` — §5.5's lying UI while the tunnel
+                                // was still carrying traffic — and left currentState
+                                // `Failed`, which opens startTunnel's duplicate-connect
+                                // guard and leaks the live TUN fd (§5.4). Room can throw
+                                // from loadProfile and a socket bind can throw under fd
+                                // pressure, so this is reachable from a "Test all" tap.
+                                //
+                                // CancellationException is rethrown: swallowing it would
+                                // break supersession, which is cooperative.
                                 val result =
-                                    loadProfile(profileId)
-                                        ?.let { profile -> measure(profile, optionsFor(index)) }
-                                        // Deleted between the list rendering and the
-                                        // run reaching it. A real outcome, not a
-                                        // silent skip: §10.4 — the row must stop
-                                        // saying "testing".
-                                        ?: LatencyResult.failed(LatencyOutcome.UNREACHABLE)
+                                    try {
+                                        loadProfile(profileId)
+                                            ?.let { profile -> measure(profile, optionsFor(index)) }
+                                            // Deleted between the list rendering and
+                                            // the run reaching it. A real outcome, not
+                                            // a silent skip: §10.4 — the row must stop
+                                            // saying "testing".
+                                            ?: LatencyResult.failed(LatencyOutcome.UNREACHABLE)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        onMeasurementError(e.javaClass.simpleName)
+                                        LatencyResult.failed(LatencyOutcome.UNREACHABLE)
+                                    }
                                 if (isCurrent(runId)) onResult(runId, profileId, result)
                             }
                         }
@@ -113,6 +156,14 @@ internal class LatencyRunner<T>(
          * device run shows `:bg` under memory pressure.
          */
         const val DEFAULT_CONCURRENCY = 4
-        const val NO_RUN = -1L
+
+        /**
+         * Below every id any caller mints. `:main` derives Home's run id as
+         * `-profileId`, so `-1` — the obvious sentinel — is exactly the id of a run
+         * for the first row Room ever inserted. `isCurrent` would then pass for a
+         * superseded Home measurement after a cancel, and the whole design rests on
+         * that fence being inviolable.
+         */
+        const val NO_RUN = Long.MIN_VALUE
     }
 }

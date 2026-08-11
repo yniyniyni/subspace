@@ -9,7 +9,11 @@ import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -25,6 +29,19 @@ import java.util.concurrent.atomic.AtomicInteger
 @OptIn(ExperimentalCoroutinesApi::class)
 class LatencyRunnerTest {
     private val options = LatencyOptions(PingMode.TCP, timeoutSeconds = 1, checkUrl = "https://x.invalid")
+
+    /**
+     * Mirrors `TunnelService`'s real scope — `SupervisorJob` plus a
+     * `CoroutineExceptionHandler` — so a throw that escapes the runner lands in
+     * [onEscape] exactly as it would land in the start-sequence handler on device.
+     */
+    @Suppress("InjectDispatcher")
+    private fun TestScope.scopeCapturing(onEscape: (Throwable) -> Unit): CoroutineScope =
+        CoroutineScope(
+            SupervisorJob() +
+                StandardTestDispatcher(testScheduler) +
+                CoroutineExceptionHandler { _, e -> onEscape(e) },
+        )
 
     @Test
     fun `every requested profile produces exactly one result, then finished`() =
@@ -175,6 +192,82 @@ class LatencyRunnerTest {
 
             delivered shouldContainExactly emptyList()
             finished shouldBe false
+        }
+
+    @Test
+    fun `a throwing measurement is reported as a failure and does not escape the scope`() =
+        runTest {
+            // The scope belongs to TunnelService and carries the start-sequence
+            // CoroutineExceptionHandler. An escaping throw therefore published a
+            // fabricated CoreStartFailed — §5.5's lying UI while the tunnel was
+            // still up — and left currentState Failed, which opens the
+            // duplicate-connect guard and leaks the live TUN fd (§5.4).
+            val results = mutableListOf<LatencyResult>()
+            var finished = false
+            var escaped: Throwable? = null
+            val runner =
+                LatencyRunner<Long>(
+                    measure = { _, _ -> error("libXray blew up") },
+                    loadProfile = { id -> id },
+                    scope = scopeCapturing { e -> escaped = e },
+                )
+
+            runner.start(1L, longArrayOf(1, 2), { options }, { _, _, r -> results += r }, { finished = true })
+            advanceUntilIdle()
+
+            escaped shouldBe null
+            finished shouldBe true
+            results.map { it.outcome } shouldContainExactly
+                listOf(LatencyOutcome.UNREACHABLE, LatencyOutcome.UNREACHABLE)
+        }
+
+    @Test
+    fun `a throwing profile load is reported as a failure, not as a crash`() =
+        runTest {
+            var escaped: Throwable? = null
+            val results = mutableListOf<LatencyResult>()
+            val runner =
+                LatencyRunner<Long>(
+                    measure = { _, _ -> LatencyResult.ok(1) },
+                    // Room can throw here — a SQLiteException, or valueOf on a
+                    // stored enum name a later version wrote.
+                    loadProfile = { error("room exploded") },
+                    scope = scopeCapturing { e -> escaped = e },
+                )
+
+            runner.start(1L, longArrayOf(7), { options }, { _, _, r -> results += r }, {})
+            advanceUntilIdle()
+
+            escaped shouldBe null
+            results.single().outcome shouldBe LatencyOutcome.UNREACHABLE
+        }
+
+    @Test
+    fun `the no-run sentinel cannot collide with a caller's run id`() =
+        runTest {
+            // :main derives Home's run id as -profileId, so -1 is the id of a run
+            // for the first row Room ever inserted. With NO_RUN = -1 a superseded
+            // Home measurement passed isCurrent after a cancel, and the whole
+            // design rests on that fence being inviolable.
+            val delivered = mutableListOf<Long>()
+            val gate = CompletableDeferred<Unit>()
+            val runner =
+                LatencyRunner<Long>(
+                    measure = { _, _ ->
+                        gate.await()
+                        LatencyResult.ok(1)
+                    },
+                    loadProfile = { id -> id },
+                    scope = TestScope(testScheduler),
+                )
+
+            runner.start(-1L, longArrayOf(1), { options }, { _, id, _ -> delivered += id }, {})
+            advanceUntilIdle()
+            runner.cancel(-1L)
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            delivered shouldContainExactly emptyList()
         }
 
     @Test

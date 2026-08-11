@@ -68,8 +68,13 @@ public class ProxyHeadProbe(
                 // run while a session is live, and overwriting that file would
                 // hand the next validate/start someone else's config.
                 val target = File(cacheDir, "ping-${UUID.randomUUID()}.json")
-                target.writeText(json)
+                // Recorded *before* the write, not after: a partial write (disk
+                // full, quota, I/O error) throws with the file already created, and
+                // assigning afterwards left `file` null so the `finally` deleted
+                // nothing — stranding a partially written config carrying the
+                // address, UUID and REALITY key (§5.6).
                 file = target
+                target.writeText(json)
                 LatencyResult.ok(
                     api.ping(
                         configPath = target.absolutePath,

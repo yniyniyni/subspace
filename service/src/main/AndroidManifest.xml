@@ -3,6 +3,18 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Declared explicitly rather than inherited from a dependency's manifest,
+      because ForeignVpn depends on it deliberately: it reads the active network's
+      transport to detect that *another* app's VPN holds the default route, in
+      which case no measurement is possible and the app says so instead of showing
+      the meaningless reading it could obtain.
+
+      Escaping such a VPN is not possible — see ForeignVpn's KDoc. An earlier
+      revision of this comment claimed otherwise, describing a class that was
+      written, disproved on device, and removed.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- §14.1: VPN apps are an enumerated criterion for systemExempted. A
          non-qualifying type throws ForegroundServiceTypeNotAllowedException at

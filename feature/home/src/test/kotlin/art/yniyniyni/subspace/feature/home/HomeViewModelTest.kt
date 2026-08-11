@@ -5,6 +5,8 @@ import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
+import art.yniyniyni.subspace.core.model.LatencyOutcome
+import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
@@ -151,6 +153,34 @@ class HomeViewModelTest {
         }
 
         override fun disconnect() = Unit
+
+        private val _latencies = MutableStateFlow<Map<Long, LatencyResult>>(emptyMap())
+        override val latencies: StateFlow<Map<Long, LatencyResult>> = _latencies.asStateFlow()
+
+        private val _measuring = MutableStateFlow<Set<Long>>(emptySet())
+        override val measuring: StateFlow<Set<Long>> = _measuring.asStateFlow()
+
+        /** Off by default here so existing tests keep their "nothing measured yet" baseline. */
+        var launchPingEnabled: Boolean = false
+        override val pingOnLaunch: Flow<Boolean> get() = MutableStateFlow(launchPingEnabled)
+
+        /** Settable so a test can drive the failure branch, not only the happy one. */
+        var resultToReturn: LatencyResult = LatencyResult.ok(42)
+
+        /** Leaves the measurement in flight, so the "testing" state can be asserted. */
+        var autoComplete: Boolean = true
+
+        var measuredIds: List<Long> = emptyList()
+            private set
+
+        override suspend fun measure(profileId: Long) {
+            measuredIds = measuredIds + profileId
+            if (autoComplete) {
+                _latencies.value = _latencies.value + (profileId to resultToReturn)
+            } else {
+                _measuring.value = _measuring.value + profileId
+            }
+        }
     }
 
     @Before
@@ -318,5 +348,140 @@ class HomeViewModelTest {
             tunnel.emit(ConnectionState.Connecting(StartupStage.ValidatingConfig))
 
             viewModel.state.value.connection shouldBe ConnectionState.Connecting(StartupStage.ValidatingConfig)
+        }
+
+    // ── M4.5: the LATENCY tile ──────────────────────────────────────────────
+
+    /** The active-profile fixture these tests share: one selectable VLESS row. */
+    private fun latencyFixture(): Triple<FakeSettings, FakeTunnelConnection, FakeActiveProfileSource> {
+        val settings = FakeSettings()
+        val tunnel = FakeTunnelConnection()
+        val source =
+            FakeActiveProfileSource(
+                profiles = listOf(storedProfile(id = 1L, name = "Frankfurt")),
+                activeProfileId = settings.activeProfileId,
+            )
+        settings.setActiveProfile(1L)
+        return Triple(settings, tunnel, source)
+    }
+
+    @Test
+    fun `the latency tile is empty until a measurement is taken`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            // Nothing measures on connect and nothing measures periodically, so
+            // this is the state until the user asks.
+            viewModel.state.value.latency shouldBe null
+            tunnel.measuredIds shouldBe emptyList()
+        }
+
+    @Test
+    fun `testing the active profile fills the tile`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onTestLatency()
+            advanceUntilIdle()
+
+            tunnel.measuredIds shouldBe listOf(1L)
+            viewModel.state.value.latency shouldBe LatencyResult.ok(42)
+        }
+
+    @Test
+    fun `a failed measurement is shown as a failure, not as a number`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.resultToReturn = LatencyResult.failed(LatencyOutcome.UNREACHABLE)
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onTestLatency()
+            advanceUntilIdle()
+
+            viewModel.state.value.latency shouldBe LatencyResult.failed(LatencyOutcome.UNREACHABLE)
+        }
+
+    @Test
+    fun `testing does nothing when there is no active profile`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            val source = FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onTestLatency()
+            advanceUntilIdle()
+
+            tunnel.measuredIds shouldBe emptyList()
+            viewModel.state.value.isMeasuringLatency shouldBe false
+        }
+
+    @Test
+    fun `showing home measures the active profile when launch testing is on`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.launchPingEnabled = true
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+
+            // Before this, Home sat at an em-dash until the user visited Servers
+            // and came back, because ping-on-launch fired only from that list.
+            viewModel.state.value.latency shouldBe LatencyResult.ok(42)
+        }
+
+    @Test
+    fun `showing home again does not re-measure a profile that already has a reading`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.launchPingEnabled = true
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+
+            // Once per session, with no second claim to keep in step with
+            // LatencyCache's — "already has a reading" is the whole condition.
+            tunnel.measuredIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun `showing home measures nothing when launch testing is off`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.launchPingEnabled = false
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onHomeShown()
+            advanceUntilIdle()
+
+            tunnel.measuredIds shouldBe emptyList()
+        }
+
+    @Test
+    fun `the tile reports measuring while a run is in flight`() =
+        runTest {
+            val (_, tunnel, source) = latencyFixture()
+            tunnel.autoComplete = false
+            val viewModel = HomeViewModel(tunnel, source)
+            advanceUntilIdle()
+
+            viewModel.onTestLatency()
+            advanceUntilIdle()
+
+            viewModel.state.value.isMeasuringLatency shouldBe true
+            viewModel.state.value.latency shouldBe null
         }
 }

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.settings
 
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.PingMode
 
 /**
  * What the Settings screen shows: Appearance's current choice and About's
@@ -13,6 +14,20 @@ internal data class SettingsState(
     val xrayVersion: XrayVersionState = XrayVersionState.Loading,
     val hwidEnabled: Boolean = true,
     val hwid: String = "",
+    /**
+     * How latency is measured.
+     *
+     * Only two modes exist. `icmp` needs root (Appendix D), and a GET-based
+     * `proxy` mode is not implementable against libXray v26.7.11 — its
+     * `MeasureDelay` hardcodes an HTTP HEAD. A provider's `ping-type: proxy`
+     * therefore resolves to [PingMode.PROXY_HEAD], which is why the UI label for
+     * it says "(HEAD)" rather than a bare "Proxy".
+     */
+    val pingMode: PingMode = PingMode.TCP,
+    val pingCheckUrl: String = "",
+    val pingTimeoutSeconds: Int = 5,
+    val pingOnLaunch: Boolean = true,
+    val pingOnLaunchMetered: Boolean = false,
 ) {
     /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (§5.6). */
     override fun toString(): String =

@@ -16,6 +16,10 @@ dependencies {
     // depends on for the identical reason (§7).
     implementation(project(":core:parser"))
     implementation(project(":core:ui"))
+    // TunnelClient: measurement runs in :bg, where §5.1's protector lives.
+    // §4 permits a :feature: module depending on :service — it forbids the
+    // reverse, and :feature:home already declares this same edge.
+    implementation(project(":service"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)

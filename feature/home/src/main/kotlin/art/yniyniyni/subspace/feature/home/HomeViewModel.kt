@@ -10,8 +10,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
@@ -33,14 +35,58 @@ internal class HomeViewModel @Inject constructor(
             tunnel.state,
             profileSource.activeProfile,
             profileSource.hasAnyProfile,
-        ) { connection, activeProfile, hasAnyProfile ->
+            tunnel.latencies,
+            tunnel.measuring,
+        ) { connection, activeProfile, hasAnyProfile, latencies, measuring ->
             HomeState(
                 connection = connection,
                 activeProfile = activeProfile,
                 hasAnyProfile = hasAnyProfile,
+                // Keyed on the active profile: switching servers must not carry
+                // the previous one's number across, which would be the wrong
+                // measurement rather than merely a stale one.
+                latency = activeProfile?.let { latencies[it.id] },
+                isMeasuringLatency = activeProfile != null && activeProfile.id in measuring,
             )
         }.onEach { _state.value = it }
             .launchIn(viewModelScope)
+    }
+
+    /**
+     * Called when Home is shown.
+     *
+     * Home is the landing screen, and before this it sat at an em-dash until the
+     * user visited Servers and came back — because ping-on-launch fired only from
+     * that screen's list. Populated-or-not depending on which tab you happened to
+     * open is worse than either, so Home joins the same launch run.
+     *
+     * Deliberately measures only when this profile has no reading yet: that makes
+     * it once per session without a second claim to keep in step with
+     * `LatencyCache`'s, and re-running on every recomposition is therefore free.
+     *
+     * No metered gate here, unlike the group runs. That gate exists because
+     * measuring forty servers on cellular is real data; one server is a single
+     * connect, and skipping it would recreate the empty-Home inconsistency this
+     * exists to remove.
+     */
+    fun onHomeShown() {
+        viewModelScope.launch {
+            if (!tunnel.pingOnLaunch.first()) return@launch
+            val profileId = _state.value.activeProfile?.id ?: return@launch
+            if (profileId in tunnel.latencies.value || profileId in tunnel.measuring.value) return@launch
+            tunnel.measure(profileId)
+        }
+    }
+
+    /**
+     * Measures the active profile.
+     *
+     * A no-op with nothing selected — there is no server to measure, and the tile
+     * offers no affordance in that state either.
+     */
+    fun onTestLatency() {
+        val profileId = _state.value.activeProfile?.id ?: return
+        viewModelScope.launch { tunnel.measure(profileId) }
     }
 
     /**

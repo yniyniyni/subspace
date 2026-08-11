@@ -4,6 +4,8 @@ package art.yniyniyni.subspace.service;
 import art.yniyniyni.subspace.service.ConnectionStateParcel;
 import art.yniyniyni.subspace.service.ProfileParcel;
 import art.yniyniyni.subspace.service.ITunnelCallback;
+import art.yniyniyni.subspace.service.ILatencyCallback;
+import art.yniyniyni.subspace.service.LatencyOptionsParcel;
 
 /**
  * The only channel between :main and :bg.
@@ -34,4 +36,34 @@ interface ITunnelService {
     void registerCallback(ITunnelCallback callback);
 
     void unregisterCallback(ITunnelCallback callback);
+
+    /**
+     * Measures the latency of every profile in `profileIds`, reporting each
+     * result on `callback` as it lands.
+     *
+     * Measurement lives here rather than in :main because §5.1's protector is
+     * here: a ping opens a socket to the remote server, and while a session is up
+     * an unprotected one is routed back into the TUN — so it would time the
+     * server *through* the tunnel instead of timing the server.
+     *
+     * `oneway` for the reason disconnect() is: a measurement blocks for up to the
+     * timeout, and a synchronous binder call would charge that to the caller's UI
+     * thread (§5.3).
+     *
+     * Ids, not ProfileParcels: :bg already has Room access, and marshalling forty
+     * profiles into one transaction runs at binder's 1 MB ceiling for no benefit.
+     *
+     * Starting a run supersedes any run already in flight.
+     */
+    oneway void startLatencyRun(long runId, in long[] profileIds, in int[] modes,
+                                in LatencyOptionsParcel options, ILatencyCallback callback);
+
+    /**
+     * Stops scheduling for `runId`.
+     *
+     * Not instantaneous, and callers must not imply it is: a measurement already
+     * inside libXray's blocking ping runs to completion. Its result is discarded
+     * by run id rather than delivered.
+     */
+    oneway void cancelLatencyRun(long runId);
 }

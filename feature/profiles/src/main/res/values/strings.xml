@@ -18,6 +18,23 @@
     <string name="servers_sort_alphabetical">A–Z</string>
     <string name="servers_sort_as_listed">As listed</string>
     <string name="servers_sort_last_used">Recently used</string>
+    <string name="servers_sort_fastest">Fastest</string>
+    <!-- An em-dash, not "0 ms": an unmeasured server has no latency, and a
+         substituted number would look measured (ARCHITECTURE.md §10.1). -->
+    <string name="servers_latency_none">—</string>
+    <string name="servers_latency_ms">%1$d ms</string>
+    <string name="servers_latency_testing">…</string>
+    <string name="servers_latency_failed">No response</string>
+    <string name="servers_latency_unsupported">Not testable</string>
+    <!-- Shown instead of a reading when another app's VPN holds the route. The
+         number obtainable in that state times that app's local endpoint, not the
+         server — a device run produced 1 ms for Singapore. -->
+    <string name="servers_latency_foreign_vpn">Another VPN</string>
+    <string name="servers_latency_description">%1$s latency</string>
+    <string name="servers_test_one">Test %1$s</string>
+    <string name="servers_test_group">Test all</string>
+    <string name="servers_test_cancel">Stop testing</string>
+    <string name="servers_sort_from_provider">Order set by provider</string>
 
     <string name="servers_empty_title">No servers yet</string>
     <string name="servers_empty_body">Import a subscription or paste a config to add your first server.</string>

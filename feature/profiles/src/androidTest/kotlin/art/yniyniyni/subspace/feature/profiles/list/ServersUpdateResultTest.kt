@@ -47,6 +47,11 @@ class ServersUpdateResultTest {
                         onUpdateSubscription = {},
                         onDismissUpdateResult = onDismissUpdateResult,
                         onOpenSubscriptionDetail = {},
+                        onTestProfile = {},
+                        onTestGroup = {},
+                        onCancelTests = {},
+                        onGroupSortChanged = { _, _ -> },
+                        onServersShown = {},
                     ),
                 )
             }

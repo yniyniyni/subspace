@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.home
 
 import android.text.format.DateUtils
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -32,10 +34,12 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
+import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.ui.component.ConnectControl
 import art.yniyniyni.subspace.core.ui.component.ConnectVisualState
 import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
+import art.yniyniyni.subspace.core.ui.component.StatTile
 import kotlinx.coroutines.delay
 
 private const val UPTIME_TICK_MILLIS = 1_000L
@@ -72,6 +76,10 @@ fun HomeScreen(
     val viewModel: HomeViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    // Keyed on the active profile: switching servers should measure the new one,
+    // and onHomeShown is a no-op for a profile that already has a reading.
+    LaunchedEffect(state.activeProfile?.id) { viewModel.onHomeShown() }
+
     HomeScreenContent(
         state = state,
         actions =
@@ -80,6 +88,7 @@ fun HomeScreen(
             onDisconnect = viewModel::onDisconnect,
             onNavigateToServers = onNavigateToServers,
             onAddServer = onAddServer,
+            onTestLatency = viewModel::onTestLatency,
         ),
         modifier = modifier,
     )
@@ -98,6 +107,11 @@ internal data class HomeActions(
     val onDisconnect: () -> Unit,
     val onNavigateToServers: () -> Unit,
     val onAddServer: () -> Unit,
+    /**
+     * M4.5: measures the active profile. The only other trigger is ping-on-launch,
+     * once per session — nothing measures on connect and nothing on a timer.
+     */
+    val onTestLatency: () -> Unit,
 )
 
 /**
@@ -174,6 +188,8 @@ internal fun HomeScreenContent(
             onAddServer = actions.onAddServer,
         )
 
+        LatencyStat(state = state, onTest = actions.onTestLatency)
+
         AssistChip(
             onClick = actions.onAddServer,
             label = { Text(stringResource(R.string.home_add_server)) },
@@ -182,13 +198,15 @@ internal fun HomeScreenContent(
             },
         )
 
-        // Deliberately NOT rendered: the DOWN/UP/LATENCY StatTile row and the
-        // route chip the design prototype shows. M3 measures neither traffic
-        // volume (M7, via the Xray stats API — §14.4) nor latency (M4) nor
-        // per-app routing (M5). StatTile exists in :core:ui precisely so
-        // those milestones can render it once they have a real value;
-        // drawing it here with zeros or placeholder text would tell the user
-        // this security tool measured something it did not (§10.1).
+        // Still deliberately NOT rendered: the DOWN/UP tiles and the route chip
+        // the design prototype shows. This build measures neither traffic volume
+        // (M7, via the Xray stats API — §14.4) nor per-app routing (M5), and
+        // drawing them with zeros or placeholder text would tell the user this
+        // security tool measured something it did not (§10.1).
+        //
+        // The LATENCY tile above is the first of that row to be fed, because
+        // M4.5 is the first milestone with a real number for it — and it still
+        // renders an em-dash rather than a zero until someone actually measures.
     }
 }
 
@@ -252,6 +270,58 @@ private const val MILLIS_PER_SECOND = 1_000L
  * ([HomeState.hasAnyProfile]) — that is where a server is chosen or its
  * active status changed — and to [onAddServer] only when the store is
  * genuinely empty, since there is nothing to navigate to and pick from yet.
+ */
+/**
+ * The LATENCY slot of the design system's [StatTile], finally fed.
+ *
+ * `StatTile`'s own KDoc asked that whichever milestone first has a real value to
+ * show be the one to render it. M4.5 is that milestone for latency; the traffic
+ * slot stays unfed until M7 has counters.
+ *
+ * Every non-`OK` outcome renders text rather than a number. `delayMillis` is read
+ * on the `OK` branch alone: libXray reports a failed ping as a `10000`/`11000`
+ * sentinel, and `StatTile` formats nothing itself — it renders exactly what it is
+ * handed, which makes formatting the caller's responsibility and this branch the
+ * place §10.1 is either honoured or violated.
+ *
+ * Tapping measures, and so does ping-on-launch once per session. Nothing else:
+ * no measurement on connect, and no timer.
+ */
+@Composable
+private fun LatencyStat(
+    state: HomeState,
+    onTest: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val latency = state.latency
+    val value =
+        when {
+            state.isMeasuringLatency -> stringResource(R.string.home_latency_testing)
+            latency == null -> stringResource(R.string.home_latency_none)
+            latency.outcome == LatencyOutcome.OK -> stringResource(R.string.home_latency_ms, latency.delayMillis)
+            latency.outcome == LatencyOutcome.UNSUPPORTED -> stringResource(R.string.home_latency_unsupported)
+            latency.outcome == LatencyOutcome.FOREIGN_VPN -> stringResource(R.string.home_latency_foreign_vpn)
+            else -> stringResource(R.string.home_latency_failed)
+        }
+    val hint = stringResource(R.string.home_latency_test_description)
+    StatTile(
+        value = value,
+        label = stringResource(R.string.home_latency_label),
+        accent = false,
+        modifier =
+        modifier
+            .clickable(
+                enabled = state.activeProfile != null && !state.isMeasuringLatency,
+                role = Role.Button,
+                onClick = onTest,
+            )
+            .semantics { contentDescription = hint },
+    )
+}
+
+/**
+ * The active server, and where tapping it goes — see [HomeActions] for the split
+ * between navigating to the list and going straight to import.
  */
 @Composable
 private fun ActiveServerTile(

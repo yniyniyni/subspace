@@ -28,4 +28,8 @@ dependencies {
     // ShareLinkFallbackTest uses kotest matchers; the convention plugin only
     // wires kotest-assertions into testImplementation, not androidTestImplementation.
     androidTestImplementation(libs.kotest.assertions)
+    // The probes are suspend functions, so their JVM tests need runTest. Already
+    // in the catalog and used by :feature:home and :feature:profiles — this is a
+    // module that had no suspend surface to test until M4.5, not a new dependency.
+    testImplementation(libs.kotlinx.coroutines.test)
 }

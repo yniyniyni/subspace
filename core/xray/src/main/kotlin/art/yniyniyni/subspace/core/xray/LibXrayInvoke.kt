@@ -45,10 +45,32 @@ internal object LibXrayInvoke {
             request.put("payload", payload)
         }
 
-        val response = JSONObject(LibXray.invoke(request.toString()))
-        if (!response.optBoolean("success", false)) {
-            throw XrayException("libXray $method failed: ${response.optString("error")}")
+        return parse(method, LibXray.invoke(request.toString()))
+    }
+
+    /**
+     * Splits the envelope. Separate from [call] only because `LibXray.invoke` is
+     * native and cannot run in a JVM test, while this — the part with a rule
+     * worth pinning — can.
+     *
+     * **The `data` object is dropped whenever `success` is false, and that is
+     * load-bearing rather than incidental.** `ping` is the method that makes it
+     * matter: libXray answers a failed measurement with `success:false` *and* a
+     * populated `{"delay":10000}` or `{"delay":11000}` — its `PingDelayError` and
+     * `PingDelayTimeout` sentinels (`invoke.go`, `nodep/measure.go`). Returning
+     * `data` here on a failure would hand a caller a number that looks measured
+     * and is not, which is §10.1's failure mode arriving through an upstream API.
+     * `LibXrayInvokeTest` pins this; do not "improve" it into surfacing `data` on
+     * failure.
+     */
+    fun parse(
+        method: String,
+        response: String,
+    ): JSONObject? {
+        val envelope = JSONObject(response)
+        if (!envelope.optBoolean("success", false)) {
+            throw XrayException("libXray $method failed: ${envelope.optString("error")}")
         }
-        return response.optJSONObject("data")
+        return envelope.optJSONObject("data")
     }
 }

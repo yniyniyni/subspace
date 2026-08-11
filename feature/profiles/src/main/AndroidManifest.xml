@@ -7,6 +7,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!--
+      M4.5: LatencyTester reads ConnectivityManager.isActiveNetworkMetered to
+      decide whether ping-on-launch may run. Declared in the module that makes
+      the call rather than relied on from the app-level merge — the call works
+      either way at runtime, but a module whose manifest does not state what it
+      needs is one refactor away from being wrong, and Android lint fails the
+      build on exactly that.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />

@@ -49,6 +49,18 @@ internal class LatencyRunner<T>(
      */
     private val onMeasurementError: (String) -> Unit = {},
 ) {
+    /**
+     * One semaphore for the runner, not one per run.
+     *
+     * A superseded run's measurements cannot be interrupted — that is the whole
+     * reason the run-id fence exists — so a per-run semaphore let the old run's
+     * permits and the new run's permits coexist, allowing up to twice
+     * [concurrency] live `core.Instance`s in `:bg`. In a process whose heap is the
+     * stated reason for the bound, and with 4 already an unverified guess, a bound
+     * that doubles under ordinary supersession is not a bound.
+     */
+    private val gate = Semaphore(concurrency)
+
     private val lock = Any()
 
     // Both guarded by `lock`.
@@ -82,7 +94,6 @@ internal class LatencyRunner<T>(
 
         val started =
             scope.launch {
-                val gate = Semaphore(concurrency)
                 profileIds
                     .mapIndexed { index, profileId ->
                         async {

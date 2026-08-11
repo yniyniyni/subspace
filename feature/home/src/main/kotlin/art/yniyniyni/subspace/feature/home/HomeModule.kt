@@ -69,6 +69,7 @@ internal class BoundTunnelConnection @Inject constructor(
         // the two paths that can supersede.
         cache.finish(cache.testing.value)
         cache.markTesting(listOf(profileId))
+        @Suppress("IgnoredReturnValue")
         client.startLatencyRun(
             runId = -profileId,
             // Home follows the global setting: it measures the active profile,

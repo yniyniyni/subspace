@@ -107,7 +107,10 @@ internal data class HomeActions(
     val onDisconnect: () -> Unit,
     val onNavigateToServers: () -> Unit,
     val onAddServer: () -> Unit,
-    /** M4.5: measures the active profile. Nothing measures it automatically. */
+    /**
+     * M4.5: measures the active profile. The only other trigger is ping-on-launch,
+     * once per session — nothing measures on connect and nothing on a timer.
+     */
     val onTestLatency: () -> Unit,
 )
 
@@ -281,7 +284,8 @@ private const val MILLIS_PER_SECOND = 1_000L
  * handed, which makes formatting the caller's responsibility and this branch the
  * place §10.1 is either honoured or violated.
  *
- * Tapping measures. Nothing else does: no measurement on connect, and no timer.
+ * Tapping measures, and so does ping-on-launch once per session. Nothing else:
+ * no measurement on connect, and no timer.
  */
 @Composable
 private fun LatencyStat(

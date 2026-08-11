@@ -320,7 +320,13 @@ constructor(
                 }
             if (eligible.isEmpty()) return@launch
             val ids = eligible.flatMap { group -> group.profiles.map { it.id } }
-            latencyTester.test(ids, modesFor(eligible))
+            // A dropped run gives its claims back. `:bg` binds asynchronously
+            // across a process fork, so a list that composes first would otherwise
+            // spend each group's single launch run on a measurement that never
+            // happened — a gate must mean "not yet", never "not this session".
+            if (!latencyTester.test(ids, modesFor(eligible))) {
+                latencyTester.releaseLaunchRun(eligible.map { it.id })
+            }
         }
     }
 

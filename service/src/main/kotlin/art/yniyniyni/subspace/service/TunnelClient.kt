@@ -149,13 +149,18 @@ public class TunnelClient @Inject constructor(
      * If nothing is bound yet the run is dropped and [onFinished] still fires, so
      * the caller's rows return to idle instead of sitting on "testing" forever.
      */
+    /**
+     * @return false when nothing was bound and the run was dropped. Callers that
+     *   spent a once-per-session claim on it need to know, or that claim is burnt
+     *   on a measurement which never happened.
+     */
     public fun startLatencyRun(
         runId: Long,
         targets: List<LatencyTarget>,
         options: LatencyOptions,
         onResult: (Long, LatencyResult) -> Unit,
         onFinished: () -> Unit,
-    ) {
+    ): Boolean {
         val stub =
             object : ILatencyCallback.Stub() {
                 override fun onResult(
@@ -179,11 +184,28 @@ public class TunnelClient @Inject constructor(
             }
         latencyCallback = stub
         val bound = service
-        if (bound == null) {
-            Log.w(TAG, "latency run dropped: not bound")
-            onFinished()
-            return
-        }
+        // Two ways a run never reaches :bg — nothing bound yet, or the binder died
+        // between the check and the call — and both must report the same thing to
+        // the caller, since both leave a once-per-session claim spent on a
+        // measurement that did not happen.
+        val started =
+            if (bound == null) {
+                Log.w(TAG, "latency run dropped: not bound")
+                false
+            } else {
+                dispatchLatencyRun(bound, runId, targets, options, stub)
+            }
+        if (!started) onFinished()
+        return started
+    }
+
+    private fun dispatchLatencyRun(
+        bound: ITunnelService,
+        runId: Long,
+        targets: List<LatencyTarget>,
+        options: LatencyOptions,
+        stub: ILatencyCallback.Stub,
+    ): Boolean =
         try {
             // Split into parallel arrays only here, at the wire format, and
             // re-paired by index on the other side.
@@ -197,11 +219,11 @@ public class TunnelClient @Inject constructor(
                     }
                 }.toIntArray()
             bound.startLatencyRun(runId, ids, wireModes, LatencyOptionsParcel.from(options), stub)
+            true
         } catch (e: android.os.RemoteException) {
             Log.w(TAG, "latency run failed: ${e.javaClass.simpleName}")
-            onFinished()
+            false
         }
-    }
 
     /**
      * Stops scheduling for [runId].

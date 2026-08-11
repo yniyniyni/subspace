@@ -54,7 +54,7 @@ internal interface LatencyTester {
     suspend fun test(
         profileIds: List<Long>,
         modes: Map<Long, PingMode> = emptyMap(),
-    )
+    ): Boolean
 
     /**
      * Stops scheduling the current run.
@@ -67,6 +67,9 @@ internal interface LatencyTester {
 
     /** True the first time it is asked for [groupId] this session — see [LatencyCache.claimLaunchRun]. */
     fun claimLaunchRun(groupId: Long): Boolean
+
+    /** Returns claims taken for a run that never started — see [LatencyCache.releaseLaunchRun]. */
+    fun releaseLaunchRun(groupIds: Collection<Long>)
 
     /** The user's global ping-on-launch setting. */
     val pingOnLaunch: Flow<Boolean>
@@ -115,8 +118,8 @@ constructor(
     override suspend fun test(
         profileIds: List<Long>,
         modes: Map<Long, PingMode>,
-    ) {
-        if (profileIds.isEmpty()) return
+    ): Boolean {
+        if (profileIds.isEmpty()) return false
         // Starting a run supersedes any run in flight, and a superseded run never
         // reaches its own onFinished — that is fenced on the run id in :bg.
         // Without this, the rows it had marked would sit on "…" for the rest of
@@ -132,7 +135,7 @@ constructor(
             )
         val id = runId.incrementAndGet()
         cache.markTesting(profileIds)
-        tunnel.startLatencyRun(
+        return tunnel.startLatencyRun(
             runId = id,
             // Per profile: `ping-type` is scoped to the subscription that
             // delivered it (§A.1), so one run spanning two groups can need two
@@ -153,6 +156,8 @@ constructor(
     }
 
     override fun claimLaunchRun(groupId: Long): Boolean = cache.claimLaunchRun(groupId)
+
+    override fun releaseLaunchRun(groupIds: Collection<Long>) = cache.releaseLaunchRun(groupIds)
 
     /**
      * Read at the moment a launch run is considered, not cached: the user may

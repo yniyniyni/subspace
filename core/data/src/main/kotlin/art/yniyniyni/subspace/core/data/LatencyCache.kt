@@ -86,4 +86,17 @@ constructor() {
      * nothing to reset.
      */
     public fun claimLaunchRun(groupId: Long): Boolean = launchRunClaimed.add(groupId)
+
+    /**
+     * Hands a claim back when the run it was taken for never started.
+     *
+     * `TunnelClient` drops a run outright when nothing is bound yet, and binding
+     * is asynchronous across a process fork — so a list that composes before
+     * `onServiceConnected` lands would otherwise burn that group's single launch
+     * run on a measurement that never happened. `LaunchPinger` treats every gate
+     * as "not yet, not never"; this keeps the drop path honest to the same rule.
+     */
+    public fun releaseLaunchRun(groupIds: Collection<Long>) {
+        launchRunClaimed.removeAll(groupIds.toSet())
+    }
 }

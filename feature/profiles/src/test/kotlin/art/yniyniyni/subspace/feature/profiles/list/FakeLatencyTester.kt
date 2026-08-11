@@ -54,11 +54,22 @@ internal class FakeLatencyTester(
     var lastModes: Map<Long, PingMode> = emptyMap()
         private set
 
+    /** Settable so a test can drive the not-bound path, which returns false. */
+    var startSucceeds: Boolean = true
+
+    var releasedGroups: Collection<Long> = emptyList()
+        private set
+
+    override fun releaseLaunchRun(groupIds: Collection<Long>) {
+        releasedGroups = groupIds
+        launchRunClaimed.removeAll(groupIds.toSet())
+    }
+
     override suspend fun test(
         profileIds: List<Long>,
         modes: Map<Long, PingMode>,
-    ) {
-        if (profileIds.isEmpty()) return
+    ): Boolean {
+        if (profileIds.isEmpty()) return false
         // Mirrors BoundLatencyTester: a run supersedes any run in flight, and the
         // superseded one never reaches its own onFinished, so its rows must be
         // released here or they stay marked forever.
@@ -74,6 +85,7 @@ internal class FakeLatencyTester(
             // state a real run passes through.
             _testing.value = _testing.value + profileIds
         }
+        return startSucceeds
     }
 
     override fun cancel() {

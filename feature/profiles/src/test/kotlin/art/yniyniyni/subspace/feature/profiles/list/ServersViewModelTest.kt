@@ -934,6 +934,25 @@ class ServersViewModelTest {
         }
 
     @Test
+    fun `a launch run dropped before the service is bound gives its claim back`() =
+        runTest {
+            tester.startSucceeds = false
+            advanceUntilIdle()
+
+            viewModel.onServersShown()
+            advanceUntilIdle()
+            tester.releasedGroups shouldBe listOf(group.id)
+
+            // :bg binds asynchronously across a process fork, so the list can
+            // compose first. Without the release, that group's single launch run
+            // was spent on a measurement that never happened.
+            tester.startSucceeds = true
+            viewModel.onServersShown()
+            advanceUntilIdle()
+            tester.testCallCount shouldBe 2
+        }
+
+    @Test
     fun `a metered network suppresses the launch run but leaves the manual action`() =
         runTest {
             tester.metered = true

@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.xray
 
+import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
+import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import art.yniyniyni.subspace.core.model.SocksOutbound
@@ -43,6 +47,8 @@ class XrayConfigGeneratorTest {
             dnsServer = "1.1.1.1",
             enableSniffing = true,
         )
+
+    private val profile = Profile(id = "id", name = "n", outbound = outbound)
 
     /**
      * `generate` now returns a [ConfigResult], not a bare String. Every test
@@ -138,6 +144,98 @@ class XrayConfigGeneratorTest {
     fun `matches the golden file`() {
         val golden = checkNotNull(javaClass.getResource("/golden/vless-reality.json")).readText()
         generateJson(outbound, settings) shouldBe golden.trimEnd()
+    }
+
+    // The M1 tunnel is proven on hardware. Routing must not drift it, so this
+    // pins the exact block a null rule set produces — byte for byte.
+    @Test
+    fun `no rule set produces the M1 routing block unchanged`() {
+        val json = (XrayConfigGenerator.generate(profile, settings) as ConfigResult.Ok).json
+
+        json shouldContain
+            """
+            |  "routing": {
+            |    "domainStrategy": "IPIfNonMatch",
+            |    "rules": []
+            |  }
+            """.trimMargin()
+    }
+
+    @Test
+    @Suppress("Indentation") // ktlint requires this nested constructor indentation; detekt disagrees.
+    fun `a rule set is emitted into the routing block`() {
+        val routed =
+            settings.copy(
+                routing =
+                    RoutingRuleSet(
+                        name = "test",
+                        buckets =
+                            mapOf(
+                                RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:category-ads-all")),
+                                RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8")),
+                            ),
+                        domainStrategy = DomainStrategy.AS_IS,
+                    ),
+            )
+
+        val json = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        json shouldContain
+            """
+            |  "routing": {
+            |    "domainStrategy": "AsIs",
+            |    "rules": [
+            |      { "type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block" },
+            |      { "type": "field", "ip": ["10.0.0.0/8"], "outboundTag": "direct" }
+            |    ]
+            |  }
+            """.trimMargin()
+    }
+
+    @Test
+    fun `routing output escapes entries when callers bypass entry validation`() {
+        val unvalidatedEntry = "safe\"\n\u0001\"outboundTag\": \"block"
+        val routing =
+            RoutingRuleSet(
+                name = "test",
+                buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf(unvalidatedEntry))),
+            )
+        val routed = settings.copy(routing = routing)
+
+        val json = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        json shouldContain
+            """{ "type": "field", "domain": ["safe\"\n\u0001\"outboundTag\": \"block"], "outboundTag": "proxy" }"""
+    }
+
+    @Test
+    fun `IP on demand strategy uses the Xray wire value`() {
+        val routed =
+            settings.copy(
+                routing = RoutingRuleSet(name = "test", domainStrategy = DomainStrategy.IP_ON_DEMAND),
+            )
+
+        val json = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        json shouldContain """"domainStrategy": "IPOnDemand"""
+    }
+
+    @Test
+    @Suppress("Indentation") // ktlint requires this nested constructor indentation; detekt disagrees.
+    fun `generation stays deterministic with a rule set`() {
+        val routed =
+            settings.copy(
+                routing =
+                    RoutingRuleSet(
+                        name = "test",
+                        buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("a.example", "b.example"))),
+                    ),
+            )
+
+        val first = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+        val second = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        first shouldBe second
     }
 
     /**

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.xray
 
+import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import art.yniyniyni.subspace.core.model.SocksOutbound
@@ -17,6 +19,14 @@ public data class TunnelSettings(
     /** Advertised to both the `dns` block and `VpnService.Builder.addDnsServer` (§5.2). */
     val dnsServer: String,
     val enableSniffing: Boolean,
+    /**
+     * The active routing rule set, or null when routing is off.
+     *
+     * Null is not a degraded mode: it produces the `"rules": []` block M1's
+     * proven tunnel has always carried, byte for byte. Defaulted so that call
+     * sites which do not route yet keep compiling.
+     */
+    val routing: RoutingRuleSet? = null,
 )
 
 /**
@@ -112,11 +122,7 @@ public object XrayConfigGenerator {
         appendInbounds(sb, settings)
         appendOutbounds(sb, outbound)
 
-        sb.appendLine("""  "routing": {""")
-        sb.appendLine("""    "domainStrategy": "IPIfNonMatch",""")
-        // Empty in M1. Rule-based routing is M5.
-        sb.appendLine("""    "rules": []""")
-        sb.appendLine("""  }""")
+        appendRouting(sb, settings.routing)
         sb.append("}")
 
         return sb.toString()
@@ -136,6 +142,36 @@ public object XrayConfigGenerator {
         sb.appendLine("""  "dns": {""")
         sb.appendLine("""    "servers": ["${settings.dnsServer}"]""")
         sb.appendLine("""  },""")
+    }
+
+    /**
+     * §6's routing block. Empty in M1; M5 fills it from the active rule set.
+     *
+     * A null [routing] reproduces the M1 block exactly — `IPIfNonMatch` and an
+     * empty rule array — because the tunnel that block belongs to is proven on
+     * hardware and this milestone does not get to drift it. `XrayConfigGeneratorTest`
+     * pins that byte-for-byte.
+     */
+    private fun appendRouting(
+        sb: StringBuilder,
+        routing: RoutingRuleSet?,
+    ) {
+        val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
+        val rules = routing?.let(::routingRuleLines).orEmpty()
+
+        sb.appendLine("""  "routing": {""")
+        sb.appendLine("""    "domainStrategy": "${strategy.wireValue}",""")
+        if (rules.isEmpty()) {
+            sb.appendLine("""    "rules": []""")
+        } else {
+            sb.appendLine("""    "rules": [""")
+            rules.forEachIndexed { index, rule ->
+                val comma = if (index == rules.size - 1) "" else ","
+                sb.appendLine("""      $rule$comma""")
+            }
+            sb.appendLine("""    ]""")
+        }
+        sb.appendLine("""  }""")
     }
 
     private fun appendInbounds(

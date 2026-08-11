@@ -16,6 +16,7 @@ import javax.inject.Singleton
 // table directly. No other module is meant to know these strings.
 private const val KEY_THEME = "theme"
 private const val KEY_ACTIVE_PROFILE = "active_profile_id"
+private const val KEY_ACTIVE_ROUTING_RULE_SET = "active_routing_rule_set_id"
 private const val KEY_HWID_ENABLED = "hwid_enabled"
 private const val KEY_PING_MODE = "ping_mode"
 private const val KEY_PING_CHECK_URL = "ping_check_url"
@@ -82,6 +83,26 @@ internal constructor(
      */
     public suspend fun setActiveProfile(id: Long?) {
         dao.put(SettingEntity(key = KEY_ACTIVE_PROFILE, value = id?.toString().orEmpty()))
+    }
+
+    /**
+     * The active routing rule set, or null when routing is off.
+     *
+     * Null is the ordinary state, not an error: it produces the `"rules": []`
+     * block M1's proven tunnel has always carried.
+     */
+    public val activeRoutingRuleSetId: Flow<Long?> =
+        dao.observe(KEY_ACTIVE_ROUTING_RULE_SET).map { stored -> stored?.toLongOrNull() }
+
+    /**
+     * Sets the active rule set, or turns routing off when [id] is null.
+     *
+     * Clearing writes an empty string for the same reason [setActiveProfile]
+     * does: [SettingDao] exposes no delete, and `toLongOrNull()` reads `""` back
+     * as null — the same result as a key that was never written.
+     */
+    public suspend fun setActiveRoutingRuleSetId(id: Long?) {
+        dao.put(SettingEntity(key = KEY_ACTIVE_ROUTING_RULE_SET, value = id?.toString() ?: ""))
     }
 
     /** Whether the global Device ID header gate is enabled; defaults to on for provider compatibility. */

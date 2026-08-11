@@ -112,6 +112,32 @@ class SettingsRepositoryTest {
         }
 
     @Test
+    fun activeRoutingRuleSetIdDefaultsToNull() =
+        runTest {
+            repository.activeRoutingRuleSetId.first() shouldBe null
+        }
+
+    @Test
+    fun activeRoutingRuleSetIdRoundTrips() =
+        runTest {
+            repository.setActiveRoutingRuleSetId(7L)
+
+            repository.activeRoutingRuleSetId.first() shouldBe 7L
+        }
+
+    // Routing off is a real state, not an absent one — clearing must read back
+    // as null rather than as 0, which would be a rule set id.
+    @Test
+    fun clearingActiveRoutingRuleSetIdReadsBackAsNull() =
+        runTest {
+            repository.setActiveRoutingRuleSetId(7L)
+
+            repository.setActiveRoutingRuleSetId(null)
+
+            repository.activeRoutingRuleSetId.first() shouldBe null
+        }
+
+    @Test
     fun launchPingTogglesRoundTrip() =
         runTest {
             repository.setPingOnLaunch(false)

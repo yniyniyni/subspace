@@ -651,6 +651,9 @@ class TunnelService : VpnService() {
             .measure(profile.address, profile.port, options.timeoutSeconds)
     }
 
+    private fun pingModeOf(wire: Int): PingMode =
+        if (wire == LatencyOptionsParcel.MODE_TCP) PingMode.TCP else PingMode.PROXY_HEAD
+
     /** True while this service holds a session, in any state but a settled down one. */
     private fun ownTunnelActive(): Boolean =
         synchronized(lock) {
@@ -701,6 +704,7 @@ class TunnelService : VpnService() {
             override fun startLatencyRun(
                 runId: Long,
                 profileIds: LongArray?,
+                modes: IntArray?,
                 options: LatencyOptionsParcel?,
                 callback: ILatencyCallback?,
             ) {
@@ -717,7 +721,14 @@ class TunnelService : VpnService() {
                 latencyRunner.start(
                     runId = runId,
                     profileIds = ids,
-                    options = resolved,
+                    // Per index, because `ping-type` is scoped to the subscription
+                    // that delivered it (§A.1) and one run can span groups whose
+                    // providers chose differently. A missing or short array falls
+                    // back to the run's own mode — the global setting.
+                    optionsFor = { index ->
+                        val mode = modes?.getOrNull(index)
+                        if (mode == null) resolved else resolved.copy(mode = pingModeOf(mode))
+                    },
                     onResult = { id, profileId, result ->
                         deliverLatency { target.onResult(id, profileId, result.delayMillis, result.outcome.ordinal) }
                     },

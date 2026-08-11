@@ -7,6 +7,8 @@ import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.model.LatencyResult
+import art.yniyniyni.subspace.core.model.PingMode
+import art.yniyniyni.subspace.core.model.pingModeFrom
 import art.yniyniyni.subspace.core.parser.directive.UserInfo
 import art.yniyniyni.subspace.core.parser.directive.parseUserInfo
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
@@ -64,6 +66,12 @@ constructor(
      * A `MANUAL` group is simply absent, which leaves our own setting in charge.
      */
     private var providerPingOnOpen: Map<Long, String?> = emptyMap()
+
+    /**
+     * Each group's `ping-type`, refreshed whenever state is rebuilt. Absent means
+     * that group follows the user's global mode setting.
+     */
+    private var providerPingType: Map<Long, String?> = emptyMap()
 
     init {
         // Unfiltered: the source availableProtocols is derived from (every
@@ -147,6 +155,15 @@ constructor(
         val sortType: String?,
         /** This subscription's `subscription-ping-onopen-enabled`, or null when unset. */
         val pingOnOpen: String?,
+        /**
+         * This subscription's `ping-type`, or null when its provider sent none.
+         *
+         * Per subscription for the same §A.1 reason [sortType] is: a provider
+         * choosing `tcp` must not change how a *different* provider's servers are
+         * measured, or the two groups' numbers stop being comparable while looking
+         * identical on screen.
+         */
+        val pingType: String?,
     )
 
     /** How the rows are presented, as opposed to what the rows are. */
@@ -174,7 +191,8 @@ constructor(
                     profileSource.observeUserInfo(sub.id),
                     profileSource.observeEffective(sub.id, KEY_SUBSCRIPTIONS_SORT_TYPE, default = null),
                     profileSource.observeEffective(sub.id, KEY_PING_ON_OPEN, default = null),
-                ) { raw, sortType, pingOnOpen ->
+                    profileSource.observeEffective(sub.id, KEY_PING_TYPE, default = null),
+                ) { raw, sortType, pingOnOpen, pingType ->
                     sub.groupId to
                         SubscriptionContext(
                             subscriptionId = sub.id,
@@ -182,6 +200,7 @@ constructor(
                             lastFetchedAtEpochMillis = sub.lastFetchedAt,
                             sortType = sortType.value,
                             pingOnOpen = pingOnOpen.value,
+                            pingType = pingType.value,
                         )
                 }
             }
@@ -242,7 +261,9 @@ constructor(
 
     /** Measures one server. A one-element run — the same path a group run takes. */
     fun onTestProfile(profileId: Long) {
-        viewModelScope.launch { latencyTester.test(listOf(profileId)) }
+        val group = _state.value.groups.firstOrNull { g -> g.profiles.any { it.id == profileId } }
+        val modes = group?.let { modesFor(listOf(it)) }.orEmpty()
+        viewModelScope.launch { latencyTester.test(listOf(profileId), modes) }
     }
 
     /**
@@ -252,8 +273,10 @@ constructor(
      * would spend a minute of the user's battery on servers they cannot see.
      */
     fun onTestGroup(groupId: Long) {
-        val ids = _state.value.groups.firstOrNull { it.id == groupId }?.profiles?.map { it.id }.orEmpty()
-        viewModelScope.launch { latencyTester.test(ids) }
+        val group = _state.value.groups.firstOrNull { it.id == groupId }
+        val ids = group?.profiles?.map { it.id }.orEmpty()
+        val modes = group?.let { modesFor(listOf(it)) }.orEmpty()
+        viewModelScope.launch { latencyTester.test(ids, modes) }
     }
 
     /**
@@ -287,14 +310,30 @@ constructor(
         viewModelScope.launch {
             val enabled = latencyTester.pingOnLaunch.first()
             val allowMetered = latencyTester.pingOnLaunchMetered.first()
-            _state.value.groups.forEach { group ->
-                val providerValue = providerPingOnOpen[group.id]
-                if (launchPinger.shouldRun(group.id, enabled, allowMetered, providerValue)) {
-                    onTestGroup(group.id)
+            // Collected into **one** run rather than one per group. Starting a run
+            // supersedes any run in flight, so a loop of per-group starts left only
+            // the last group actually measured — invisible with a single group, and
+            // silently wrong with two. Found by review, not by the device run.
+            val eligible =
+                _state.value.groups.filter { group ->
+                    launchPinger.shouldRun(group.id, enabled, allowMetered, providerPingOnOpen[group.id])
                 }
-            }
+            if (eligible.isEmpty()) return@launch
+            val ids = eligible.flatMap { group -> group.profiles.map { it.id } }
+            latencyTester.test(ids, modesFor(eligible))
         }
     }
+
+    /**
+     * Each profile's measurement mode, from the `ping-type` its own group's
+     * provider set. Absent leaves that profile on the user's global setting.
+     */
+    private fun modesFor(groups: List<ServersGroup>): Map<Long, PingMode> =
+        groups
+            .flatMap { group ->
+                val mode = providerPingType[group.id]?.let(::pingModeFrom)
+                if (mode == null) emptyList() else group.profiles.map { row -> row.id to mode }
+            }.toMap()
 
     /**
      * The user's own order for one group, outranking that group's provider.
@@ -323,6 +362,8 @@ constructor(
         val totalCountById = raw.associate { it.id to it.profiles.size }
         providerPingOnOpen =
             subscriptionContextByGroupId.mapValues { (_, context) -> context.pingOnOpen }
+        providerPingType =
+            subscriptionContextByGroupId.mapValues { (_, context) -> context.pingType }
         val groups =
             filtered.map { group ->
                 val context = subscriptionContextByGroupId[group.id]
@@ -390,6 +431,7 @@ constructor(
 /** `DirectiveRegistry` keys this screen resolves per subscription. */
 private const val KEY_SUBSCRIPTIONS_SORT_TYPE = "subscriptions-sort-type"
 private const val KEY_PING_ON_OPEN = "subscription-ping-onopen-enabled"
+private const val KEY_PING_TYPE = "ping-type"
 
 private fun StoredProfile.toRow(
     activeProfileId: Long?,

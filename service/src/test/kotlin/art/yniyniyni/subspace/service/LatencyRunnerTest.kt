@@ -41,7 +41,7 @@ class LatencyRunnerTest {
             runner.start(
                 runId = 1L,
                 profileIds = longArrayOf(1, 2, 3),
-                options = options,
+                optionsFor = { options },
                 onResult = { _, id, _ -> results += id },
                 onFinished = { runId -> finishedRunId = runId },
             )
@@ -63,7 +63,7 @@ class LatencyRunnerTest {
                     scope = TestScope(testScheduler),
                 )
 
-            runner.start(1L, longArrayOf(7), options, { _, _, r -> results += r }, {})
+            runner.start(1L, longArrayOf(7), { options }, { _, _, r -> results += r }, {})
             advanceUntilIdle()
 
             // §10.4: a real outcome, not a silent skip — the row must stop saying
@@ -90,7 +90,7 @@ class LatencyRunnerTest {
                     concurrency = 2,
                 )
 
-            runner.start(1L, (1L..10L).toList().toLongArray(), options, { _, _, _ -> }, {})
+            runner.start(1L, (1L..10L).toList().toLongArray(), { options }, { _, _, _ -> }, {})
             advanceUntilIdle()
 
             peak.get() shouldBeLessThanOrEqual 2
@@ -113,9 +113,9 @@ class LatencyRunnerTest {
                     concurrency = 1,
                 )
 
-            runner.start(1L, longArrayOf(1, 2, 3), options, { _, _, _ -> }, {})
+            runner.start(1L, longArrayOf(1, 2, 3), { options }, { _, _, _ -> }, {})
             advanceUntilIdle()
-            runner.start(2L, longArrayOf(9), options, { _, _, _ -> }, {})
+            runner.start(2L, longArrayOf(9), { options }, { _, _, _ -> }, {})
             gate.complete(Unit)
             advanceUntilIdle()
 
@@ -139,9 +139,9 @@ class LatencyRunnerTest {
                     scope = TestScope(testScheduler),
                 )
 
-            runner.start(1L, longArrayOf(1), options, { _, id, _ -> delivered += id }, {})
+            runner.start(1L, longArrayOf(1), { options }, { _, id, _ -> delivered += id }, {})
             advanceUntilIdle()
-            runner.start(2L, longArrayOf(9), options, { _, id, _ -> delivered += id }, {})
+            runner.start(2L, longArrayOf(9), { options }, { _, id, _ -> delivered += id }, {})
             gate.complete(Unit)
             advanceUntilIdle()
 
@@ -167,7 +167,7 @@ class LatencyRunnerTest {
                     scope = TestScope(testScheduler),
                 )
 
-            runner.start(1L, longArrayOf(1), options, { _, id, _ -> delivered += id }, { finished = true })
+            runner.start(1L, longArrayOf(1), { options }, { _, id, _ -> delivered += id }, { finished = true })
             advanceUntilIdle()
             runner.cancel(1L)
             gate.complete(Unit)
@@ -188,7 +188,7 @@ class LatencyRunnerTest {
                     scope = TestScope(testScheduler),
                 )
 
-            runner.start(2L, longArrayOf(9), options, { _, id, _ -> delivered += id }, {})
+            runner.start(2L, longArrayOf(9), { options }, { _, id, _ -> delivered += id }, {})
             // A stale cancel arriving late from a run that already ended.
             runner.cancel(1L)
             advanceUntilIdle()

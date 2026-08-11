@@ -100,3 +100,17 @@ public data class LatencyOptions(
     val timeoutSeconds: Int,
     val checkUrl: String,
 )
+
+/**
+ * One profile, and the mode it is to be measured in.
+ *
+ * A carrier rather than two parallel lists: `ping-type` is scoped per
+ * subscription (§A.1), so a single run can span groups measured differently, and
+ * an id list beside a mode list is one filter or sort away from pairing the
+ * wrong two. They travel as parallel arrays only across the AIDL boundary, where
+ * primitives are the wire format — and are re-paired immediately on both sides.
+ */
+public data class LatencyTarget(
+    val profileId: Long,
+    val mode: PingMode,
+)

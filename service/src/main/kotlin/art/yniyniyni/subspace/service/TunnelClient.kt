@@ -11,6 +11,8 @@ import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOptions
 import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.LatencyResult
+import art.yniyniyni.subspace.core.model.LatencyTarget
+import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,7 +151,7 @@ public class TunnelClient @Inject constructor(
      */
     public fun startLatencyRun(
         runId: Long,
-        profileIds: List<Long>,
+        targets: List<LatencyTarget>,
         options: LatencyOptions,
         onResult: (Long, LatencyResult) -> Unit,
         onFinished: () -> Unit,
@@ -183,7 +185,18 @@ public class TunnelClient @Inject constructor(
             return
         }
         try {
-            bound.startLatencyRun(runId, profileIds.toLongArray(), LatencyOptionsParcel.from(options), stub)
+            // Split into parallel arrays only here, at the wire format, and
+            // re-paired by index on the other side.
+            val ids = targets.map { it.profileId }.toLongArray()
+            val wireModes =
+                targets.map { target ->
+                    if (target.mode == PingMode.TCP) {
+                        LatencyOptionsParcel.MODE_TCP
+                    } else {
+                        LatencyOptionsParcel.MODE_PROXY_HEAD
+                    }
+                }.toIntArray()
+            bound.startLatencyRun(runId, ids, wireModes, LatencyOptionsParcel.from(options), stub)
         } catch (e: android.os.RemoteException) {
             Log.w(TAG, "latency run failed: ${e.javaClass.simpleName}")
             onFinished()

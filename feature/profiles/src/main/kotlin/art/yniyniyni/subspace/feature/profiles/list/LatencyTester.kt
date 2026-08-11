@@ -8,6 +8,8 @@ import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOptions
 import art.yniyniyni.subspace.core.model.LatencyResult
+import art.yniyniyni.subspace.core.model.LatencyTarget
+import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.service.TunnelClient
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -39,8 +41,20 @@ internal interface LatencyTester {
      *
      * A single-server test is just a one-element list — there is deliberately no
      * separate path for it, so the row action and the group action cannot drift.
+     *
+     * **Implementations must release the rows a superseded run had marked.** That
+     * run never reaches its own `onFinished` — it is fenced on the run id in
+     * `:bg` — so anything it marked would otherwise show "…" for the rest of the
+     * session. Reachable by tapping "Test all" and then a single row.
+     *
+     * @param modes per-profile overrides. `ping-type` is scoped to the
+     *   subscription that delivered it (§A.1), so one run spanning two groups can
+     *   need two modes; an absent entry means the user's global setting.
      */
-    suspend fun test(profileIds: List<Long>)
+    suspend fun test(
+        profileIds: List<Long>,
+        modes: Map<Long, PingMode> = emptyMap(),
+    )
 
     /**
      * Stops scheduling the current run.
@@ -98,8 +112,16 @@ constructor(
      */
     private val runId = AtomicLong(0)
 
-    override suspend fun test(profileIds: List<Long>) {
+    override suspend fun test(
+        profileIds: List<Long>,
+        modes: Map<Long, PingMode>,
+    ) {
         if (profileIds.isEmpty()) return
+        // Starting a run supersedes any run in flight, and a superseded run never
+        // reaches its own onFinished — that is fenced on the run id in :bg.
+        // Without this, the rows it had marked would sit on "…" for the rest of
+        // the session. Clearing here is what makes supersession safe.
+        cache.finish(cache.testing.value)
         // Resolved here rather than in :bg, so the service never has to reach
         // into settings to interpret a run.
         val options =
@@ -112,7 +134,10 @@ constructor(
         cache.markTesting(profileIds)
         tunnel.startLatencyRun(
             runId = id,
-            profileIds = profileIds,
+            // Per profile: `ping-type` is scoped to the subscription that
+            // delivered it (§A.1), so one run spanning two groups can need two
+            // modes. Absent means the user's global setting.
+            targets = profileIds.map { id -> LatencyTarget(id, modes[id] ?: options.mode) },
             options = options,
             onResult = { profileId, result -> cache.put(profileId, result) },
             // Clears the in-flight flag without writing results for rows that

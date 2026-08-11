@@ -6,6 +6,7 @@ import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOptions
 import art.yniyniyni.subspace.core.model.LatencyResult
+import art.yniyniyni.subspace.core.model.LatencyTarget
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.service.TunnelClient
 import dagger.Module
@@ -63,7 +64,9 @@ internal class BoundTunnelConnection @Inject constructor(
         cache.markTesting(listOf(profileId))
         client.startLatencyRun(
             runId = -profileId,
-            profileIds = listOf(profileId),
+            // Home follows the global setting: it measures the active profile,
+            // and has no group context to resolve a provider's ping-type from.
+            targets = listOf(LatencyTarget(profileId, options.mode)),
             options = options,
             onResult = { id, result -> cache.put(id, result) },
             onFinished = { cache.finish(listOf(profileId)) },

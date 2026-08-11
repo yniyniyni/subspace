@@ -43,7 +43,7 @@ internal class LatencyRunner<T>(
     fun start(
         runId: Long,
         profileIds: LongArray,
-        options: LatencyOptions,
+        optionsFor: (Int) -> LatencyOptions,
         onResult: (Long, Long, LatencyResult) -> Unit,
         onFinished: (Long) -> Unit,
     ) {
@@ -61,12 +61,12 @@ internal class LatencyRunner<T>(
             scope.launch {
                 val gate = Semaphore(concurrency)
                 profileIds
-                    .map { profileId ->
+                    .mapIndexed { index, profileId ->
                         async {
                             gate.withPermit {
                                 val result =
                                     loadProfile(profileId)
-                                        ?.let { profile -> measure(profile, options) }
+                                        ?.let { profile -> measure(profile, optionsFor(index)) }
                                         // Deleted between the list rendering and the
                                         // run reaching it. A real outcome, not a
                                         // silent skip: §10.4 — the row must stop

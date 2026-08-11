@@ -13,6 +13,7 @@ import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.Outbound
+import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
@@ -856,6 +857,80 @@ class ServersViewModelTest {
             // The fixture group is MANUAL: no subscription, so no directive could
             // ever have enabled this. Ours does.
             tester.testedIds shouldBe listOf(1L, 2L, 3L, 4L)
+        }
+
+    // ── Review findings: three defects the device run could not reach ───────
+    //
+    // The subscription used on device held one group, which hid the first two
+    // entirely — a single-group launch has nothing to supersede and nothing left
+    // marked. These are the regression guards.
+
+    @Test
+    fun `the launch run measures every eligible group in one run, not one run per group`() =
+        runTest {
+            val second = ProfileGroup(id = 2L, name = "Other", profiles = listOf(frankfurt.copy(id = 9L)))
+            val multi = FakeProfileSource(listOf(group, second))
+            val model = ServersViewModel(multi, tester)
+            advanceUntilIdle()
+
+            model.onServersShown()
+            advanceUntilIdle()
+
+            // One run. A loop of per-group starts left only the last group
+            // measured, because starting a run supersedes any run in flight.
+            tester.testCallCount shouldBe 1
+            tester.testedIds shouldBe listOf(1L, 2L, 3L, 4L, 9L)
+        }
+
+    @Test
+    fun `starting a run clears rows a superseded run had left marked`() =
+        runTest {
+            val pending = FakeLatencyTester(autoComplete = false)
+            val model = ServersViewModel(source, pending)
+            advanceUntilIdle()
+
+            model.onTestGroup(group.id)
+            advanceUntilIdle()
+            // Supersedes the group run while its rows are still marked.
+            model.onTestProfile(1L)
+            advanceUntilIdle()
+
+            // A superseded run never reaches its own onFinished — it is fenced on
+            // the run id — so without an explicit clear these rows would show "…"
+            // for the rest of the session.
+            val stillTesting = rowsOf(model).filter { it.isTesting }.map { it.id }
+            stillTesting shouldBe listOf(1L)
+        }
+
+    @Test
+    fun `a provider's ping-type sets the mode for that group's servers`() =
+        runTest {
+            val subscription = subscriptionFor()
+            val subscribedSource =
+                FakeProfileSource(allGroups = listOf(group), subscriptions = listOf(subscription))
+            subscribedSource.directives[subscription.id] = mutableMapOf("ping-type" to "tcp")
+            val model = ServersViewModel(subscribedSource, tester)
+            advanceUntilIdle()
+
+            model.onTestGroup(group.id)
+            advanceUntilIdle()
+
+            // §A.1 scopes ping-type to the subscription that sent it. Before this,
+            // the directive was stored and never read — the milestone claimed
+            // three directive readers and shipped two.
+            val expected = listOf(1L, 2L, 3L, 4L).associateWith { PingMode.TCP }
+            tester.lastModes shouldBe expected
+        }
+
+    @Test
+    fun `a group whose provider sent no ping-type follows the global setting`() =
+        runTest {
+            viewModel.onTestGroup(group.id)
+            advanceUntilIdle()
+
+            // Empty means "no per-group override" — the tester falls back to the
+            // user's own mode rather than substituting one.
+            tester.lastModes shouldBe emptyMap()
         }
 
     @Test

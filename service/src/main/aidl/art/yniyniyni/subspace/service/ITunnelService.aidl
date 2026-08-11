@@ -55,7 +55,7 @@ interface ITunnelService {
      *
      * Starting a run supersedes any run already in flight.
      */
-    oneway void startLatencyRun(long runId, in long[] profileIds,
+    oneway void startLatencyRun(long runId, in long[] profileIds, in int[] modes,
                                 in LatencyOptionsParcel options, ILatencyCallback callback);
 
     /**

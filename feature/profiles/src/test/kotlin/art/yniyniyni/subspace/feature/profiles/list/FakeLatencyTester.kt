@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.feature.profiles.list
 
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyResult
+import art.yniyniyni.subspace.core.model.PingMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,10 +51,21 @@ internal class FakeLatencyTester(
 
     private val launchRunClaimed = mutableSetOf<Long>()
 
-    override suspend fun test(profileIds: List<Long>) {
+    var lastModes: Map<Long, PingMode> = emptyMap()
+        private set
+
+    override suspend fun test(
+        profileIds: List<Long>,
+        modes: Map<Long, PingMode>,
+    ) {
         if (profileIds.isEmpty()) return
+        // Mirrors BoundLatencyTester: a run supersedes any run in flight, and the
+        // superseded one never reaches its own onFinished, so its rows must be
+        // released here or they stay marked forever.
+        _testing.value = emptySet()
         testCallCount++
         testedIds = profileIds
+        lastModes = modes
         if (autoComplete) {
             _results.value = _results.value + profileIds.associateWith { id -> resultFor(id) }
             _testing.value = _testing.value - profileIds.toSet()

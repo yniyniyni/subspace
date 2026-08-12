@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.data.di
 
 import android.content.Context
 import androidx.room.Room
+import art.yniyniyni.subspace.core.data.db.GeoAssetDao
 import art.yniyniyni.subspace.core.data.db.MIGRATION_1_2
 import art.yniyniyni.subspace.core.data.db.MIGRATION_2_3
 import art.yniyniyni.subspace.core.data.db.ProfileDao
@@ -76,4 +77,7 @@ internal object DataModule {
 
     @Provides
     fun routingRuleSetDao(database: SubspaceDatabase): RoutingRuleSetDao = database.routingRuleSetDao()
+
+    @Provides
+    fun geoAssetDao(database: SubspaceDatabase): GeoAssetDao = database.geoAssetDao()
 }

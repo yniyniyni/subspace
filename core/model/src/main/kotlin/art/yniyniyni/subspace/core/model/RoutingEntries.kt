@@ -18,7 +18,31 @@ public enum class EntryProblem {
 
 private const val GEOIP_DAT = "geoip.dat"
 private const val GEOSITE_DAT = "geosite.dat"
-private val SAFE_GEO_FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]*\\.dat")
+
+/**
+ * The one definition of what a geo database filename may look like.
+ *
+ * Three places need it and they must not drift apart: this file (which decides
+ * whether an `ext:` reference is usable), `GeoAssetRepository` in `:core:data`
+ * (which decides what may be written to the geo directory), and `Redaction`'s
+ * [redact] exemption. The last is why drift is not merely untidy — widening the
+ * redaction copy alone would fail *unsafe*, letting a hostname through §5.6.
+ *
+ * A `String` rather than a `Regex` so `Redaction` can embed it in a larger
+ * pattern; [SAFE_GEO_FILE_NAME] is the compiled form for whole-name matching.
+ */
+internal const val GEO_FILE_NAME_REGEX = "[A-Za-z0-9][A-Za-z0-9._-]*\\.dat"
+
+internal val SAFE_GEO_FILE_NAME = Regex(GEO_FILE_NAME_REGEX)
+
+/**
+ * Whether [name] is a legal geo database filename.
+ *
+ * Public because `:core:data` enforces the same grammar before staging or
+ * installing a file, and a second copy of the expression there is the drift
+ * [GEO_FILE_NAME_REGEX] exists to prevent.
+ */
+public fun isGeoFileName(name: String): Boolean = SAFE_GEO_FILE_NAME.matches(name)
 
 private const val IPV4_GROUPS = 4
 private const val IPV4_MAX_OCTET = 255
@@ -129,13 +153,20 @@ public object RoutingEntries {
     }
 
     // ReturnCount: guard clauses make address and CIDR validation independently readable.
-    // UnreachableCode: detektMain (the type-resolution variant `./gradlew build` runs, unlike
-    // the plain `:core:model:detekt` used elsewhere) flags the `?: return false` below as
-    // unreachable, which it is not — `prefix` is read on the very next line. Confirmed
-    // pre-existing and unrelated to any change in this task: identical on this file's content
-    // at commit 3348415, the last commit before Task 11 touched this module. Left unexplained
-    // beyond that pending upstream detekt/Kotlin 2.4 triage, since no sourced claim about the
-    // root cause is available (§10.5).
+    //
+    // UnreachableCode: detektMain — the type-resolution variant `./gradlew build` runs, which
+    // the plain `:core:model:detekt` task does not — reports the last two lines of this
+    // function as unreachable. They are not, and the proof is a test rather than this comment:
+    //
+    //   - `prefixPart.toIntOrNull() ?: return false` is reached, and returns, for a
+    //     non-numeric prefix — `rejects a non-numeric cidr prefix` ("10.0.0.0/abc").
+    //   - the range check on the final line is reached by `rejects a malformed address in an
+    //     ip bucket` ("10.0.0.0/33", "fc00::/129") and by every accepted CIDR in
+    //     `accepts well-formed entries` ("10.0.0.0/8", "fc00::/7").
+    //
+    // Delete the suppression and those tests still pass, which is what makes it a false
+    // positive and not dead code. Root cause not sourced — §10.5 forbids guessing at one —
+    // so this stays until upstream detekt/Kotlin triage explains it.
     @Suppress("ReturnCount", "UnreachableCode")
     private fun isAddressOrCidr(value: String): Boolean {
         val address = value.substringBefore('/')
@@ -161,9 +192,12 @@ public object RoutingEntries {
      * malformed separators and the wrong number of uncompressed groups.
      *
      * CyclomaticComplexMethod/ReturnCount: each branch validates one IPv6 grammar constraint.
-     * UnreachableCode: the same detektMain false positive as isAddressOrCidr above, on the
-     * `?: return false` inside the `if (hasCompression) { ... }` block — `left`/`right` are
-     * both read on the next line.
+     *
+     * UnreachableCode: the same detektMain false positive as `isAddressOrCidr` above, here on
+     * the whole `if (hasCompression) { … }` branch. `accepts well-formed entries` reaches it
+     * with `fc00::/7`, `::1` and `2001:db8::1` — every compressed literal takes that branch and
+     * is accepted through it — and `rejects malformed ipv6 syntax` reaches its `?: return
+     * false` exits with `:::1`. Both pass with the suppression removed.
      */
     @Suppress("CyclomaticComplexMethod", "ReturnCount", "UnreachableCode")
     private fun isIpv6(address: String): Boolean {

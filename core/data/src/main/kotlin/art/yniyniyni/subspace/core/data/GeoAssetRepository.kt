@@ -6,6 +6,7 @@ import art.yniyniyni.subspace.core.data.db.GeoAssetEntity
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoDataValidator
 import art.yniyniyni.subspace.core.model.GeoValidation
+import art.yniyniyni.subspace.core.model.isGeoFileName
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -68,9 +69,6 @@ public fun interface GeoDownloader {
 
 /** How long an installed file is considered fresh for a scheduled refresh (§A.3.1). */
 internal const val GEO_REFRESH_INTERVAL_MILLIS = 7L * 24 * 60 * 60 * 1000
-
-/** Matches the filename grammar accepted by `ext:` routing entries. */
-private val SAFE_GEO_FILE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]*\\.dat")
 
 /** What to install, and where from. */
 public data class GeoInstallRequest(
@@ -523,6 +521,13 @@ internal constructor(
 
         val installMutexes = ConcurrentHashMap<String, Mutex>()
 
-        fun isSafeFileName(fileName: String): Boolean = SAFE_GEO_FILE_NAME.matches(fileName)
+        /**
+         * The grammar `ext:` routing entries accept, from `:core:model`.
+         *
+         * Deliberately not a second copy of the expression: `Redaction` relies on
+         * the same grammar for its §5.6 exemption, so a local edit here that did
+         * not reach there would fail unsafe.
+         */
+        fun isSafeFileName(fileName: String): Boolean = isGeoFileName(fileName)
     }
 }

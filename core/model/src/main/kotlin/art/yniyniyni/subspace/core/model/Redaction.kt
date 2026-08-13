@@ -14,23 +14,40 @@ private val IPV4_PATTERN = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
 private val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
 
 /**
- * A `.dat` geo database filename, in the exact grammar `RoutingEntries`
- * validates every such name against (`SAFE_GEO_FILE_NAME` there — kept in sync
- * by hand, since that `val` is private to its own file).
+ * A message that is **nothing but** a `, `-separated list of geo filenames.
  *
- * `FailureReason.GeoDataMissing`'s detail (`TunnelService.failStart`, §4.4) is
- * built entirely from filenames this grammar already accepted, so a token that
- * matches it in full is never anything else. `.dat` is not an IANA top-level
- * domain, so narrowing [HOSTNAME_PATTERN] for it does not open a hole for a real
- * hostname — §5.6 is about `example.com`, not `geoip.dat`.
+ * This is the exact shape of `FailureReason.GeoDataMissing`'s detail, which
+ * `TunnelService.resolveRouting` builds as `missing.sorted().joinToString(", ")`
+ * over names [SAFE_GEO_FILE_NAME] has already accepted. §10.4 is the reason it
+ * must survive [redact]: telling a user "geo data missing — `<redacted>`" sends
+ * them looking for a broken server instead of re-downloading a file.
+ *
+ * ## Why the whole string, and not the token
+ *
+ * Exempting any *token* that looks like `<name>.dat` would exempt it everywhere,
+ * in every string that ever reaches [redact] — including the config libXray
+ * quotes back when `testXray` rejects one. `RoutingEntries` accepts any domain
+ * body without whitespace, `/` or `:`, so `corp.internal.dat` is a legal routing
+ * rule, and a routing rule is user browsing data under §5.6. Anchoring to the
+ * whole message means the exemption can only ever apply to a string that
+ * contains nothing else — a config dump with a `.dat`-suffixed rule in it is not
+ * one, and is redacted normally.
+ *
+ * Idempotent by construction: the input contains no [REDACTED] marker and the
+ * output is the input, so a second pass — which `ConnectionStateParcel` performs
+ * on the far side of the binder — returns the same string again.
+ *
+ * ## What this does not close
+ *
+ * A message that is *only* a `.dat`-suffixed hostname is passed through, because
+ * a custom geo source may legitimately be called `corp.internal.dat` and this
+ * grammar cannot distinguish the two. That residual is bounded by callers rather
+ * than by the pattern: every diagnostic reaching [redact] carries prose,
+ * punctuation or JSON around its tokens, and all of those fail this match. See
+ * `RedactionTest.a dat-suffixed hostname is redacted wherever a real message
+ * would put it`, which pins that.
  */
-private val GEO_FILE_NAME_PATTERN = Regex("""[A-Za-z0-9][A-Za-z0-9._-]*\.dat""")
-
-/** [HOSTNAME_PATTERN]'s replacement — every match becomes [SENTINEL] except a [GEO_FILE_NAME_PATTERN] one. */
-private fun redactHostnameToken(match: MatchResult): String {
-    val token = match.value
-    return if (GEO_FILE_NAME_PATTERN.matches(token)) token else SENTINEL
-}
+private val GEO_FILE_LIST_MESSAGE = Regex("$GEO_FILE_NAME_REGEX(?:, $GEO_FILE_NAME_REGEX)*")
 
 private val BASE64_BLOB_PATTERN = Regex("""\b[A-Za-z0-9+/_-]{24,}={0,2}\b""")
 
@@ -197,19 +214,25 @@ private const val LABELLED_TOKEN_GROUP = 4
  * label rule recognises an already-redacted token. That matters because
  * `ConnectionStateParcel` redacts on both sides of the IPC boundary.
  *
- * One narrow exemption: [HOSTNAME_PATTERN] leaves a token alone when it fully
- * matches [GEO_FILE_NAME_PATTERN] — `geoip.dat` is not a secret, and
- * `FailureReason.GeoDataMissing`'s whole point (§10.4) is naming it to the user
- * rather than hiding it behind this function.
+ * One exemption, and it is anchored to the entire message rather than to a
+ * token: a string that is nothing but a geo filename list passes through
+ * untouched. See [GEO_FILE_LIST_MESSAGE] for why the anchoring is the whole
+ * point — `geoip.dat` is not a secret, but `corp.internal.dat` inside a quoted
+ * config is.
  */
-public fun redact(message: String): String =
+public fun redact(message: String): String {
+    if (GEO_FILE_LIST_MESSAGE.matches(message)) return message
+    return redactEveryPattern(message)
+}
+
+private fun redactEveryPattern(message: String): String =
     message
         .replace(REDACTED, SENTINEL)
         .replace(URL_PATTERN, SENTINEL)
         .replace(UUID_PATTERN, SENTINEL)
         .replace(IPV4_PATTERN, SENTINEL)
         .replace(IPV6_PATTERN) { match -> if (isIpv6Address(match.value)) SENTINEL else match.value }
-        .replace(HOSTNAME_PATTERN, ::redactHostnameToken)
+        .replace(HOSTNAME_PATTERN, SENTINEL)
         .replace(BASE64_BLOB_PATTERN, SENTINEL)
         .replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
         .replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }

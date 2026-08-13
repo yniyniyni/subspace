@@ -157,6 +157,21 @@ class RoutingEntriesTest {
         RoutingEntries.problemWith("example.com", BucketField.IPS) shouldBe EntryProblem.MalformedAddress
     }
 
+    /**
+     * A prefix that is not a number at all, as distinct from one that is out of
+     * range: `/33` parses and fails the range check, `/abc` fails to parse.
+     *
+     * Those are separate lines in `isAddressOrCidr`, and this is the only test
+     * that reaches the parse one — which matters because that line carries an
+     * `UnreachableCode` suppression whose justification is that a test proves it
+     * reachable. Delete this and the suppression becomes an unchecked claim.
+     */
+    @Test
+    fun `rejects a non-numeric cidr prefix`() {
+        RoutingEntries.problemWith("10.0.0.0/abc", BucketField.IPS) shouldBe EntryProblem.MalformedAddress
+        RoutingEntries.problemWith("fc00::/x", BucketField.IPS) shouldBe EntryProblem.MalformedAddress
+    }
+
     @Test
     fun `rejects malformed ipv6 syntax`() {
         listOf(

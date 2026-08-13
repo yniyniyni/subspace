@@ -243,4 +243,35 @@ class RedactionTest {
         redact(prefix + "address=vpnserver port=443") shouldNotContain "vpnserver"
         redact(prefix + "vpnserver: connection refused") shouldNotContain "vpnserver"
     }
+
+    /**
+     * §10.4: `FailureReason.GeoDataMissing`'s entire purpose is naming exactly
+     * which `.dat` file is missing so the user re-downloads it instead of going
+     * looking for a broken server. A filename is shape, not content (§5.6) — it
+     * is not the "server address" this function exists to protect, and if this
+     * regresses the failure reads "Geo data missing — `<redacted>, <redacted>`",
+     * which tells the user nothing.
+     */
+    @Test
+    fun `keeps geo database filenames intact`() {
+        redact("geoip.dat, geosite.dat") shouldBe "geoip.dat, geosite.dat"
+    }
+
+    @Test
+    fun `a geo filename in the message does not open a hole for a real hostname, uuid, or reality key`() {
+        // Pins that the geoip.dat/geosite.dat exemption is narrow: it must not
+        // stop the hostname, UUID and base64-blob rules from firing on
+        // everything else in the same message.
+        val key = "SGVsbG8gdGhpcyBpcyBhIGZha2UgcmVhbGl0eSBrZXk"
+        val message =
+            "geoip.dat missing; server secret.example.com refused user " +
+                "70cc48c5-b2f4-4a1e-9f3d-0123456789ab, publicKey=$key"
+
+        val out = redact(message)
+
+        out shouldContain "geoip.dat"
+        out shouldNotContain "secret.example.com"
+        out shouldNotContain "70cc48c5"
+        out shouldNotContain key
+    }
 }

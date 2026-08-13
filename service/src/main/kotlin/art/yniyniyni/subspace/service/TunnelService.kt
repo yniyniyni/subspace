@@ -21,6 +21,7 @@ import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
 import art.yniyniyni.subspace.core.xray.ConfigResult
@@ -293,10 +294,8 @@ class TunnelService : VpnService() {
     }
 
     // One early return per step is the point, not a smell: §10.4 requires each
-    // stage of the start sequence to fail specifically and stop there. The
-    // routing gate (§4.4) added one more branch than CyclomaticComplexMethod's
-    // default threshold allows.
-    @Suppress("ReturnCount", "CyclomaticComplexMethod")
+    // stage of the start sequence to fail specifically and stop there.
+    @Suppress("ReturnCount")
     private suspend fun startCore(
         gen: Int,
         xray: XrayController,
@@ -313,18 +312,13 @@ class TunnelService : VpnService() {
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
         val routing =
-            when (val resolution = routingResolver.resolve()) {
-                is RoutingResolution.Off -> null
-                is RoutingResolution.Active -> resolution.ruleSet
-                is RoutingResolution.MissingGeoData ->
-                    // §10.4: named specifically. The filenames are shape, not
-                    // content, so they are safe to surface (§5.6).
-                    return failStart(
-                        gen,
-                        FailureReason.GeoDataMissing,
-                        IllegalStateException(resolution.missing.sorted().joinToString(", ")),
-                        rowId,
-                    )
+            when (val gate = resolveRouting(gen, rowId)) {
+                // failStart already ran inside resolveRouting for this branch —
+                // its cleanup (configFile/controller cleared, notification and
+                // service stopped) has already happened, same as every other
+                // failure exit in this function. Nothing left to do here but stop.
+                is RoutingGateResult.Failed -> return null
+                is RoutingGateResult.Proceed -> gate.routing
             }
         val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true, routing = routing)
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
@@ -371,6 +365,69 @@ class TunnelService : VpnService() {
         }
 
         return socksPort
+    }
+
+    /**
+     * The routing gate's outcome, kept as its own type rather than a nullable
+     * [RoutingRuleSet] precisely so "routing is off" ([Proceed] with a null
+     * [Proceed.routing]) cannot be confused with "the gate failed and
+     * [startCore] must stop" ([Failed]) — a code-review finding on this task's
+     * first pass, when both were folded into one nullable.
+     */
+    private sealed interface RoutingGateResult {
+        data class Proceed(val routing: RoutingRuleSet?) : RoutingGateResult
+
+        /** [failStart] has already run — [startCore] must return without doing anything else. */
+        data object Failed : RoutingGateResult
+    }
+
+    /**
+     * §4.4's activation gate, extracted out of [startCore] so that function stays
+     * under detekt's cyclomatic-complexity threshold — Task 12 adds a second
+     * allocated port to the same function, and a bare `@Suppress` here would only
+     * have bought one more task before the same finding came back.
+     *
+     * [RoutingResolver.resolve] reaches Room (`RoutingRepository`,
+     * `SettingsRepository`) and disk (`GeoAssetRepository.installedFileNames`)
+     * through the suspend lambdas built in [onCreate]; unlike every `XrayException`
+     * elsewhere in [startCore], nothing here narrows what those calls can throw.
+     * Left unguarded, that failure reaches [errorHandler] instead of [failStart] —
+     * which publishes [FailureReason.CoreStartFailed] same as this catch does, but
+     * skips failStart's cleanup (§5.4: `configFile`/`controller` cleared,
+     * `stopForeground`/`stopSelf` called), leaving the foreground notification
+     * stuck on "Connecting" and `:bg` alive indefinitely.
+     */
+    // The three resolver lambdas' failure shapes are Room's/the filesystem's, not ours to narrow.
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun resolveRouting(
+        gen: Int,
+        rowId: Long,
+    ): RoutingGateResult {
+        val resolution =
+            try {
+                routingResolver.resolve()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failStart(gen, FailureReason.CoreStartFailed, e, rowId)
+                return RoutingGateResult.Failed
+            }
+        return when (resolution) {
+            is RoutingResolution.Off -> RoutingGateResult.Proceed(null)
+            is RoutingResolution.Active -> RoutingGateResult.Proceed(resolution.ruleSet)
+            is RoutingResolution.MissingGeoData -> {
+                // §10.4: named specifically. The filenames are shape, not
+                // content, so they are safe to surface (§5.6) — Redaction.kt
+                // carries a matching exemption so they survive failure().
+                failStart(
+                    gen,
+                    FailureReason.GeoDataMissing,
+                    IllegalStateException(resolution.missing.sorted().joinToString(", ")),
+                    rowId,
+                )
+                RoutingGateResult.Failed
+            }
+        }
     }
 
     /**

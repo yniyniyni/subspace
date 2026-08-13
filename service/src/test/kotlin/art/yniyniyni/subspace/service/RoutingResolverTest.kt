@@ -16,7 +16,11 @@ class RoutingResolverTest {
         installed: Set<String> = emptySet(),
     ) = RoutingResolver(
         activeRuleSetId = { activeId },
-        loadRuleSet = { ruleSet },
+        // `id == activeId` rather than unconditionally returning `ruleSet`: a
+        // resolver that called loadRuleSet with the wrong id (e.g. a hardcoded
+        // 0L) must fail every test below that supplies a ruleSet, not silently
+        // pass all of them (code review finding 5, fix round 1).
+        loadRuleSet = { id -> ruleSet.takeIf { id == activeId } },
         installedGeoFiles = { installed },
     )
 

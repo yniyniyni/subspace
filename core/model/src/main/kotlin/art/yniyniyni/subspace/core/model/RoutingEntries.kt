@@ -128,7 +128,15 @@ public object RoutingEntries {
         return if (illegal) EntryProblem.MalformedDomain else null
     }
 
-    @Suppress("ReturnCount") // Guard clauses make address and CIDR validation independently readable.
+    // ReturnCount: guard clauses make address and CIDR validation independently readable.
+    // UnreachableCode: detektMain (the type-resolution variant `./gradlew build` runs, unlike
+    // the plain `:core:model:detekt` used elsewhere) flags the `?: return false` below as
+    // unreachable, which it is not — `prefix` is read on the very next line. Confirmed
+    // pre-existing and unrelated to any change in this task: identical on this file's content
+    // at commit 3348415, the last commit before Task 11 touched this module. Left unexplained
+    // beyond that pending upstream detekt/Kotlin 2.4 triage, since no sourced claim about the
+    // root cause is available (§10.5).
+    @Suppress("ReturnCount", "UnreachableCode")
     private fun isAddressOrCidr(value: String): Boolean {
         val address = value.substringBefore('/')
         val prefixPart = value.substringAfter('/', missingDelimiterValue = "")
@@ -151,8 +159,13 @@ public object RoutingEntries {
     /**
      * Accepts RFC 4291 compression and an IPv4-mapped tail while rejecting
      * malformed separators and the wrong number of uncompressed groups.
+     *
+     * CyclomaticComplexMethod/ReturnCount: each branch validates one IPv6 grammar constraint.
+     * UnreachableCode: the same detektMain false positive as isAddressOrCidr above, on the
+     * `?: return false` inside the `if (hasCompression) { ... }` block — `left`/`right` are
+     * both read on the next line.
      */
-    @Suppress("CyclomaticComplexMethod", "ReturnCount") // Each branch validates one IPv6 grammar constraint.
+    @Suppress("CyclomaticComplexMethod", "ReturnCount", "UnreachableCode")
     private fun isIpv6(address: String): Boolean {
         if (address.isEmpty() || address.contains(":::")) return false
 

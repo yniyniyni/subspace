@@ -12,6 +12,26 @@ private val UUID_PATTERN =
 private val URL_PATTERN = Regex("""\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+""")
 private val IPV4_PATTERN = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
 private val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
+
+/**
+ * A `.dat` geo database filename, in the exact grammar `RoutingEntries`
+ * validates every such name against (`SAFE_GEO_FILE_NAME` there — kept in sync
+ * by hand, since that `val` is private to its own file).
+ *
+ * `FailureReason.GeoDataMissing`'s detail (`TunnelService.failStart`, §4.4) is
+ * built entirely from filenames this grammar already accepted, so a token that
+ * matches it in full is never anything else. `.dat` is not an IANA top-level
+ * domain, so narrowing [HOSTNAME_PATTERN] for it does not open a hole for a real
+ * hostname — §5.6 is about `example.com`, not `geoip.dat`.
+ */
+private val GEO_FILE_NAME_PATTERN = Regex("""[A-Za-z0-9][A-Za-z0-9._-]*\.dat""")
+
+/** [HOSTNAME_PATTERN]'s replacement — every match becomes [SENTINEL] except a [GEO_FILE_NAME_PATTERN] one. */
+private fun redactHostnameToken(match: MatchResult): String {
+    val token = match.value
+    return if (GEO_FILE_NAME_PATTERN.matches(token)) token else SENTINEL
+}
+
 private val BASE64_BLOB_PATTERN = Regex("""\b[A-Za-z0-9+/_-]{24,}={0,2}\b""")
 
 /**
@@ -176,6 +196,11 @@ private const val LABELLED_TOKEN_GROUP = 4
  * the pass can chew on a marker that does not exist yet — which is also how the
  * label rule recognises an already-redacted token. That matters because
  * `ConnectionStateParcel` redacts on both sides of the IPC boundary.
+ *
+ * One narrow exemption: [HOSTNAME_PATTERN] leaves a token alone when it fully
+ * matches [GEO_FILE_NAME_PATTERN] — `geoip.dat` is not a secret, and
+ * `FailureReason.GeoDataMissing`'s whole point (§10.4) is naming it to the user
+ * rather than hiding it behind this function.
  */
 public fun redact(message: String): String =
     message
@@ -184,7 +209,7 @@ public fun redact(message: String): String =
         .replace(UUID_PATTERN, SENTINEL)
         .replace(IPV4_PATTERN, SENTINEL)
         .replace(IPV6_PATTERN) { match -> if (isIpv6Address(match.value)) SENTINEL else match.value }
-        .replace(HOSTNAME_PATTERN, SENTINEL)
+        .replace(HOSTNAME_PATTERN, ::redactHostnameToken)
         .replace(BASE64_BLOB_PATTERN, SENTINEL)
         .replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
         .replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }

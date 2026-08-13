@@ -46,6 +46,18 @@ public enum class GeoInstallResult {
 
     /** The bytes arrived but were not a geo database of the declared kind. */
     Rejected,
+
+    /**
+     * The bytes arrived and validated, but staging, publication or recording
+     * them failed.
+     *
+     * Distinct from [DownloadFailed] because §A.4.1 counts telling the user the
+     * wrong thing as worse than telling them nothing: "download failed" sends
+     * them to check their connection when the network did its job and the
+     * device's storage did not. [InstalledGeoAsset.lastFailure] carries which of
+     * the local steps it was.
+     */
+    InstallFailed,
 }
 
 /**
@@ -196,7 +208,7 @@ internal constructor(
             } catch (error: Exception) {
                 error.rethrowIfCancellation()
                 recordFailure(request, GeoAssetFailure.InstallFailed)
-                return GeoInstallResult.DownloadFailed
+                return GeoInstallResult.InstallFailed
             }
 
         try {
@@ -206,7 +218,7 @@ internal constructor(
                 } catch (error: Exception) {
                     error.rethrowIfCancellation()
                     recordFailure(request, GeoAssetFailure.InstallFailed)
-                    return GeoInstallResult.DownloadFailed
+                    return GeoInstallResult.InstallFailed
                 }
             try {
                 return installSafely(request)
@@ -231,7 +243,7 @@ internal constructor(
                 Files.createTempDirectory(stagingRoot.toPath(), STAGING_PREFIX).toFile()
             } catch (_: IOException) {
                 recordFailure(request, GeoAssetFailure.InstallFailed)
-                return GeoInstallResult.DownloadFailed
+                return GeoInstallResult.InstallFailed
             }
         val baseName = request.fileName.removeSuffix(DAT_SUFFIX)
         val stagedDat = File(stagingDir, request.fileName)
@@ -254,7 +266,7 @@ internal constructor(
                 } catch (error: Exception) {
                     error.rethrowIfCancellation()
                     recordFailure(request, GeoAssetFailure.InstallFailed)
-                    return GeoInstallResult.DownloadFailed
+                    return GeoInstallResult.InstallFailed
                 }
             if (validation != GeoValidation.Valid) {
                 recordValidationFailure(request, validation)
@@ -267,11 +279,11 @@ internal constructor(
                 } catch (_: RollbackFailedException) {
                     retainStaging = true
                     recordFailure(request, GeoAssetFailure.RecoveryFailed)
-                    return GeoInstallResult.DownloadFailed
+                    return GeoInstallResult.InstallFailed
                 } catch (error: Exception) {
                     error.rethrowIfCancellation()
                     recordFailure(request, GeoAssetFailure.InstallFailed)
-                    return GeoInstallResult.DownloadFailed
+                    return GeoInstallResult.InstallFailed
                 }
 
             try {
@@ -284,7 +296,7 @@ internal constructor(
                     request,
                     if (retainStaging) GeoAssetFailure.RecoveryFailed else GeoAssetFailure.InstallFailed,
                 )
-                return GeoInstallResult.DownloadFailed
+                return GeoInstallResult.InstallFailed
             }
         } finally {
             // A failed rollback keeps its forced backups for recovery. This

@@ -119,19 +119,27 @@ class GeoFileFetcherTest {
             GeoDownloadOutcome.Failed(GeoFetchFailure.ServerError)
     }
 
+    // Every curated source is a `releases/latest/download/…` URL, and GitHub
+    // answers those with a 302 chain to its asset host. A fetcher that stops at
+    // the first response downloads nothing from the catalogue at all.
     @Test
-    fun rejectsRedirectsWithoutFollowingAPrivateHttpTarget() = runTest {
+    fun followsARedirectToTheAssetHost() = runTest {
         server.enqueue(
             MockResponse
                 .Builder()
                 .code(302)
-                .addHeader("Location", "http://127.0.0.1:65535/private.dat")
+                .addHeader("Location", server.url("/assets/geoip.dat").toString())
                 .build(),
         )
+        server.enqueue(MockResponse(code = 200, body = "hello"))
+        val file = target()
 
-        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) {} shouldBe
-            GeoDownloadOutcome.Failed(GeoFetchFailure.ClientError)
-        server.requestCount shouldBe 1
+        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) {}
+
+        outcome.shouldBeInstanceOf<GeoDownloadOutcome.Success>()
+        outcome.bytes shouldBe 5L
+        file.readText() shouldBe "hello"
+        server.requestCount shouldBe 2
     }
 
     @Test

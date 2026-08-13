@@ -184,7 +184,7 @@ class GeoAssetRepositoryTest {
     fun aValidDatabaseWithoutTheRequiredSidecarIsNotInstalled() = runTest {
         validator.writesSidecar = false
 
-        stack.repository.install(request()) shouldBe GeoInstallResult.DownloadFailed
+        stack.repository.install(request()) shouldBe GeoInstallResult.InstallFailed
 
         File(stack.repository.geoDirectory(), "geosite.dat").exists() shouldBe false
         stack.repository.observeAll().first().single().lastFailure shouldBe "InstallFailed"
@@ -194,7 +194,7 @@ class GeoAssetRepositoryTest {
     fun anUnexpectedValidatorFailureIsRecordedAndLeavesNoStagingFiles() = runTest {
         validator.exception = IllegalStateException("unexpected")
 
-        stack.repository.install(request()) shouldBe GeoInstallResult.DownloadFailed
+        stack.repository.install(request()) shouldBe GeoInstallResult.InstallFailed
 
         stack.repository.observeAll().first().single().lastFailure shouldBe "InstallFailed"
         stagingFiles() shouldBe emptyList()
@@ -310,7 +310,7 @@ class GeoAssetRepositoryTest {
                 }
             }
 
-        stack.repositoryWith(failingDao).install(request()) shouldBe GeoInstallResult.DownloadFailed
+        stack.repositoryWith(failingDao).install(request()) shouldBe GeoInstallResult.InstallFailed
 
         File(stack.repository.geoDirectory(), "geosite.dat").readText() shouldBe "old payload"
         File(stack.repository.geoDirectory(), "geosite.json").readText() shouldBe "{\"version\":\"old\"}"
@@ -345,7 +345,7 @@ class GeoAssetRepositoryTest {
 
         stack
             .repositoryWith(failingDao) { _, _ -> throw java.io.IOException("simulated rollback copy failure") }
-            .install(request()) shouldBe GeoInstallResult.DownloadFailed
+            .install(request()) shouldBe GeoInstallResult.InstallFailed
 
         stack.repository.observeAll().first().single().lastFailure shouldBe "RecoveryFailed"
         val recoveryFiles = stagingFiles().map { it.name }.toSet()

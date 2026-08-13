@@ -104,7 +104,18 @@ public class GeoFileFetcher private constructor(
                 .Builder()
                 .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .callTimeout(CALL_TIMEOUT_MINUTES, TimeUnit.MINUTES)
-                .followRedirects(false)
+                // Redirects are followed, because every curated source needs it:
+                // `github.com/<owner>/<repo>/releases/latest/download/<file>` is a
+                // 302 to the tagged release, which is itself a 302 to
+                // release-assets.githubusercontent.com. Measured 2026-08-13 — a
+                // client that refuses redirects downloads nothing at all from the
+                // catalogue and reports every source as a client error.
+                //
+                // Cross-protocol redirects are still refused. An https source that
+                // tries to hand the download to plaintext http gets a 3xx back
+                // instead, which maps to ClientError, so geo data can never be
+                // fetched over a downgraded connection.
+                .followRedirects(true)
                 .followSslRedirects(false)
                 .build(),
         )

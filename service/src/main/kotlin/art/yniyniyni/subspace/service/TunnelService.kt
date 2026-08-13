@@ -9,7 +9,10 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
+import art.yniyniyni.subspace.core.data.GeoAssetRepository
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
@@ -37,6 +40,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -90,11 +94,25 @@ class TunnelService : VpnService() {
     @Inject
     lateinit var profileRepository: ProfileRepository
 
+    @Inject
+    lateinit var routingRepository: RoutingRepository
+
+    @Inject
+    lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var geoAssetRepository: GeoAssetRepository
+
     // Built in onCreate, once profileRepository is injected. Wraps the
     // repository's two spec-D4 methods as plain suspend lambdas rather than
     // handing ConnectionRecorder the repository itself — see ConnectionRecorder's
     // KDoc for why that indirection is what keeps it unit-testable.
     private lateinit var connectionRecorder: ConnectionRecorder
+
+    // Built in onCreate, once the three repositories above are injected. Same
+    // suspend-lambda indirection as connectionRecorder, for the same reason —
+    // see RoutingResolver's KDoc.
+    private lateinit var routingResolver: RoutingResolver
 
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
@@ -172,6 +190,12 @@ class TunnelService : VpnService() {
                     // quote back the value that failed to write.
                     Log.e(TAG, "failed to record connection outcome: ${e.javaClass.simpleName}")
                 },
+            )
+        routingResolver =
+            RoutingResolver(
+                activeRuleSetId = { settingsRepository.activeRoutingRuleSetId.first() },
+                loadRuleSet = { id -> routingRepository.ruleSet(id) },
+                installedGeoFiles = { geoAssetRepository.installedFileNames() },
             )
     }
 
@@ -269,8 +293,10 @@ class TunnelService : VpnService() {
     }
 
     // One early return per step is the point, not a smell: §10.4 requires each
-    // stage of the start sequence to fail specifically and stop there.
-    @Suppress("ReturnCount")
+    // stage of the start sequence to fail specifically and stop there. The
+    // routing gate (§4.4) added one more branch than CyclomaticComplexMethod's
+    // default threshold allows.
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     private suspend fun startCore(
         gen: Int,
         xray: XrayController,
@@ -286,7 +312,21 @@ class TunnelService : VpnService() {
             }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
-        val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true)
+        val routing =
+            when (val resolution = routingResolver.resolve()) {
+                is RoutingResolution.Off -> null
+                is RoutingResolution.Active -> resolution.ruleSet
+                is RoutingResolution.MissingGeoData ->
+                    // §10.4: named specifically. The filenames are shape, not
+                    // content, so they are safe to surface (§5.6).
+                    return failStart(
+                        gen,
+                        FailureReason.GeoDataMissing,
+                        IllegalStateException(resolution.missing.sorted().joinToString(", ")),
+                        rowId,
+                    )
+            }
+        val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true, routing = routing)
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck

@@ -107,6 +107,17 @@ public enum class FailureReason {
      * to something other than what the user chose.
      */
     ProfileDecodeFailed,
+
+    /**
+     * The active routing rule set references a geo database that is not on disk.
+     *
+     * Distinct from [ConfigRejected], which is what `testXray` would report for
+     * the same config. §10.4: the specific reason is the difference between a
+     * user who re-downloads their geo files and one who goes looking for a broken
+     * server. The activation gate normally prevents this — it is reachable when
+     * a file is deleted, or storage is cleared, after activation.
+     */
+    GeoDataMissing,
 }
 
 /**

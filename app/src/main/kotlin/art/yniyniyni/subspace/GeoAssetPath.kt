@@ -50,11 +50,22 @@ public fun geoAssetDirectory(context: Context): File = File(context.filesDir, "g
  *
  * @return true when the variable was set. A false is logged and not fatal: the
  *   tunnel still works, only geo-referencing rules cannot resolve, and the
- *   activation gate plus `testXray` both surface that specifically.
+ *   activation gate plus `testXray` both surface that specifically. This
+ *   covers both ways that can happen: [Os.setenv] itself failing, and
+ *   [geoAssetDirectory] not existing and failing to be created — `mkdirs()`'s
+ *   own return value can't be trusted for the second case, since it returns
+ *   `false` for a directory that already exists just as it does for one it
+ *   could not create, so the directory is checked directly instead.
  */
 public fun installGeoAssetPath(context: Context): Boolean {
     val dir = geoAssetDirectory(context)
     dir.mkdirs()
+    if (!dir.isDirectory) {
+        // §5.6: no path in the message — dir's name ("geo") is fixed, only
+        // its parent (internal storage) is per-install state.
+        Log.e(TAG, "could not create the $ASSET_LOCATION_ENV directory")
+        return false
+    }
     return try {
         Os.setenv(ASSET_LOCATION_ENV, dir.absolutePath, true)
         true

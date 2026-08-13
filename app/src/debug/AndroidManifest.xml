@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug-only, merged into this app's own manifest (not a separate test package —
+         see GeoEnvRecordingProvider's KDoc for why that distinction is load-bearing here).
+         GeoAssetPathTest's ordering check needs a component the platform instantiates
+         strictly between Application.attachBaseContext and Application.onCreate; this
+         provider is invisible to release builds since src/debug never ships there. -->
+    <application>
+        <provider
+            android:name=".GeoEnvRecordingProvider"
+            android:authorities="${applicationId}.debug.geoenvrecorder"
+            android:exported="false" />
+    </application>
+</manifest>

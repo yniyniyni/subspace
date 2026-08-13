@@ -40,4 +40,22 @@ class GeoAssetPathTest {
         // reasoning that puts the config in filesDir puts geo data there.
         Os.getenv("XRAY_LOCATION_ASSET") shouldEndWith "/files/geo"
     }
+
+    /**
+     * Pins the ordering [installGeoAssetPath]'s KDoc spends four paragraphs
+     * defending, not just its presence.
+     *
+     * The four tests above run as instrumented test methods, which the
+     * platform only starts once `Application.onCreate` has already returned —
+     * they would stay green even if the call moved from `attachBaseContext`
+     * into `onCreate`, catching only outright deletion or a move to
+     * `TunnelService`. [GeoEnvRecordingProvider] observes the variable from
+     * its own `onCreate`, which the platform runs strictly between
+     * `Application.attachBaseContext` and `Application.onCreate` — the exact
+     * window that matters. See its KDoc for why that ordering can be trusted.
+     */
+    @Test
+    fun theVariableIsAlreadySetWhenContentProvidersInstall() {
+        GeoEnvRecordingProvider.recordedXrayLocationAsset shouldBe geoAssetDirectory(context).absolutePath
+    }
 }

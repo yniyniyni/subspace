@@ -60,6 +60,12 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
     implementation(project(":core:ui"))
+    // GeoModule binds LibXrayGeoDataValidator to :core:data's GeoDataValidator
+    // interface. Not :core:network too: checkModuleBoundaries (§4) allows only
+    // :core:data to depend on that module, so the GeoFileFetcher wrapper this
+    // task needs lives in :core:data's own DataModule instead — see its
+    // geoDownloader KDoc.
+    implementation(project(":core:xray"))
     implementation(project(":feature:home"))
     implementation(project(":feature:profiles"))
     implementation(project(":feature:routing"))

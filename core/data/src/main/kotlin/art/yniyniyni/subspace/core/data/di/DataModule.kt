@@ -3,6 +3,9 @@ package art.yniyniyni.subspace.core.data.di
 
 import android.content.Context
 import androidx.room.Room
+import art.yniyniyni.subspace.core.data.GeoAssetRepository
+import art.yniyniyni.subspace.core.data.GeoAssetRoot
+import art.yniyniyni.subspace.core.data.GeoDownloader
 import art.yniyniyni.subspace.core.data.db.GeoAssetDao
 import art.yniyniyni.subspace.core.data.db.MIGRATION_1_2
 import art.yniyniyni.subspace.core.data.db.MIGRATION_2_3
@@ -11,14 +14,29 @@ import art.yniyniyni.subspace.core.data.db.RoutingRuleSetDao
 import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SubscriptionDao
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
+import art.yniyniyni.subspace.core.model.GeoDataValidator
+import art.yniyniyni.subspace.core.network.GeoDownloadOutcome
+import art.yniyniyni.subspace.core.network.GeoFileFetcher
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import java.io.File
+import java.io.IOException
 import javax.inject.Singleton
 
 private const val DATABASE_NAME = "subspace.db"
+
+/**
+ * Ceiling on any single geo database, in bytes.
+ *
+ * The largest measured source is runetfreedom's `geosite.dat` at 73.7 MB
+ * (research §7). 128 MiB leaves real headroom for upstream growth while still
+ * bounding a source that lies about its size or a hijacked URL serving an
+ * endless stream — a geo source URL is user-supplied and untrusted (§A.1).
+ */
+private const val MAX_GEO_FILE_BYTES = 128L * 1024 * 1024
 
 /**
  * Opens [SubspaceDatabase] against the on-disk file called [name].
@@ -80,4 +98,57 @@ internal object DataModule {
 
     @Provides
     fun geoAssetDao(database: SubspaceDatabase): GeoAssetDao = database.geoAssetDao()
+
+    /**
+     * Assembles [GeoAssetRepository] from its Room DAO plus the two seams this
+     * module cannot supply itself: [GeoDataValidator] is a `:core:xray` call and
+     * [GeoAssetRoot] is a path `:app` computes (§4 forbids `:core:data` from
+     * depending on either), so both come from `:app`'s `GeoModule` via Hilt's
+     * shared app component. [GeoAssetRepository]'s constructor is `internal` to
+     * this module on purpose (§11) — production reaches it only through this
+     * provider, never by hand.
+     */
+    @Provides
+    @Singleton
+    fun geoAssetRepository(
+        dao: GeoAssetDao,
+        validator: GeoDataValidator,
+        @GeoAssetRoot root: File,
+        downloader: GeoDownloader,
+    ): GeoAssetRepository =
+        GeoAssetRepository(
+            dao = dao,
+            validator = validator,
+            root = root,
+            download = downloader::download,
+            clock = System::currentTimeMillis,
+        )
+
+    /**
+     * The production [GeoDownloader]: streams through [GeoFileFetcher] and
+     * translates its outcome into [GeoAssetRepository]'s narrower contract.
+     *
+     * This lives here rather than in `:app`'s `GeoModule` because `:core:network`
+     * is `:core:data`'s own I/O boundary (§4) — `GeoFileFetcher` is not visible
+     * from `:app` at all, `checkModuleBoundaries` enforces exactly that, and the
+     * same seam already exists for the subscription pipeline
+     * (`SubscriptionSyncFailure`, in this module, for the identical reason).
+     * `proxyPort` is left at its default; Task 13 wires it once a tunnel is
+     * live to route the request through.
+     */
+    @Provides
+    @Singleton
+    fun geoDownloader(fetcher: GeoFileFetcher): GeoDownloader =
+        GeoDownloader { url, target ->
+            when (val outcome = fetcher.download(url, target, MAX_GEO_FILE_BYTES) {}) {
+                is GeoDownloadOutcome.Success -> outcome.bytes to outcome.sha256
+                // GeoAssetRepository.install's download step catches this and
+                // records DownloadFailed; a failure discovered after a
+                // successful download (staging, validation, publish, or the
+                // Room record) is recorded as InstallFailed instead, so a local
+                // disk problem is never reported to the user as "check your
+                // connection" (§A.4.1).
+                is GeoDownloadOutcome.Failed -> throw IOException(outcome.reason.name)
+            }
+        }
 }

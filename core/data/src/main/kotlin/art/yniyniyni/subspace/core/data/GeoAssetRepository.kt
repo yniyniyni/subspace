@@ -22,6 +22,49 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.WRITE
 import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Qualifier
+
+/**
+ * Qualifies the directory xray-core reads geo databases from.
+ *
+ * [GeoAssetRepository] needs the concrete path, but this module must not compute
+ * it itself: `art.yniyniyni.subspace.geoAssetDirectory` lives in `:app`,
+ * downstream of `:core:data` (§4), and is also the exact value
+ * `installGeoAssetPath` points `XRAY_LOCATION_ASSET` at — the two must never
+ * disagree, so `:app`'s `GeoModule` is the only place allowed to supply it. Hilt
+ * aggregates every `@InstallIn(SingletonComponent::class)` module at the app
+ * component, so `DataModule.geoAssetRepository` can depend on a binding declared
+ * in `:app` without `:core:data` gaining a Gradle dependency on it.
+ *
+ * Follows the qualifier precedent at `core/network/.../di/AppVersion.kt`: a bare
+ * `File` has no type of its own to distinguish "the geo root" from any other
+ * file Hilt could be asked to provide.
+ */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+public annotation class GeoAssetRoot
+
+/**
+ * Fetches one geo database's bytes to [target], returning its size and SHA-256 digest.
+ *
+ * [GeoAssetRepository]'s constructor already takes exactly this shape as a plain
+ * suspend lambda rather than a `GeoFileFetcher` directly, so the repository
+ * stays testable without a real HTTP client — the same reason its `clock` is a
+ * `() -> Long` rather than a `System.currentTimeMillis()` call. [GeoDownloader]
+ * names that shape as a SAM Hilt can bind. Its production implementation lives
+ * in `DataModule.geoDownloader`, inside this module rather than `:app`:
+ * `:core:network` is `:core:data`'s own I/O boundary (§4,
+ * `checkModuleBoundaries`), and translating `GeoDownloadOutcome`/
+ * `GeoFetchFailure` into this narrower contract here is the same seam
+ * `SubscriptionSyncFailure` already uses for the subscription pipeline, not a
+ * new pattern.
+ */
+public fun interface GeoDownloader {
+    public suspend fun download(
+        url: String,
+        target: File,
+    ): Pair<Long, String>
+}
 
 /** How long an installed file is considered fresh for a scheduled refresh (§A.3.1). */
 internal const val GEO_REFRESH_INTERVAL_MILLIS = 7L * 24 * 60 * 60 * 1000

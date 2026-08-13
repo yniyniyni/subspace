@@ -3,6 +3,7 @@ package art.yniyniyni.subspace
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import androidx.hilt.work.HiltWorkerFactory
@@ -69,6 +70,21 @@ class SubspaceApplication : Application(), Configuration.Provider {
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(hiltWorkerFactory).build()
+
+    /**
+     * Runs in **every** process, and strictly before Hilt's generated `onCreate`
+     * performs member injection — which is exactly what
+     * [installGeoAssetPath] requires. See its KDoc before moving this.
+     *
+     * Unlike the refresh scheduling in [onCreate], this is deliberately *not*
+     * gated on [isMainProcess]: `:bg` is the process that actually runs the core,
+     * so it is the one that must have the variable set. Setting it in `:main` too
+     * is harmless and keeps the two processes identical.
+     */
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        installGeoAssetPath(this)
+    }
 
     override fun onCreate() {
         super.onCreate()

@@ -17,6 +17,12 @@ import javax.inject.Inject
  * into a `GeoSiteList` or `GeoIPList`, and writes `path.Join(datDir, name+".json")`
  * listing every code with its rule count — see research §5, which quotes it.
  *
+ * Its protobuf parsing is **not** a reliable declared-kind discriminator: some
+ * valid `GeoIPList` bytes also unmarshal as an empty-or-lossy `GeoSiteList`.
+ * [GeoDataKind] therefore remains trusted source metadata, validated by the
+ * curated catalogue or explicit user selection. This call still rejects absent,
+ * empty and structurally corrupt downloads, and produces the category sidecar.
+ *
  * That second effect is why this method is worth calling rather than parsing the
  * protobuf ourselves: the emitted JSON is the rule editor's category list, and
  * getting it here costs nothing. Parsing it ourselves would mean a protobuf

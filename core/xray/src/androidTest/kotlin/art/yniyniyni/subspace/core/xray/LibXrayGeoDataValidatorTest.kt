@@ -101,13 +101,15 @@ class LibXrayGeoDataValidatorTest {
     }
 
     @Test
-    fun rejectsAGeoipDatabaseWhenItIsDeclaredAsDomainData() = runTest {
-        // The CIDR message uses field 1 as bytes, while GeoSite's corresponding
-        // Domain field requires a varint type; parsing this declared-kind mismatch
-        // must fail rather than treating an IP database as site data.
+    fun doesNotTreatDeclaredKindAsAProtobufDiscriminator() = runTest {
+        // libXray uses protobuf unmarshal, which is deliberately permissive about
+        // unknown/incompatible fields. These valid GeoIP bytes also unmarshal as
+        // a GeoSiteList, so countGeoData cannot prove the caller's declared kind.
+        // GeoDataKind is trusted source metadata; this method validates structure
+        // and emits a category sidecar, not the semantic origin of the bytes.
         File(dir, "geoip.dat").writeBytes(minimalGeoIpList())
 
-        validator.validate(dir, "geoip", GeoDataKind.DOMAIN) shouldBe GeoValidation.NotGeoData
+        validator.validate(dir, "geoip", GeoDataKind.DOMAIN) shouldBe GeoValidation.Valid
     }
 
     private fun minimalGeoIpList(): ByteArray {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.sync
 
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -13,6 +14,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -20,6 +22,8 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
 internal const val GEO_REFRESH_WORK_NAME = "geo-refresh"
+
+private const val TAG = "GeoRefreshScheduler"
 
 /** The scheduled cadence. The 7-day freshness cap lives in [GeoAssetRepository.isDueForRefresh], not here. */
 private const val GEO_REFRESH_INTERVAL_DAYS = 1L
@@ -37,21 +41,58 @@ internal class GeoRefreshDecisions(
     private val install: suspend (GeoInstallRequest) -> Unit,
 ) {
     /**
-     * Installs every file [dueFiles] returns. Never throws (§10.4): a failure is already
-     * recorded on the `geo_assets` row as `lastFailure` and surfaced in the UI by
-     * [GeoAssetRepository.install] itself, so reporting a worker failure here would additionally
-     * invite WorkManager to retry a URL that is simply wrong — the same reasoning
-     * `SubscriptionRefreshWorker`'s KDoc gives for the subscription path.
+     * Installs every file [dueFiles] returns. Never throws (§10.4).
+     *
+     * That guarantee cannot rest on [install] alone. [GeoAssetRepository.install] itself never
+     * throws — a failure is already recorded on the `geo_assets` row as `lastFailure` and
+     * surfaced in the UI — but production's [dueFiles] wraps `GeoAssetRepository.observeAll()`
+     * plus a `GeoAssetRepository.isDueForRefresh` Room read *per asset*, neither of which carries
+     * that same promise: a locked or corrupt database throws there, before a single [install] call
+     * happens. Review round 2, Important 4 caught this: an uncaught throw here would propagate out
+     * of `GeoRefreshWorker.doWork()`, and — because that worker's `reschedule()` call sits in the
+     * matching `finally` and itself does its own Room read (`onMetered()`) — a *second* failure
+     * there would silently replace the first, the same way `SubscriptionRefreshWorker`'s KDoc
+     * warns reporting worker failure would invite WorkManager to retry a URL that is simply wrong.
+     * Both [dueFiles] and each [install] call are therefore caught individually below, narrowly,
+     * with [CancellationException] always rethrown so genuine cancellation is never mistaken for
+     * an ordinary failure. One failing file does not stop the rest of [dueFiles]' list from being
+     * attempted.
      */
+    @Suppress("TooGenericExceptionCaught") // Deliberate backstop — see the KDoc above.
     suspend fun refreshDue() {
-        dueFiles().forEach { install(it) }
+        val due =
+            try {
+                dueFiles()
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (ignored: Exception) {
+                emptyList()
+            }
+        due.forEach { request ->
+            try {
+                install(request)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (ignored: Exception) {
+                // Deliberately silent, not merely uncrashing: this class has no Android Log
+                // available to it (it is the plain-JVM-testable half of GeoRefreshScheduler,
+                // and GeoRefreshDecisionsTest exercises exactly this branch without a device),
+                // and production's own `install` already logs the outcome per file — see
+                // GeoRefreshModule.geoRefreshScheduler. An exception reaching here at all means
+                // that logging itself was bypassed, which is already the unexpected case this
+                // catch exists for.
+            }
+        }
     }
 
     /**
      * Installs [request] immediately, without consulting [dueFiles] at all.
      *
      * §A.5: the 7-day cap [dueFiles] applies exists to stop a chatty profile hammering a CDN, not
-     * to tell the device's owner no. A manual "Update now" always runs.
+     * to tell the device's owner no. A manual "Update now" always runs, and — unlike [refreshDue]
+     * — is allowed to propagate a failure: it is not reached from `GeoRefreshWorker`, so there is
+     * no WorkManager retry policy for a swallowed exception to misdirect, and a caller-visible
+     * failure is exactly what a user-initiated action needs so it can be reported.
      */
     suspend fun refreshNow(request: GeoInstallRequest) {
         install(request)
@@ -158,7 +199,15 @@ internal object GeoRefreshModule {
         GeoRefreshScheduler(
             workManager = workManager,
             dueFiles = { dueGeoRequests(geoAssets, System.currentTimeMillis()) },
-            install = { request -> geoAssets.install(request) },
+            install = { request ->
+                // §5.6: the filename is shape, not a secret — the source URL that goes with it
+                // is, and stays out of this line. Without this, a scheduled run that installed
+                // nothing (dueFiles() came back empty — the ordinary case, most days) is
+                // indistinguishable in the log from one that never ran at all, which is exactly
+                // the silent-failure shape the bootstrap fix (Finding 2) exists to catch earlier.
+                val result = geoAssets.install(request)
+                Log.d(TAG, "geo refresh: ${request.fileName} -> $result")
+            },
             onMetered = { settings.geoRefreshOnMetered.first() },
         )
 }

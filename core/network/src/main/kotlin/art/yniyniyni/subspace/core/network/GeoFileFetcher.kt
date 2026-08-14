@@ -20,7 +20,6 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -129,27 +128,29 @@ public class GeoFileFetcher private constructor(
     }
 
     /**
-     * OkHttp holds a connection pool per client, so a client is built once per
-     * proxy target rather than per request.
+     * `OkHttpClient.newBuilder()` shares the parent's connection pool and dispatcher, so a fresh
+     * client per call is not a fresh pool — there is nothing here worth caching per port, and a
+     * per-port cache would only accumulate: the port is allocated fresh per session (§10.6) and
+     * nothing ever evicts an old one. An earlier version of this method cached one `OkHttpClient`
+     * per `proxyPort` in a `ConcurrentHashMap` on exactly the (wrong) premise that construction
+     * was the expensive part; review round 2, Minor caught it.
      *
-     * `Proxy.Type.HTTP`, never SOCKS: OkHttp resolves the hostname itself before
-     * a SOCKS connect, which would leak the host to the local resolver while
-     * appearing to fetch through the tunnel (§5.2, research §8). An HTTP proxy
-     * receives the hostname and resolves it at the far end.
+     * `Proxy.Type.HTTP`, never SOCKS. Whether a Java SOCKS proxy resolves the hostname locally
+     * before connecting — which would leak it to the local resolver while appearing to fetch
+     * through the tunnel (§5.2) — is not verified (research §8: "Not verified. Do not treat as
+     * fact.", §10.5). HTTP sidesteps the question rather than answering it: an HTTP proxy receives
+     * the hostname in absolute-form and resolves it at the far end by construction, so there is
+     * nothing to verify for this path regardless.
      */
     private fun clientFor(proxyPort: Int?): OkHttpClient =
         if (proxyPort == null) {
             client
         } else {
-            proxiedClients.getOrPut(proxyPort) {
-                client
-                    .newBuilder()
-                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort)))
-                    .build()
-            }
+            client
+                .newBuilder()
+                .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort)))
+                .build()
         }
-
-    private val proxiedClients = ConcurrentHashMap<Int, OkHttpClient>()
 
     /**
      * Downloads [url] into [target], calling [onProgress] with the running byte

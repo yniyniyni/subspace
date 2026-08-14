@@ -57,4 +57,30 @@ class TunnelProxyBindingTest {
             withClue(state::class.simpleName.orEmpty()) { state.httpProxyPortOrNull() shouldBe null }
         }
     }
+
+    /**
+     * Review round 2, Critical 1: an unbound client's cached [ConnectionState.Connected] is not
+     * evidence of anything current — `TunnelClient.unbind()` (called every time the UI
+     * backgrounds) stops refreshing it, so it can go on reporting a port from a session that has
+     * since ended with nobody listening (`onRevoke()`, `:bg` killed). [resolveHttpProxyPort] must
+     * refuse to hand that out rather than trust a state it has no live link to.
+     */
+    @Test
+    fun `an unbound client offers no port even with a stale Connected state`() {
+        val stale = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080, httpProxyPort = 1081)
+
+        resolveHttpProxyPort(bound = false, state = stale) shouldBe null
+    }
+
+    @Test
+    fun `a bound client with a live Connected state offers its port`() {
+        val connected = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080, httpProxyPort = 1081)
+
+        resolveHttpProxyPort(bound = true, state = connected) shouldBe 1081
+    }
+
+    @Test
+    fun `a bound client still applies every other state rule`() {
+        resolveHttpProxyPort(bound = true, state = ConnectionState.Disconnected) shouldBe null
+    }
 }

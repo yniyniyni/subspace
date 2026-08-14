@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.sync
 import art.yniyniyni.subspace.core.data.GeoInstallRequest
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -72,6 +73,68 @@ class GeoRefreshDecisionsTest {
             decisions.refreshNow(geoipRequest())
 
             dueFilesCalled shouldBe false
+        }
+
+    /**
+     * Review round 2, Important 4: production's `dueFiles` wraps Room reads
+     * (`GeoAssetRepository.observeAll()`, `isDueForRefresh` per asset) that carry no never-throw
+     * promise of their own, unlike `GeoAssetRepository.install`. A locked or corrupt database must
+     * not turn into an uncaught exception out of `GeoRefreshWorker.doWork()` — see the KDoc on
+     * [GeoRefreshDecisions.refreshDue] for why a *second* failure in `reschedule()`'s own `finally`
+     * would then silently replace this one.
+     */
+    @Test
+    fun `refreshDue does not throw when dueFiles itself throws`() =
+        runTest {
+            val installs = mutableListOf<String>()
+            val decisions =
+                GeoRefreshDecisions(
+                    dueFiles = { error("database is locked") },
+                    install = { installs += it.fileName },
+                )
+
+            decisions.refreshDue()
+
+            installs shouldBe emptyList()
+        }
+
+    /** One bad file must not take the rest of the run down with it. */
+    @Test
+    fun `refreshDue keeps installing the remaining due files after one install throws`() =
+        runTest {
+            val installs = mutableListOf<String>()
+            val decisions =
+                GeoRefreshDecisions(
+                    dueFiles = { listOf(geoipRequest(), geositeRequest()) },
+                    install = { request ->
+                        if (request.fileName == "geoip.dat") error("disk full")
+                        installs += request.fileName
+                    },
+                )
+
+            decisions.refreshDue()
+
+            installs shouldBe listOf("geosite.dat")
+        }
+
+    /** Swallowing failures must not extend to genuine cancellation — that is not an error to hide. */
+    @Test
+    fun `refreshDue still propagates cancellation rather than swallowing it`() =
+        runTest {
+            val decisions =
+                GeoRefreshDecisions(
+                    dueFiles = { throw CancellationException("cancelled") },
+                    install = {},
+                )
+
+            var threw = false
+            try {
+                decisions.refreshDue()
+            } catch (_: CancellationException) {
+                threw = true
+            }
+
+            threw shouldBe true
         }
 
     private fun geoipRequest() =

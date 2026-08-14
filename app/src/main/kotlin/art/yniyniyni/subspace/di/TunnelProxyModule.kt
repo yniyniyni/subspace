@@ -7,7 +7,6 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import javax.inject.Singleton
 
 /**
  * Supplies the one [TunnelProxyLocator] implementation.
@@ -20,7 +19,10 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class TunnelProxyModule {
+    // No @Singleton here: TunnelProxyBinding (the @Binds delegate) is already @Singleton at its
+    // own @Inject constructor, which is what actually governs instance lifetime — @Binds has no
+    // constructor of its own to scope, so a second @Singleton on the binding was redundant.
+    // Review round 2, Minor.
     @Binds
-    @Singleton
     internal abstract fun tunnelProxyLocator(implementation: TunnelProxyBinding): TunnelProxyLocator
 }

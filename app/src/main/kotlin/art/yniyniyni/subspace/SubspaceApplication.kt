@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import art.yniyniyni.subspace.sync.GeoRefreshScheduler
 import art.yniyniyni.subspace.sync.RefreshScheduler
 import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
@@ -64,6 +65,23 @@ class SubspaceApplication : Application(), Configuration.Provider {
     @Inject
     internal lateinit var refreshScheduler: Lazy<RefreshScheduler>
 
+    /**
+     * Same [Lazy] requirement as [refreshScheduler] and for the identical reason: resolving
+     * [GeoRefreshScheduler] pulls in its own `WorkManager` binding, which must not run before
+     * [onCreate] has finished member injection.
+     *
+     * Review round 2, Critical 2: [GeoRefreshScheduler.reschedule] has exactly one caller in
+     * production — [art.yniyniyni.subspace.sync.GeoRefreshWorker]'s own `finally`. Without this
+     * field and the call in [onCreate] below, the daily `geo-refresh` periodic job never exists on
+     * a fresh install (`enqueueUniquePeriodicWork` is never reached by anything), so the worker
+     * that would re-create it never runs either — the whole chain is dead before it starts, and
+     * silently: nothing throws, nothing logs, no geo database ever refreshes. [RefreshScheduler]
+     * avoids this because [onCreate] bootstraps it the same way; [GeoRefreshScheduler] needs the
+     * same bootstrap, not a self-sustaining chain of its own.
+     */
+    @Inject
+    internal lateinit var geoRefreshScheduler: Lazy<GeoRefreshScheduler>
+
     // Owned by this Application instance, not GlobalScope (§12) — it lives exactly as long as the
     // process does, which is what the launch-time refresh below needs.
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -98,6 +116,13 @@ class SubspaceApplication : Application(), Configuration.Provider {
             val scheduler = refreshScheduler.get()
             applicationScope.launch { scheduler.rescheduleOnChanges() }
             registerActivityLifecycleCallbacks(ForegroundCallbacks { onMovedToForeground(scheduler) })
+
+            // Bootstraps the geo-refresh periodic job — see geoRefreshScheduler's KDoc. Unlike
+            // the subscription scheduler above, geo refresh has no Room-observable schedule input
+            // to react to (the cadence is a fixed daily period; the 7-day freshness cap lives
+            // inside GeoAssetRepository.isDueForRefresh, not in the schedule) and no separate
+            // on-open trigger, so a single reschedule() call is this scheduler's entire bootstrap.
+            applicationScope.launch { geoRefreshScheduler.get().reschedule() }
         }
     }
 

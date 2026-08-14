@@ -41,6 +41,7 @@ class SettingsHwidLayoutTest {
                         onPingOnLaunchChanged = {},
                         onPingOnLaunchMeteredChanged = {},
                     ),
+                    onNavigateToRouting = {},
                 )
             }
         }

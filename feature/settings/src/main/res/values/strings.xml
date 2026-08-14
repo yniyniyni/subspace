@@ -49,4 +49,8 @@
     <string name="settings_ping_on_launch_summary">Measures each group once when you open the server list.</string>
     <string name="settings_ping_on_launch_metered">Also on mobile data</string>
     <string name="settings_ping_on_launch_metered_summary">Off by default — testing a large list uses real data. Manual tests always work.</string>
+
+    <string name="settings_section_routing">Routing</string>
+    <string name="settings_routing_row_label">Rule sets</string>
+    <string name="settings_routing_row_summary">Block, proxy or route traffic directly by domain or address</string>
 </resources>

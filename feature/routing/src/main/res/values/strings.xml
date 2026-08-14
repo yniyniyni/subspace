@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no
+     hardcoded UI text. §5.6: a rule set's own name is the only user-supplied
+     value shown by this screen (interpolated as %1$s below) — never an
+     entry, a site or an IP. -->
+<resources>
+    <string name="routing_title">Routing</string>
+
+    <string name="routing_off_label">Off</string>
+    <string name="routing_off_description">Routing off — every connection uses the default path</string>
+
+    <string name="routing_create_description">Create rule set</string>
+    <string name="routing_edit_description">Edit %1$s</string>
+    <string name="routing_delete_description">Delete %1$s</string>
+    <string name="routing_activate_description">Activate %1$s</string>
+
+    <plurals name="routing_entry_count">
+        <item quantity="one">%1$d entry</item>
+        <item quantity="other">%1$d entries</item>
+    </plurals>
+
+    <!-- Blocks activation — see RuleSetRow.canActivate. -->
+    <string name="routing_missing_geo_files">Needs geo files: %1$s</string>
+    <!-- Informational only — never blocks activation. -->
+    <string name="routing_update_failed">Last update failed</string>
+
+    <string name="routing_empty_title">No rule sets yet</string>
+    <string name="routing_empty_message">Create a rule set to block, proxy or route traffic directly by domain or address.</string>
+</resources>

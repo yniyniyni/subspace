@@ -11,4 +11,28 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
+    implementation(project(":core:ui"))
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.hilt.navigation.compose)
+    // The active-selector radio's check/delete/create/warning glyphs and the
+    // "Routing" settings row's own icon — same -core-only choice as every
+    // other module. See THIRD_PARTY.md.
+    implementation(libs.compose.material.icons.core)
+
+    testImplementation(libs.kotest.assertions)
+    // RoutingViewModel drives its state through viewModelScope, which needs a
+    // Main dispatcher — same gap :feature:settings' own build.gradle.kts
+    // documents.
+    testImplementation(libs.kotlinx.coroutines.test)
+
+    // First Compose UI test in this module (RoutingListScreenContentTest): the two activation-gate
+    // markers and the empty state are layout/rendering facts a JVM state test cannot see — same
+    // reasoning, and same additions, :feature:settings' own build.gradle.kts documents in full for
+    // SettingsHwidLayoutTest. No device is reachable in this environment, so this test compiles but
+    // does not run here — see its own KDoc.
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.kotest.assertions)
+    debugImplementation(libs.compose.ui.test.manifest)
+    androidTestImplementation(libs.androidx.test.espresso.core)
 }

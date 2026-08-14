@@ -19,6 +19,12 @@ public sealed interface ConnectionState {
     public data class Connected(
         val sinceEpochMillis: Long,
         val socksPort: Int,
+        /**
+         * The loopback HTTP proxy port, or 0 when the tunnel carries no HTTP
+         * inbound. `:main` dials this so subscription and geo fetches travel
+         * through the tunnel (spec §5.4).
+         */
+        val httpProxyPort: Int = 0,
     ) : ConnectionState
 
     public data object Disconnecting : ConnectionState

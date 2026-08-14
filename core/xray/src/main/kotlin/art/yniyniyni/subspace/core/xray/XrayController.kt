@@ -30,13 +30,33 @@ public class XrayController(
      */
     public suspend fun allocatePort(): Int =
         withContext(io) {
-            val data = LibXrayInvoke.call("getFreePorts", JSONObject().put("count", 1))
-            val ports = data?.optJSONArray("ports")
-            if (ports == null || ports.length() == 0) {
-                throw XrayException("libXray returned no free port")
-            }
-            ports.getInt(0)
+            fetchFreePorts(1).first()
         }
+
+    /**
+     * Requests [count] **distinct** free ports.
+     *
+     * See [allocateDistinctPorts] for why a single `getFreePorts` call is not
+     * enough on its own to guarantee that — `docs/agent/research/libxray-api.md`
+     * §5 has the upstream source. This is the seam `TunnelService` uses to
+     * allocate the SOCKS and loopback HTTP ports together (§10.6: neither is
+     * ever a literal).
+     *
+     * @throws XrayException when [count] distinct ports could not be obtained.
+     */
+    public suspend fun allocatePorts(count: Int): List<Int> =
+        withContext(io) {
+            allocateDistinctPorts(count) { n -> fetchFreePorts(n) }
+        }
+
+    private fun fetchFreePorts(count: Int): List<Int> {
+        val data = LibXrayInvoke.call("getFreePorts", JSONObject().put("count", count))
+        val ports = data?.optJSONArray("ports")
+        if (ports == null || ports.length() == 0) {
+            throw XrayException("libXray returned no free ports")
+        }
+        return List(ports.length()) { i -> ports.getInt(i) }
+    }
 
     /**
      * §6: validate before starting. A malformed config makes libXray fail in a way

@@ -144,6 +144,39 @@ class XrayControllerTest {
             }
         }
 
+    /**
+     * §10.5: an unverified inbound shape is exactly the kind of thing that gets
+     * a whole config rejected at connect. `XrayConfigGeneratorTest` proves the
+     * JSON *looks* right; only the real core proves it *is* right — and this is
+     * the first time a config carrying two inbounds is fed to it.
+     */
+    @Test
+    fun aTwoInboundConfigIsAcceptedByTheRealCore() =
+        runTest {
+            val controller = XrayController()
+            val ports = controller.allocatePorts(count = 2)
+            val settings =
+                TunnelSettings(
+                    socksPort = ports[0],
+                    dnsServer = "1.1.1.1",
+                    enableSniffing = true,
+                    httpPort = ports[1],
+                )
+            val profile = Profile(id = "id", name = "n", outbound = outbound)
+            val result = XrayConfigGenerator.generate(profile, settings)
+            check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            val configFile = File(cacheDir, "instr-two-inbound.json").apply { writeText(result.json) }
+
+            try {
+                controller.validate(configFile)
+            } catch (e: XrayException) {
+                // §5.6: the message can quote the config back.
+                fail("the core rejected a two-inbound config: ${e.javaClass.simpleName}")
+            } finally {
+                configFile.delete()
+            }
+        }
+
     @Test
     fun malformedConfigIsRejectedWithARealError() =
         runTest {

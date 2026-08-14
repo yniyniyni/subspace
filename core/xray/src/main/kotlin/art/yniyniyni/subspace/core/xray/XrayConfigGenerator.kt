@@ -27,6 +27,19 @@ public data class TunnelSettings(
      * sites which do not route yet keep compiling.
      */
     val routing: RoutingRuleSet? = null,
+    /**
+     * Loopback HTTP proxy port, or null when app fetches are not proxied.
+     *
+     * §6's config shape has always read `socks [+ optional http]`; this is the
+     * optional half. HTTP rather than a second SOCKS inbound because an HTTP
+     * `CONNECT` carries the hostname to the proxy, so the *proxy* resolves it —
+     * a Java SOCKS client may resolve locally first, which would leak the
+     * subscription hostname while appearing to fetch through the tunnel (§5.2,
+     * research §8).
+     *
+     * Allocated at connect time like [socksPort]; §10.6 forbids a literal.
+     */
+    val httpPort: Int? = null,
 )
 
 /**
@@ -179,23 +192,8 @@ public object XrayConfigGenerator {
         settings: TunnelSettings,
     ) {
         sb.appendLine("""  "inbounds": [""")
-        sb.appendLine("""    {""")
-        sb.appendLine("""      "tag": "socks-in",""")
-        sb.appendLine("""      "protocol": "socks",""")
-        // §6: loopback only. Never 0.0.0.0 — that turns the phone into an open
-        // proxy for anyone on the same Wi-Fi.
-        sb.appendLine("""      "listen": "127.0.0.1",""")
-        sb.appendLine("""      "port": ${settings.socksPort},""")
-        sb.appendLine("""      "settings": {""")
-        sb.appendLine("""        "udp": true""")
-        sb.appendLine("""      }${if (settings.enableSniffing) "," else ""}""")
-        if (settings.enableSniffing) {
-            sb.appendLine("""      "sniffing": {""")
-            sb.appendLine("""        "enabled": true,""")
-            sb.appendLine("""        "destOverride": ["http", "tls"]""")
-            sb.appendLine("""      }""")
-        }
-        sb.appendLine("""    }""")
+        appendSocksInbound(sb, settings, trailingComma = settings.httpPort != null)
+        settings.httpPort?.let { port -> appendHttpInbound(sb, port) }
         sb.appendLine("""  ],""")
     }
 
@@ -351,4 +349,65 @@ public object XrayConfigGenerator {
         }
         sb.appendLine("""        }""")
     }
+}
+
+/**
+ * The SOCKS inbound M1's tunnel has always carried. Byte-identical whether or
+ * not [appendHttpInbound] follows it — only [trailingComma] changes with that.
+ *
+ * A top-level function rather than a member of [XrayConfigGenerator], same
+ * reason as [appendHttpInbound]: neither needs the object's other members, and
+ * splitting the single inbound-emitting function into two for the optional
+ * HTTP inbound pushed the object over detekt's function-count threshold.
+ */
+private fun appendSocksInbound(
+    sb: StringBuilder,
+    settings: TunnelSettings,
+    trailingComma: Boolean,
+) {
+    sb.appendLine("""    {""")
+    sb.appendLine("""      "tag": "socks-in",""")
+    sb.appendLine("""      "protocol": "socks",""")
+    // §6: loopback only. Never 0.0.0.0 — that turns the phone into an open
+    // proxy for anyone on the same Wi-Fi.
+    sb.appendLine("""      "listen": "127.0.0.1",""")
+    sb.appendLine("""      "port": ${settings.socksPort},""")
+    sb.appendLine("""      "settings": {""")
+    sb.appendLine("""        "udp": true""")
+    sb.appendLine("""      }${if (settings.enableSniffing) "," else ""}""")
+    if (settings.enableSniffing) {
+        sb.appendLine("""      "sniffing": {""")
+        sb.appendLine("""        "enabled": true,""")
+        sb.appendLine("""        "destOverride": ["http", "tls"]""")
+        sb.appendLine("""      }""")
+    }
+    sb.appendLine("""    }${if (trailingComma) "," else ""}""")
+}
+
+/**
+ * The inbound `:core:network` dials so app fetches travel through the tunnel.
+ *
+ * Same loopback rule as the SOCKS inbound, and it matters more here: an HTTP
+ * proxy reachable from the LAN is usable directly from any browser on the
+ * network.
+ *
+ * No `sniffing` block: the destination is already known — an HTTP `CONNECT`
+ * states it — so there is nothing to sniff.
+ *
+ * A top-level function rather than a member of [XrayConfigGenerator]: it needs
+ * none of the object's other members, and keeping it out is what keeps that
+ * object under detekt's function-count threshold now that the SOCKS inbound
+ * emission was split out too.
+ */
+private fun appendHttpInbound(
+    sb: StringBuilder,
+    port: Int,
+) {
+    sb.appendLine("""    {""")
+    sb.appendLine("""      "tag": "http-in",""")
+    sb.appendLine("""      "protocol": "http",""")
+    sb.appendLine("""      "listen": "127.0.0.1",""")
+    sb.appendLine("""      "port": $port,""")
+    sb.appendLine("""      "settings": {}""")
+    sb.appendLine("""    }""")
 }

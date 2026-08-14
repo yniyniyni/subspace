@@ -241,6 +241,15 @@ class ParcelMappingTest {
     }
 
     @Test
+    fun `connected round-trips both ports`() {
+        val state = ConnectionState.Connected(sinceEpochMillis = 42L, socksPort = 1080, httpProxyPort = 1081)
+
+        val restored = ConnectionStateParcel.from(state).toState()
+
+        restored shouldBe state
+    }
+
+    @Test
     fun `an unknown kind degrades to disconnected instead of throwing`() {
         // A state the UI cannot name must not take down the process trying to
         // display it. This is the forward-compatibility path if :bg is ever
@@ -250,6 +259,7 @@ class ParcelMappingTest {
             stage = 0,
             sinceEpochMillis = 0,
             socksPort = 0,
+            httpProxyPort = 0,
             reason = 0,
             detail = "",
         ).toState() shouldBe ConnectionState.Disconnected

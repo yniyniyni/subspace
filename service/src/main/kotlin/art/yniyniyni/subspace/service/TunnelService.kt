@@ -288,10 +288,19 @@ class TunnelService : VpnService() {
 
             // Split at the seam that matters for unwinding: once the core is up,
             // every later failure must stop it again.
-            val socksPort = startCore(gen, xray, profile, rowId) ?: return@launch
-            attachTun(gen, xray, socksPort, rowId)
+            val ports = startCore(gen, xray, profile, rowId) ?: return@launch
+            attachTun(gen, xray, ports.socksPort, ports.httpPort, rowId)
         }
     }
+
+    /**
+     * The two ports [startCore] allocates together, carried to [attachTun].
+     *
+     * Not a bare `Pair<Int, Int>`: `ports.first`/`ports.second` at the call site
+     * would be one more place a reviewer has to remember which index is which,
+     * for a mistake that decodes to a plausible port either way.
+     */
+    private data class StartedPorts(val socksPort: Int, val httpPort: Int)
 
     // One early return per step is the point, not a smell: §10.4 requires each
     // stage of the start sequence to fail specifically and stop there.
@@ -301,14 +310,22 @@ class TunnelService : VpnService() {
         xray: XrayController,
         profile: Profile,
         rowId: Long,
-    ): Int? {
+    ): StartedPorts? {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.AllocatingPort))) return null
-        val socksPort =
+        // One call for both ports, not two calls to allocatePort(): §10.6 and
+        // docs/agent/research/libxray-api.md §5 — getFreePorts closes each
+        // listener before opening the next, so nothing stops the kernel handing
+        // back the same number twice even across separate calls. allocatePorts
+        // verifies distinctness and retries; a config with two inbounds on the
+        // same port is rejected by the core outright.
+        val ports =
             try {
-                xray.allocatePort()
+                xray.allocatePorts(count = 2)
             } catch (e: XrayException) {
                 return failStart(gen, FailureReason.PortAllocationFailed, e, rowId)
             }
+        val socksPort = ports[0]
+        val httpPort = ports[1]
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
         val routing =
@@ -320,7 +337,14 @@ class TunnelService : VpnService() {
                 is RoutingGateResult.Failed -> return null
                 is RoutingGateResult.Proceed -> gate.routing
             }
-        val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true, routing = routing)
+        val settings =
+            TunnelSettings(
+                socksPort = socksPort,
+                dnsServer = DNS_SERVER,
+                enableSniffing = true,
+                routing = routing,
+                httpPort = httpPort,
+            )
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck
@@ -364,7 +388,7 @@ class TunnelService : VpnService() {
             return failStart(gen, FailureReason.CoreStartFailed, e, rowId)
         }
 
-        return socksPort
+        return StartedPorts(socksPort, httpPort)
     }
 
     /**
@@ -443,6 +467,7 @@ class TunnelService : VpnService() {
         gen: Int,
         xray: XrayController,
         socksPort: Int,
+        httpPort: Int,
         rowId: Long,
     ) {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
@@ -488,7 +513,7 @@ class TunnelService : VpnService() {
             return
         }
 
-        val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort)
+        val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort, httpPort)
         // One generation-checked transition: the connected notification is established and
         // `Connected` published together under the lock, and the spec-D4 success write (see
         // ConnectionRecorder) happens strictly after. Previously this published, suspended in

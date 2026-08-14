@@ -19,6 +19,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.string.shouldStartWith
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.Test
 
@@ -380,6 +381,44 @@ class XrayConfigGeneratorTest {
                 (json.count { it == '[' } - json.count { it == ']' }) shouldBe 0
             }
         }
+    }
+
+    // ── Loopback HTTP inbound ────────────────────────────────────────────────
+
+    @Test
+    fun `no http port emits only the socks inbound`() {
+        val json = (XrayConfigGenerator.generate(profile, settings) as ConfigResult.Ok).json
+
+        json shouldNotContain """"protocol": "http""""
+    }
+
+    @Test
+    fun `an http port emits a second loopback inbound`() {
+        val json =
+            (XrayConfigGenerator.generate(profile, settings.copy(httpPort = 10809)) as ConfigResult.Ok).json
+
+        json shouldContain """      "tag": "http-in","""
+        json shouldContain """      "protocol": "http","""
+        json shouldContain """      "port": 10809,"""
+    }
+
+    // §6: never 0.0.0.0. An open HTTP proxy on the LAN is trivially usable from
+    // any browser on the network.
+    @Test
+    fun `the http inbound binds to loopback only`() {
+        val json =
+            (XrayConfigGenerator.generate(profile, settings.copy(httpPort = 10809)) as ConfigResult.Ok).json
+
+        json shouldNotContain "0.0.0.0"
+        json.split(""""listen": """).drop(1).forEach { it shouldStartWith "\"127.0.0.1\"" }
+    }
+
+    @Test
+    fun `the config with an http inbound is still deterministic`() {
+        val routed = settings.copy(httpPort = 10809)
+
+        (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json shouldBe
+            (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
     }
 
     @Test

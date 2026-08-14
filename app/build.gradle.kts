@@ -101,6 +101,12 @@ dependencies {
     // either. ThemeResolutionTest is this module's first JVM unit test.
     testImplementation(libs.junit)
     testImplementation(libs.kotest.assertions)
+    // GeoRefreshDecisionsTest: the plain-JVM half of Task 14's coverage, exercising
+    // GeoRefreshScheduler's decision logic via runTest without a WorkManager. Same catalog
+    // artifact every other module's testImplementation already uses (core/network,
+    // core/xray, feature/settings, feature/home, feature/profiles, service) — not a new
+    // dependency, just this module's first JVM test that needs it.
+    testImplementation(libs.kotlinx.coroutines.test)
 
     // :app builds android {} directly rather than through subspace.android.library
     // (see the kotlin {} block's comment above), so none of the androidTest kit

@@ -23,6 +23,7 @@ private const val KEY_PING_CHECK_URL = "ping_check_url"
 private const val KEY_PING_TIMEOUT_SECONDS = "ping_timeout_seconds"
 private const val KEY_PING_ON_LAUNCH = "ping_on_launch"
 private const val KEY_PING_ON_LAUNCH_METERED = "ping_on_launch_metered"
+private const val KEY_GEO_REFRESH_ON_METERED = "geo_refresh_on_metered"
 
 /**
  * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
@@ -48,6 +49,7 @@ public enum class ThemePreference { System, Light, Dark }
  * is not multi-process safe, and this app runs `:main` and `:bg` as separate processes. One
  * storage engine means one invalidation mechanism and one place to reason about concurrency.
  */
+@Suppress("TooManyFunctions") // One typed getter/setter pair per setting; splitting the class would not shrink this.
 @Singleton
 public class SettingsRepository
 @Inject
@@ -201,5 +203,21 @@ internal constructor(
 
     public suspend fun setPingOnLaunchMetered(enabled: Boolean) {
         dao.put(SettingEntity(key = KEY_PING_ON_LAUNCH_METERED, value = enabled.toString()))
+    }
+
+    /**
+     * Whether a *scheduled* geo-database refresh may run on a metered network.
+     *
+     * Off by default: the largest measured source is 73.7 MB (`GeoSourceCatalogue`), and pulling
+     * that unannounced over cellular is hostile. A manual "Update now" is unaffected by this
+     * setting — it always runs, ignoring both the metered constraint and the freshness cap
+     * (§A.5). This module does not know about the scheduler that reads this flag; `:app`'s
+     * `GeoRefreshScheduler` is the caller (§4 forbids the reverse dependency).
+     */
+    public val geoRefreshOnMetered: Flow<Boolean> =
+        dao.observe(KEY_GEO_REFRESH_ON_METERED).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    public suspend fun setGeoRefreshOnMetered(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_GEO_REFRESH_ON_METERED, value = enabled.toString()))
     }
 }

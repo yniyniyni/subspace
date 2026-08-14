@@ -17,7 +17,10 @@ import okhttp3.Request
 import okhttp3.Response
 import java.io.File
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -126,6 +129,29 @@ public class GeoFileFetcher private constructor(
     }
 
     /**
+     * OkHttp holds a connection pool per client, so a client is built once per
+     * proxy target rather than per request.
+     *
+     * `Proxy.Type.HTTP`, never SOCKS: OkHttp resolves the hostname itself before
+     * a SOCKS connect, which would leak the host to the local resolver while
+     * appearing to fetch through the tunnel (§5.2, research §8). An HTTP proxy
+     * receives the hostname and resolves it at the far end.
+     */
+    private fun clientFor(proxyPort: Int?): OkHttpClient =
+        if (proxyPort == null) {
+            client
+        } else {
+            proxiedClients.getOrPut(proxyPort) {
+                client
+                    .newBuilder()
+                    .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort)))
+                    .build()
+            }
+        }
+
+    private val proxiedClients = ConcurrentHashMap<Int, OkHttpClient>()
+
+    /**
      * Downloads [url] into [target], calling [onProgress] with the running byte
      * count. Always on [Dispatchers.IO] (§5.3).
      *
@@ -133,12 +159,10 @@ public class GeoFileFetcher private constructor(
      * @param proxyPort the tunnel's loopback HTTP proxy, or null to fetch
      *   directly. Declared here rather than added later because inserting a
      *   parameter before the trailing lambda would break every call site.
-     *   Wired in Part 2, Task 13; until then every caller passes null.
      */
     @Suppress(
         "ReturnCount", // §10.4: each failure is distinct and returns where it is detected.
         "SwallowedException", // Invalid URLs intentionally have no implementation-detail field.
-        "UnusedParameter", // proxyPort is part of the stable API and is wired in Part 2, Task 13.
     )
     public suspend fun download(
         url: String,
@@ -165,7 +189,7 @@ public class GeoFileFetcher private constructor(
             try {
                 val outcome =
                     awaitOutcome(
-                        call = client.newCall(request),
+                        call = clientFor(proxyPort).newCall(request),
                         target = target,
                         maxBytes = maxBytes,
                         onProgress = onProgress,

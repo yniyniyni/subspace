@@ -11,6 +11,8 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
@@ -140,6 +142,18 @@ constructor(
                 .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .apply {
+                    // Proxy.Type.HTTP, never SOCKS: OkHttp resolves the hostname
+                    // itself before a SOCKS connect, which would leak the host to
+                    // the local resolver while appearing to fetch through the
+                    // tunnel (§5.2). An HTTP proxy receives the hostname and
+                    // resolves it at the far end. A fresh client is already built
+                    // per attempt (the timeout chain above is per-request), so
+                    // there is no pool to share by caching one per port here.
+                    request.proxyPort?.let { port ->
+                        proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port)))
+                    }
+                }
                 .build()
                 .newCall(request.toOkHttpRequest())
         }.getOrNull() ?: return FetchOutcome.Failed(FetchFailure.NotFound)

@@ -15,6 +15,7 @@ import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SubscriptionDao
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.model.GeoDataValidator
+import art.yniyniyni.subspace.core.model.TunnelProxyLocator
 import art.yniyniyni.subspace.core.network.GeoDownloadOutcome
 import art.yniyniyni.subspace.core.network.GeoFileFetcher
 import dagger.Module
@@ -133,14 +134,20 @@ internal object DataModule {
      * from `:app` at all, `checkModuleBoundaries` enforces exactly that, and the
      * same seam already exists for the subscription pipeline
      * (`SubscriptionSyncFailure`, in this module, for the identical reason).
-     * `proxyPort` is left at its default; Task 13 wires it once a tunnel is
-     * live to route the request through.
+     * [TunnelProxyLocator] is resolved fresh on every download, not cached at
+     * provider time, so a geo update started while the tunnel is connecting
+     * (or after it drops) reads the current port rather than a stale one.
      */
     @Provides
     @Singleton
-    fun geoDownloader(fetcher: GeoFileFetcher): GeoDownloader =
+    fun geoDownloader(
+        fetcher: GeoFileFetcher,
+        proxyLocator: TunnelProxyLocator,
+    ): GeoDownloader =
         GeoDownloader { url, target ->
-            when (val outcome = fetcher.download(url, target, MAX_GEO_FILE_BYTES) {}) {
+            val outcome =
+                fetcher.download(url, target, MAX_GEO_FILE_BYTES, proxyPort = proxyLocator.httpProxyPortOrNull()) {}
+            when (outcome) {
                 is GeoDownloadOutcome.Success -> outcome.bytes to outcome.sha256
                 // GeoAssetRepository.install's download step catches this and
                 // records DownloadFailed; a failure discovered after a

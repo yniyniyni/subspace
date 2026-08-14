@@ -17,6 +17,7 @@ import art.yniyniyni.subspace.core.data.serialization.identityHashOfRaw
 import art.yniyniyni.subspace.core.data.serialization.toJson
 import art.yniyniyni.subspace.core.data.transportSummary
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.TunnelProxyLocator
 import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.SubscriptionRequest
@@ -50,6 +51,13 @@ private const val MAX_LOG_KEY_LENGTH = 64
  * drift.
  *
  * Entirely on [Dispatchers.IO] (§5.3).
+ *
+ * [proxyLocator] is how a subscription refresh reaches the tunnel's loopback
+ * HTTP proxy (spec §5.4): `:app` supplies the only implementation, over
+ * `TunnelClient`'s published state, because `:core:data` cannot depend on
+ * `:service` (§4). A background refresh with no bound service — or no tunnel
+ * up at all — gets null back and fetches directly; that is correct fallback
+ * behaviour, not a failure (see [TunnelProxyLocator.httpProxyPortOrNull]).
  */
 @Singleton
 public class SubscriptionSyncer
@@ -59,6 +67,7 @@ internal constructor(
     private val subscriptions: SubscriptionRepository,
     private val settings: SettingsRepository,
     private val source: SubscriptionSource,
+    private val proxyLocator: TunnelProxyLocator,
 ) {
     /**
      * Runs one sync of [subscriptionId].
@@ -103,6 +112,7 @@ internal constructor(
                     hwidEnabled = subscription.hwidEnabled && settings.hwidEnabled.first(),
                     userAgentOverride = userAgent,
                     timeoutSeconds = timeout,
+                    proxyPort = proxyLocator.httpProxyPortOrNull(),
                 ),
             )
 

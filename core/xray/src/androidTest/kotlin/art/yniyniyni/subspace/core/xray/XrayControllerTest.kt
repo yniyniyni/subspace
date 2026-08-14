@@ -7,6 +7,7 @@ import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -165,6 +166,11 @@ class XrayControllerTest {
             val profile = Profile(id = "id", name = "n", outbound = outbound)
             val result = XrayConfigGenerator.generate(profile, settings)
             check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            // Task-12 review, Finding 4: without this, the test would pass
+            // vacuously against a one-inbound config if the generator ever
+            // dropped httpPort — this cannot be re-run here (no device is
+            // reachable), so whoever runs it later needs it to mean something.
+            result.json shouldContain "http-in"
             val configFile = File(cacheDir, "instr-two-inbound.json").apply { writeText(result.json) }
 
             try {

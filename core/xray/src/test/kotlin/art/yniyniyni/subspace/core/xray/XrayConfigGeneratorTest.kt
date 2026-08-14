@@ -413,6 +413,29 @@ class XrayConfigGeneratorTest {
         json.split(""""listen": """).drop(1).forEach { it shouldStartWith "\"127.0.0.1\"" }
     }
 
+    /**
+     * Task-12 review, Finding 1: `produces parseable json` below only balances
+     * brace/bracket counts, and a missing separator between the socks and http
+     * inbound objects changes neither count — so a hardcoded
+     * `trailingComma = false` would pass that test, the golden file test, and
+     * every case above it while emitting invalid JSON. That fails at connect
+     * as `ConfigRejected` with nothing in the message to explain why (the core
+     * quotes the config back, and §5.6 forbids logging it). This asserts the
+     * actual separator between the two inbound objects rather than relying on
+     * a check that cannot see it.
+     */
+    @Test
+    fun `the socks and http inbounds are comma-separated, not merely adjacent`() {
+        val json =
+            (XrayConfigGenerator.generate(profile, settings.copy(httpPort = 10809)) as ConfigResult.Ok).json
+
+        // Anchored on the http-in tag, not just any "},\n    {" run: the outbounds
+        // array a few lines down has its own "proxy" → "direct" separator with the
+        // same shape, and an earlier draft of this assertion matched *that* one —
+        // passing regardless of whether the inbounds separator was present at all.
+        json shouldContain "    },\n    {\n      \"tag\": \"http-in\""
+    }
+
     @Test
     fun `the config with an http inbound is still deterministic`() {
         val routed = settings.copy(httpPort = 10809)

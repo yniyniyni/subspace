@@ -260,6 +260,26 @@ class RedactionTest {
     }
 
     /**
+     * Task-12 review, Finding 5: [GEO_FILE_LIST_MESSAGE]'s separator (`", "`) is
+     * coupled to `TunnelService.resolveRouting`'s
+     * `resolution.missing.sorted().joinToString(", ")` by a comment only — there
+     * is nothing that breaks if one changes and not the other, and the failure
+     * mode is silent: the exemption stops matching, filenames get redacted away,
+     * and the diagnostic §10.4 exists for degrades to unreadable with no test
+     * failure anywhere pointing at why. `:core:model` cannot depend on `:service`
+     * to call the real joiner, so this reproduces its exact call shape instead —
+     * `sorted()` then `joinToString(", ")` over real, [isGeoFileName]-shaped
+     * names — and asserts the result survives [redact] byte for byte.
+     */
+    @Test
+    fun `survives the exact joined form TunnelService resolveRouting produces`() {
+        val missing = setOf("mynets.dat", "geoip.dat", "geosite.dat")
+        val message = missing.sorted().joinToString(", ")
+
+        redact(message) shouldBe message
+    }
+
+    /**
      * The exemption is anchored to the **whole** message, and this is the test
      * that says so.
      *

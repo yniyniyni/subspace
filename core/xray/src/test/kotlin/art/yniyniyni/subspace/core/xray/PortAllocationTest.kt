@@ -52,8 +52,11 @@ class PortAllocationTest {
                     List(count) { 38411 }
                 }
             }
-            // Bounded: a genuinely exhausted range must fail, not spin.
-            (calls in 2..5) shouldBe true
+            // Pins the bound exactly. `calls in 2..5` would still pass if the
+            // bound silently changed from 3 to 5, and would report an
+            // uninformative "false is not true" rather than "expected 3 but
+            // was 5" if it ever moved (task-12 review, Finding 3).
+            calls shouldBe 3
         }
     }
 
@@ -68,6 +71,30 @@ class PortAllocationTest {
                 }
 
             ports shouldBe listOf(1, 2)
+            calls shouldBe 2
+        }
+
+    /**
+     * Task-12 review, Finding 2: an over-long list where the *extra* entries
+     * are themselves duplicates — `[1, 1, 2]` for `count = 2` — has
+     * `toSet().size == count` (the unique values are exactly `{1, 2}`), so
+     * `ports.toSet().size == count` alone accepts it. A plain over-long
+     * distinct list like `[1, 2, 3]` for `count = 2` does not exercise this:
+     * its set size is 3, which already fails the distinctness check with or
+     * without the `ports.size == count` clause. This is the shape that
+     * actually needs the size clause to be rejected.
+     */
+    @Test
+    fun `an over-long result padded with a duplicate is treated as a failed attempt`() =
+        runTest {
+            var calls = 0
+            val ports =
+                allocateDistinctPorts(2) { count ->
+                    calls++
+                    if (calls == 1) listOf(1, 1, 2) else listOf(4, 5)
+                }
+
+            ports shouldBe listOf(4, 5)
             calls shouldBe 2
         }
 }

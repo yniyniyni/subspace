@@ -96,13 +96,36 @@ public class TunnelClient @Inject constructor(
             }
         }
 
+    /**
+     * Review round 3, Residual 1: [Context.bindService]'s `Boolean` return matters — `false` means
+     * ActivityManager refused the bind outright (rare, but real: e.g. the process is in a state
+     * that cannot host new bindings), and when that happens [connection] is never invoked for this
+     * attempt, so nothing would otherwise correct [isBound] back to false. Left as an unconditional
+     * `true`, a previous session's stale `Connected(port)` becomes servable again the next time
+     * [isBound] is consulted — the exact failure Finding 1 closed, reached through a different door.
+     *
+     * The ordering below is deliberate, not incidental: [isBound] is set `true` *before* calling
+     * [Context.bindService], and only ever corrected to `false` *after*, and only when the call
+     * itself reports rejection. [Context.bindService] can invoke [ServiceConnection.onServiceConnected]
+     * synchronously, before returning — writing `isBound = context.bindService(...)` in one line
+     * would still be race-free for that specific case (a synchronous connect only happens when the
+     * call itself is about to return `true`), but assigning the *raw return value* unconditionally
+     * after the call, rather than only ever narrowing `true` down to `false` on rejection, is the
+     * shape that stays correct even if a future change makes [connection] itself start touching
+     * [isBound]: this can only ever downgrade an optimistic `true` to `false`, never overwrite a
+     * `true` something else legitimately established with a stale value of its own.
+     */
     public fun bind() {
         isBound = true
-        context.bindService(
-            Intent(context, TunnelService::class.java),
-            connection,
-            Context.BIND_AUTO_CREATE,
-        )
+        val accepted =
+            context.bindService(
+                Intent(context, TunnelService::class.java),
+                connection,
+                Context.BIND_AUTO_CREATE,
+            )
+        if (!accepted) {
+            isBound = false
+        }
     }
 
     /**

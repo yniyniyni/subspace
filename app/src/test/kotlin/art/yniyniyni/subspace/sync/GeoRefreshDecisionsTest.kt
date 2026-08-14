@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.sync
 
 import art.yniyniyni.subspace.core.data.GeoInstallRequest
 import art.yniyniyni.subspace.core.model.GeoDataKind
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -115,6 +116,47 @@ class GeoRefreshDecisionsTest {
             decisions.refreshDue()
 
             installs shouldBe listOf("geosite.dat")
+        }
+
+    /**
+     * Review round 3, Residual 2: silence on this specific catch was called out as the shape
+     * §10.4 names by itself — a locked/corrupt database and an ordinary "nothing was due" day must
+     * not look identical everywhere. [GeoRefreshDecisions.onDueFilesFailure] is what lets
+     * production distinguish them (a log line, in [GeoRefreshModule.geoRefreshScheduler]) without
+     * this test needing an Android `Log` call to observe it.
+     */
+    @Test
+    fun `refreshDue reports a dueFiles failure to onDueFilesFailure, and still does not throw`() =
+        runTest {
+            var reported: Throwable? = null
+            val decisions =
+                GeoRefreshDecisions(
+                    dueFiles = { error("database is locked") },
+                    install = {},
+                    onDueFilesFailure = { reported = it },
+                )
+
+            decisions.refreshDue()
+
+            reported.shouldNotBeNull()
+            reported.message shouldBe "database is locked"
+        }
+
+    /** The [install] catch stays silent by design — see [GeoRefreshDecisions.onDueFilesFailure]'s KDoc. */
+    @Test
+    fun `refreshDue does not report an install failure to onDueFilesFailure`() =
+        runTest {
+            var reported: Throwable? = null
+            val decisions =
+                GeoRefreshDecisions(
+                    dueFiles = { listOf(geoipRequest()) },
+                    install = { error("disk full") },
+                    onDueFilesFailure = { reported = it },
+                )
+
+            decisions.refreshDue()
+
+            reported shouldBe null
         }
 
     /** Swallowing failures must not extend to genuine cancellation — that is not an error to hide. */

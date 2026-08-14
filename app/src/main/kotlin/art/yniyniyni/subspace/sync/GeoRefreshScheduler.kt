@@ -39,6 +39,23 @@ private const val GEO_REFRESH_INTERVAL_DAYS = 1L
 internal class GeoRefreshDecisions(
     private val dueFiles: suspend () -> List<GeoInstallRequest>,
     private val install: suspend (GeoInstallRequest) -> Unit,
+    /**
+     * Reports a [dueFiles] failure the moment it happens, before it is downgraded to "nothing was
+     * due". Defaults to a no-op so every existing caller — every JVM test that does not care about
+     * this path — is unaffected; [GeoRefreshModule.geoRefreshScheduler] supplies a real one.
+     *
+     * Review round 3, Residual 2: the [install] catch below stays silent on purpose, because
+     * [GeoAssetRepository.install] already records its own failure on the `geo_assets` row and the
+     * UI already surfaces it — nothing is lost by not also logging it here. That reasoning does
+     * **not** extend to [dueFiles]: it fails *before* any [install] call, so nothing is written to
+     * any row and nothing anywhere records that it happened. Left silent, a locked or corrupt
+     * database becomes indistinguishable from "nothing was due today" — the ordinary case, most
+     * days — which is exactly the shape §10.4 calls out by name. This lambda is what lets
+     * production log it (an exception class name only, §5.6 — no path, no URL) while keeping
+     * [refreshDue]'s never-throw guarantee provable by a plain JVM test, with no Android `Log` call
+     * inside this class for that test to trip over.
+     */
+    private val onDueFilesFailure: (Throwable) -> Unit = {},
 ) {
     /**
      * Installs every file [dueFiles] returns. Never throws (§10.4).
@@ -56,7 +73,7 @@ internal class GeoRefreshDecisions(
      * Both [dueFiles] and each [install] call are therefore caught individually below, narrowly,
      * with [CancellationException] always rethrown so genuine cancellation is never mistaken for
      * an ordinary failure. One failing file does not stop the rest of [dueFiles]' list from being
-     * attempted.
+     * attempted. See [onDueFilesFailure]'s own KDoc for why only the [dueFiles] catch reports.
      */
     @Suppress("TooGenericExceptionCaught") // Deliberate backstop — see the KDoc above.
     suspend fun refreshDue() {
@@ -65,7 +82,8 @@ internal class GeoRefreshDecisions(
                 dueFiles()
             } catch (cancellation: CancellationException) {
                 throw cancellation
-            } catch (ignored: Exception) {
+            } catch (error: Exception) {
+                onDueFilesFailure(error)
                 emptyList()
             }
         due.forEach { request ->
@@ -74,13 +92,12 @@ internal class GeoRefreshDecisions(
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (ignored: Exception) {
-                // Deliberately silent, not merely uncrashing: this class has no Android Log
-                // available to it (it is the plain-JVM-testable half of GeoRefreshScheduler,
-                // and GeoRefreshDecisionsTest exercises exactly this branch without a device),
-                // and production's own `install` already logs the outcome per file — see
-                // GeoRefreshModule.geoRefreshScheduler. An exception reaching here at all means
-                // that logging itself was bypassed, which is already the unexpected case this
-                // catch exists for.
+                // Deliberately silent — see onDueFilesFailure's KDoc for why this catch and that
+                // one are not symmetric: production's own `install` already logs the outcome per
+                // file (GeoRefreshModule.geoRefreshScheduler), and GeoAssetRepository.install
+                // already records the failure on the geo_assets row the UI reads. An exception
+                // reaching here at all means that recording itself was bypassed, which is already
+                // the unexpected case this catch exists for.
             }
         }
     }
@@ -118,8 +135,10 @@ internal class GeoRefreshScheduler(
     dueFiles: suspend () -> List<GeoInstallRequest>,
     install: suspend (GeoInstallRequest) -> Unit,
     private val onMetered: suspend () -> Boolean,
+    /** Forwarded to [GeoRefreshDecisions] — see its KDoc. Defaults to a no-op, same as there. */
+    onDueFilesFailure: (Throwable) -> Unit = {},
 ) {
-    private val decisions = GeoRefreshDecisions(dueFiles, install)
+    private val decisions = GeoRefreshDecisions(dueFiles, install, onDueFilesFailure)
 
     /** Installs every geo database due for a refresh. Never throws — see [GeoRefreshDecisions.refreshDue]. */
     suspend fun refreshDue() = decisions.refreshDue()
@@ -209,5 +228,11 @@ internal object GeoRefreshModule {
                 Log.d(TAG, "geo refresh: ${request.fileName} -> $result")
             },
             onMetered = { settings.geoRefreshOnMetered.first() },
+            // Review round 3, Residual 2: a locked or corrupt database must not be
+            // indistinguishable from "nothing was due today" — see GeoRefreshDecisions'
+            // onDueFilesFailure KDoc. Exception class name only (§5.6): no path, no URL.
+            onDueFilesFailure = { error ->
+                Log.w(TAG, "geo refresh: could not compute due files: ${error.javaClass.simpleName}")
+            },
         )
 }

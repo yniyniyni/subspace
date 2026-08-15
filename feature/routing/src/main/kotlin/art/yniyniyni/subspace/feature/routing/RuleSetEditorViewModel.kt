@@ -216,36 +216,43 @@ constructor(
      * [RoutingViewModel.activate][RoutingViewModel]'s own KDoc documents — or
      * while a previous call is still in flight ([RuleSetEditorState.saving]).
      *
-     * Checks [RoutingSource.ruleSetNamed] before writing anything: a name
-     * collision must become [SaveProblem.NameConflict], never a silent
-     * overwrite of the other rule set (fix round 1, Finding 8 — see
-     * [SaveProblem.NameConflict]'s own KDoc). Only past that gate does it
-     * call [RoutingSource.upsert], and only inside a `try` — an
-     * [IllegalArgumentException] from a stale, pre-tightening invalid entry
-     * or an unexpected write failure both become a [SaveProblem] instead of
-     * an uncaught crash (fix round 1, Finding 7).
+     * Both [RoutingSource] calls this makes — [RoutingSource.ruleSetNamed] for
+     * the collision check (fix round 1, Finding 8 — see
+     * [SaveProblem.NameConflict]'s own KDoc) and [RoutingSource.upsert] for the
+     * write itself — run inside the one `try` in [saveDraft]. Fix round 2,
+     * Finding 10: an earlier version of this method ran the collision read
+     * *outside* that `try`, on every save, unconditionally — reopening exactly
+     * the uncaught-crash defect Finding 7 closed for the write, for the read
+     * right next to it in the same function. Anything either call throws now
+     * becomes a [SaveProblem] (never a crash), and [RuleSetEditorState.saving]
+     * is reset on every exit path, including both failure ones —
+     * [CancellationException] is the one exception to both: rethrown
+     * unmodified, never turned into a [SaveProblem] or used to reset `saving`,
+     * since a cancelled `viewModelScope` means this [ViewModel] is being torn
+     * down and further state updates are moot.
      */
     fun save() {
         val current = _state.value
         if (!current.canSave || current.saving) return
         viewModelScope.launch {
             _state.update { it.copy(saving = true, saveProblem = null) }
-            val trimmedName = current.name.trim()
-            val collision = source.ruleSetNamed(trimmedName)
-            if (collision != null && collision.id != current.id) {
-                _state.update { it.copy(saving = false, saveProblem = SaveProblem.NameConflict(trimmedName)) }
-                return@launch
-            }
-            saveDraft(current, trimmedName)
+            saveDraft(current, current.name.trim())
         }
     }
 
-    @Suppress("TooGenericExceptionCaught") // A write can fail in ways this ViewModel cannot enumerate (§10.4).
+    // TooGenericExceptionCaught: either RoutingSource call below can fail in ways this ViewModel
+    // cannot enumerate (§10.4).
+    @Suppress("TooGenericExceptionCaught")
     private suspend fun saveDraft(
         current: RuleSetEditorState,
         trimmedName: String,
     ) {
         try {
+            val collision = source.ruleSetNamed(trimmedName)
+            if (collision != null && collision.id != current.id) {
+                _state.update { it.copy(saving = false, saveProblem = SaveProblem.NameConflict(trimmedName)) }
+                return
+            }
             source.upsert(
                 RoutingRuleSet(
                     id = current.id,

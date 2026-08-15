@@ -39,13 +39,14 @@ import java.io.IOException
  * running them with the `@Before`/`@After` below commented out: all seven still pass. That is not
  * the vacuous-pass failure mode Task 15 hit — those tests genuinely exercise synchronous code —
  * but it does mean this file's own `@Before`/`@After` cannot be verified against those seven
- * alone. Every `load`/`save` test (including fix round 1's additions for Findings 5, 7 and 8, and
- * the re-entrancy Minor) goes through `viewModelScope.launch` (mirroring
- * [RoutingViewModel.activate]) specifically so this file has tests that put the dispatcher setup
- * to real use: with the `@Before`/`@After` deleted, 10 of this class's own 24 tests fail (the
- * whole-module run reports "36 tests completed, 10 failed" since `GeoCategoriesTest` and
- * `RoutingViewModelTest` are separate classes with their own unaffected setups) — confirmed by
- * deleting the setup and re-running (see the task report for the exact list and output).
+ * alone. Every `load`/`save` test (including fix round 1's additions for Findings 5, 7 and 8, fix
+ * round 2's addition for Finding 10, and the re-entrancy Minor) goes through `viewModelScope.launch`
+ * (mirroring [RoutingViewModel.activate]) specifically so this file has tests that put the
+ * dispatcher setup to real use: with the `@Before`/`@After` deleted, 11 of this class's own 25
+ * tests fail (the whole-module run reports "37 tests completed, 11 failed" since
+ * `GeoCategoriesTest` and `RoutingViewModelTest` are separate classes with their own unaffected
+ * setups) — confirmed by deleting the setup and re-running (see the task report for the exact
+ * list and output).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RuleSetEditorViewModelTest {
@@ -54,6 +55,9 @@ class RuleSetEditorViewModelTest {
         private val siteCategories: List<GeoCategory> = emptyList(),
         private val ipCategories: List<GeoCategory> = emptyList(),
         private val failUpsertWith: Throwable? = null,
+        // Fix round 2, Finding 10: the collision read can fail too, and none of fix round 1's
+        // tests exercised that — this is what closes that gap.
+        private val failRuleSetNamedWith: Throwable? = null,
         // A suspension point `upsert` awaits before doing anything else — lets a test observe
         // RuleSetEditorState.saving mid-flight (fix round 1, Minor: save's re-entrancy guard).
         private val upsertGate: CompletableDeferred<Unit>? = null,
@@ -71,7 +75,10 @@ class RuleSetEditorViewModelTest {
 
         // The real RoutingRuleSetEntity.name index is unique, so at most one row can ever match —
         // the same one-match invariant this in-memory lookup mirrors against `sets`.
-        override suspend fun ruleSetNamed(name: String): RoutingRuleSet? = sets.value.firstOrNull { it.name == name }
+        override suspend fun ruleSetNamed(name: String): RoutingRuleSet? {
+            failRuleSetNamedWith?.let { throw it }
+            return sets.value.firstOrNull { it.name == name }
+        }
 
         override suspend fun categoriesFor(field: BucketField): List<GeoCategory> =
             when (field) {
@@ -364,6 +371,24 @@ class RuleSetEditorViewModelTest {
 
         viewModel.state.value.saveProblem shouldBe SaveProblem.WriteFailed
         viewModel.state.value.saved shouldBe false
+    }
+
+    // Fix round 2, Finding 10: an earlier version of save() ran the collision read outside the
+    // try/catch that protects upsert — a failure here crashed the process, and saving was never
+    // reset, wedging the Save button disabled for the rest of the ViewModel's life. Neither of
+    // those must happen now.
+    @Test
+    fun `a failure reading the name collision check is surfaced, not thrown, and does not wedge saving`() = runTest {
+        val source = FakeSource(failRuleSetNamedWith = IOException("db unavailable"))
+        val viewModel = editor(source)
+        viewModel.setName("ads")
+
+        viewModel.save()
+
+        viewModel.state.value.saveProblem shouldBe SaveProblem.WriteFailed
+        viewModel.state.value.saved shouldBe false
+        viewModel.state.value.saving shouldBe false
+        source.upserted shouldBe null
     }
 
     // Finding 8: upsertByIdOrName's id==0 branch resolves by name and would silently overwrite

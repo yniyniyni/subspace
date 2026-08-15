@@ -7,15 +7,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -26,7 +22,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import art.yniyniyni.subspace.R
 import art.yniyniyni.subspace.core.ui.component.FloatingNavigationBar
 import art.yniyniyni.subspace.core.ui.component.NavItem
 import art.yniyniyni.subspace.feature.home.HomeScreen
@@ -35,6 +30,7 @@ import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
 import art.yniyniyni.subspace.feature.profiles.subscription.SubscriptionDetailScreen
 import art.yniyniyni.subspace.feature.routing.RoutingListScreen
+import art.yniyniyni.subspace.feature.routing.RuleSetEditorScreen
 import art.yniyniyni.subspace.feature.settings.SettingsScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
 
@@ -56,24 +52,24 @@ private const val SETTINGS_VALUE = "settings"
  * is on screen — each is a single-purpose flow a user is pushed into and
  * pops back out of, not a place they "switch" between.
  *
- * Every destination but one renders its real screen directly: `Home`
- * ([HomeScreen], from `:feature:home`), `Servers` ([ServersScreen], from
- * `:feature:profiles`, wired in Task 18's fix round 1 after code review
- * found it built, tested and unreachable), `QrScan`
+ * Every destination renders its real screen directly: `Home` ([HomeScreen],
+ * from `:feature:home`), `Servers` ([ServersScreen], from `:feature:profiles`,
+ * wired in Task 18's fix round 1 after code review found it built, tested and
+ * unreachable), `QrScan`
  * ([QrScanRoute][art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute],
  * from `:feature:profiles`, wired in Task 20's fix round 1 for the identical
  * reason), `Editor` ([EditorScreen], from `:feature:profiles`, wired in
  * Task 21 — the same "no later task owns this" treatment), `Settings`
- * ([SettingsScreen], from `:feature:settings`, Task 22) and, as of Task 15
- * (M5), `RoutingList` ([RoutingListScreen], from `:feature:routing`). The one
- * exception is `RuleSetEditor`, which still renders [PlaceholderScreen] —
- * Task 15's own brief calls for both routes to be declared and reachable
- * together even though the real editor is Task 16's job, since
- * `RoutingListScreen`'s create/edit actions need somewhere real to push to
- * now. Every *other* destination resolves a `ViewModel` through
- * `hiltViewModel()`, which is why [SubspaceNavHostTest] cannot drive the real
- * [SubspaceNavHost] Hilt-free for any of those — see that file's own KDoc for
- * what that means for its coverage.
+ * ([SettingsScreen], from `:feature:settings`, Task 22), `RoutingList`
+ * ([RoutingListScreen], from `:feature:routing`, Task 15) and, as of Task 16,
+ * `RuleSetEditor` ([RuleSetEditorScreen], from `:feature:routing` — Task 15's
+ * own brief had declared both routes ahead of this one existing, wired to a
+ * `PlaceholderScreen`, since `RoutingListScreen`'s create/edit actions already
+ * needed somewhere real to push to; this task retires that placeholder). Every
+ * destination resolves a `ViewModel` through `hiltViewModel()`, which is why
+ * [SubspaceNavHostTest] cannot drive the real [SubspaceNavHost] Hilt-free for
+ * any of them — see that file's own KDoc for what that means for its
+ * coverage.
  *
  * Root layout is a plain [Box], not a [androidx.compose.material3.Scaffold].
  * [FloatingNavigationBar] already applies its own `navigationBars`
@@ -305,29 +301,12 @@ private fun NavGraphBuilder.routingDestinations(navController: NavHostController
             onBack = { navController.popBackStack() },
         )
     }
-    composable<RuleSetEditor> {
-        // Task 16 owns the real editor. Wired here now, ahead of that screen existing,
-        // because Task 15's own brief calls for both RoutingList and RuleSetEditor to be
-        // declared and reachable together — the same "declare the route once its
-        // destination is coming, not before" boundary [SubscriptionDetail]'s own KDoc
-        // documents, except here the *list* screen (this task) already needs somewhere
-        // real to push its create/edit actions to. PlaceholderScreen is the same interim
-        // shape Home, Servers, Settings, Editor and QrScan each wore before their own
-        // task landed — see that composable's own KDoc.
-        PlaceholderScreen(stringResource(R.string.rule_set_editor_placeholder_title))
-    }
-}
-
-/**
- * A bare title on a full-size [Surface] — stands in for a destination whose
- * real screen a later task builds. Home, Servers, Settings, [Editor] and
- * [QrScan] each wore this shape until their own task replaced it outright;
- * [RuleSetEditor] is the one route still wearing it, until Task 16 lands the
- * real rule set editor.
- */
-@Composable
-private fun PlaceholderScreen(title: String, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier.fillMaxSize()) {
-        Text(text = title, style = MaterialTheme.typography.headlineMedium)
+    composable<RuleSetEditor> { entry ->
+        // Task 16: RuleSetEditorScreen replaces the placeholder outright — the same
+        // "no later task owns this" treatment ServersScreen (Task 18 fix round 1),
+        // QrScanScreen (Task 20 fix round 1), EditorScreen (Task 21) and SettingsScreen/
+        // SubscriptionDetailScreen (Task 15/22) each got.
+        val route: RuleSetEditor = entry.toRoute()
+        RuleSetEditorScreen(ruleSetId = route.ruleSetId, onDone = { navController.popBackStack() })
     }
 }

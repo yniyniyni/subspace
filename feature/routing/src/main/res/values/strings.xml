@@ -27,4 +27,48 @@
 
     <string name="routing_empty_title">No rule sets yet</string>
     <string name="routing_empty_message">Create a rule set to block, proxy or route traffic directly by domain or address.</string>
+
+    <!-- Rule set editor (Task 16). §5.6: the name field is the only user-supplied value this
+         screen echoes back — every entry field below only ever displays what the user themself
+         typed into it, never logs it, and EntryProblem's own mapping below carries no entry
+         text either. -->
+    <string name="rule_set_editor_title">Rule set</string>
+    <string name="rule_set_editor_back_description">Back</string>
+    <string name="rule_set_editor_save_button">Save</string>
+    <string name="rule_set_editor_name_label">Name</string>
+
+    <string name="rule_set_editor_order_label">Rule order</string>
+    <string name="rule_set_editor_move_earlier_description">Move %1$s earlier</string>
+    <string name="rule_set_editor_move_later_description">Move %1$s later</string>
+
+    <string name="rule_set_editor_domain_strategy_label">Domain strategy</string>
+    <string name="rule_set_editor_domain_strategy_as_is">As is</string>
+    <string name="rule_set_editor_domain_strategy_ip_if_non_match">IP if no domain match</string>
+    <string name="rule_set_editor_domain_strategy_ip_on_demand">IP on demand</string>
+
+    <string name="rule_set_editor_outcome_block">Block</string>
+    <string name="rule_set_editor_outcome_proxy">Proxy</string>
+    <string name="rule_set_editor_outcome_direct">Direct</string>
+    <string name="rule_set_editor_field_sites">Sites</string>
+    <string name="rule_set_editor_field_ips">IPs</string>
+    <!-- "%1$s → %2$s", e.g. "Block → Sites" -->
+    <string name="rule_set_editor_section_title">%1$s → %2$s</string>
+
+    <string name="rule_set_editor_entry_hint">Domain, address or geosite:/geoip: code</string>
+    <string name="rule_set_editor_add_description">Add entry</string>
+    <!-- §5.6: deliberately does not interpolate the entry itself, unlike routing_edit_description's
+         rule-set name (a label the user chose, not a value it routes) — this row's own visible Text
+         already carries the entry for a screen reader to reach. -->
+    <string name="rule_set_editor_remove_entry_description">Remove entry</string>
+    <string name="rule_set_editor_browse_categories_description">Browse categories</string>
+    <!-- "%1$s (%2$d rules)", e.g. "category-ads-all (42 rules)" -->
+    <string name="rule_set_editor_category_row">%1$s (%2$d rules)</string>
+
+    <string name="rule_set_editor_problem_blank">Entry cannot be blank</string>
+    <string name="rule_set_editor_problem_missing_geo_code">Add a code after the colon, e.g. geosite:cn</string>
+    <string name="rule_set_editor_problem_malformed_ext_reference">Reference must be ext:file.dat:code</string>
+    <string name="rule_set_editor_problem_malformed_address">Not a valid address or CIDR range</string>
+    <string name="rule_set_editor_problem_malformed_domain">Not a valid domain entry</string>
+    <string name="rule_set_editor_problem_illegal_character">Entry cannot contain a quote or backslash</string>
 </resources>
+

@@ -4,8 +4,4 @@
      address, uuid, or key. -->
 <resources>
     <string name="app_name">Subspace</string>
-
-    <!-- Task 15 (M5): PlaceholderScreen's title for RuleSetEditor, until Task 16 lands the real
-         editor — same stand-in shape Home/Servers/Settings/Editor/QrScan each wore in turn. -->
-    <string name="rule_set_editor_placeholder_title">Rule set editor</string>
 </resources>

@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package art.yniyniyni.subspace.feature.routing
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import art.yniyniyni.subspace.core.model.BucketField
+import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.EntryProblem
+import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingEntries
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
+import art.yniyniyni.subspace.core.model.RuleBucket
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/**
+ * One rule set's working copy — the same "hold a local draft, write through
+ * only on explicit save" shape
+ * [art.yniyniyni.subspace.feature.profiles.editor.EditorState] uses, so
+ * abandoning this screen changes nothing (brief step 4).
+ *
+ * @param entryProblem why the most recent [RuleSetEditorViewModel.addEntry]
+ *   call was refused, or `null`. Deliberately not keyed by which of the six
+ *   buckets it came from — [EntryProblem] itself carries no entry text (§5.6),
+ *   and the six add fields share this one slot the same way the brief's own
+ *   tests read it: a single field on the draft, not one per bucket.
+ * @param siteCategories the parsed contents of `geosite.json` beside the geo
+ *   root's `geosite.dat`, or empty when that sidecar does not exist or does
+ *   not parse — see [GeoCategories.read]. Drives the SITES fields' "browse
+ *   categories" affordance; empty means that affordance stays disabled.
+ * @param ipCategories the same, for `geoip.json` / the IPS fields.
+ */
+internal data class RuleSetEditorState(
+    val loading: Boolean = true,
+    val id: Long = 0L,
+    val name: String = "",
+    val buckets: Map<RouteOutcome, RuleBucket> = emptyMap(),
+    val order: List<RouteOutcome> = RoutingRuleSet.DEFAULT_ORDER,
+    val domainStrategy: DomainStrategy = DomainStrategy.IP_IF_NON_MATCH,
+    val entryProblem: EntryProblem? = null,
+    val siteCategories: List<GeoCategory> = emptyList(),
+    val ipCategories: List<GeoCategory> = emptyList(),
+    val saved: Boolean = false,
+) {
+    /** The stored entries for [outcome]/[field]. §5.6: this is the screen's whole job — display, never log. */
+    fun bucket(
+        outcome: RouteOutcome,
+        field: BucketField,
+    ): List<String> {
+        val ruleBucket = buckets[outcome] ?: RuleBucket()
+        return when (field) {
+            BucketField.SITES -> ruleBucket.sites
+            BucketField.IPS -> ruleBucket.ips
+        }
+    }
+
+    /** [field]'s parsed category list — see [siteCategories]/[ipCategories]'s own KDoc. */
+    fun categoriesFor(field: BucketField): List<GeoCategory> =
+        when (field) {
+            BucketField.SITES -> siteCategories
+            BucketField.IPS -> ipCategories
+        }
+
+    /** The one save gate the brief specifies (step 4): a non-blank name, nothing more. */
+    val canSave: Boolean get() = name.isNotBlank()
+}
+
+/**
+ * Backs the rule set editor: a working copy of one
+ * [art.yniyniyni.subspace.core.model.RoutingRuleSet], validated per entry as
+ * it is typed and written through [RoutingSource.upsert] only on [save].
+ *
+ * [RoutingSource.upsert] **throws** [IllegalArgumentException] on an entry
+ * [RoutingEntries.problemWith] rejects — [addEntry] is the guard that must
+ * keep such an entry from ever reaching it (brief's "Interfaces" note).
+ */
+@HiltViewModel
+internal class RuleSetEditorViewModel
+@Inject
+constructor(
+    private val source: RoutingSource,
+) : ViewModel() {
+    private val _state = MutableStateFlow(RuleSetEditorState())
+    val state: StateFlow<RuleSetEditorState> = _state.asStateFlow()
+
+    /**
+     * Loads [id] — an existing row, or [id] left in place as a fresh draft when
+     * no row matches (the create-new-rule-set sentinel `NEW_RULE_SET` in `:app`
+     * is `0L`, [RoutingRuleSet]'s own default `id`, so this module needs no
+     * knowledge of that constant itself; §4 forbids depending on `:app` anyway).
+     * Also reads both category sidecars once — see
+     * [RuleSetEditorState.siteCategories]'s own KDoc and [RoutingSource.categoriesFor]
+     * for why the filesystem read is dispatched inside [source], not here.
+     */
+    fun load(id: Long) {
+        viewModelScope.launch {
+            val existing = source.ruleSet(id)
+            val siteCategories = source.categoriesFor(BucketField.SITES)
+            val ipCategories = source.categoriesFor(BucketField.IPS)
+            _state.value =
+                (existing?.toEditorState() ?: RuleSetEditorState(loading = false, id = id))
+                    .copy(loading = false, siteCategories = siteCategories, ipCategories = ipCategories)
+        }
+    }
+
+    /**
+     * Validates [entry] for [outcome]/[field] and, only if it passes, adds it —
+     * never both rejects and adds (brief: "A rejected entry is never added").
+     * A duplicate of an entry already in the bucket is silently ignored rather
+     * than reported as a problem: it is not malformed, it would just add
+     * nothing.
+     */
+    fun addEntry(
+        outcome: RouteOutcome,
+        field: BucketField,
+        entry: String,
+    ) {
+        val problem = RoutingEntries.problemWith(entry, field)
+        if (problem != null) {
+            _state.update { it.copy(entryProblem = problem) }
+            return
+        }
+        val trimmed = entry.trim()
+        _state.update { current ->
+            val existing = current.bucket(outcome, field)
+            if (trimmed in existing) return@update current.copy(entryProblem = null)
+            current.copy(
+                buckets = current.buckets + (outcome to current.bucketWith(outcome, field, existing + trimmed)),
+                entryProblem = null,
+            )
+        }
+    }
+
+    /** Removes [entry] from [outcome]/[field], leaving the rest of the bucket in order. A no-op if absent. */
+    fun removeEntry(
+        outcome: RouteOutcome,
+        field: BucketField,
+        entry: String,
+    ) {
+        _state.update { current ->
+            val existing = current.bucket(outcome, field)
+            current.copy(buckets = current.buckets + (outcome to current.bucketWith(outcome, field, existing - entry)))
+        }
+    }
+
+    fun setName(value: String) = update { it.copy(name = value) }
+
+    /**
+     * Sets the rule evaluation order. Silently ignored when [order] is not a
+     * permutation of every [RouteOutcome] — [RoutingRuleSet]'s own `init`
+     * requires that, and this is the guard that keeps [save] from ever
+     * constructing one that would throw building the draft in the first place.
+     */
+    fun setOrder(order: List<RouteOutcome>) {
+        val isPermutation = order.size == RouteOutcome.entries.size && order.toSet() == RouteOutcome.entries.toSet()
+        if (isPermutation) update { it.copy(order = order) }
+    }
+
+    fun setDomainStrategy(strategy: DomainStrategy) = update { it.copy(domainStrategy = strategy) }
+
+    /**
+     * Writes the current draft through [RoutingSource.upsert]. Refuses when
+     * [RuleSetEditorState.canSave] is false — the same "a disabled control is a
+     * hint, the gate belongs here too" reasoning
+     * [RoutingViewModel.activate][RoutingViewModel]'s own KDoc documents.
+     */
+    fun save() {
+        val current = _state.value
+        if (!current.canSave) return
+        viewModelScope.launch {
+            source.upsert(
+                RoutingRuleSet(
+                    id = current.id,
+                    name = current.name.trim(),
+                    buckets = current.buckets,
+                    order = current.order,
+                    domainStrategy = current.domainStrategy,
+                ),
+            )
+            _state.update { it.copy(saved = true) }
+        }
+    }
+
+    private inline fun update(transform: (RuleSetEditorState) -> RuleSetEditorState) {
+        _state.update(transform)
+    }
+}
+
+private fun RuleSetEditorState.bucketWith(
+    outcome: RouteOutcome,
+    field: BucketField,
+    entries: List<String>,
+): RuleBucket {
+    val current = buckets[outcome] ?: RuleBucket()
+    return when (field) {
+        BucketField.SITES -> current.copy(sites = entries)
+        BucketField.IPS -> current.copy(ips = entries)
+    }
+}
+
+private fun RoutingRuleSet.toEditorState(): RuleSetEditorState =
+    RuleSetEditorState(
+        loading = false,
+        id = id,
+        name = name,
+        buckets = buckets,
+        order = order,
+        domainStrategy = domainStrategy,
+    )

@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.routing
 
-/** What the rule set list screen shows: one row per stored rule set. */
+/**
+ * What the rule set list screen shows: one row per stored rule set.
+ *
+ * @param activeRuleSetId carried rather than re-derived from `ruleSets`. Asking
+ *   `ruleSets.none { it.isActive }` reports "off" for a first frame that has no
+ *   rows yet, and for a stored id whose row has since been deleted — in both
+ *   cases the UI would claim routing is off while the setting still holds a
+ *   value. Null genuinely means off.
+ */
 internal data class RoutingState(
     val ruleSets: List<RuleSetRow> = emptyList(),
+    val activeRuleSetId: Long? = null,
 )
 
 /**

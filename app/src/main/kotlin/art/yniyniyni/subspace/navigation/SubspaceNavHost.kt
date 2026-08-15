@@ -302,6 +302,7 @@ private fun NavGraphBuilder.routingDestinations(navController: NavHostController
         RoutingListScreen(
             onCreateRuleSet = { navController.navigate(RuleSetEditor(ruleSetId = NEW_RULE_SET)) },
             onEditRuleSet = { id -> navController.navigate(RuleSetEditor(ruleSetId = id)) },
+            onBack = { navController.popBackStack() },
         )
     }
     composable<RuleSetEditor> {

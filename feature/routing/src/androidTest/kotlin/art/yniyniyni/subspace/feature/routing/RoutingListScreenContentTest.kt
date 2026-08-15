@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.feature.routing
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -80,6 +81,10 @@ class RoutingListScreenContentTest {
 
         composeRule.onNodeWithText("Last update failed").assertIsDisplayed()
         composeRule.onNodeWithText("Needs geo files:", substring = true).assertDoesNotExist()
+        // The half this test is named for but did not assert: a failed refresh
+        // is a warning, not a gate. Without this line, making
+        // hasFailedGeoUpdate disable the selector leaves the test green.
+        composeRule.onNodeWithContentDescription("Activate ads").assertIsEnabled()
     }
 
     @Test

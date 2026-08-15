@@ -70,14 +70,27 @@ constructor(
 
     override val activeRuleSetId: Flow<Long?> = settingsRepository.activeRoutingRuleSetId
 
-    // GeoAssetRepository.installedFileNames() is a suspend, one-shot read (it
-    // also verifies the file is actually still on disk); this screen needs a
-    // flow that recomposes when an install completes, so it maps
-    // observeAll() instead of calling that read once.
+    /**
+     * The activation gate's input, and it must be **the same question the
+     * service asks**.
+     *
+     * `observeAll()` is only the trigger here, not the answer. Deriving the set
+     * from the rows directly — `installedAt != null` — asks the database, while
+     * `RoutingResolver` in `:service` asks
+     * [GeoAssetRepository.installedFileNames], which additionally requires
+     * `File(root, name).isFile`. Those disagree exactly when a row says
+     * installed and the file is gone: a storage manager sweep, a partial wipe, a
+     * rollback that could not restore. In that state a database-only gate shows
+     * no marker, enables the selector, permits activation — and the next connect
+     * hard-fails with `GeoDataMissing`, which is the outcome this gate exists to
+     * prevent.
+     *
+     * So: re-read through the repository on every emission. The cost is a
+     * handful of `File.isFile` calls, already on IO inside the repository, and
+     * what it buys is that the screen and the service cannot drift apart.
+     */
     override val installedGeoFiles: Flow<Set<String>> =
-        geoAssetRepository.observeAll().map { assets ->
-            assets.filter { it.installedAt != null }.map { it.fileName }.toSet()
-        }
+        geoAssetRepository.observeAll().map { geoAssetRepository.installedFileNames() }
 
     override val failedGeoFiles: Flow<Set<String>> =
         geoAssetRepository.observeAll().map { assets ->

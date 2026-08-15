@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -43,7 +44,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
 
 private val CONTENT_HORIZONTAL_PADDING = 24.dp
 private val CARD_PADDING = 16.dp
@@ -70,11 +70,15 @@ private val EMPTY_STATE_TOP_PADDING = 48.dp
  *   takes its own navigation callbacks rather than owning a `NavController`.
  * @param onEditRuleSet a row's edit icon, forwarded to `RuleSetEditor(id)`
  *   for that real row.
+ * @param onBack pops back to Settings. This is a pushed destination and the
+ *   floating nav pill is hidden on it, so without this the only way out is the
+ *   system gesture — the same reason `SubscriptionDetailScreen` carries one.
  */
 @Composable
 fun RoutingListScreen(
     onCreateRuleSet: () -> Unit,
     onEditRuleSet: (Long) -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: RoutingViewModel = hiltViewModel()
@@ -88,6 +92,7 @@ fun RoutingListScreen(
             onDelete = viewModel::delete,
             onCreateRuleSet = onCreateRuleSet,
             onEditRuleSet = onEditRuleSet,
+            onBack = onBack,
         ),
         modifier = modifier,
     )
@@ -99,6 +104,7 @@ internal data class RoutingListActions(
     val onDelete: (Long) -> Unit,
     val onCreateRuleSet: () -> Unit,
     val onEditRuleSet: (Long) -> Unit,
+    val onBack: () -> Unit,
 )
 
 /**
@@ -118,16 +124,27 @@ internal fun RoutingListScreenContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = CONTENT_HORIZONTAL_PADDING)
-            // Same reason SettingsScreenContent reserves this itself — see
-            // FLOATING_NAV_CONTENT_BOTTOM_PADDING's own KDoc.
-            .padding(top = CONTENT_HORIZONTAL_PADDING, bottom = FLOATING_NAV_CONTENT_BOTTOM_PADDING),
+            // No FLOATING_NAV_CONTENT_BOTTOM_PADDING: that constant is for the
+            // three top-level screens that scroll beneath the floating nav
+            // pill. This is a pushed destination and the pill is hidden on it,
+            // so reserving its height would just be dead space under the last
+            // card.
+            .padding(vertical = CONTENT_HORIZONTAL_PADDING),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text = stringResource(R.string.routing_title), style = MaterialTheme.typography.headlineMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = actions.onBack) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.routing_back_description),
+                    )
+                }
+                Text(text = stringResource(R.string.routing_title), style = MaterialTheme.typography.headlineMedium)
+            }
             IconButton(onClick = actions.onCreateRuleSet) {
                 Icon(
                     imageVector = Icons.Default.Add,
@@ -137,7 +154,7 @@ internal fun RoutingListScreenContent(
         }
 
         OffRow(
-            isOff = state.ruleSets.none { it.isActive },
+            isOff = state.activeRuleSetId == null,
             onSelect = { actions.onActivate(null) },
             modifier = Modifier.padding(top = CARD_GAP),
         )

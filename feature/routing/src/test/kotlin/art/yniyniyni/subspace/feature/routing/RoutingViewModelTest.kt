@@ -49,10 +49,12 @@ class RoutingViewModelTest {
         val sets: MutableStateFlow<List<RoutingRuleSet>>,
         val activeId: MutableStateFlow<Long?> = MutableStateFlow(null),
         val installed: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet()),
+        val failed: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet()),
     ) : RoutingSource {
         override val ruleSets = sets
         override val activeRuleSetId = activeId
         override val installedGeoFiles = installed
+        override val failedGeoFiles = failed
         var activated: Long? = null
 
         override suspend fun setActive(id: Long?) {
@@ -144,5 +146,52 @@ class RoutingViewModelTest {
         RoutingViewModel(source).delete(literalSet.id)
 
         source.activeRuleSetId.value shouldBe null
+    }
+
+    /**
+     * The two markers are independent, and this is the half that is easy to get
+     * backwards: a failed *refresh* of a file that is still installed and still
+     * working must not block activation. Treating it as blocking would strand a
+     * user on a working rule set because a CDN was briefly unreachable.
+     *
+     * `RoutingListScreenContentTest` asserts the rendered selector stays
+     * enabled; this pins the rule itself, and unlike that one it can actually
+     * run without a device.
+     */
+    @Test
+    fun `a failed geo update does not block activation`() = runTest {
+        val source =
+            FakeSource(
+                sets = MutableStateFlow(listOf(geoSet)),
+                installed = MutableStateFlow(setOf("geosite.dat")),
+                failed = MutableStateFlow(setOf("geosite.dat")),
+            )
+
+        val row = RoutingViewModel(source).state.value.ruleSets.single()
+
+        row.hasFailedGeoUpdate shouldBe true
+        row.missingGeoFiles shouldBe emptySet()
+        row.canActivate shouldBe true
+    }
+
+    /**
+     * Off-ness comes from the stored id, not from "no row is active".
+     *
+     * A stored id whose row has been deleted elsewhere leaves the list with no
+     * active row while the setting still holds a value; re-deriving would show
+     * "Off" and quietly disagree with what is stored.
+     */
+    @Test
+    fun `a dangling active id is not reported as off`() = runTest {
+        val source =
+            FakeSource(
+                sets = MutableStateFlow(listOf(literalSet)),
+                activeId = MutableStateFlow(404L),
+            )
+
+        val state = RoutingViewModel(source).state.value
+
+        state.activeRuleSetId shouldBe 404L
+        state.ruleSets.single().isActive shouldBe false
     }
 }

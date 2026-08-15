@@ -81,8 +81,10 @@ data class RuleSetEditor(val ruleSetId: Long)
  *
  * [Editor.profileId] uses the identical "an id that does not resolve to an
  * existing row" convention without a named constant — this one is named
- * because [RoutingListScreen][art.yniyniyni.subspace.feature.routing.RoutingListScreen]'s
- * create button and this file's own KDoc above both need to reference the
- * sentinel value without duplicating it.
+ * because `SubspaceNavHost` and this file's own KDoc above both need to
+ * reference the sentinel without duplicating it. Note `:feature:routing` never
+ * sees this constant: the list screen exposes an `onCreateRuleSet` callback and
+ * `SubspaceNavHost` supplies the id, because a feature module cannot depend on
+ * `:app` (§4).
  */
 const val NEW_RULE_SET = 0L

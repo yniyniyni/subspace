@@ -46,8 +46,9 @@ constructor(
             source.installedGeoFiles,
             source.failedGeoFiles,
         ) { sets, activeId, installed, failed ->
-            sets.map { set -> set.toRow(isActive = set.id == activeId, installed = installed, failed = failed) }
-        }.onEach { rows -> _state.update { it.copy(ruleSets = rows) } }
+            val rows = sets.map { set -> set.toRow(set.id == activeId, installed, failed) }
+            RoutingState(ruleSets = rows, activeRuleSetId = activeId)
+        }.onEach { next -> _state.update { next } }
             .launchIn(viewModelScope)
     }
 
@@ -72,9 +73,13 @@ constructor(
     }
 
     /**
-     * Deletes [id]. If it is the active rule set, clears the active id first
-     * — otherwise the tunnel would resolve a dangling reference on the next
-     * connect (§5.5).
+     * Deletes [id]. If it is the active rule set, clears the active id first.
+     *
+     * `RoutingResolver` already treats a dangling active id as routing off
+     * rather than as an error, so leaving one behind would not wedge the
+     * tunnel — but it would leave the stored setting disagreeing with what the
+     * user sees, and the next rule set to be assigned that row id would
+     * silently become active.
      */
     fun delete(id: Long) {
         viewModelScope.launch {
@@ -98,6 +103,10 @@ private fun RoutingRuleSet.toRow(
         entryCount = entryCount,
         isActive = isActive,
         missingGeoFiles = required - installed,
+        // Narrower than "any geo asset has a lastFailure": only a failure on a
+        // file *this* set references is worth showing on *this* row. The
+        // consequence is deliberate — a literal-only set never shows the
+        // marker, because no failed download can affect it.
         hasFailedGeoUpdate = required.any { it in failed },
     )
 }

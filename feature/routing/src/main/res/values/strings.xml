@@ -10,6 +10,7 @@
     <string name="routing_off_description">Routing off — every connection uses the default path</string>
 
     <string name="routing_create_description">Create rule set</string>
+    <string name="routing_back_description">Back</string>
     <string name="routing_edit_description">Edit %1$s</string>
     <string name="routing_delete_description">Delete %1$s</string>
     <string name="routing_activate_description">Activate %1$s</string>

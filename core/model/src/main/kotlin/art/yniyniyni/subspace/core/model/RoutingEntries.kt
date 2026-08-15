@@ -76,6 +76,24 @@ private const val REGEXP_PREFIX = "regexp:"
 @Suppress("TooManyFunctions") // Keeps the entry-classification helpers private to their single public API.
 public object RoutingEntries {
     /**
+     * The `geosite:`/`geoip:` prefix Xray's built-in database uses for [field] — the one
+     * [geoFileFor] and [problemWith] both special-case below, and the authority
+     * `:feature:routing`'s rule set editor reaches for when it inserts a picked category ahead
+     * of a code (`"geosite:" + code`) rather than re-declaring this string a third time. A
+     * second copy outside this file is the same drift [GEO_FILE_NAME_REGEX]'s own KDoc warns
+     * about for the filename grammar, applied to the prefix instead.
+     */
+    public fun builtInPrefix(field: BucketField): String = if (field == BucketField.IPS) "geoip:" else "geosite:"
+
+    /**
+     * The built-in geo database filename Xray reads for [field] — `geoip.dat`/`geosite.dat`.
+     * The authority for the same "which `.dat`" question `GeoAssetRepository`'s install
+     * sequence answers for the `.json` sidecar beside it (swap the suffix, do not re-derive
+     * the base name).
+     */
+    public fun builtInGeoFileName(field: BucketField): String = if (field == BucketField.IPS) GEOIP_DAT else GEOSITE_DAT
+
+    /**
      * The `.dat` file [entry] needs, or null when it resolves without one.
      *
      * Literal CIDRs and literal domains return null, which is why a rule set built
@@ -87,9 +105,9 @@ public object RoutingEntries {
         field: BucketField,
     ): String? {
         val bare = entry.trim().removeReversePrefix(field)
-        val builtIn = if (field == BucketField.IPS) "geoip:" to GEOIP_DAT else "geosite:" to GEOSITE_DAT
-        if (bare.startsWith(builtIn.first)) {
-            return if (bare.length > builtIn.first.length) builtIn.second else null
+        val builtInPrefix = builtInPrefix(field)
+        if (bare.startsWith(builtInPrefix)) {
+            return if (bare.length > builtInPrefix.length) builtInGeoFileName(field) else null
         }
         for (prefix in field.extPrefixes()) {
             if (bare.startsWith(prefix)) {
@@ -115,7 +133,7 @@ public object RoutingEntries {
         val bare = trimmed.removeReversePrefix(field)
         if (bare.isEmpty()) return EntryProblem.Blank
 
-        val builtInPrefix = if (field == BucketField.IPS) "geoip:" else "geosite:"
+        val builtInPrefix = builtInPrefix(field)
         if (bare.startsWith(builtInPrefix)) {
             return if (bare.length > builtInPrefix.length) null else EntryProblem.MissingGeoCode
         }

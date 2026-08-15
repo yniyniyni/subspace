@@ -509,17 +509,28 @@ internal constructor(
     /** Signals that an attempted rollback retained backups which need recovery. */
     private class RollbackFailedException(cause: Exception) : IOException(cause)
 
-    private companion object {
-        const val STAGING_DIR = "staging"
-        const val LOCK_DIR = "locks"
-        const val STAGING_PREFIX = "geo-"
-        const val DAT_SUFFIX = ".dat"
-        const val JSON_SUFFIX = ".json"
-        const val BACKUP_SUFFIX = ".previous"
-        const val RESTORE_SUFFIX = ".restore"
-        const val LOCK_SUFFIX = ".lock"
+    /**
+     * Was `private companion object` until fix round 1 review (Task 16): [DAT_SUFFIX] and
+     * [JSON_SUFFIX] are the authority for the `.dat` → `.json` sidecar naming convention this
+     * class's own install sequence documents (KDoc above: "move staging/.../<name>.json →
+     * <root>/<name>.json" before the `.dat`) — `:feature:routing`'s rule set editor needs that
+     * exact swap to find a built-in database's category sidecar, and re-declaring the two
+     * literals there instead of reading them from here is the drift [isGeoFileName]'s own KDoc
+     * already warns about for the filename grammar. Every other member here stays `private`
+     * individually; only the two suffixes are part of this class's public surface now.
+     */
+    public companion object {
+        public const val DAT_SUFFIX: String = ".dat"
+        public const val JSON_SUFFIX: String = ".json"
 
-        val installMutexes = ConcurrentHashMap<String, Mutex>()
+        private const val STAGING_DIR = "staging"
+        private const val LOCK_DIR = "locks"
+        private const val STAGING_PREFIX = "geo-"
+        private const val BACKUP_SUFFIX = ".previous"
+        private const val RESTORE_SUFFIX = ".restore"
+        private const val LOCK_SUFFIX = ".lock"
+
+        private val installMutexes = ConcurrentHashMap<String, Mutex>()
 
         /**
          * The grammar `ext:` routing entries accept, from `:core:model`.
@@ -528,6 +539,6 @@ internal constructor(
          * the same grammar for its §5.6 exemption, so a local edit here that did
          * not reach there would fail unsafe.
          */
-        fun isSafeFileName(fileName: String): Boolean = isGeoFileName(fileName)
+        private fun isSafeFileName(fileName: String): Boolean = isGeoFileName(fileName)
     }
 }

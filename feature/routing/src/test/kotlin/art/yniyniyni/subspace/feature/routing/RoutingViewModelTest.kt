@@ -65,6 +65,12 @@ class RoutingViewModelTest {
         override suspend fun delete(id: Long) {
             sets.value = sets.value.filterNot { it.id == id }
         }
+
+        // RoutingViewModel never calls upsert — RoutingSource.upsert lost its default in fix
+        // round 1 (Task 16, Minor: a silently-succeeding default is the wrong shape for a
+        // write), so every RoutingSource implementer must say so explicitly now, even one that
+        // never exercises this path.
+        override suspend fun upsert(set: RoutingRuleSet): Long = error("upsert not exercised by RoutingViewModelTest")
     }
 
     @Before

@@ -38,6 +38,20 @@ internal constructor(
     /** The rule set with [id], or null when it has been deleted. */
     public suspend fun ruleSet(id: Long): RoutingRuleSet? = dao.byId(id)?.toModel()
 
+    /**
+     * The rule set named [name], or null when no row has it.
+     *
+     * [RoutingRuleSetEntity.name] is uniquely indexed, so at most one row can
+     * match. Exists for the rule set editor's save-time collision check:
+     * [upsert]'s `id == 0` branch resolves a fresh entity **by name** and
+     * updates that row in place — deliberate for M6 import (see
+     * [RoutingRuleSetDao.upsertByIdOrName]'s own KDoc), but silent data loss
+     * for an interactive create. The editor calls this first and refuses the
+     * save itself rather than relying on [upsert] to reject anything — it
+     * never does, by design.
+     */
+    public suspend fun ruleSetNamed(name: String): RoutingRuleSet? = dao.byName(name)?.toModel()
+
     /** Inserts or updates, returning the row id. */
     public suspend fun upsert(set: RoutingRuleSet): Long {
         set.requireValidEntries()

@@ -231,4 +231,27 @@ class RoutingEntriesTest {
     fun `rejects an empty regexp body`() {
         RoutingEntries.problemWith("regexp:", BucketField.SITES) shouldBe EntryProblem.Blank
     }
+
+    // ---- builtInPrefix / builtInGeoFileName: the shared authority fix round 1 review asked
+    // :feature:routing's rule set editor to derive from, instead of re-declaring the literals ----
+
+    @Test
+    fun `the built-in prefix for sites is geosite`() {
+        RoutingEntries.builtInPrefix(BucketField.SITES) shouldBe "geosite:"
+    }
+
+    @Test
+    fun `the built-in prefix for ips is geoip`() {
+        RoutingEntries.builtInPrefix(BucketField.IPS) shouldBe "geoip:"
+    }
+
+    @Test
+    fun `the built-in geo file name for sites is geosite dat`() {
+        RoutingEntries.builtInGeoFileName(BucketField.SITES) shouldBe "geosite.dat"
+    }
+
+    @Test
+    fun `the built-in geo file name for ips is geoip dat`() {
+        RoutingEntries.builtInGeoFileName(BucketField.IPS) shouldBe "geoip.dat"
+    }
 }

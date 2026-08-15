@@ -96,6 +96,22 @@ class RoutingRepositoryTest {
         loaded.bucket(RouteOutcome.DIRECT) shouldBe RuleBucket()
     }
 
+    // The rule set editor's save-time collision check (fix round 1, Task 16 Finding 8) reads
+    // through this rather than trusting upsert not to silently merge into an unrelated row.
+    @Test
+    fun ruleSetNamedFindsTheOneRowWithThatName() = runTest {
+        val id = stack.repository.upsert(sample)
+
+        stack.repository.ruleSetNamed(sample.name).shouldNotBeNull().id shouldBe id
+    }
+
+    @Test
+    fun ruleSetNamedIsNullWhenNoRowHasThatName() = runTest {
+        stack.repository.upsert(sample)
+
+        stack.repository.ruleSetNamed("no such name") shouldBe null
+    }
+
     @Test
     fun rejectsBlankAndNewlineEntriesWithoutPersistingThem() = runTest {
         val blank =

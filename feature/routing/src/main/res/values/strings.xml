@@ -70,5 +70,12 @@
     <string name="rule_set_editor_problem_malformed_address">Not a valid address or CIDR range</string>
     <string name="rule_set_editor_problem_malformed_domain">Not a valid domain entry</string>
     <string name="rule_set_editor_problem_illegal_character">Entry cannot contain a quote or backslash</string>
+
+    <!-- Save-time problems (fix round 1, Findings 7/8) — distinct from the per-entry problems
+         above, shown once near the Save button rather than on any one field. -->
+    <string name="rule_set_editor_save_problem_invalid_entry">One of the stored entries is no longer valid. Remove or fix it before saving.</string>
+    <string name="rule_set_editor_save_problem_write_failed">Could not save. Try again.</string>
+    <!-- %1$s is the conflicting rule set's own name — exempt from §5.6, see SaveProblem.NameConflict's own KDoc. -->
+    <string name="rule_set_editor_save_problem_name_conflict">A rule set named \"%1$s\" already exists. Choose a different name.</string>
 </resources>
 

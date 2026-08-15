@@ -9,6 +9,7 @@ import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RuleBucket
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.io.IOException
 
 /**
  * The brief's own `@Test` bodies (`addEntry`/`removeEntry`/`canSave`) are reproduced verbatim from
@@ -37,17 +39,24 @@ import org.junit.Test
  * running them with the `@Before`/`@After` below commented out: all seven still pass. That is not
  * the vacuous-pass failure mode Task 15 hit — those tests genuinely exercise synchronous code —
  * but it does mean this file's own `@Before`/`@After` cannot be verified against those seven
- * alone. The `save`/`load`/round-trip tests below this comment go through `viewModelScope.launch`
- * (mirroring [RoutingViewModel.activate]) specifically so this file has tests that put the
- * dispatcher setup to real use: with the `@Before`/`@After` deleted, `saving a named rule set
- * writes the current draft through upsert`, `loading an existing rule set populates its working
- * copy` and `loading a rule set with no matching row starts a fresh draft at that id` all fail —
- * confirmed by deleting the setup and re-running (see the task report for the exact output).
+ * alone. Every `load`/`save` test (including fix round 1's additions for Findings 5, 7 and 8, and
+ * the re-entrancy Minor) goes through `viewModelScope.launch` (mirroring
+ * [RoutingViewModel.activate]) specifically so this file has tests that put the dispatcher setup
+ * to real use: with the `@Before`/`@After` deleted, 10 of this class's own 24 tests fail (the
+ * whole-module run reports "36 tests completed, 10 failed" since `GeoCategoriesTest` and
+ * `RoutingViewModelTest` are separate classes with their own unaffected setups) — confirmed by
+ * deleting the setup and re-running (see the task report for the exact list and output).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RuleSetEditorViewModelTest {
     private class FakeSource(
         val sets: MutableStateFlow<List<RoutingRuleSet>> = MutableStateFlow(emptyList()),
+        private val siteCategories: List<GeoCategory> = emptyList(),
+        private val ipCategories: List<GeoCategory> = emptyList(),
+        private val failUpsertWith: Throwable? = null,
+        // A suspension point `upsert` awaits before doing anything else — lets a test observe
+        // RuleSetEditorState.saving mid-flight (fix round 1, Minor: save's re-entrancy guard).
+        private val upsertGate: CompletableDeferred<Unit>? = null,
     ) : RoutingSource {
         override val ruleSets = sets
         override val activeRuleSetId = MutableStateFlow<Long?>(null)
@@ -60,7 +69,19 @@ class RuleSetEditorViewModelTest {
 
         override suspend fun ruleSet(id: Long): RoutingRuleSet? = sets.value.firstOrNull { it.id == id }
 
+        // The real RoutingRuleSetEntity.name index is unique, so at most one row can ever match —
+        // the same one-match invariant this in-memory lookup mirrors against `sets`.
+        override suspend fun ruleSetNamed(name: String): RoutingRuleSet? = sets.value.firstOrNull { it.name == name }
+
+        override suspend fun categoriesFor(field: BucketField): List<GeoCategory> =
+            when (field) {
+                BucketField.SITES -> siteCategories
+                BucketField.IPS -> ipCategories
+            }
+
         override suspend fun upsert(set: RoutingRuleSet): Long {
+            upsertGate?.await()
+            failUpsertWith?.let { throw it }
             upserted = set
             val without = sets.value.filterNot { it.id == set.id }
             val stored = if (set.id == 0L) set.copy(id = 1L) else set
@@ -288,5 +309,140 @@ class RuleSetEditorViewModelTest {
         expected.forEach { (bucketKey, entry) ->
             viewModel.state.value.bucket(bucketKey.first, bucketKey.second) shouldBe listOf(entry)
         }
+    }
+
+    // Everything below is fix round 1 (Task 16 review): Findings 5, 7 and 8, plus the
+    // re-entrancy Minor.
+
+    @Test
+    fun `load routes each field's categories separately, never swapped`() = runTest {
+        val siteCategories = listOf(GeoCategory("category-ads-all", 42))
+        val ipCategories = listOf(GeoCategory("cn", 12345))
+        val viewModel = editor(FakeSource(siteCategories = siteCategories, ipCategories = ipCategories))
+
+        viewModel.load(0L)
+
+        val state = viewModel.state.value
+        state.categoriesFor(BucketField.SITES) shouldBe siteCategories
+        state.categoriesFor(BucketField.IPS) shouldBe ipCategories
+    }
+
+    @Test
+    fun `no categories means the picker has nothing to show for either field`() = runTest {
+        val viewModel = editor(FakeSource())
+
+        viewModel.load(0L)
+
+        viewModel.state.value.categoriesFor(BucketField.SITES) shouldBe emptyList()
+        viewModel.state.value.categoriesFor(BucketField.IPS) shouldBe emptyList()
+    }
+
+    // Finding 7: RoutingSource.upsert throws IllegalArgumentException on an entry the guard
+    // should have already stopped — a row written before a validation tightening, say. Must
+    // become a SaveProblem, never an uncaught exception out of viewModelScope.launch.
+    @Test
+    fun `an entry RoutingSource rejects at save time is surfaced, not thrown`() = runTest {
+        val source = FakeSource(failUpsertWith = IllegalArgumentException("bad entry"))
+        val viewModel = editor(source)
+        viewModel.setName("ads")
+
+        viewModel.save()
+
+        viewModel.state.value.saveProblem shouldBe SaveProblem.InvalidEntry
+        viewModel.state.value.saved shouldBe false
+        viewModel.state.value.saving shouldBe false
+    }
+
+    // Finding 7: a Room/storage failure must not crash the process either (§10.4).
+    @Test
+    fun `an unexpected write failure is surfaced, not thrown`() = runTest {
+        val source = FakeSource(failUpsertWith = IOException("disk full"))
+        val viewModel = editor(source)
+        viewModel.setName("ads")
+
+        viewModel.save()
+
+        viewModel.state.value.saveProblem shouldBe SaveProblem.WriteFailed
+        viewModel.state.value.saved shouldBe false
+    }
+
+    // Finding 8: upsertByIdOrName's id==0 branch resolves by name and would silently overwrite
+    // a different, existing rule set. The editor must refuse instead.
+    @Test
+    fun `creating a rule set with another set's name is refused, not merged into it`() = runTest {
+        val existing =
+            RoutingRuleSet(
+                id = 1,
+                name = "ads",
+                buckets = mapOf(RouteOutcome.BLOCK to RuleBucket(sites = listOf("a.example"))),
+            )
+        val source = FakeSource(MutableStateFlow(listOf(existing)))
+        val viewModel = editor(source)
+        viewModel.setName("ads")
+        viewModel.addEntry(RouteOutcome.PROXY, BucketField.SITES, "b.example")
+
+        viewModel.save()
+
+        viewModel.state.value.saveProblem shouldBe SaveProblem.NameConflict("ads")
+        viewModel.state.value.saved shouldBe false
+        source.upserted shouldBe null
+        // The existing row is untouched — this is the silent-destruction outcome the guard exists
+        // to prevent, pinned directly rather than only inferred from upserted being null.
+        source.sets.value.single().bucket(RouteOutcome.BLOCK).sites shouldBe listOf("a.example")
+    }
+
+    // The same collision, reached by renaming an existing set into another one's name instead of
+    // creating fresh — upsertByIdOrName's id!=0 branch would hit the unique index and crash
+    // (Finding 7) rather than silently merge, but it must still be refused with a clear reason
+    // before that happens.
+    @Test
+    fun `renaming a rule set into another set's name is refused`() = runTest {
+        val other = RoutingRuleSet(id = 1, name = "ads")
+        val editing =
+            RoutingRuleSet(
+                id = 7,
+                name = "lan",
+                buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8"))),
+            )
+        val source = FakeSource(MutableStateFlow(listOf(other, editing)))
+        val viewModel = editor(source)
+        viewModel.load(7)
+
+        viewModel.setName("ads")
+        viewModel.save()
+
+        viewModel.state.value.saveProblem shouldBe SaveProblem.NameConflict("ads")
+        source.upserted shouldBe null
+    }
+
+    // Saving a set under the name it already has is not a collision with itself.
+    @Test
+    fun `saving a rule set under its own unchanged name succeeds`() = runTest {
+        val editing = RoutingRuleSet(id = 7, name = "lan")
+        val source = FakeSource(MutableStateFlow(listOf(editing)))
+        val viewModel = editor(source)
+        viewModel.load(7)
+
+        viewModel.save()
+
+        viewModel.state.value.saveProblem shouldBe null
+        viewModel.state.value.saved shouldBe true
+        source.upserted?.name shouldBe "lan"
+    }
+
+    // Minor: two fast taps on Save before the first upsert resolves must not issue two writes.
+    @Test
+    fun `a second save call is refused while the first is still in flight`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val source = FakeSource(upsertGate = gate)
+        val viewModel = editor(source)
+        viewModel.setName("ads")
+
+        viewModel.save()
+        viewModel.state.value.saving shouldBe true
+
+        viewModel.save()
+
+        source.upserted shouldBe null
     }
 }

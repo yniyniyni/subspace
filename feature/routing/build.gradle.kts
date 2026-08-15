@@ -19,20 +19,22 @@ dependencies {
     // "Routing" settings row's own icon — same -core-only choice as every
     // other module. See THIRD_PARTY.md.
     implementation(libs.compose.material.icons.core)
+    // GeoCategories parses the geosite.json/geoip.json sidecar with this rather than
+    // org.json.JSONObject: fix round 1 review found this module's first draft added a
+    // testImplementation(libs.org.json) purely to work around org.json being a stub on the
+    // JVM unit-test classpath — a workaround `:core:xray`'s LibXrayInvokeTest already
+    // considered and rejected by name for the identical reason (see that file's own KDoc).
+    // kotlinx-serialization-json needs no compiler plugin here (no @Serializable class,
+    // just JsonElement navigation) and is already an `implementation` dependency of
+    // `:core:parser`, `:core:data` and `:app`, so this is not a new artifact in the app,
+    // only a new module declaring one already present.
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.kotest.assertions)
     // RoutingViewModel drives its state through viewModelScope, which needs a
     // Main dispatcher — same gap :feature:settings' own build.gradle.kts
     // documents.
     testImplementation(libs.kotlinx.coroutines.test)
-    // GeoCategories parses with org.json.JSONObject, already on Android at runtime — no new
-    // *production* dependency (brief step 3). But local JVM unit tests run against AGP's
-    // android.jar stub, whose org.json methods throw "not mocked" at runtime rather than
-    // parsing anything (confirmed empirically: GeoCategoriesTest's "reads codes and rule
-    // counts" failed with exactly that RuntimeException before this line was added). The real
-    // reference implementation, test-scoped only, is the standard fix and never reaches the
-    // APK. See THIRD_PARTY.md.
-    testImplementation(libs.org.json)
 
     // First Compose UI test in this module (RoutingListScreenContentTest): the two activation-gate
     // markers and the empty state are layout/rendering facts a JVM state test cannot see — same

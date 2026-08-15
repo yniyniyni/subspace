@@ -11,12 +11,50 @@ import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RuleBucket
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+/**
+ * Why the most recent [RuleSetEditorViewModel.save] failed, or (via a `null`
+ * [RuleSetEditorState.saveProblem]) that it did not fail. Fix round 1,
+ * Finding 7/8: [save] used to let [RoutingSource.upsert]'s
+ * [IllegalArgumentException] and any Room write failure propagate out of
+ * `viewModelScope.launch` uncaught, crashing the process (§10.4 wants a
+ * specific message, not a crash), and did not detect the one write it can
+ * silently corrupt data on — see [NameConflict].
+ */
+internal sealed interface SaveProblem {
+    /**
+     * [RoutingSource.upsert] rejected an entry. [addEntry] should have
+     * stopped this before it ever reached [save] — this exists for a row
+     * written before a validation tightening, or restored from a backup,
+     * whose entries were never re-validated by [RuleSetEditorViewModel.load].
+     */
+    data object InvalidEntry : SaveProblem
+
+    /** The write itself failed — Room, storage, or another unexpected exception. */
+    data object WriteFailed : SaveProblem
+
+    /**
+     * A different rule set is already named [name].
+     * `RoutingRuleSetDao.upsertByIdOrName`'s `id == 0` branch resolves a
+     * fresh entity **by name** and updates that row's buckets, order and
+     * strategy in place — deliberate for M6's "importing a name that already
+     * exists is an update" semantics, but interactive create is not import,
+     * and this editor is the first UI to reach that branch. [save] checks
+     * [RoutingSource.ruleSetNamed] itself and refuses rather than letting the
+     * collision happen silently.
+     *
+     * [name] is exempt from §5.6 the same way [RuleSetRow.name] is: a label
+     * the user chose to identify a rule set, not a value it routes.
+     */
+    data class NameConflict(val name: String) : SaveProblem
+}
 
 /**
  * One rule set's working copy — the same "hold a local draft, write through
@@ -34,6 +72,12 @@ import javax.inject.Inject
  *   not parse — see [GeoCategories.read]. Drives the SITES fields' "browse
  *   categories" affordance; empty means that affordance stays disabled.
  * @param ipCategories the same, for `geoip.json` / the IPS fields.
+ * @param saving true from the moment [RuleSetEditorViewModel.save] starts its
+ *   write until it resolves — [RuleSetEditorViewModel.save]'s own re-entrancy
+ *   guard (fix round 1, Minor): without it two fast taps on Save before the
+ *   first write resolves issue two upserts.
+ * @param saveProblem why the most recent [RuleSetEditorViewModel.save] call
+ *   failed, or `null` — see [SaveProblem]'s own KDoc.
  */
 internal data class RuleSetEditorState(
     val loading: Boolean = true,
@@ -45,6 +89,8 @@ internal data class RuleSetEditorState(
     val entryProblem: EntryProblem? = null,
     val siteCategories: List<GeoCategory> = emptyList(),
     val ipCategories: List<GeoCategory> = emptyList(),
+    val saving: Boolean = false,
+    val saveProblem: SaveProblem? = null,
     val saved: Boolean = false,
 ) {
     /** The stored entries for [outcome]/[field]. §5.6: this is the screen's whole job — display, never log. */
@@ -167,22 +213,55 @@ constructor(
      * Writes the current draft through [RoutingSource.upsert]. Refuses when
      * [RuleSetEditorState.canSave] is false — the same "a disabled control is a
      * hint, the gate belongs here too" reasoning
-     * [RoutingViewModel.activate][RoutingViewModel]'s own KDoc documents.
+     * [RoutingViewModel.activate][RoutingViewModel]'s own KDoc documents — or
+     * while a previous call is still in flight ([RuleSetEditorState.saving]).
+     *
+     * Checks [RoutingSource.ruleSetNamed] before writing anything: a name
+     * collision must become [SaveProblem.NameConflict], never a silent
+     * overwrite of the other rule set (fix round 1, Finding 8 — see
+     * [SaveProblem.NameConflict]'s own KDoc). Only past that gate does it
+     * call [RoutingSource.upsert], and only inside a `try` — an
+     * [IllegalArgumentException] from a stale, pre-tightening invalid entry
+     * or an unexpected write failure both become a [SaveProblem] instead of
+     * an uncaught crash (fix round 1, Finding 7).
      */
     fun save() {
         val current = _state.value
-        if (!current.canSave) return
+        if (!current.canSave || current.saving) return
         viewModelScope.launch {
+            _state.update { it.copy(saving = true, saveProblem = null) }
+            val trimmedName = current.name.trim()
+            val collision = source.ruleSetNamed(trimmedName)
+            if (collision != null && collision.id != current.id) {
+                _state.update { it.copy(saving = false, saveProblem = SaveProblem.NameConflict(trimmedName)) }
+                return@launch
+            }
+            saveDraft(current, trimmedName)
+        }
+    }
+
+    @Suppress("TooGenericExceptionCaught") // A write can fail in ways this ViewModel cannot enumerate (§10.4).
+    private suspend fun saveDraft(
+        current: RuleSetEditorState,
+        trimmedName: String,
+    ) {
+        try {
             source.upsert(
                 RoutingRuleSet(
                     id = current.id,
-                    name = current.name.trim(),
+                    name = trimmedName,
                     buckets = current.buckets,
                     order = current.order,
                     domainStrategy = current.domainStrategy,
                 ),
             )
-            _state.update { it.copy(saved = true) }
+            _state.update { it.copy(saving = false, saved = true) }
+        } catch (_: IllegalArgumentException) {
+            _state.update { it.copy(saving = false, saveProblem = SaveProblem.InvalidEntry) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _state.update { it.copy(saving = false, saveProblem = SaveProblem.WriteFailed) }
         }
     }
 

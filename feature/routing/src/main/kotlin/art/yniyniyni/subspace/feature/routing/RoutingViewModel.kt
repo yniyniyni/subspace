@@ -80,10 +80,16 @@ constructor(
      * tunnel — but it would leave the stored setting disagreeing with what the
      * user sees, and the next rule set to be assigned that row id would
      * silently become active.
+     *
+     * Compares [id] against [RoutingState.activeRuleSetId] directly (fix round
+     * 1, Minor) rather than re-deriving through `ruleSets.firstOrNull { it.id
+     * == id }?.isActive` — the two must agree by construction
+     * ([toRow] derives `isActive` from this same comparison), so the lookup
+     * was strictly more code for the identical answer.
      */
     fun delete(id: Long) {
         viewModelScope.launch {
-            if (_state.value.ruleSets.firstOrNull { it.id == id }?.isActive == true) {
+            if (_state.value.activeRuleSetId == id) {
                 source.setActive(null)
             }
             source.delete(id)

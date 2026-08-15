@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.routing
 
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 private const val CODES_KEY = "codes"
@@ -27,6 +31,19 @@ internal data class GeoCategory(val code: String, val ruleCount: Int)
  * [RuleSetEditorViewModel] uses this to drive the rule set editor's
  * "browse categories" affordance — see [GeoCategory]'s own KDoc for why that is
  * not a §5.6 concern.
+ *
+ * Parses with `kotlinx-serialization-json`, not `org.json.JSONObject`. Fix
+ * round 1 review: this file's first draft used `org.json` and added a
+ * `testImplementation(libs.org.json)` purely to work around it being a stub on
+ * the JVM unit-test classpath — a workaround `:core:xray`'s
+ * `LibXrayInvokeTest` already considered and rejected by name for the
+ * identical reason (see that file's own KDoc: *"a JSON dependency added
+ * purely for tests... costs more than"* the alternative). `kotlinx-serialization-json`
+ * needs no `kotlin.plugin.serialization` compiler plugin here — nothing below
+ * is `@Serializable`, this only walks a [kotlinx.serialization.json.JsonElement]
+ * tree — and it is already an `implementation` dependency of `:core:parser`,
+ * `:core:data` and `:app`, so this module declaring it is not a new artifact
+ * reaching the APK.
  */
 internal object GeoCategories {
     /**
@@ -42,16 +59,21 @@ internal object GeoCategories {
     fun read(file: File): List<GeoCategory> {
         if (!file.isFile) return emptyList()
         return try {
-            val codes = JSONObject(file.readText()).optJSONArray(CODES_KEY) ?: return emptyList()
-            (0 until codes.length()).map { index ->
-                val entry = codes.getJSONObject(index)
-                GeoCategory(code = entry.getString(CODE_KEY), ruleCount = entry.getInt(RULE_COUNT_KEY))
+            val root = Json.parseToJsonElement(file.readText()).jsonObject
+            val codes = root[CODES_KEY]?.jsonArray ?: return emptyList()
+            codes.map { element ->
+                val entry = element.jsonObject
+                GeoCategory(
+                    code = entry.getValue(CODE_KEY).jsonPrimitive.content,
+                    ruleCount = entry.getValue(RULE_COUNT_KEY).jsonPrimitive.int,
+                )
             }
         } catch (_: Exception) {
-            // org.json throws JSONException for a malformed document, but also plain
-            // RuntimeException for some malformed shapes (e.g. a "codes" entry that is not
-            // itself a JSON object) — a corrupt sidecar file is exactly the case this
-            // function exists to survive, regardless of which one it throws.
+            // kotlinx.serialization throws SerializationException for a malformed document, but
+            // also IllegalArgumentException (a wrong-shaped element, e.g. "codes" not an array)
+            // and NoSuchElementException (a missing "code"/"ruleCount" key) — a corrupt sidecar
+            // file is exactly the case this function exists to survive, regardless of which one
+            // it throws.
             emptyList()
         }
     }

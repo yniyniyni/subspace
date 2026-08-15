@@ -59,6 +59,7 @@ class RoutingListScreenContentTest {
                         onDelete = {},
                         onCreateRuleSet = {},
                         onEditRuleSet = {},
+                        onBack = {},
                     ),
                 )
             }
@@ -84,7 +85,9 @@ class RoutingListScreenContentTest {
         // The half this test is named for but did not assert: a failed refresh
         // is a warning, not a gate. Without this line, making
         // hasFailedGeoUpdate disable the selector leaves the test green.
-        composeRule.onNodeWithContentDescription("Activate ads").assertIsEnabled()
+        // Fix round 2: this test renders failedButActivatableRow ("lan"), not
+        // blockedRow ("ads") — the finder previously matched zero nodes.
+        composeRule.onNodeWithContentDescription("Activate lan").assertIsEnabled()
     }
 
     @Test

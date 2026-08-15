@@ -47,9 +47,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,12 +56,20 @@ import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.EntryProblem
 import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingEntries
 
 private val CONTENT_PADDING = 16.dp
 private val FIELD_GAP = 12.dp
 private val SECTION_GAP = 20.dp
 private val ROW_ICON_GAP = 8.dp
 private val LOADING_TOP_PADDING = 48.dp
+
+/**
+ * Identifies the loading spinner to `RuleSetEditorScreenContentTest` — same pattern as
+ * [EditorScreen][art.yniyniyni.subspace.feature.profiles.editor.EditorScreen]'s own
+ * `EDITOR_LOADING_TEST_TAG`.
+ */
+internal const val RULE_SET_EDITOR_LOADING_TEST_TAG = "rule-set-editor-loading"
 
 /**
  * `:app`'s `RuleSetEditor(ruleSetId)` route — one rule set's editor. See
@@ -172,11 +179,16 @@ private fun EditorTopBar(
 @Composable
 private fun LoadingBody(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        // No `contentDescription = ""`, unlike a first draft of this file (fix round 1, Minor):
+        // that was copied from EditorScreen.kt's own LoadingBody, but there it pairs with a
+        // testTag a test actually uses to find the node — without one, an empty description is
+        // pure a11y harm (TalkBack still stops here and announces nothing) with no offsetting
+        // benefit. RULE_SET_EDITOR_LOADING_TEST_TAG below is that missing pairing.
         CircularProgressIndicator(
             modifier =
             Modifier
                 .padding(top = LOADING_TOP_PADDING)
-                .semantics { contentDescription = "" },
+                .testTag(RULE_SET_EDITOR_LOADING_TEST_TAG),
         )
     }
 }
@@ -221,15 +233,17 @@ private fun EditorForm(
             }
         }
 
-        if (state.entryProblem != null) {
+        // Save-time-only problems (fix round 1, Findings 7/8) — a rejected-entry-while-typing
+        // problem is shown inline on its own field below, never here (Finding 4).
+        if (state.saveProblem != null) {
             Text(
-                text = state.entryProblem.toDisplayText(),
+                text = state.saveProblem.toDisplayText(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )
         }
 
-        Button(onClick = actions.onSave, enabled = state.canSave) {
+        Button(onClick = actions.onSave, enabled = state.canSave && !state.saving) {
             Text(stringResource(R.string.rule_set_editor_save_button))
         }
     }
@@ -339,6 +353,13 @@ private fun EntrySection(
     var draft by remember(outcome, field) { mutableStateOf("") }
     val sectionTitle =
         stringResource(R.string.rule_set_editor_section_title, outcome.displayName(), field.displayName())
+    // Live, per-field validation (fix round 1, Finding 4 — the brief asked for "while typing",
+    // not only on the + tap). RoutingEntries.problemWith is the exact pure function
+    // RuleSetEditorViewModel.addEntry itself calls, so this can never disagree with what
+    // actually gets rejected — a picked category never reaches this check at all, since
+    // CategoryPicker calls onAdd (addEntry) directly. Blank is not shown: an empty field is not
+    // yet a mistake, only what tapping + would currently report.
+    val liveProblem = if (draft.isEmpty()) null else RoutingEntries.problemWith(draft, field)
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(FIELD_GAP / 2)) {
         Text(
@@ -346,19 +367,24 @@ private fun EntrySection(
             style = MaterialTheme.typography.titleMedium,
         )
         entries.forEach { entry -> EntryRow(entry = entry, onRemove = { onRemove(entry) }) }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 label = { Text(stringResource(R.string.rule_set_editor_entry_hint)) },
                 singleLine = true,
+                isError = liveProblem != null,
+                supportingText = liveProblem?.let { problem -> { Text(problem.toDisplayText()) } },
                 keyboardOptions = KeyboardOptions.Default,
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(ROW_ICON_GAP))
             IconButton(
                 onClick = {
-                    if (draft.isNotEmpty()) {
+                    // Only a draft the pure check already accepts is cleared — a rejected entry
+                    // keeps its text and its inline reason above instead of vanishing silently
+                    // (fix round 1, Finding 4).
+                    if (draft.isNotEmpty() && liveProblem == null) {
                         onAdd(draft)
                         draft = ""
                     }
@@ -370,17 +396,15 @@ private fun EntrySection(
                 )
             }
             if (categories.isNotEmpty()) {
-                CategoryPicker(prefix = field.builtInPrefix(), categories = categories, onSelected = onAdd)
+                CategoryPicker(
+                    prefix = RoutingEntries.builtInPrefix(field),
+                    categories = categories,
+                    onSelected = onAdd,
+                )
             }
         }
     }
 }
-
-private fun BucketField.builtInPrefix(): String =
-    when (this) {
-        BucketField.SITES -> "geosite:"
-        BucketField.IPS -> "geoip:"
-    }
 
 @Composable
 private fun EntryRow(
@@ -453,4 +477,17 @@ private fun EntryProblem.toDisplayText(): String =
         EntryProblem.MalformedAddress -> stringResource(R.string.rule_set_editor_problem_malformed_address)
         EntryProblem.MalformedDomain -> stringResource(R.string.rule_set_editor_problem_malformed_domain)
         EntryProblem.IllegalCharacter -> stringResource(R.string.rule_set_editor_problem_illegal_character)
+    }
+
+/**
+ * [SaveProblem.NameConflict.name] is exempt from §5.6 the same way
+ * [SaveProblem.NameConflict]'s own KDoc says — it is the conflicting rule
+ * set's name, not an entry.
+ */
+@Composable
+private fun SaveProblem.toDisplayText(): String =
+    when (this) {
+        SaveProblem.InvalidEntry -> stringResource(R.string.rule_set_editor_save_problem_invalid_entry)
+        SaveProblem.WriteFailed -> stringResource(R.string.rule_set_editor_save_problem_write_failed)
+        is SaveProblem.NameConflict -> stringResource(R.string.rule_set_editor_save_problem_name_conflict, name)
     }

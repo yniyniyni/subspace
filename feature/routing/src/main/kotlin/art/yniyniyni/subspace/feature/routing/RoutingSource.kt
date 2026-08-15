@@ -5,6 +5,7 @@ import art.yniyniyni.subspace.core.data.GeoAssetRepository
 import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.model.BucketField
+import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -15,8 +16,21 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val GEOSITE_JSON = "geosite.json"
-private const val GEOIP_JSON = "geoip.json"
+/**
+ * The `<name>.json` sidecar for [field]'s built-in geo database — swaps
+ * [GeoAssetRepository.DAT_SUFFIX] for [GeoAssetRepository.JSON_SUFFIX] on
+ * [RoutingEntries.builtInGeoFileName], the exact suffix swap
+ * [GeoAssetRepository]'s own install sequence performs when it publishes the
+ * two files (KDoc there: JSON before DAT). A standalone top-level function,
+ * not a private detail of [BoundRoutingSource.categoriesFor], so a plain JVM
+ * test can pin `"geosite.dat" -> "geosite.json"` without needing a real
+ * [BoundRoutingSource] (which — like every other member on it — cannot be
+ * constructed outside `:core:data`; see this file's own class KDoc).
+ */
+internal fun categorySidecarFileName(field: BucketField): String {
+    val datName = RoutingEntries.builtInGeoFileName(field).removeSuffix(GeoAssetRepository.DAT_SUFFIX)
+    return datName + GeoAssetRepository.JSON_SUFFIX
+}
 
 /**
  * The [RoutingRepository], [SettingsRepository] and [GeoAssetRepository] slice
@@ -78,15 +92,27 @@ internal interface RoutingSource {
     suspend fun ruleSet(id: Long): RoutingRuleSet? = null
 
     /**
+     * The rule set already named [name], or `null`. See
+     * [RoutingRepository.ruleSetNamed] — the editor's save-time collision
+     * check (fix round 1, Finding 8).
+     *
+     * Defaults to always-`null` for the same reason [ruleSet] documents. A
+     * fake that wants to exercise the collision path must override this.
+     */
+    suspend fun ruleSetNamed(name: String): RoutingRuleSet? = null
+
+    /**
      * Inserts or updates [set], returning its row id. See
      * [RoutingRepository.upsert] — **throws** [IllegalArgumentException] if any
      * entry fails [art.yniyniyni.subspace.core.model.RoutingEntries.problemWith].
      * [RuleSetEditorViewModel] must never let an invalid entry reach this call.
      *
-     * Defaults to a no-op echoing [set]'s own id, for the same
-     * keep-`FakeSource`-compiling reason [ruleSet] documents.
+     * No default: unlike a read, a fake that silently "succeeds" a write it
+     * never performed is a defect that produces no failing assertion — a test
+     * asserting on [RuleSetEditorViewModel.save] would pass while proving
+     * nothing actually got written. A fake that needs this must say so.
      */
-    suspend fun upsert(set: RoutingRuleSet): Long = set.id
+    suspend fun upsert(set: RoutingRuleSet): Long
 
     /**
      * The parsed `<name>.json` sidecar for [field]'s built-in geo database
@@ -96,12 +122,16 @@ internal interface RoutingSource {
      * disabled, whether because the file does not exist yet or does not parse.
      *
      * A suspend function rather than a raw directory path so the filesystem
-     * read stays dispatched inside this source (§5.3) — [BoundRoutingSource]
-     * wraps it in [Dispatchers.IO], the same treatment
-     * [GeoAssetRepository.installedFileNames] gives its own `File.isFile`
-     * calls, rather than leaving [RuleSetEditorViewModel] to do that itself
-     * (which would race `runTest`'s virtual scheduler in a JVM ViewModel test,
-     * since [Dispatchers.IO] is a real dispatcher it does not control).
+     * read stays **behind this source**, not in [RuleSetEditorViewModel] —
+     * the same reason [GeoAssetRepository.installedFileNames] does its own
+     * `File.isFile` calls rather than handing `geoDirectory()` to
+     * `RoutingViewModel` and letting it touch the filesystem directly (§3/§4:
+     * the module that owns a path does the I/O against it). [BoundRoutingSource]
+     * wraps this in [Dispatchers.IO], the same treatment
+     * [GeoAssetRepository.installedFileNames] gives its own reads. (A plain
+     * `withContext(Dispatchers.IO)` inside the ViewModel would also have been
+     * fine under a test dispatcher — that is a solved problem, not the reason
+     * for this seam.)
      *
      * Defaults to an empty list for the same keep-`FakeSource`-compiling reason
      * [ruleSet] documents.
@@ -154,11 +184,12 @@ constructor(
 
     override suspend fun ruleSet(id: Long): RoutingRuleSet? = routingRepository.ruleSet(id)
 
+    override suspend fun ruleSetNamed(name: String): RoutingRuleSet? = routingRepository.ruleSetNamed(name)
+
     override suspend fun upsert(set: RoutingRuleSet): Long = routingRepository.upsert(set)
 
     override suspend fun categoriesFor(field: BucketField): List<GeoCategory> =
         withContext(Dispatchers.IO) {
-            val fileName = if (field == BucketField.IPS) GEOIP_JSON else GEOSITE_JSON
-            GeoCategories.read(File(geoAssetRepository.geoDirectory(), fileName))
+            GeoCategories.read(File(geoAssetRepository.geoDirectory(), categorySidecarFileName(field)))
         }
 }

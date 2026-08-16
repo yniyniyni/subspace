@@ -32,11 +32,25 @@ license.
 | [AndroidX WorkManager](https://developer.android.com/jetpack/androidx/releases/work) (`androidx.work:work-runtime-ktx`, resolves `work-runtime` transitively) | 2.11.0 | Apache-2.0 | **Used for:** `RefreshScheduler`/`SubscriptionRefreshWorker` (Task 12), the self-rescheduling one-shot job that refreshes each subscription on its own provider-supplied `profile-update-interval` (spec D9). **Justification (§10.7):** ARCHITECTURE.md §A.2 requires auto-update on an interval; `AlarmManager` and a bare coroutine both lose to Doze (§9) and neither survives process death or reboot. WorkManager is the platform's answer, and is what M7's always-on VPN needs regardless — with always-on the tunnel runs for weeks without the app being opened, and a stale server list then breaks a tunnel with no UI open to fix it. Licence verified from `work-runtime-ktx`'s own POM (`<license><name>The Apache Software License, Version 2.0</name></license>`, fetched directly from Google's Maven), not a project README. Attribution only. |
 | [AndroidX Hilt Work](https://developer.android.com/jetpack/androidx/releases/hilt) (`androidx.hilt:hilt-work`, `androidx.hilt:hilt-compiler` for the `@HiltWorker` KSP processor) | 1.3.0 | Apache-2.0 | **Used for:** injecting `RefreshScheduler` into `SubscriptionRefreshWorker` via `@HiltWorker`/`@AssistedInject`, and the `HiltWorkerFactory` `SubspaceApplication`'s `Configuration.Provider` hands to WorkManager. **Justification (§10.7):** the alternative is a hand-rolled `WorkerFactory` that switches on class name to construct every worker manually, which does not scale and is exactly the kind of small-problem-sized custom code §10.7 warns against a dependency to avoid. `hilt-compiler` is a KSP-only annotation processor (not shipped in the APK) recorded alongside `hilt-work` because they are versioned and used together for this one feature, the same way `androidx.hilt:hilt-compiler`'s Dagger counterpart (`hilt-android-compiler`) is not separately listed from `hilt-android` elsewhere in this file. Licence verified from `hilt-work`'s own POM (`<license><name>The Apache Software License, Version 2.0</name></license>`, fetched directly from Google's Maven), not a project README. Attribution only. |
 
-Bundled `geoip.dat` / `geosite.dat` originate from
-[v2fly/domain-list-community](https://github.com/v2fly/domain-list-community)
-(MIT) and [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat)
-(GPL-3.0 for the build tooling; the emitted `.dat` files are data). Record the
-exact source and release tag in the assets README when they are first added.
+## Downloadable geo databases
+
+`geoip.dat`/`geosite.dat` are **not bundled** in the APK (ARCHITECTURE.md §6,
+M5). The app fetches one on demand, from a source the user picks. Because the
+bytes are never redistributed by this project — only fetched by the user's own
+device, on request, from the upstream's own release URL — this table records
+an attribution note for each catalogue source rather than a distribution
+obligation: **it removes a licensing question this file used to carry, rather
+than adding one.** A custom source a user adds of their own accord carries
+whatever licence that source declares; this project makes no claim about it.
+
+Sources are `GeoSourceCatalogue.kt` (`:core:model`), the single place new rows
+must be added — do not hand-transcribe a licence from memory (§10.5):
+
+| Source | Files | License | Note |
+|---|---|---|---|
+| [v2fly/geoip](https://github.com/v2fly/geoip) + [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community) | `geoip.dat`, `geosite.dat` (published as `dlc.dat`) | MIT | Default catalogue entry (`GeoSourceCatalogue.DEFAULT_SOURCE_ID`). Upstream, politically neutral, smallest combined download of the curated sets. |
+| [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat) | `geoip.dat`, `geosite.dat` | GPL-3.0 (build tooling) / CC-BY-SA-4.0 (per `GeoSourceCatalogue.kt`'s recorded `licence` field) | Curated ruleset variant, not consumed as code — fetched as data by the user's own device. |
+| [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat) | `geoip.dat`, `geosite.dat` | GPL-3.0 | Ruleset tuned for Russia-focused routing. The 73.7 MB `geosite.dat` is the largest catalogue entry (`docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md` §7) and the reason the download is streamed and validated before install rather than held in memory. |
 
 All versions above are the **resolved** coordinates from
 `./gradlew :core:parser:dependencies --configuration runtimeClasspath`, and each

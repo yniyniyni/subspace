@@ -294,8 +294,42 @@ Rules:
   JSON. This makes diffing and testing possible.
 - Bind inbounds to `127.0.0.1` only. Never `0.0.0.0` — that turns the phone
   into an open proxy on the local network.
-- Ship `geoip.dat` and `geosite.dat` in assets. Copy to internal storage on
-  first run, and support replacing them from a URL.
+- Geo databases are **not bundled in the APK**. `GeoSourceCatalogue`
+  (`:core:model`) lists curated sources — v2fly, Loyalsoldier and
+  runetfreedom, each publishing its own `geoip.dat`/`geosite.dat` pair (v2fly's
+  domain list ships as `dlc.dat` and is installed under the name xray-core
+  expects) — plus whatever custom source a user adds. `GeoAssetRepository`
+  (`:core:data`) fetches a chosen source **on demand**: it streams the
+  download to a staging directory (never a `ByteArray` — the largest catalogue
+  entry is 73.7 MB, an easy OOM), validates it with `GeoDataValidator` before
+  anything live is touched (an HTTP 200 proves nothing; a captive portal or a
+  GitHub error page is valid HTTP and invalid protobuf), then installs
+  **atomically**: same-filesystem renames move the `.json` sidecar into place
+  first and the `.dat` file last, so a process killed mid-install can only
+  ever leave a stale-but-consistent live pair, never a half-written one. `:app`
+  points xray-core at the install directory by setting `XRAY_LOCATION_ASSET`
+  from `SubspaceApplication.attachBaseContext` (`GeoAssetPath.kt`), before
+  anything touches a `libXray.*` class — the ordering is load-bearing, §10.2's
+  category: it looks like boilerplate and is not, and a wrong ordering fails
+  silently (no exception, no log line) rather than loudly.
+
+  **Why not bundled.** Measured per-file sizes range 2.3–73.7 MB depending on
+  source (`docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md`
+  §7), against an APK that is otherwise small. Bundling even the smallest
+  curated pair would roughly double the install size for every user,
+  including the majority who never enable a `geoip:`/`geosite:` rule. Fetching
+  on demand means only someone who turns on routing pays that cost, once, for
+  the one source they picked — not every install, for sources most users never
+  use.
+- The `[+ optional http]` inbound above is now used, not merely reserved:
+  when a session allocates it a port, `TunnelProxyBinding` (`:app`) publishes
+  it through the `TunnelProxyLocator` interface, and `:core:data`'s
+  `SubscriptionSyncer` dials subscription fetches through it while the tunnel
+  is connected, instead of direct from the device. HTTP rather than a second
+  SOCKS inbound: an HTTP `CONNECT` carries the target as `host:port` in
+  authority form, so the *proxy* performs DNS resolution — a Java SOCKS client
+  may resolve locally first, which would leak the subscription hostname while
+  appearing to fetch through the tunnel (§5.2, research §8).
 - Validate before starting. A malformed config makes libXray fail in a way
   that is hard to attribute; catch it early and surface a real error.
 

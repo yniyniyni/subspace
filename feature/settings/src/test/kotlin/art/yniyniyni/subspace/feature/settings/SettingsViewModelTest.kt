@@ -6,6 +6,7 @@ import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.InstalledGeoAsset
 import art.yniyniyni.subspace.core.data.ThemePreference
 import art.yniyniyni.subspace.core.model.GeoDataKind
+import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
@@ -136,17 +137,24 @@ class SettingsViewModelTest {
      * runs, so this fake has no cap or metered flag to bypass in the first place.
      */
     private class FakeGeoAssetSource(
+        installed: List<InstalledGeoAsset> = emptyList(),
         private val results: Map<String, GeoInstallResult> = emptyMap(),
         private val defaultResult: GeoInstallResult = GeoInstallResult.Installed,
     ) : GeoAssetSource {
-        private val _installedAssets = MutableStateFlow<List<InstalledGeoAsset>>(emptyList())
+        private val _installedAssets = MutableStateFlow(installed)
         override val installedAssets: Flow<List<InstalledGeoAsset>> = _installedAssets.asStateFlow()
 
         val requests = mutableListOf<GeoInstallRequest>()
+        val removed = mutableListOf<String>()
 
         override suspend fun install(request: GeoInstallRequest): GeoInstallResult {
             requests += request
             return results[request.fileName] ?: defaultResult
+        }
+
+        override suspend fun remove(fileName: String) {
+            removed += fileName
+            _installedAssets.value = _installedAssets.value.filterNot { it.fileName == fileName }
         }
     }
 
@@ -435,5 +443,59 @@ class SettingsViewModelTest {
             request.sourceUrl shouldBe "https://example.invalid/dlc.dat"
             request.fileName shouldBe "geosite-custom.dat"
             request.geoType shouldBe GeoDataKind.DOMAIN
+        }
+
+    // ── Branch review, Finding 3: a typo'd custom source had no way to stop being retried ────
+
+    @Test
+    fun `removing a custom source calls through to the repository`() =
+        runTest {
+            val custom =
+                InstalledGeoAsset(
+                    fileName = "geosite-custom.dat",
+                    sourceUrl = "https://example.invalid/typo.dat",
+                    geoType = GeoDataKind.DOMAIN,
+                    sizeBytes = null,
+                    installedAt = null,
+                    lastAttemptedAt = 1_754_000_000_000L,
+                    lastFailure = "DownloadFailed",
+                )
+            val geoAssetSource = FakeGeoAssetSource(installed = listOf(custom))
+            val model =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), geoAssetSource)
+            advanceUntilIdle()
+
+            model.onRemoveCustomGeoSource("geosite-custom.dat")
+            advanceUntilIdle()
+
+            geoAssetSource.removed shouldBe listOf("geosite-custom.dat")
+        }
+
+    // A catalogue row always has somewhere to reappear from (the picker, or GeoSourceCatalogue
+    // .defaults), so removing one would be confusing at best — this must be refused, not just
+    // hidden from the UI (the same "the gate belongs here too" reasoning onRemoveCustomGeoSource's
+    // own KDoc documents).
+    @Test
+    fun `removing a catalogue source is refused`() =
+        runTest {
+            val installed =
+                InstalledGeoAsset(
+                    fileName = "geoip.dat",
+                    sourceUrl = GeoSourceCatalogue.source("v2fly-geoip")!!.downloadUrl,
+                    geoType = GeoDataKind.IP,
+                    sizeBytes = 1_000,
+                    installedAt = 1_754_000_000_000L,
+                    lastAttemptedAt = 1_754_000_000_000L,
+                    lastFailure = null,
+                )
+            val geoAssetSource = FakeGeoAssetSource(installed = listOf(installed))
+            val model =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), geoAssetSource)
+            advanceUntilIdle()
+
+            model.onRemoveCustomGeoSource("geoip.dat")
+            advanceUntilIdle()
+
+            geoAssetSource.removed shouldBe emptyList()
         }
 }

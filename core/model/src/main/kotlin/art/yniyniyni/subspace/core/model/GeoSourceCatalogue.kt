@@ -41,7 +41,13 @@ public data class GeoSource(
  * combined download of the curated sets.
  */
 public object GeoSourceCatalogue {
-    /** The preselected row for a user who never opens the source picker. */
+    /**
+     * The preselected geoip row for a user who never opens the source picker, and the anchor
+     * [defaults] derives its provider from — see [defaults]'s own KDoc. `THIRD_PARTY.md` cites this
+     * constant by name as the "Default catalogue entry"; [defaults] reading through it rather than
+     * re-declaring `"v2fly"` as a second literal is what keeps that citation honest (branch review,
+     * Finding 5).
+     */
     public const val DEFAULT_SOURCE_ID: String = "v2fly-geoip"
 
     public val sources: List<GeoSource> =
@@ -108,8 +114,18 @@ public object GeoSourceCatalogue {
             ),
         )
 
-    /** v2fly's geoip and geosite pair for a user who never opens the picker. */
-    public fun defaults(): List<GeoSource> = sources.filter { it.id == "v2fly-geoip" || it.id == "v2fly-geosite" }
+    /**
+     * v2fly's geoip and geosite pair for a user who never opens the picker: every row sharing
+     * [DEFAULT_SOURCE_ID]'s provider prefix (`<provider>-<kind>`, the convention every id above
+     * follows). Derived from [DEFAULT_SOURCE_ID] rather than a second pair of `"v2fly-..."`
+     * literals so the two can never name different providers — before this fix they were two
+     * independent copies of the same fact, and only [DEFAULT_SOURCE_ID]'s own test read the
+     * constant at all (branch review, Finding 5).
+     */
+    public fun defaults(): List<GeoSource> {
+        val provider = DEFAULT_SOURCE_ID.substringBefore('-')
+        return sources.filter { it.id.startsWith("$provider-") }
+    }
 
     /** A curated row, or null for an unknown/user-added source. */
     public fun source(id: String): GeoSource? = sources.firstOrNull { it.id == id }

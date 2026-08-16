@@ -87,6 +87,9 @@
     <!-- %1$s is a formatted date, e.g. "2026-08-11". -->
     <string name="settings_geo_installed_at">Installed %1$s</string>
     <string name="settings_geo_update_now">Update %1$s now</string>
+    <!-- %1$s is the row's display name — a custom source only, so this button never appears on a
+         catalogue row (branch review, Finding 3). -->
+    <string name="settings_geo_remove_custom_source">Remove %1$s</string>
     <string name="settings_geo_kind_domain">Domain list</string>
     <string name="settings_geo_kind_ip">IP list</string>
     <string name="settings_geo_add_custom_title">Add custom source</string>

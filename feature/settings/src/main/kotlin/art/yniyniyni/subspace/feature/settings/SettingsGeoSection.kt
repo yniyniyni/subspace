@@ -10,9 +10,11 @@
 package art.yniyniyni.subspace.feature.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -151,9 +153,16 @@ internal fun InstalledGeoAsset.asCustomSource(): GeoSource =
  *
  * The fix: an installed asset is ground truth for its filename **unless** [selectedIds] explicitly
  * names a different source for that filename right now — in which case that selection is a
- * *pending* switch, previewed with its own estimate and no installed-only fields (no size, no
- * date, no error), exactly like a never-installed row. Only once "Update now" actually downloads
- * the pending selection does it become the new ground truth, because at that point the two agree.
+ * *pending* switch, previewed with its own estimate (no installed-only *size*, per the §A.5 fix
+ * above) but **not** stripped of the rest of the installed asset's state. Branch review, Finding 2:
+ * an earlier version of this also erased [InstalledGeoAsset.installedAt] and
+ * [InstalledGeoAsset.lastFailure] the instant a selection was armed, so the row read "Not installed
+ * yet" for a file that was still genuinely installed and still active for routing — the Routing
+ * screen, which reads [InstalledGeoAsset] directly rather than through a pending selection, kept
+ * disagreeing with this one the whole time — and, worse, a persisted failure on that same file
+ * became invisible for as long as the selection stayed armed, the exact masking class Task 17's own
+ * Finding 3 closed through a different door. Only once "Update now" actually downloads the pending
+ * selection does the row become the new ground truth outright, because at that point the two agree.
  * A filename with neither an installed asset nor a matching selection falls back to
  * [GeoSourceCatalogue.defaults] — the two starter rows a user who never opens the picker still
  * sees.
@@ -192,7 +201,13 @@ private fun rowForFileName(
             sources.firstOrNull { it.installFileName == fileName && it.downloadUrl == installedAsset.sourceUrl }
         return geoRowFor(matched ?: installedAsset.asCustomSource(), installedAsset, isCustom = matched == null)
     }
-    if (pendingSource != null) return geoRowFor(pendingSource, installed = null)
+    if (pendingSource != null) {
+        // The estimate must be the pending source's (§A.5), but everything else about an existing
+        // installed asset — install date, error marker — must survive an armed-but-not-yet-updated
+        // selection (branch review, Finding 2). sizeBytes = null is what keeps GeoRowItem's
+        // `installedBytes ?: approximateBytes` from showing the stale on-disk size instead.
+        return geoRowFor(pendingSource, installed = installedAsset?.copy(sizeBytes = null))
+    }
     val defaultSource = defaultSources.firstOrNull { it.installFileName == fileName } ?: return null
     return geoRowFor(defaultSource, installed = null)
 }
@@ -218,6 +233,7 @@ internal fun SettingsGeoSection(
                 updating = row.installFileName in state.geoUpdateInFlight,
                 result = state.geoUpdateResults[row.installFileName],
                 onUpdateNow = { actions.onGeoUpdateNow(row) },
+                onRemove = { actions.onRemoveCustomGeoSource(row.installFileName) },
             )
         }
 
@@ -248,15 +264,24 @@ internal fun SettingsGeoSection(
 /**
  * One row: display name (the real filename for a custom source, §5.6 — filenames are shape, not
  * a secret, and a generic "Custom source" label for every custom row left two of them
- * indistinguishable), size, licence, install date, status, and an "Update now" action that always
- * runs (§A.5 — see [GeoAssetSource.install]'s KDoc).
+ * indistinguishable), size, licence, install date, status, an "Update now" action that always runs
+ * (§A.5 — see [GeoAssetSource.install]'s KDoc), and — for a custom row only — a "Remove" action
+ * (branch review, Finding 3): a catalogue row always has somewhere to reappear from ([GeoSourcePicker]
+ * or [GeoSourceCatalogue.defaults]), so only a custom row can be a typo'd URL with no other way to
+ * stop it being retried by a scheduled refresh forever.
  */
+// row/updating/result/onUpdateNow/onRemove/modifier is the width of one row's own data and its two
+// actions, not a candidate for grouping into a carrier that would just move the same five names one
+// level down — same reasoning EntrySection's own LongParameterList suppression gives in
+// RuleSetEditorScreen.kt.
+@Suppress("LongParameterList")
 @Composable
 private fun GeoRowItem(
     row: GeoRow,
     updating: Boolean,
     result: GeoInstallResult?,
     onUpdateNow: () -> Unit,
+    onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sizeMb = (row.installedBytes ?: row.approximateBytes) / BYTES_PER_MEGABYTE
@@ -282,9 +307,18 @@ private fun GeoRowItem(
                 if (updating) {
                     CircularProgressIndicator(modifier = Modifier.size(UPDATE_SPINNER_SIZE))
                 } else {
-                    val updateDescription = stringResource(R.string.settings_geo_update_now, displayName)
-                    IconButton(onClick = onUpdateNow) {
-                        Icon(imageVector = Icons.Default.Refresh, contentDescription = updateDescription)
+                    Row {
+                        if (row.isCustom) {
+                            val removeDescription =
+                                stringResource(R.string.settings_geo_remove_custom_source, displayName)
+                            IconButton(onClick = onRemove) {
+                                Icon(imageVector = Icons.Default.Delete, contentDescription = removeDescription)
+                            }
+                        }
+                        val updateDescription = stringResource(R.string.settings_geo_update_now, displayName)
+                        IconButton(onClick = onUpdateNow) {
+                            Icon(imageVector = Icons.Default.Refresh, contentDescription = updateDescription)
+                        }
                     }
                 }
             },

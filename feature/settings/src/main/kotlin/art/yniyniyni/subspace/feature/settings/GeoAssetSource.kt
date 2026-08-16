@@ -31,6 +31,13 @@ internal interface GeoAssetSource {
      * [AppVersionSource]'s KDoc explains).
      */
     suspend fun install(request: GeoInstallRequest): GeoInstallResult
+
+    /**
+     * Drops the recorded row for [fileName]. See [GeoAssetRepository.remove]'s own KDoc — this is
+     * the seam branch review Finding 3 wires a "Remove" action for custom sources through to, so a
+     * typo'd URL is not retried by a scheduled refresh forever with no way to stop it.
+     */
+    suspend fun remove(fileName: String)
 }
 
 @Singleton
@@ -42,4 +49,6 @@ constructor(
     override val installedAssets: Flow<List<InstalledGeoAsset>> = repository.observeAll()
 
     override suspend fun install(request: GeoInstallRequest): GeoInstallResult = repository.install(request)
+
+    override suspend fun remove(fileName: String) = repository.remove(fileName)
 }

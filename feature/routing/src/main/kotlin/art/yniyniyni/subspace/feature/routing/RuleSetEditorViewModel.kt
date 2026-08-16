@@ -5,7 +5,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
-import art.yniyniyni.subspace.core.model.EntryProblem
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
@@ -62,11 +61,6 @@ internal sealed interface SaveProblem {
  * [art.yniyniyni.subspace.feature.profiles.editor.EditorState] uses, so
  * abandoning this screen changes nothing (brief step 4).
  *
- * @param entryProblem why the most recent [RuleSetEditorViewModel.addEntry]
- *   call was refused, or `null`. Deliberately not keyed by which of the six
- *   buckets it came from — [EntryProblem] itself carries no entry text (§5.6),
- *   and the six add fields share this one slot the same way the brief's own
- *   tests read it: a single field on the draft, not one per bucket.
  * @param siteCategories the parsed contents of `geosite.json` beside the geo
  *   root's `geosite.dat`, or empty when that sidecar does not exist or does
  *   not parse — see [GeoCategories.read]. Drives the SITES fields' "browse
@@ -86,7 +80,6 @@ internal data class RuleSetEditorState(
     val buckets: Map<RouteOutcome, RuleBucket> = emptyMap(),
     val order: List<RouteOutcome> = RoutingRuleSet.DEFAULT_ORDER,
     val domainStrategy: DomainStrategy = DomainStrategy.IP_IF_NON_MATCH,
-    val entryProblem: EntryProblem? = null,
     val siteCategories: List<GeoCategory> = emptyList(),
     val ipCategories: List<GeoCategory> = emptyList(),
     val saving: Boolean = false,
@@ -160,24 +153,25 @@ constructor(
      * A duplicate of an entry already in the bucket is silently ignored rather
      * than reported as a problem: it is not malformed, it would just add
      * nothing.
+     *
+     * Reports nothing about *why* a rejected [entry] was refused — per-field live validation in
+     * [RuleSetEditorScreen] calls [RoutingEntries.problemWith] itself for that, reading straight
+     * from the field's own draft text rather than this state (branch review: `entryProblem` used to
+     * live here too, set and tested but never read by the screen once that live path shipped; dead
+     * state removed rather than left as false confidence).
      */
     fun addEntry(
         outcome: RouteOutcome,
         field: BucketField,
         entry: String,
     ) {
-        val problem = RoutingEntries.problemWith(entry, field)
-        if (problem != null) {
-            _state.update { it.copy(entryProblem = problem) }
-            return
-        }
+        if (RoutingEntries.problemWith(entry, field) != null) return
         val trimmed = entry.trim()
         _state.update { current ->
             val existing = current.bucket(outcome, field)
-            if (trimmed in existing) return@update current.copy(entryProblem = null)
+            if (trimmed in existing) return@update current
             current.copy(
                 buckets = current.buckets + (outcome to current.bucketWith(outcome, field, existing + trimmed)),
-                entryProblem = null,
             )
         }
     }

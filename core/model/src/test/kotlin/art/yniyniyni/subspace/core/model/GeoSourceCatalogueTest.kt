@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.model
 
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -22,6 +23,19 @@ class GeoSourceCatalogueTest {
         defaults shouldHaveSize 2
         defaults.map { it.installFileName }.toSet() shouldBe setOf("geoip.dat", "geosite.dat")
         defaults.map { it.geoType }.toSet() shouldBe setOf(GeoDataKind.IP, GeoDataKind.DOMAIN)
+    }
+
+    /**
+     * Branch review, Finding 5: `defaults()` used to re-declare `"v2fly-geoip"`/`"v2fly-geosite"`
+     * as literals, two lines below a `DEFAULT_SOURCE_ID` constant `THIRD_PARTY.md` cites as
+     * authoritative but nothing else in production code ever read. Pinned so the two cannot drift
+     * apart again without this failing.
+     */
+    @Test
+    fun defaultsAlwaysContainsTheRowDefaultSourceIdNames() {
+        val defaultRow = GeoSourceCatalogue.sources.single { it.id == GeoSourceCatalogue.DEFAULT_SOURCE_ID }
+
+        GeoSourceCatalogue.defaults() shouldContain defaultRow
     }
 
     /**

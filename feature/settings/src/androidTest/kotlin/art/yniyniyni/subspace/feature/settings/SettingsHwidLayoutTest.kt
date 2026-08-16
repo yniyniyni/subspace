@@ -44,6 +44,7 @@ class SettingsHwidLayoutTest {
                         onGeoUpdateNow = {},
                         onAddCustomGeoSource = { _, _, _ -> },
                         onGeoRefreshOnMeteredChanged = {},
+                        onRemoveCustomGeoSource = {},
                     ),
                     onNavigateToRouting = {},
                 )

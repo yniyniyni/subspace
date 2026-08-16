@@ -3,7 +3,6 @@ package art.yniyniyni.subspace.feature.routing
 
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
-import art.yniyniyni.subspace.core.model.EntryProblem
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RuleBucket
@@ -120,23 +119,12 @@ class RuleSetEditorViewModelTest {
     }
 
     @Test
-    fun `an invalid entry is rejected with a reason and not added`() = runTest {
+    fun `an invalid entry is rejected and not added`() = runTest {
         val viewModel = editor()
 
         viewModel.addEntry(RouteOutcome.DIRECT, BucketField.IPS, "999.1.1.1")
 
-        viewModel.state.value.entryProblem shouldBe EntryProblem.MalformedAddress
         viewModel.state.value.bucket(RouteOutcome.DIRECT, BucketField.IPS) shouldBe emptyList()
-    }
-
-    @Test
-    fun `the problem clears on the next valid entry`() = runTest {
-        val viewModel = editor()
-        viewModel.addEntry(RouteOutcome.DIRECT, BucketField.IPS, "999.1.1.1")
-
-        viewModel.addEntry(RouteOutcome.DIRECT, BucketField.IPS, "10.0.0.0/8")
-
-        viewModel.state.value.entryProblem shouldBe null
     }
 
     // The generator interpolates entries into hand-written JSON; a quote would
@@ -147,7 +135,7 @@ class RuleSetEditorViewModelTest {
 
         viewModel.addEntry(RouteOutcome.PROXY, BucketField.SITES, """ex"ample.com""")
 
-        viewModel.state.value.entryProblem shouldBe EntryProblem.IllegalCharacter
+        viewModel.state.value.bucket(RouteOutcome.PROXY, BucketField.SITES) shouldBe emptyList()
     }
 
     @Test

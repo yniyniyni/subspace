@@ -89,6 +89,7 @@ fun SettingsScreen(
             onGeoUpdateNow = viewModel::onGeoUpdateNow,
             onAddCustomGeoSource = viewModel::onAddCustomGeoSource,
             onGeoRefreshOnMeteredChanged = viewModel::onGeoRefreshOnMeteredChanged,
+            onRemoveCustomGeoSource = viewModel::onRemoveCustomGeoSource,
         ),
         onNavigateToRouting = onNavigateToRouting,
         modifier = modifier,
@@ -115,6 +116,7 @@ internal data class SettingsActions(
     val onGeoUpdateNow: (GeoRow) -> Unit,
     val onAddCustomGeoSource: (url: String, fileName: String, geoType: GeoDataKind) -> Unit,
     val onGeoRefreshOnMeteredChanged: (Boolean) -> Unit,
+    val onRemoveCustomGeoSource: (String) -> Unit,
 )
 
 /**

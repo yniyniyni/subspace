@@ -219,19 +219,40 @@ constructor(
         }
     }
 
+    /**
+     * §10.4 (branch review, Finding 4): [geoUpdateInFlight] is added before the call and must come
+     * back out on every exit, not only the ordinary return — [GeoAssetSource.install] is documented
+     * never to throw, so this `finally` is defensive rather than fixing an observed hang, but a
+     * spinner stranded by some future exception in this path (or plain cancellation) is exactly the
+     * silent-bad-state shape §10.4 asks this codebase not to risk for one line.
+     */
     private suspend fun runGeoInstall(fileName: String, request: GeoInstallRequest): GeoInstallResult {
         _state.update { it.copy(geoUpdateInFlight = it.geoUpdateInFlight + fileName) }
-        val result = geoAssetSource.install(request)
-        _state.update {
-            it.copy(
-                geoUpdateInFlight = it.geoUpdateInFlight - fileName,
-                geoUpdateResults = it.geoUpdateResults + (fileName to result),
-            )
+        try {
+            val result = geoAssetSource.install(request)
+            _state.update { it.copy(geoUpdateResults = it.geoUpdateResults + (fileName to result)) }
+            return result
+        } finally {
+            _state.update { it.copy(geoUpdateInFlight = it.geoUpdateInFlight - fileName) }
         }
-        return result
     }
 
     fun onGeoRefreshOnMeteredChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setGeoRefreshOnMetered(enabled) }
+    }
+
+    /**
+     * Drops the recorded row for [fileName] — see [GeoAssetSource.remove]'s KDoc (branch review,
+     * Finding 3). Restricted to a custom (non-catalogue) row both here and in the affordance that
+     * calls this: the same "a disabled control is a hint, the gate belongs here too" reasoning
+     * [art.yniyniyni.subspace.feature.routing.RuleSetEditorViewModel.save]'s own KDoc documents. A
+     * catalogue row would simply reappear the next time its source is selected, so removing one
+     * would be confusing at best — this silently ignores that case rather than surfacing an error
+     * for a button [SettingsGeoSection] never shows on a catalogue row in the first place.
+     */
+    fun onRemoveCustomGeoSource(fileName: String) {
+        val row = _state.value.geoRows.firstOrNull { it.installFileName == fileName } ?: return
+        if (!row.isCustom) return
+        viewModelScope.launch { geoAssetSource.remove(fileName) }
     }
 }

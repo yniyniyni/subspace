@@ -73,9 +73,10 @@ internal const val RULE_SET_EDITOR_LOADING_TEST_TAG = "rule-set-editor-loading"
 
 /**
  * `:app`'s `RuleSetEditor(ruleSetId)` route — one rule set's editor. See
- * [RuleSetEditorViewModel]'s own KDoc for the working-copy/write-through-on-save
- * shape, and its [RuleSetEditorState]'s KDoc for why [EntryProblem] is shown
- * once for the whole screen rather than per bucket.
+ * [RuleSetEditorViewModel]'s own KDoc for the working-copy/write-through-on-save shape.
+ * [EntryProblem] is shown live, per field, from that field's own draft text — see
+ * [RuleSetEditorViewModel.addEntry]'s KDoc for why no `RuleSetEditorState` field backs this
+ * anymore (branch review: it used to, but nothing here ever read it).
  */
 @Composable
 fun RuleSetEditorScreen(

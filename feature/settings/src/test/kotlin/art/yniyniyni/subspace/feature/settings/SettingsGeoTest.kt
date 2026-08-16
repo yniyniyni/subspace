@@ -95,9 +95,15 @@ class SettingsGeoTest {
     /**
      * §A.5: the size shown before a download must be the cost the user is about to incur, not
      * whatever happens to already be on disk under the same filename from a different source.
+     *
+     * Branch review, Finding 2: an armed pending selection must NOT also erase that the filename
+     * is genuinely still installed — [installedAt] here must keep reading the real install date,
+     * not `null`, or this row disagrees with the Routing screen (which reads the installed asset
+     * directly) about whether `geosite.dat` is installed, while nothing has actually changed on
+     * disk yet.
      */
     @Test
-    fun `picking a new source for an installed filename previews its estimate, not the stale installed size`() {
+    fun `picking a new source for an installed filename previews its estimate, but keeps the installed date`() {
         val installedFromV2fly =
             InstalledGeoAsset(
                 fileName = "geosite.dat",
@@ -120,7 +126,38 @@ class SettingsGeoTest {
         row.sourceId shouldBe "runetfreedom-geosite"
         row.installedBytes shouldBe null
         row.approximateBytes shouldBe 73_703_302
-        row.installedAt shouldBe null
+        row.installedAt shouldBe 1_754_000_000_000L
+    }
+
+    /**
+     * Branch review, Finding 2's other half: a persisted failure on the file that is actually
+     * installed must stay visible while a different source is merely armed, not selected. Before
+     * this fix `hasError` was forced to `false` here unconditionally — the same masking class
+     * Task 17's own Finding 3 closed, reached through a different door.
+     */
+    @Test
+    fun `an armed pending selection does not hide a persisted failure on the installed asset`() {
+        val installedWithFailure =
+            InstalledGeoAsset(
+                fileName = "geosite.dat",
+                sourceUrl = GeoSourceCatalogue.source("v2fly-geosite")!!.downloadUrl,
+                geoType = GeoDataKind.DOMAIN,
+                sizeBytes = 2_300_000,
+                installedAt = null,
+                lastAttemptedAt = 1_754_000_000_000L,
+                lastFailure = "DownloadFailed",
+            )
+
+        val rows =
+            geoRowsFor(
+                sources = GeoSourceCatalogue.sources,
+                selectedIds = setOf("runetfreedom-geosite"),
+                installed = listOf(installedWithFailure),
+            )
+
+        val row = rows.single { it.installFileName == "geosite.dat" }
+        row.hasError shouldBe true
+        row.lastFailure shouldBe "DownloadFailed"
     }
 
     @Test

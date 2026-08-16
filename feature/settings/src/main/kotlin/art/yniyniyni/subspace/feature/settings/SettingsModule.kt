@@ -21,4 +21,8 @@ internal object SettingsModule {
     @Provides
     @Singleton
     fun appVersionSource(impl: BoundAppVersionSource): AppVersionSource = impl
+
+    @Provides
+    @Singleton
+    fun geoAssetSource(impl: BoundGeoAssetSource): GeoAssetSource = impl
 }

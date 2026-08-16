@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
 import art.yniyniyni.subspace.core.ui.component.SectionHeader
@@ -84,6 +85,10 @@ fun SettingsScreen(
             onPingTimeoutChanged = viewModel::onPingTimeoutChanged,
             onPingOnLaunchChanged = viewModel::onPingOnLaunchChanged,
             onPingOnLaunchMeteredChanged = viewModel::onPingOnLaunchMeteredChanged,
+            onGeoSourceSelected = viewModel::onGeoSourceSelected,
+            onGeoUpdateNow = viewModel::onGeoUpdateNow,
+            onAddCustomGeoSource = viewModel::onAddCustomGeoSource,
+            onGeoRefreshOnMeteredChanged = viewModel::onGeoRefreshOnMeteredChanged,
         ),
         onNavigateToRouting = onNavigateToRouting,
         modifier = modifier,
@@ -106,6 +111,10 @@ internal data class SettingsActions(
     val onPingTimeoutChanged: (Int) -> Unit,
     val onPingOnLaunchChanged: (Boolean) -> Unit,
     val onPingOnLaunchMeteredChanged: (Boolean) -> Unit,
+    val onGeoSourceSelected: (String) -> Unit,
+    val onGeoUpdateNow: (GeoRow) -> Unit,
+    val onAddCustomGeoSource: (url: String, fileName: String, geoType: GeoDataKind) -> Unit,
+    val onGeoRefreshOnMeteredChanged: (Boolean) -> Unit,
 )
 
 /**
@@ -154,6 +163,9 @@ internal fun SettingsScreenContent(
             supportingText = stringResource(R.string.settings_routing_row_summary),
             onClick = onNavigateToRouting,
         )
+
+        SectionHeader(stringResource(R.string.settings_section_geo))
+        SettingsGeoSection(state = state, actions = actions)
 
         SectionHeader(stringResource(R.string.settings_section_about))
         SettingRow(

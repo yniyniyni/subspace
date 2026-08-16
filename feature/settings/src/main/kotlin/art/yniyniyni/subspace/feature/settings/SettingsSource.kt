@@ -61,6 +61,15 @@ internal interface SettingsSource {
     suspend fun setPingOnLaunch(enabled: Boolean)
 
     suspend fun setPingOnLaunchMetered(enabled: Boolean)
+
+    /**
+     * Whether a *scheduled* geo-database refresh may run on a metered network. See
+     * [SettingsRepository.geoRefreshOnMetered]. A manual "Update now" is unaffected by this — see
+     * [GeoAssetSource.install]'s KDoc.
+     */
+    val geoRefreshOnMetered: Flow<Boolean>
+
+    suspend fun setGeoRefreshOnMetered(enabled: Boolean)
 }
 
 @Singleton
@@ -93,4 +102,9 @@ constructor(
 
     override suspend fun setPingOnLaunchMetered(enabled: Boolean) =
         settingsRepository.setPingOnLaunchMetered(enabled)
+
+    override val geoRefreshOnMetered: Flow<Boolean> = settingsRepository.geoRefreshOnMetered
+
+    override suspend fun setGeoRefreshOnMetered(enabled: Boolean) =
+        settingsRepository.setGeoRefreshOnMetered(enabled)
 }

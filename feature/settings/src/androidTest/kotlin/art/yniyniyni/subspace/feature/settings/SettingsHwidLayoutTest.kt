@@ -40,6 +40,10 @@ class SettingsHwidLayoutTest {
                         onPingTimeoutChanged = {},
                         onPingOnLaunchChanged = {},
                         onPingOnLaunchMeteredChanged = {},
+                        onGeoSourceSelected = {},
+                        onGeoUpdateNow = {},
+                        onAddCustomGeoSource = { _, _, _ -> },
+                        onGeoRefreshOnMeteredChanged = {},
                     ),
                     onNavigateToRouting = {},
                 )

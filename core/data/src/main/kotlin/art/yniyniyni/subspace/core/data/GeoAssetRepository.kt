@@ -207,6 +207,26 @@ internal constructor(
         }
 
     /**
+     * Drops the recorded `geo_assets` row for [fileName]. Whatever is on disk under that name, if
+     * anything, is untouched — this only stops [fileName] from appearing in [observeAll] or being
+     * considered by a scheduled refresh (`GeoRefreshScheduler`'s due-list reads only what
+     * [observeAll] returns).
+     *
+     * The one production caller of
+     * [art.yniyniyni.subspace.core.data.db.GeoAssetDao.deleteByFileName] (branch review, Finding
+     * 3): a custom source with a typo'd URL writes a row here via [recordFailure] that a scheduled
+     * refresh then retries once a day forever, with no way to stop short of reinstalling the app.
+     * `:feature:settings` is expected to offer this only for a custom (non-catalogue) row — a
+     * catalogue row reappears the moment [GeoSourceCatalogue][art.yniyniyni.subspace.core.model.GeoSourceCatalogue]
+     * or the source picker names it again, so removing one there would look like a no-op at best.
+     */
+    public suspend fun remove(fileName: String) {
+        withContext(Dispatchers.IO) {
+            dao.deleteByFileName(fileName)
+        }
+    }
+
+    /**
      * Runs the full sequence for one file. Never throws (§10.4).
      *
      * On ordinary failures the previous installed DAT/JSON pair is left exactly
@@ -230,7 +250,7 @@ internal constructor(
      * block the real install this call is actually for.
      */
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
-    private fun sweepStaleStagingQuietly() {
+    private suspend fun sweepStaleStagingQuietly() {
         try {
             sweepStaleStaging(clock())
         } catch (error: Exception) {
@@ -256,25 +276,61 @@ internal constructor(
      *    `.json` sidecar both touch files inside it throughout the operation, so
      *    [latestModificationRecursively] — the newest `lastModified()` of the directory or
      *    anything inside it — only stops advancing once nothing is writing to it anymore. A
-     *    directory younger than [STALE_STAGING_AGE_MILLIS] is assumed live and left alone,
-     *    regardless of how this sweep's own timing happens to line up with a concurrent
-     *    [installSafely] run elsewhere.
-     *  - A **retained recovery** directory: [installSafely]'s `retainStaging` case, left behind by
-     *    a [RollbackFailedException] holding the last surviving copies of the previous live
-     *    DAT/JSON pair. These carry a `*.previous` backup file ([BACKUP_SUFFIX]) and are never
-     *    swept by age at all — only a successful manual recovery removes them, matching what
-     *    [installSafely]'s own `finally` already promises for that case.
+     *    directory younger than [STALE_STAGING_AGE_MILLIS] is assumed live and left alone. This
+     *    is a plain mtime heuristic, **not** a synchronized one: this sweep runs before both the
+     *    per-name [Mutex] and the cross-process `FileLock` that guard the [install] call it is
+     *    part of are acquired, so it inspects every directory under `staging/` regardless of what
+     *    any concurrent [installSafely] elsewhere is doing to its own. In the bounded worst case a
+     *    download that stalls the full [STALE_STAGING_AGE_MILLIS] without writing a single byte
+     *    can be swept out from under a live, still-running install for a *different* filename — a
+     *    spurious but retryable failure. It can never touch `root`'s published `.dat`/`.json`
+     *    files, and it can never touch a genuinely retained recovery directory (below); the only
+     *    thing at risk is an abnormally stalled staging directory.
+     *  - A **genuinely retained recovery** directory: [installSafely]'s `retainStaging` case, left
+     *    behind by a [RollbackFailedException] holding the last surviving copies of the previous
+     *    live DAT/JSON pair. These carry a `*.previous` backup file ([BACKUP_SUFFIX]) — but a
+     *    `*.previous` file by itself is **not** sufficient to identify this case: [publish] copies
+     *    the previous live files into this same staging directory as forced rollback backups on
+     *    *every* ordinary install over an existing file (see [backupLiveFile]), so a process
+     *    killed mid-publish — after that copy, before this operation's own `finally` runs —
+     *    leaves a directory that looks identical, with no [RollbackFailedException] and no
+     *    `RecoveryFailed` row behind it. Left exempt unconditionally, that directory would never
+     *    be reclaimed either, which is the defect a branch review found here (up to ~147 MB per
+     *    occurrence, two forced backups). [isRetainedForRecovery] disambiguates the two by reading
+     *    the matching `geo_assets` row: only [GeoAssetFailure.RecoveryFailed] — the one outcome
+     *    [installSafely] records for the genuine case — exempts the directory from the age check,
+     *    and it does so forever. No code anywhere in this app currently clears a `RecoveryFailed`
+     *    row or removes its backup directory; "only a successful manual recovery removes them" is
+     *    what [installSafely]'s own `finally` comment intends, not a mechanism that exists yet.
+     *    Until one is built, these directories accumulate and can only be cleared by hand.
      */
-    internal fun sweepStaleStaging(nowMillis: Long) {
+    internal suspend fun sweepStaleStaging(nowMillis: Long) {
         val directories = File(root, STAGING_DIR).listFiles()?.filter { it.isDirectory } ?: return
         directories.forEach { directory ->
-            val hasRecoveryBackup = directory.listFiles()?.any { it.name.endsWith(BACKUP_SUFFIX) } == true
-            if (hasRecoveryBackup) return@forEach
+            if (isRetainedForRecovery(directory)) return@forEach
             val age = nowMillis - directory.latestModificationRecursively()
             if (age >= STALE_STAGING_AGE_MILLIS) {
                 directory.deleteRecursively()
             }
         }
+    }
+
+    /**
+     * True only for [installSafely]'s genuine `retainStaging` case — see [sweepStaleStaging]'s own
+     * KDoc for why a `*.previous` file alone cannot tell that case apart from an ordinary kill
+     * mid-[publish]. [publish] names its `.dat` backup `"$datName$BACKUP_SUFFIX"`, and `datName` is
+     * always [GeoInstallRequest.fileName] — the same string [GeoAssetEntity.fileName] is keyed by —
+     * so stripping [BACKUP_SUFFIX] off that one file recovers the exact key to look up.
+     */
+    private suspend fun isRetainedForRecovery(directory: File): Boolean {
+        val datBackupName =
+            directory
+                .listFiles()
+                ?.map { it.name }
+                ?.firstOrNull { it.endsWith("$DAT_SUFFIX$BACKUP_SUFFIX") }
+                ?: return false
+        val fileName = datBackupName.removeSuffix(BACKUP_SUFFIX)
+        return dao.byFileName(fileName)?.lastFailure == GeoAssetFailure.RecoveryFailed.name
     }
 
     private fun File.latestModificationRecursively(): Long =

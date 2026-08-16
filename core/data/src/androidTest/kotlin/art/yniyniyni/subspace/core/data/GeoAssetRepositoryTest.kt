@@ -453,15 +453,42 @@ class GeoAssetRepositoryTest {
 
     // installSafely's own retainStaging path: a failed rollback leaves *.previous backups behind
     // on purpose, and only a successful manual recovery may remove them — never this age sweep.
+    // The row recording RecoveryFailed is what actually marks this as the genuine case (branch
+    // review, Finding 1) — see the next test for the directory that must NOT be treated this way.
     @Test
     fun sweepNeverDeletesADirectoryHoldingARetainedRecoveryBackup() = runTest {
         val recovery = stagingDirectory("geo-recovery")
         File(recovery, "geosite.dat.previous").writeText("last known good")
         ageDirectory(recovery, STALE_AGE_MILLIS)
+        recordRecoveryFailed("geosite.dat")
 
         stack.repository.sweepStaleStaging(nowMillis = stack.now)
 
         recovery.exists() shouldBe true
+    }
+
+    // Branch review, Finding 1: publish() copies the previous live DAT/JSON pair into the SAME
+    // staging directory as forced rollback backups on every ORDINARY install over an existing
+    // file — not only on installSafely's retainStaging path. A process killed mid-publish (after
+    // that copy, before installSafely's own `finally` runs) leaves a directory that looks
+    // identical to a genuine retained-recovery one: same `*.previous` files, same shape. The only
+    // real difference is that no RollbackFailedException ever fired, so the geo_assets row for
+    // this file carries no RecoveryFailed marker — here, none of the failure/record calls ever
+    // ran at all, so there is no row whatsoever. Before the fix, sweepStaleStaging exempted any
+    // directory containing a `*.previous` file unconditionally, so this directory was stranded
+    // forever; after the fix it must be reclaimed like any other stale directory once aged.
+    @Test
+    fun sweepReclaimsAStagingDirectoryStrandedByAKillMidPublish() = runTest {
+        val stranded = stagingDirectory("geo-stranded")
+        File(stranded, "geosite.dat.previous").writeText("previous live bytes")
+        File(stranded, "geosite.json.previous").writeText("{}")
+        ageDirectory(stranded, STALE_AGE_MILLIS)
+        // Deliberately no geo_assets row for "geosite.dat" at all — the process died before
+        // record()/recordFailure() ever ran, which is exactly what distinguishes this case.
+
+        stack.repository.sweepStaleStaging(nowMillis = stack.now)
+
+        stranded.exists() shouldBe false
     }
 
     @Test
@@ -473,6 +500,41 @@ class GeoAssetRepositoryTest {
         stack.repository.install(request())
 
         abandoned.exists() shouldBe false
+    }
+
+    // ---- remove (branch review: deleteByFileName had no production caller) ----
+
+    @Test
+    fun removeDropsTheRowSoItNoLongerAppearsInObserveAllOrIsDueForRefresh() = runTest {
+        stack.repository.install(request("geosite.dat")) shouldBe GeoInstallResult.Installed
+
+        stack.repository.remove("geosite.dat")
+
+        stack.repository.observeAll().first() shouldBe emptyList()
+    }
+
+    @Test
+    fun removeLeavesTheLiveFileOnDiskUntouched() = runTest {
+        stack.repository.install(request("geosite.dat")) shouldBe GeoInstallResult.Installed
+
+        stack.repository.remove("geosite.dat")
+
+        File(stack.repository.geoDirectory(), "geosite.dat").readText() shouldBe "payload"
+    }
+
+    private suspend fun recordRecoveryFailed(fileName: String) {
+        stack.geoAssetDao().upsert(
+            GeoAssetEntity(
+                fileName = fileName,
+                sourceUrl = "https://example.invalid/$fileName",
+                geoType = GeoDataKind.DOMAIN.name,
+                sha256 = null,
+                sizeBytes = null,
+                installedAt = null,
+                lastAttemptedAt = stack.now,
+                lastFailure = "RecoveryFailed",
+            ),
+        )
     }
 
     private fun stagingDirectory(name: String): File =

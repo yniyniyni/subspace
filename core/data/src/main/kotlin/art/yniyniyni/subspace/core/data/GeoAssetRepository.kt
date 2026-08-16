@@ -215,6 +215,7 @@ internal constructor(
      */
     public suspend fun install(request: GeoInstallRequest): GeoInstallResult =
         withContext(Dispatchers.IO) {
+            sweepStaleStagingQuietly()
             if (!isSafeFileName(request.fileName)) {
                 recordFailure(request, GeoAssetFailure.InvalidFileName)
                 return@withContext GeoInstallResult.Rejected
@@ -223,6 +224,61 @@ internal constructor(
                 .computeIfAbsent(request.fileName) { Mutex() }
                 .withLock { installWithFileLock(request) }
         }
+
+    /**
+     * Best-effort wrapper around [sweepStaleStaging]: a directory-listing failure here must never
+     * block the real install this call is actually for.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private fun sweepStaleStagingQuietly() {
+        try {
+            sweepStaleStaging(clock())
+        } catch (error: Exception) {
+            error.rethrowIfCancellation()
+        }
+    }
+
+    /**
+     * Deletes staging directories an operation abandoned without ever reaching [installSafely]'s
+     * own `finally` — the one case that cannot cover: a process kill mid-download, mid-validation,
+     * or mid-publish, rather than an ordinary throw. Left alone, each abandoned directory
+     * permanently strands up to the largest catalogue source's worth of bytes (73.7 MB,
+     * `GeoSourceCatalogue`) in app-private storage — invisible, and never reclaimed, since nothing
+     * else in this class revisits `staging/` once an operation's own coroutine is gone.
+     *
+     * Called at the top of every [install] rather than on a separate schedule: every real
+     * `GeoAssetRepository` in this app already calls `install` regularly (manual "Update now",
+     * `:app`'s daily scheduled refresh), so this needs no additional wiring to actually run in
+     * production, and a directory listing is cheap enough to repeat on every call.
+     *
+     * Two kinds of staging directory must survive this sweep:
+     *  - A **live** operation's directory. Streaming the download and writing the validator's
+     *    `.json` sidecar both touch files inside it throughout the operation, so
+     *    [latestModificationRecursively] — the newest `lastModified()` of the directory or
+     *    anything inside it — only stops advancing once nothing is writing to it anymore. A
+     *    directory younger than [STALE_STAGING_AGE_MILLIS] is assumed live and left alone,
+     *    regardless of how this sweep's own timing happens to line up with a concurrent
+     *    [installSafely] run elsewhere.
+     *  - A **retained recovery** directory: [installSafely]'s `retainStaging` case, left behind by
+     *    a [RollbackFailedException] holding the last surviving copies of the previous live
+     *    DAT/JSON pair. These carry a `*.previous` backup file ([BACKUP_SUFFIX]) and are never
+     *    swept by age at all — only a successful manual recovery removes them, matching what
+     *    [installSafely]'s own `finally` already promises for that case.
+     */
+    internal fun sweepStaleStaging(nowMillis: Long) {
+        val directories = File(root, STAGING_DIR).listFiles()?.filter { it.isDirectory } ?: return
+        directories.forEach { directory ->
+            val hasRecoveryBackup = directory.listFiles()?.any { it.name.endsWith(BACKUP_SUFFIX) } == true
+            if (hasRecoveryBackup) return@forEach
+            val age = nowMillis - directory.latestModificationRecursively()
+            if (age >= STALE_STAGING_AGE_MILLIS) {
+                directory.deleteRecursively()
+            }
+        }
+    }
+
+    private fun File.latestModificationRecursively(): Long =
+        walkTopDown().maxOfOrNull { it.lastModified() } ?: lastModified()
 
     /**
      * Keeps an OS lock for the whole operation, not only the final rename.
@@ -529,6 +585,14 @@ internal constructor(
         private const val BACKUP_SUFFIX = ".previous"
         private const val RESTORE_SUFFIX = ".restore"
         private const val LOCK_SUFFIX = ".lock"
+
+        /**
+         * How old an untouched staging directory must be before [sweepStaleStaging] treats it as
+         * abandoned rather than merely slow. Generous on purpose: the largest catalogue source is
+         * 73.7 MB (`GeoSourceCatalogue`), and this only needs to be shorter than "the user forgets
+         * this ever happened", not tuned to any real download's expected duration.
+         */
+        private const val STALE_STAGING_AGE_MILLIS = 2L * 60 * 60 * 1000
 
         private val installMutexes = ConcurrentHashMap<String, Mutex>()
 

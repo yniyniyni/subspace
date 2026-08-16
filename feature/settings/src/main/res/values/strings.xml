@@ -71,7 +71,21 @@
     <string name="settings_geo_result_download_failed">Download failed — check your connection</string>
     <string name="settings_geo_result_rejected">Downloaded file was not a valid geo database</string>
     <string name="settings_geo_result_install_failed">Downloaded, but installing it failed</string>
-    <string name="settings_geo_custom_source_label">Custom source</string>
+    <!-- The persisted lastFailure marker (§A.3.1): distinct from the four results above, and
+         shown when no fresh result from this session has replaced it. One string per
+         GeoAssetFailure/GeoValidation member — see lastFailureMessageRes's own KDoc for why a
+         permanent "not a geo database" must not read the same as a transient network failure. -->
+    <string name="settings_geo_persisted_invalid_filename">The install filename was rejected</string>
+    <string name="settings_geo_persisted_download_failed">Last update failed to download — check your connection</string>
+    <string name="settings_geo_persisted_install_failed">Downloaded, but installing it failed last time</string>
+    <string name="settings_geo_persisted_recovery_failed">Installing it failed and could not fully recover — try again</string>
+    <string name="settings_geo_persisted_unreadable">Last download could not be read as a geo database</string>
+    <string name="settings_geo_persisted_not_geo_data">This is not a valid geo database for the type chosen</string>
+    <!-- %1$s is the install filename — a custom row's real identity (§5.6: filenames are shape,
+         not a secret), so two custom sources never render as identical rows. -->
+    <string name="settings_geo_custom_source_label">Custom (%1$s)</string>
+    <!-- %1$s is a formatted date, e.g. "2026-08-11". -->
+    <string name="settings_geo_installed_at">Installed %1$s</string>
     <string name="settings_geo_update_now">Update %1$s now</string>
     <string name="settings_geo_kind_domain">Domain list</string>
     <string name="settings_geo_kind_ip">IP list</string>
@@ -80,5 +94,5 @@
     <string name="settings_geo_add_custom_filename">Install filename (e.g. geoip.dat)</string>
     <string name="settings_geo_add_custom_action">Add</string>
     <string name="settings_geo_metered_title">Update over mobile data</string>
-    <string name="settings_geo_metered_summary">Off by default — the largest database is over 70 MB. "Update now" always works, on any network.</string>
+    <string name="settings_geo_metered_summary">Off by default — the largest database is over 70 MB. \"Update now\" always works, on any network.</string>
 </resources>

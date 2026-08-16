@@ -24,6 +24,8 @@ private const val KEY_PING_TIMEOUT_SECONDS = "ping_timeout_seconds"
 private const val KEY_PING_ON_LAUNCH = "ping_on_launch"
 private const val KEY_PING_ON_LAUNCH_METERED = "ping_on_launch_metered"
 private const val KEY_GEO_REFRESH_ON_METERED = "geo_refresh_on_metered"
+private const val KEY_SELECTED_GEO_SOURCE_IDS = "selected_geo_source_ids"
+private const val SELECTED_GEO_SOURCE_ID_DELIMITER = ","
 
 /**
  * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
@@ -219,5 +221,36 @@ internal constructor(
 
     public suspend fun setGeoRefreshOnMetered(enabled: Boolean) {
         dao.put(SettingEntity(key = KEY_GEO_REFRESH_ON_METERED, value = enabled.toString()))
+    }
+
+    /**
+     * Which catalogue source id backs each geo install slot, empty until the user opens the
+     * picker and explicitly changes one.
+     *
+     * A branch review found the previous, unpersisted version of this setting: it lived only in
+     * `SettingsState`'s default, reset to `GeoSourceCatalogue.defaults()` on every ViewModel
+     * construction, so a deliberate switch away from v2fly was forgotten the moment Settings was
+     * left and reopened. Empty (not the defaults pair) is the correct persisted default — the
+     * fallback to `GeoSourceCatalogue.defaults()` when nothing is selected *and* nothing is
+     * installed belongs to `:feature:settings`' own row-assembly logic, not to this flag's stored
+     * value, so that logic stays free to distinguish "the user has never chosen" from "the user
+     * chose the v2fly pair on purpose".
+     *
+     * Stored as a comma-joined id list: [art.yniyniyni.subspace.core.model.GeoSource] ids are
+     * plain hyphenated identifiers the catalogue defines (never user-supplied text or a URL), so a
+     * plain split is safe and carries nothing §5.6 would otherwise redact.
+     */
+    public val selectedGeoSourceIds: Flow<Set<String>> =
+        dao.observe(KEY_SELECTED_GEO_SOURCE_IDS).map { stored ->
+            stored
+                ?.split(SELECTED_GEO_SOURCE_ID_DELIMITER)
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: emptySet()
+        }
+
+    public suspend fun setSelectedGeoSourceIds(ids: Set<String>) {
+        val value = ids.joinToString(SELECTED_GEO_SOURCE_ID_DELIMITER)
+        dao.put(SettingEntity(key = KEY_SELECTED_GEO_SOURCE_IDS, value = value))
     }
 }

@@ -35,13 +35,13 @@ internal data class SettingsState(
     /** The full catalogue, for the source picker. */
     val geoSources: List<GeoSource> = GeoSourceCatalogue.sources,
     /**
-     * Which catalogue row backs each install slot. Starts at [GeoSourceCatalogue.defaults] — the
-     * v2fly geoip/geosite pair — for a user who never opens the picker. Picking a different
-     * source of the same [art.yniyniyni.subspace.core.model.GeoDataKind] replaces the id for that
-     * slot rather than adding a second one, since both share the same `installFileName` and can
-     * only ever have one file on disk at a time.
+     * Which catalogue source id the user has explicitly picked for each install slot, persisted
+     * through [SettingsSource.selectedGeoSourceIds] (branch review, Finding 1: this used to be an
+     * in-memory default only, forgotten on every restart). Empty until the picker is used — the
+     * fallback to [GeoSourceCatalogue.defaults] for a slot nobody has touched lives in [geoRows]'
+     * own [geoRowsFor], not here, so this field can keep meaning exactly "what the user chose".
      */
-    val selectedGeoSourceIds: Set<String> = GeoSourceCatalogue.defaults().map { it.id }.toSet(),
+    val selectedGeoSourceIds: Set<String> = emptySet(),
     /** Every recorded geo asset, from [GeoAssetSource.installedAssets]. */
     val geoInstalledAssets: List<InstalledGeoAsset> = emptyList(),
     /** The install filenames a manual "Update now" is currently running for. */
@@ -55,27 +55,9 @@ internal data class SettingsState(
     /** Whether a *scheduled* geo refresh may run on a metered network. A manual update always can. */
     val geoRefreshOnMetered: Boolean = false,
 ) {
-    /**
-     * One row per install filename: the selected catalogue sources, plus any installed asset
-     * (including a user-added custom one) that isn't already covered by a selection.
-     */
+    /** One row per install filename. See [geoRowsFor]'s KDoc for exactly how ground truth is chosen. */
     val geoRows: List<GeoRow>
-        get() {
-            val selectedSources =
-                selectedGeoSourceIds
-                    .mapNotNull(GeoSourceCatalogue::source)
-                    .distinctBy { it.installFileName }
-            val selectedFileNames = selectedSources.map { it.installFileName }.toSet()
-            val catalogueRows =
-                selectedSources.map { source ->
-                    geoRowFor(source, geoInstalledAssets.firstOrNull { it.fileName == source.installFileName })
-                }
-            val customRows =
-                geoInstalledAssets
-                    .filter { it.fileName !in selectedFileNames }
-                    .map { asset -> geoRowFor(asset.asCustomSource(), asset, isCustom = true) }
-            return catalogueRows + customRows
-        }
+        get() = geoRowsFor(geoSources, selectedGeoSourceIds, geoInstalledAssets)
 
     /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (§5.6). */
     override fun toString(): String =

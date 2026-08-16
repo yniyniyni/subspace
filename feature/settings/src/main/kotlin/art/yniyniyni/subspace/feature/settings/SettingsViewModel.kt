@@ -4,10 +4,12 @@ package art.yniyniyni.subspace.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.GeoInstallRequest
+import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.ThemePreference
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
+import art.yniyniyni.subspace.core.model.isGeoFileName
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -81,6 +83,12 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(geoRefreshOnMetered = enabled) } }
             .launchIn(viewModelScope)
 
+        // Persisted (branch review, Finding 1) — a deliberate picker switch must survive a
+        // restart, the same reason `theme` is re-read here rather than cached in a local field.
+        settingsSource.selectedGeoSourceIds
+            .onEach { ids -> _state.update { it.copy(selectedGeoSourceIds = ids) } }
+            .launchIn(viewModelScope)
+
         geoAssetSource.installedAssets
             .onEach { assets -> _state.update { it.copy(geoInstalledAssets = assets) } }
             .launchIn(viewModelScope)
@@ -140,18 +148,25 @@ constructor(
      * Swaps which catalogue source backs [sourceId]'s [art.yniyniyni.subspace.core.model.GeoDataKind]:
      * any previously selected source for the same `installFileName` is dropped, since both would
      * write the same file and only one can ever be the "currently selected" one. Downloads
-     * nothing by itself — [onGeoUpdateNow] is the action that does.
+     * nothing by itself — [onGeoUpdateNow] is the action that does. Persisted through
+     * [SettingsSource.setSelectedGeoSourceIds] rather than mutated only in `_state` (branch
+     * review, Finding 1), so this survives a restart.
      */
     fun onGeoSourceSelected(sourceId: String) {
         val source = GeoSourceCatalogue.source(sourceId) ?: return
-        _state.update { current ->
-            val retainedIds =
-                current.selectedGeoSourceIds
-                    .mapNotNull(GeoSourceCatalogue::source)
-                    .filter { it.installFileName != source.installFileName }
-                    .map { it.id }
-            current.copy(selectedGeoSourceIds = (retainedIds + source.id).toSet())
+        viewModelScope.launch {
+            settingsSource.setSelectedGeoSourceIds(replaceSelectionForFileName(source.installFileName, source.id))
         }
+    }
+
+    /** [selectedGeoSourceIds] with any entry for [fileName] dropped, and [newId] added if not null. */
+    private fun replaceSelectionForFileName(fileName: String, newId: String?): Set<String> {
+        val retained =
+            _state.value.selectedGeoSourceIds
+                .mapNotNull(GeoSourceCatalogue::source)
+                .filter { it.installFileName != fileName }
+                .map { it.id }
+        return (if (newId != null) retained + newId else retained).toSet()
     }
 
     /**
@@ -166,7 +181,7 @@ constructor(
                 sourceUrl = row.downloadUrl,
                 geoType = row.geoType,
             )
-        runGeoInstall(fileName = row.installFileName, request = request)
+        viewModelScope.launch { runGeoInstall(row.installFileName, request) }
     }
 
     /**
@@ -178,25 +193,42 @@ constructor(
      * §5.6: [url] is never logged here or anywhere downstream — [GeoInstallResult] is a closed
      * vocabulary that carries no URL, and that is the only thing this method's own callers ever
      * see back.
+     *
+     * [fileName] is checked against [isGeoFileName] before anything is sent anywhere (branch
+     * review minor): [GeoCustomSourceForm]'s own Add button already disables for a shape like
+     * `geoip` with no extension, but this is the one place that guarantee holds even if a future
+     * caller skips the form — without it, a bad filename still reaches the repository, which
+     * rejects it as `InvalidFileName`, surfacing as "Downloaded file was not a valid geo database"
+     * for bytes that were never fetched at all.
      */
     fun onAddCustomGeoSource(url: String, fileName: String, geoType: GeoDataKind) {
-        runGeoInstall(
-            fileName = fileName,
-            request = GeoInstallRequest(fileName = fileName, sourceUrl = url, geoType = geoType),
-        )
-    }
-
-    private fun runGeoInstall(fileName: String, request: GeoInstallRequest) {
+        if (!isGeoFileName(fileName)) {
+            _state.update { it.copy(geoUpdateResults = it.geoUpdateResults + (fileName to GeoInstallResult.Rejected)) }
+            return
+        }
         viewModelScope.launch {
-            _state.update { it.copy(geoUpdateInFlight = it.geoUpdateInFlight + fileName) }
-            val result = geoAssetSource.install(request)
-            _state.update {
-                it.copy(
-                    geoUpdateInFlight = it.geoUpdateInFlight - fileName,
-                    geoUpdateResults = it.geoUpdateResults + (fileName to result),
-                )
+            val request = GeoInstallRequest(fileName = fileName, sourceUrl = url, geoType = geoType)
+            val result = runGeoInstall(fileName, request)
+            if (result == GeoInstallResult.Installed) {
+                // No catalogue id names a custom source, so clearing (rather than replacing) any
+                // conflicting selection is what lets geoRowsFor's ground-truth rule show this row
+                // immediately, instead of a stale pending catalogue pick for the same filename
+                // (branch review, Finding 1's other half).
+                settingsSource.setSelectedGeoSourceIds(replaceSelectionForFileName(fileName, newId = null))
             }
         }
+    }
+
+    private suspend fun runGeoInstall(fileName: String, request: GeoInstallRequest): GeoInstallResult {
+        _state.update { it.copy(geoUpdateInFlight = it.geoUpdateInFlight + fileName) }
+        val result = geoAssetSource.install(request)
+        _state.update {
+            it.copy(
+                geoUpdateInFlight = it.geoUpdateInFlight - fileName,
+                geoUpdateResults = it.geoUpdateResults + (fileName to result),
+            )
+        }
+        return result
     }
 
     fun onGeoRefreshOnMeteredChanged(enabled: Boolean) {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.settings
 
+import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.InstalledGeoAsset
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
@@ -56,4 +57,114 @@ class SettingsGeoTest {
             lastAttemptedAt = 1_754_000_000_000L,
             lastFailure = failure,
         )
+
+    // ── Branch review, Finding 1: geoRowsFor's row assembly ─────────────────────────────────
+
+    /**
+     * A branch review found the previous version of this assembly always built a filename's row
+     * from whichever catalogue source the picker happened to name for it, so a custom source
+     * installed under `geoip.dat` — the add-custom-source form's own filename hint — was rendered
+     * as the *v2fly* row, and "Update now" on it silently re-downloaded v2fly over the user's data.
+     */
+    @Test
+    fun `a custom source keeps its own identity against a colliding catalogue filename`() {
+        val custom =
+            InstalledGeoAsset(
+                fileName = "geoip.dat",
+                sourceUrl = "https://example.invalid/my-geoip.dat",
+                geoType = GeoDataKind.IP,
+                sizeBytes = 5_000_000,
+                installedAt = 1_754_000_000_000L,
+                lastAttemptedAt = 1_754_000_000_000L,
+                lastFailure = null,
+            )
+
+        val rows =
+            geoRowsFor(sources = GeoSourceCatalogue.sources, selectedIds = emptySet(), installed = listOf(custom))
+
+        val geoipRow = rows.single { it.installFileName == "geoip.dat" }
+        geoipRow.isCustom shouldBe true
+        geoipRow.downloadUrl shouldBe "https://example.invalid/my-geoip.dat"
+        geoipRow.installedBytes shouldBe 5_000_000
+        // Not "the custom source replaced v2fly" — the untouched default domain slot still shows
+        // its own v2fly preview alongside the custom ip row.
+        rows.map { it.installFileName } shouldBe listOf("geoip.dat", "geosite.dat")
+        rows.single { it.installFileName == "geosite.dat" }.sourceId shouldBe "v2fly-geosite"
+    }
+
+    /**
+     * §A.5: the size shown before a download must be the cost the user is about to incur, not
+     * whatever happens to already be on disk under the same filename from a different source.
+     */
+    @Test
+    fun `picking a new source for an installed filename previews its estimate, not the stale installed size`() {
+        val installedFromV2fly =
+            InstalledGeoAsset(
+                fileName = "geosite.dat",
+                sourceUrl = GeoSourceCatalogue.source("v2fly-geosite")!!.downloadUrl,
+                geoType = GeoDataKind.DOMAIN,
+                sizeBytes = 2_300_000,
+                installedAt = 1_754_000_000_000L,
+                lastAttemptedAt = 1_754_000_000_000L,
+                lastFailure = null,
+            )
+
+        val rows =
+            geoRowsFor(
+                sources = GeoSourceCatalogue.sources,
+                selectedIds = setOf("runetfreedom-geosite"),
+                installed = listOf(installedFromV2fly),
+            )
+
+        val row = rows.single { it.installFileName == "geosite.dat" }
+        row.sourceId shouldBe "runetfreedom-geosite"
+        row.installedBytes shouldBe null
+        row.approximateBytes shouldBe 73_703_302
+        row.installedAt shouldBe null
+    }
+
+    @Test
+    fun `an installed asset matching the current selection shows the real installed size and date`() {
+        val installed =
+            InstalledGeoAsset(
+                fileName = "geosite.dat",
+                sourceUrl = GeoSourceCatalogue.source("v2fly-geosite")!!.downloadUrl,
+                geoType = GeoDataKind.DOMAIN,
+                sizeBytes = 2_300_000,
+                installedAt = 1_754_000_000_000L,
+                lastAttemptedAt = 1_754_000_000_000L,
+                lastFailure = null,
+            )
+
+        val rows =
+            geoRowsFor(
+                sources = GeoSourceCatalogue.sources,
+                selectedIds = setOf("v2fly-geosite"),
+                installed = listOf(installed),
+            )
+
+        val row = rows.single { it.installFileName == "geosite.dat" }
+        row.sourceId shouldBe "v2fly-geosite"
+        row.installedBytes shouldBe 2_300_000
+        row.installedAt shouldBe 1_754_000_000_000L
+    }
+
+    // ── Branch review minors: no copy-paste can point two outcomes at the same string ───────
+
+    @Test
+    fun `each GeoInstallResult maps to a distinct string resource`() {
+        val ids = GeoInstallResult.entries.map { it.messageRes() }
+
+        ids.toSet() shouldHaveSize GeoInstallResult.entries.size
+    }
+
+    @Test
+    fun `every known persisted failure name maps to a distinct string resource`() {
+        val knownFailures =
+            listOf("InvalidFileName", "DownloadFailed", "InstallFailed", "RecoveryFailed", "Unreadable", "NotGeoData")
+
+        val ids = knownFailures.map { lastFailureMessageRes(it) }
+
+        ids.toSet() shouldHaveSize knownFailures.size
+    }
 }

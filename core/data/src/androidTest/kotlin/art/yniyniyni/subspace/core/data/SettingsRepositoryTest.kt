@@ -146,4 +146,21 @@ class SettingsRepositoryTest {
             repository.setPingOnLaunchMetered(true)
             repository.pingOnLaunchMetered.first() shouldBe true
         }
+
+    // Branch review: this was previously only an in-memory ViewModel default, reset to
+    // GeoSourceCatalogue.defaults() on every construction, so a deliberate picker switch was
+    // forgotten the moment Settings was reopened.
+    @Test
+    fun selectedGeoSourceIdsIsEmptyUntilSet() =
+        runTest {
+            repository.selectedGeoSourceIds.first() shouldBe emptySet()
+        }
+
+    @Test
+    fun selectedGeoSourceIdsRoundTrips() =
+        runTest {
+            repository.setSelectedGeoSourceIds(setOf("loyalsoldier-geoip", "v2fly-geosite"))
+
+            repository.selectedGeoSourceIds.first() shouldBe setOf("loyalsoldier-geoip", "v2fly-geosite")
+        }
 }

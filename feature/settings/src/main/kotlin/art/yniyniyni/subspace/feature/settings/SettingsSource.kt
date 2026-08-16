@@ -70,6 +70,15 @@ internal interface SettingsSource {
     val geoRefreshOnMetered: Flow<Boolean>
 
     suspend fun setGeoRefreshOnMetered(enabled: Boolean)
+
+    /**
+     * Which catalogue source id backs each geo install slot. See
+     * [SettingsRepository.selectedGeoSourceIds] — persisted, not a ViewModel default, so a
+     * deliberate picker switch survives a process restart (branch review, Finding 1).
+     */
+    val selectedGeoSourceIds: Flow<Set<String>>
+
+    suspend fun setSelectedGeoSourceIds(ids: Set<String>)
 }
 
 @Singleton
@@ -107,4 +116,9 @@ constructor(
 
     override suspend fun setGeoRefreshOnMetered(enabled: Boolean) =
         settingsRepository.setGeoRefreshOnMetered(enabled)
+
+    override val selectedGeoSourceIds: Flow<Set<String>> = settingsRepository.selectedGeoSourceIds
+
+    override suspend fun setSelectedGeoSourceIds(ids: Set<String>) =
+        settingsRepository.setSelectedGeoSourceIds(ids)
 }

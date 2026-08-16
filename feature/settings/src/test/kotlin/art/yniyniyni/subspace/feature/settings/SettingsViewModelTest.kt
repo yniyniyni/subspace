@@ -109,6 +109,13 @@ class SettingsViewModelTest {
             _geoRefreshOnMetered.value = enabled
         }
 
+        private val _selectedGeoSourceIds = MutableStateFlow<Set<String>>(emptySet())
+        override val selectedGeoSourceIds: Flow<Set<String>> = _selectedGeoSourceIds.asStateFlow()
+
+        override suspend fun setSelectedGeoSourceIds(ids: Set<String>) {
+            _selectedGeoSourceIds.value = ids
+        }
+
         private companion object {
             const val DEFAULT_TIMEOUT = 5
             const val MIN_TIMEOUT = 1
@@ -330,23 +337,43 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             // v2fly-geoip and loyalsoldier-geoip both install as geoip.dat: only one can be
-            // "selected" at a time, and the domain-kind pick (v2fly-geosite) is untouched.
-            model.state.value.selectedGeoSourceIds shouldBe setOf("loyalsoldier-geoip", "v2fly-geosite")
+            // "selected" at a time, and the domain-kind pick (v2fly-geosite, the untouched
+            // default) never enters selectedGeoSourceIds at all — see geoRowsFor's own KDoc for
+            // why the default fallback is not persisted as if it were a real user choice.
+            model.state.value.selectedGeoSourceIds shouldBe setOf("loyalsoldier-geoip")
+        }
+
+    // Branch review, Finding 1: this used to live only in SettingsState's in-memory default,
+    // reset to GeoSourceCatalogue.defaults() on every construction, so a deliberate switch away
+    // from v2fly was forgotten the moment Settings was reopened.
+    @Test
+    fun `the geo source selection survives a viewmodel restart`() =
+        runTest {
+            val source = FakeSettingsSource()
+            viewModel(source).onGeoSourceSelected("runetfreedom-geosite")
+            advanceUntilIdle()
+
+            val restarted = viewModel(source)
+            restarted.state.value.selectedGeoSourceIds shouldBe setOf("runetfreedom-geosite")
+            restarted.state.value.geoRows.first { it.installFileName == "geosite.dat" }.sourceId shouldBe
+                "runetfreedom-geosite"
         }
 
     @Test
-    fun `update now installs regardless of the metered setting`() =
+    fun `update now installs even while the scheduled-refresh metered setting is on`() =
         runTest {
             val settingsSource = FakeSettingsSource()
-            settingsSource.setGeoRefreshOnMetered(false)
+            settingsSource.setGeoRefreshOnMetered(true)
             val geoAssetSource = FakeGeoAssetSource()
             val model = SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource(), geoAssetSource)
+            advanceUntilIdle()
             val row = model.state.value.geoRows.first { it.sourceId == "v2fly-geoip" }
 
             model.onGeoUpdateNow(row)
             advanceUntilIdle()
 
-            // §A.5: no cap, no metered gate consulted — one install call, straight through.
+            // §A.5: "on" is the constrained state for the *scheduled* refresh this flag gates —
+            // a manual update must still go through unconditionally, one install call, no gate.
             geoAssetSource.requests shouldHaveSize 1
             geoAssetSource.requests.first().fileName shouldBe "geoip.dat"
             model.state.value.geoUpdateResults["geoip.dat"] shouldBe GeoInstallResult.Installed

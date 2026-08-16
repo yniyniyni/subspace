@@ -428,6 +428,62 @@ class GeoAssetRepositoryTest {
         stack.repository.isDueForRefresh("geosite.dat", nowMillis = eightDays) shouldBe true
     }
 
+    // ---- staged-directory sweep (branch review: a process kill mid-download stranded these) ----
+
+    @Test
+    fun sweepDeletesAnAbandonedStagingDirectoryOlderThanTheThreshold() = runTest {
+        val abandoned = stagingDirectory("geo-abandoned")
+        File(abandoned, "geosite.dat").writeText("partial")
+        ageDirectory(abandoned, STALE_AGE_MILLIS)
+
+        stack.repository.sweepStaleStaging(nowMillis = stack.now)
+
+        abandoned.exists() shouldBe false
+    }
+
+    @Test
+    fun sweepLeavesARecentlyTouchedDirectoryAlone() = runTest {
+        val live = stagingDirectory("geo-live")
+        File(live, "geosite.dat").writeText("still downloading")
+
+        stack.repository.sweepStaleStaging(nowMillis = stack.now)
+
+        live.exists() shouldBe true
+    }
+
+    // installSafely's own retainStaging path: a failed rollback leaves *.previous backups behind
+    // on purpose, and only a successful manual recovery may remove them — never this age sweep.
+    @Test
+    fun sweepNeverDeletesADirectoryHoldingARetainedRecoveryBackup() = runTest {
+        val recovery = stagingDirectory("geo-recovery")
+        File(recovery, "geosite.dat.previous").writeText("last known good")
+        ageDirectory(recovery, STALE_AGE_MILLIS)
+
+        stack.repository.sweepStaleStaging(nowMillis = stack.now)
+
+        recovery.exists() shouldBe true
+    }
+
+    @Test
+    fun installItselfSweepsStaleStagingDirectoriesFirst() = runTest {
+        val abandoned = stagingDirectory("geo-abandoned")
+        File(abandoned, "geosite.dat").writeText("partial")
+        ageDirectory(abandoned, STALE_AGE_MILLIS)
+
+        stack.repository.install(request())
+
+        abandoned.exists() shouldBe false
+    }
+
+    private fun stagingDirectory(name: String): File =
+        File(File(stack.repository.geoDirectory(), "staging"), name).apply { mkdirs() }
+
+    /** Backdates every file under [directory], including itself, so the sweep sees it as idle. */
+    private fun ageDirectory(directory: File, ageMillis: Long) {
+        val staleTime = stack.now - ageMillis
+        directory.walkTopDown().forEach { it.setLastModified(staleTime) }
+    }
+
     private fun stagingFiles(): List<File> =
         File(stack.repository.geoDirectory(), "staging").walkTopDown().filter { it.isFile }.toList()
 
@@ -466,6 +522,9 @@ class GeoAssetRepositoryTest {
         const val CROSS_PROCESS_SETTLE_MILLIS = 300L
         const val FILE_WAIT_TIMEOUT_MILLIS = 10_000L
         const val FILE_WAIT_POLL_MILLIS = 25L
+
+        // Comfortably past GeoAssetRepository's own 2-hour STALE_STAGING_AGE_MILLIS threshold.
+        const val STALE_AGE_MILLIS = 3L * 60 * 60 * 1000
     }
 
     private data class LockInstallOperation(

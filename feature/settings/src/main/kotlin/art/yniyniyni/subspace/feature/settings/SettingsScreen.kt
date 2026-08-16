@@ -41,7 +41,7 @@ private val HWID_VALUE_START_PADDING = 56.dp
 private val HWID_VALUE_BOTTOM_PADDING = 8.dp
 
 /**
- * The Settings screen: Appearance, Device ID, Latency testing, Routing and About.
+ * The Settings screen: Appearance, Device ID, Latency testing, Routing, Geo databases and About.
  *
  * **Not drawn**, each because a later milestone owns it, not because it was
  * forgotten:

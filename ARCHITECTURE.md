@@ -544,6 +544,10 @@ adb shell settings put global transition_animation_scale 0
 adb shell settings put global animator_duration_scale 0
 ```
 
+Keep the screen **on and unlocked** too: a locked device fails Compose tests
+that navigate, and it looks like a routing or back-stack bug rather than a
+lock screen.
+
 With animations on, `waitForIdle` never settles and node lookups fail
 non-deterministically. This does not look like a configuration problem: it
 looks like flaky product code. During M5's verification it produced a full

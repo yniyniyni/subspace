@@ -303,6 +303,13 @@ internal constructor(
      *    row or removes its backup directory; "only a successful manual recovery removes them" is
      *    what [installSafely]'s own `finally` comment intends, not a mechanism that exists yet.
      *    Until one is built, these directories accumulate and can only be cleared by hand.
+     *
+     *    This discriminator still depends on the `RecoveryFailed` row itself having been written.
+     *    [recordFailure] never throws (§10.4): if the Room write it makes for `RecoveryFailed`
+     *    itself fails — the same underlying fault that made [rollback] fail, still in effect —
+     *    that failure is swallowed, exactly like every other write in this class, and no row lands
+     *    for a directory that is genuinely retained. Untraceable from here without a
+     *    filesystem-level marker independent of Room; not something this fix closes.
      */
     internal suspend fun sweepStaleStaging(nowMillis: Long) {
         val directories = File(root, STAGING_DIR).listFiles()?.filter { it.isDirectory } ?: return

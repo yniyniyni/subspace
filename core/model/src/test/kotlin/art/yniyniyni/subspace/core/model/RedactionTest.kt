@@ -243,4 +243,105 @@ class RedactionTest {
         redact(prefix + "address=vpnserver port=443") shouldNotContain "vpnserver"
         redact(prefix + "vpnserver: connection refused") shouldNotContain "vpnserver"
     }
+
+    /**
+     * §10.4: `FailureReason.GeoDataMissing`'s entire purpose is naming exactly
+     * which `.dat` file is missing so the user re-downloads it instead of going
+     * looking for a broken server. A filename is shape, not content (§5.6) — it
+     * is not the "server address" this function exists to protect, and if this
+     * regresses the failure reads "Geo data missing — `<redacted>, <redacted>`",
+     * which tells the user nothing.
+     */
+    @Test
+    fun `keeps geo database filenames intact`() {
+        redact("geoip.dat, geosite.dat") shouldBe "geoip.dat, geosite.dat"
+        redact("geoip.dat") shouldBe "geoip.dat"
+        redact("geoip.dat, geosite.dat, mynets.dat") shouldBe "geoip.dat, geosite.dat, mynets.dat"
+    }
+
+    /**
+     * Task-12 review, Finding 5: [GEO_FILE_LIST_MESSAGE]'s separator (`", "`) is
+     * coupled to `TunnelService.resolveRouting`'s
+     * `resolution.missing.sorted().joinToString(", ")` by a comment only — there
+     * is nothing that breaks if one changes and not the other, and the failure
+     * mode is silent: the exemption stops matching, filenames get redacted away,
+     * and the diagnostic §10.4 exists for degrades to unreadable with no test
+     * failure anywhere pointing at why. `:core:model` cannot depend on `:service`
+     * to call the real joiner, so this reproduces its exact call shape instead —
+     * `sorted()` then `joinToString(", ")` over real, [isGeoFileName]-shaped
+     * names — and asserts the result survives [redact] byte for byte.
+     */
+    @Test
+    fun `survives the exact joined form TunnelService resolveRouting produces`() {
+        val missing = setOf("mynets.dat", "geoip.dat", "geosite.dat")
+        val message = missing.sorted().joinToString(", ")
+
+        redact(message) shouldBe message
+    }
+
+    /**
+     * The exemption is anchored to the **whole** message, and this is the test
+     * that says so.
+     *
+     * Exempting any *token* shaped like `<name>.dat` would exempt it in every
+     * string this function ever sees, including the config libXray quotes back
+     * when `testXray` rejects one. `RoutingEntries` accepts any domain body
+     * without whitespace, `/` or `:`, so `corp.internal.dat` is a legal routing
+     * rule — and a routing rule is browsing data under §5.6. If either assertion
+     * here starts passing a hostname through, the exemption has been widened
+     * from "this message is a filename list" to "this token looks like a
+     * filename", and that is a leak.
+     *
+     * ## The residual, stated plainly
+     *
+     * A message that is *nothing but* a `.dat`-suffixed hostname — `redact(
+     * "corp.internal.dat")` on its own — is passed through, because a custom geo
+     * source may legitimately be called `corp.internal.dat` and the grammar
+     * cannot tell the two apart. That is not closable here; what bounds it is
+     * that no real caller produces such a message. Every diagnostic that reaches
+     * this function carries prose, punctuation or JSON around the token, and all
+     * of those fail the whole-message match — which is exactly what the cases
+     * below cover.
+     */
+    @Test
+    fun `a dat-suffixed hostname is redacted wherever a real message would put it`() {
+        redact("dial tcp corp.internal.dat:443: refused") shouldNotContain "corp.internal.dat"
+        redact("""{"domain":["corp.internal.dat"]}""") shouldNotContain "corp.internal.dat"
+        redact("proxying to secret.example.dat") shouldNotContain "secret.example.dat"
+        redact("geoip.dat secret.example.dat") shouldNotContain "secret.example.dat"
+    }
+
+    /**
+     * The deliberate trade: outside a pure filename list, a `.dat` name is
+     * redacted like any other host-shaped token. Losing the filename from free
+     * text is the price of the anchoring above, and it costs nothing in practice
+     * — `GeoDataMissing`'s detail is only ever the bare list, never prose.
+     */
+    @Test
+    fun `a geo filename inside a larger message is redacted like any other token`() {
+        redact("failed to parse geoip.dat") shouldBe "failed to parse <redacted>"
+    }
+
+    @Test
+    fun `a quoted config leaks neither a dat-suffixed rule nor a real server`() {
+        val key = "SGVsbG8gdGhpcyBpcyBhIGZha2UgcmVhbGl0eSBrZXk"
+        val message =
+            """{"domain":["corp.internal.dat"],"address":"secret.example.com",""" +
+                """"id":"70cc48c5-b2f4-4a1e-9f3d-0123456789ab","publicKey":"$key"}"""
+
+        val out = redact(message)
+
+        out shouldNotContain "corp.internal.dat"
+        out shouldNotContain "secret.example.com"
+        out shouldNotContain "70cc48c5"
+        out shouldNotContain key
+    }
+
+    /** `ConnectionStateParcel` redacts on both sides of the binder, so the exemption must survive twice. */
+    @Test
+    fun `the filename list is idempotent under a second pass`() {
+        val once = redact("geoip.dat, geosite.dat")
+
+        redact(once) shouldBe once
+    }
 }

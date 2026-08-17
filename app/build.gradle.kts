@@ -60,6 +60,12 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
     implementation(project(":core:ui"))
+    // GeoModule binds LibXrayGeoDataValidator to :core:data's GeoDataValidator
+    // interface. Not :core:network too: checkModuleBoundaries (§4) allows only
+    // :core:data to depend on that module, so the GeoFileFetcher wrapper this
+    // task needs lives in :core:data's own DataModule instead — see its
+    // geoDownloader KDoc.
+    implementation(project(":core:xray"))
     implementation(project(":feature:home"))
     implementation(project(":feature:profiles"))
     implementation(project(":feature:routing"))
@@ -95,6 +101,12 @@ dependencies {
     // either. ThemeResolutionTest is this module's first JVM unit test.
     testImplementation(libs.junit)
     testImplementation(libs.kotest.assertions)
+    // GeoRefreshDecisionsTest: the plain-JVM half of Task 14's coverage, exercising
+    // GeoRefreshScheduler's decision logic via runTest without a WorkManager. Same catalog
+    // artifact every other module's testImplementation already uses (core/network,
+    // core/xray, feature/settings, feature/home, feature/profiles, service) — not a new
+    // dependency, just this module's first JVM test that needs it.
+    testImplementation(libs.kotlinx.coroutines.test)
 
     // :app builds android {} directly rather than through subspace.android.library
     // (see the kotlin {} block's comment above), so none of the androidTest kit

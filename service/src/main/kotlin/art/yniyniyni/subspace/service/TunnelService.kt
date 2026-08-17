@@ -9,7 +9,10 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
+import art.yniyniyni.subspace.core.data.GeoAssetRepository
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.FailureReason
@@ -18,6 +21,7 @@ import art.yniyniyni.subspace.core.model.LatencyOutcome
 import art.yniyniyni.subspace.core.model.LatencyResult
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
 import art.yniyniyni.subspace.core.xray.ConfigResult
@@ -37,6 +41,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -90,11 +95,25 @@ class TunnelService : VpnService() {
     @Inject
     lateinit var profileRepository: ProfileRepository
 
+    @Inject
+    lateinit var routingRepository: RoutingRepository
+
+    @Inject
+    lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var geoAssetRepository: GeoAssetRepository
+
     // Built in onCreate, once profileRepository is injected. Wraps the
     // repository's two spec-D4 methods as plain suspend lambdas rather than
     // handing ConnectionRecorder the repository itself — see ConnectionRecorder's
     // KDoc for why that indirection is what keeps it unit-testable.
     private lateinit var connectionRecorder: ConnectionRecorder
+
+    // Built in onCreate, once the three repositories above are injected. Same
+    // suspend-lambda indirection as connectionRecorder, for the same reason —
+    // see RoutingResolver's KDoc.
+    private lateinit var routingResolver: RoutingResolver
 
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
@@ -172,6 +191,12 @@ class TunnelService : VpnService() {
                     // quote back the value that failed to write.
                     Log.e(TAG, "failed to record connection outcome: ${e.javaClass.simpleName}")
                 },
+            )
+        routingResolver =
+            RoutingResolver(
+                activeRuleSetId = { settingsRepository.activeRoutingRuleSetId.first() },
+                loadRuleSet = { id -> routingRepository.ruleSet(id) },
+                installedGeoFiles = { geoAssetRepository.installedFileNames() },
             )
     }
 
@@ -255,7 +280,11 @@ class TunnelService : VpnService() {
         goForeground(R.string.notification_connecting)
 
         scope.launch {
-            val xray = XrayController()
+            // geoAssetRepository.geoDirectory() is where GeoAssetRepository installs
+            // geoip.dat/geosite.dat (§6). Passing it here — not leaving the
+            // controller to point nowhere — is what makes a geoip:/geosite:/ext:
+            // rule resolvable at all: research §2b, XrayController's own KDoc.
+            val xray = XrayController(geoAssetDir = geoAssetRepository.geoDirectory())
             synchronized(lock) {
                 if (gen != generation) return@launch
                 controller = xray
@@ -263,10 +292,19 @@ class TunnelService : VpnService() {
 
             // Split at the seam that matters for unwinding: once the core is up,
             // every later failure must stop it again.
-            val socksPort = startCore(gen, xray, profile, rowId) ?: return@launch
-            attachTun(gen, xray, socksPort, rowId)
+            val ports = startCore(gen, xray, profile, rowId) ?: return@launch
+            attachTun(gen, xray, ports.socksPort, ports.httpPort, rowId)
         }
     }
+
+    /**
+     * The two ports [startCore] allocates together, carried to [attachTun].
+     *
+     * Not a bare `Pair<Int, Int>`: `ports.first`/`ports.second` at the call site
+     * would be one more place a reviewer has to remember which index is which,
+     * for a mistake that decodes to a plausible port either way.
+     */
+    private data class StartedPorts(val socksPort: Int, val httpPort: Int)
 
     // One early return per step is the point, not a smell: §10.4 requires each
     // stage of the start sequence to fail specifically and stop there.
@@ -276,17 +314,41 @@ class TunnelService : VpnService() {
         xray: XrayController,
         profile: Profile,
         rowId: Long,
-    ): Int? {
+    ): StartedPorts? {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.AllocatingPort))) return null
-        val socksPort =
+        // One call for both ports, not two calls to allocatePort(): §10.6 and
+        // docs/agent/research/libxray-api.md §5 — getFreePorts closes each
+        // listener before opening the next, so nothing stops the kernel handing
+        // back the same number twice even across separate calls. allocatePorts
+        // verifies distinctness and retries; a config with two inbounds on the
+        // same port is rejected by the core outright.
+        val ports =
             try {
-                xray.allocatePort()
+                xray.allocatePorts(count = 2)
             } catch (e: XrayException) {
                 return failStart(gen, FailureReason.PortAllocationFailed, e, rowId)
             }
+        val socksPort = ports[0]
+        val httpPort = ports[1]
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
-        val settings = TunnelSettings(socksPort, DNS_SERVER, enableSniffing = true)
+        val routing =
+            when (val gate = resolveRouting(gen, rowId)) {
+                // failStart already ran inside resolveRouting for this branch —
+                // its cleanup (configFile/controller cleared, notification and
+                // service stopped) has already happened, same as every other
+                // failure exit in this function. Nothing left to do here but stop.
+                is RoutingGateResult.Failed -> return null
+                is RoutingGateResult.Proceed -> gate.routing
+            }
+        val settings =
+            TunnelSettings(
+                socksPort = socksPort,
+                dnsServer = DNS_SERVER,
+                enableSniffing = true,
+                routing = routing,
+                httpPort = httpPort,
+            )
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck
@@ -330,7 +392,70 @@ class TunnelService : VpnService() {
             return failStart(gen, FailureReason.CoreStartFailed, e, rowId)
         }
 
-        return socksPort
+        return StartedPorts(socksPort, httpPort)
+    }
+
+    /**
+     * The routing gate's outcome, kept as its own type rather than a nullable
+     * [RoutingRuleSet] precisely so "routing is off" ([Proceed] with a null
+     * [Proceed.routing]) cannot be confused with "the gate failed and
+     * [startCore] must stop" ([Failed]) — a code-review finding on this task's
+     * first pass, when both were folded into one nullable.
+     */
+    private sealed interface RoutingGateResult {
+        data class Proceed(val routing: RoutingRuleSet?) : RoutingGateResult
+
+        /** [failStart] has already run — [startCore] must return without doing anything else. */
+        data object Failed : RoutingGateResult
+    }
+
+    /**
+     * §4.4's activation gate, extracted out of [startCore] so that function stays
+     * under detekt's cyclomatic-complexity threshold — Task 12 adds a second
+     * allocated port to the same function, and a bare `@Suppress` here would only
+     * have bought one more task before the same finding came back.
+     *
+     * [RoutingResolver.resolve] reaches Room (`RoutingRepository`,
+     * `SettingsRepository`) and disk (`GeoAssetRepository.installedFileNames`)
+     * through the suspend lambdas built in [onCreate]; unlike every `XrayException`
+     * elsewhere in [startCore], nothing here narrows what those calls can throw.
+     * Left unguarded, that failure reaches [errorHandler] instead of [failStart] —
+     * which publishes [FailureReason.CoreStartFailed] same as this catch does, but
+     * skips failStart's cleanup (§5.4: `configFile`/`controller` cleared,
+     * `stopForeground`/`stopSelf` called), leaving the foreground notification
+     * stuck on "Connecting" and `:bg` alive indefinitely.
+     */
+    // The three resolver lambdas' failure shapes are Room's/the filesystem's, not ours to narrow.
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun resolveRouting(
+        gen: Int,
+        rowId: Long,
+    ): RoutingGateResult {
+        val resolution =
+            try {
+                routingResolver.resolve()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failStart(gen, FailureReason.CoreStartFailed, e, rowId)
+                return RoutingGateResult.Failed
+            }
+        return when (resolution) {
+            is RoutingResolution.Off -> RoutingGateResult.Proceed(null)
+            is RoutingResolution.Active -> RoutingGateResult.Proceed(resolution.ruleSet)
+            is RoutingResolution.MissingGeoData -> {
+                // §10.4: named specifically. The filenames are shape, not
+                // content, so they are safe to surface (§5.6) — Redaction.kt
+                // carries a matching exemption so they survive failure().
+                failStart(
+                    gen,
+                    FailureReason.GeoDataMissing,
+                    IllegalStateException(resolution.missing.sorted().joinToString(", ")),
+                    rowId,
+                )
+                RoutingGateResult.Failed
+            }
+        }
     }
 
     /**
@@ -346,6 +471,7 @@ class TunnelService : VpnService() {
         gen: Int,
         xray: XrayController,
         socksPort: Int,
+        httpPort: Int,
         rowId: Long,
     ) {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
@@ -391,7 +517,7 @@ class TunnelService : VpnService() {
             return
         }
 
-        val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort)
+        val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort, httpPort)
         // One generation-checked transition: the connected notification is established and
         // `Connected` published together under the lock, and the spec-D4 success write (see
         // ConnectionRecorder) happens strictly after. Previously this published, suspended in

@@ -42,6 +42,28 @@ public class TunnelClient @Inject constructor(
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
+    /**
+     * Whether the Binder handshake has completed since the latest [bind].
+     *
+     * [state] is a **cache**: it is a plain field, so once nothing calls [unbind]'s
+     * `_state.value = ...` again, it holds whatever it last held forever — including across
+     * an app backgrounding that outlives the tunnel itself (§9's `onRevoke()`, `:bg` killed).
+     * Neither of those can notify a client that has unregistered its callback, so [state] alone
+     * cannot answer "is this still true"; only [isBound] can, and only by admitting when it
+     * cannot answer at all. It stays false while [Context.bindService] has merely accepted a
+     * pending request and becomes true only after [ServiceConnection.onServiceConnected]
+     * registers [callback] and re-reads the real service state. Otherwise the foreground refresh
+     * that starts alongside an activity bind could consume the previous session's stale proxy
+     * port before the asynchronous handshake replaces it. This is §5.5's "declining to guess"
+     * applied to a cache that has gone stale rather than one that was never populated.
+     *
+     * `@Volatile` because [bind]/[unbind] run on the main thread (Activity lifecycle callbacks)
+     * while a background worker's read of this can run on [kotlinx.coroutines.Dispatchers.IO].
+     */
+    @Volatile
+    public var isBound: Boolean = false
+        private set
+
     private var service: ITunnelService? = null
 
     private val callback =
@@ -58,17 +80,24 @@ public class TunnelClient @Inject constructor(
                 binder: IBinder?,
             ) {
                 val svc = ITunnelService.Stub.asInterface(binder)
-                service = svc
                 try {
                     svc.registerCallback(callback)
                     // §5.5: re-read the real state on every bind.
                     _state.value = svc.state.toState()
+                    service = svc
+                    // Publish this last. A worker that observes true must also
+                    // observe the refreshed state above, never the stale cache.
+                    isBound = true
                 } catch (e: android.os.RemoteException) {
+                    isBound = false
+                    service = null
+                    runCatching { svc.unregisterCallback(callback) }
                     Log.w(TAG, "bind handshake failed: ${e.javaClass.simpleName}")
                 }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {
+                isBound = false
                 service = null
                 // Deliberately NOT Disconnected: :bg died, which says nothing
                 // about whether the tunnel is down. Claiming Disconnected here
@@ -77,7 +106,9 @@ public class TunnelClient @Inject constructor(
             }
         }
 
+    /** Starts a bind attempt. [isBound] remains false until its handshake completes. */
     public fun bind() {
+        isBound = false
         context.bindService(
             Intent(context, TunnelService::class.java),
             connection,
@@ -85,7 +116,14 @@ public class TunnelClient @Inject constructor(
         )
     }
 
+    /**
+     * [isBound] flips false first, deliberately before the unregister/unbind calls below: those
+     * can fail ([android.os.RemoteException], a stale [ServiceConnection]) without changing the
+     * one fact that matters to a caller of [isBound] — this client no longer has, or is trying to
+     * keep, a live link to the service.
+     */
     public fun unbind() {
+        isBound = false
         try {
             service?.unregisterCallback(callback)
         } catch (e: android.os.RemoteException) {

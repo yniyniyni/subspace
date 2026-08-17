@@ -22,6 +22,7 @@ public data class ConnectionStateParcel(
     val stage: Int,
     val sinceEpochMillis: Long,
     val socksPort: Int,
+    val httpProxyPort: Int,
     val reason: Int,
     val detail: String,
 ) : Parcelable {
@@ -30,6 +31,7 @@ public data class ConnectionStateParcel(
         stage = parcel.readInt(),
         sinceEpochMillis = parcel.readLong(),
         socksPort = parcel.readInt(),
+        httpProxyPort = parcel.readInt(),
         reason = parcel.readInt(),
         detail = parcel.readString().orEmpty(),
     )
@@ -42,6 +44,7 @@ public data class ConnectionStateParcel(
         dest.writeInt(stage)
         dest.writeLong(sinceEpochMillis)
         dest.writeInt(socksPort)
+        dest.writeInt(httpProxyPort)
         dest.writeInt(reason)
         dest.writeString(detail)
     }
@@ -64,7 +67,7 @@ public data class ConnectionStateParcel(
         when (kind) {
             KIND_DISCONNECTED -> ConnectionState.Disconnected
             KIND_CONNECTING -> ConnectionState.Connecting(StartupStage.entries[stage])
-            KIND_CONNECTED -> ConnectionState.Connected(sinceEpochMillis, socksPort)
+            KIND_CONNECTED -> ConnectionState.Connected(sinceEpochMillis, socksPort, httpProxyPort)
             KIND_DISCONNECTING -> ConnectionState.Disconnecting
             KIND_FAILED -> failure(FailureReason.entries[reason], detail)
             else -> ConnectionState.Disconnected
@@ -88,10 +91,10 @@ public data class ConnectionStateParcel(
         fun from(state: ConnectionState): ConnectionStateParcel =
             when (state) {
                 is ConnectionState.Disconnected ->
-                    ConnectionStateParcel(KIND_DISCONNECTED, 0, 0L, 0, 0, "")
+                    ConnectionStateParcel(KIND_DISCONNECTED, 0, 0L, 0, 0, 0, "")
 
                 is ConnectionState.Connecting ->
-                    ConnectionStateParcel(KIND_CONNECTING, state.stage.ordinal, 0L, 0, 0, "")
+                    ConnectionStateParcel(KIND_CONNECTING, state.stage.ordinal, 0L, 0, 0, 0, "")
 
                 is ConnectionState.Connected ->
                     ConnectionStateParcel(
@@ -99,15 +102,16 @@ public data class ConnectionStateParcel(
                         0,
                         state.sinceEpochMillis,
                         state.socksPort,
+                        state.httpProxyPort,
                         0,
                         "",
                     )
 
                 is ConnectionState.Disconnecting ->
-                    ConnectionStateParcel(KIND_DISCONNECTING, 0, 0L, 0, 0, "")
+                    ConnectionStateParcel(KIND_DISCONNECTING, 0, 0L, 0, 0, 0, "")
 
                 is ConnectionState.Failed ->
-                    ConnectionStateParcel(KIND_FAILED, 0, 0L, 0, state.reason.ordinal, state.detail)
+                    ConnectionStateParcel(KIND_FAILED, 0, 0L, 0, 0, state.reason.ordinal, state.detail)
             }
     }
 }

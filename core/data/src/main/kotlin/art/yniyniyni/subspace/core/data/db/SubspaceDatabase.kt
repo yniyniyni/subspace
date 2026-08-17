@@ -12,8 +12,10 @@ import androidx.room.RoomDatabase
         SubscriptionEntity::class,
         SubscriptionDirectiveEntity::class,
         SubscriptionOverrideEntity::class,
+        RoutingRuleSetEntity::class,
+        GeoAssetEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 internal abstract class SubspaceDatabase : RoomDatabase() {
@@ -22,4 +24,8 @@ internal abstract class SubspaceDatabase : RoomDatabase() {
     abstract fun settingDao(): SettingDao
 
     abstract fun subscriptionDao(): SubscriptionDao
+
+    abstract fun routingRuleSetDao(): RoutingRuleSetDao
+
+    abstract fun geoAssetDao(): GeoAssetDao
 }

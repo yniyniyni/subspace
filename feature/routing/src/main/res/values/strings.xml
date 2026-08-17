@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no
+     hardcoded UI text. §5.6: a rule set's own name is the only user-supplied
+     value shown by this screen (interpolated as %1$s below) — never an
+     entry, a site or an IP. -->
+<resources>
+    <string name="routing_title">Routing</string>
+
+    <string name="routing_off_label">Off</string>
+    <string name="routing_off_description">Routing off — every connection uses the default path</string>
+
+    <string name="routing_create_description">Create rule set</string>
+    <string name="routing_back_description">Back</string>
+    <string name="routing_edit_description">Edit %1$s</string>
+    <string name="routing_delete_description">Delete %1$s</string>
+    <string name="routing_activate_description">Activate %1$s</string>
+
+    <plurals name="routing_entry_count">
+        <item quantity="one">%1$d entry</item>
+        <item quantity="other">%1$d entries</item>
+    </plurals>
+
+    <!-- Blocks activation — see RuleSetRow.canActivate. -->
+    <string name="routing_missing_geo_files">Needs geo files: %1$s</string>
+    <!-- Informational only — never blocks activation. -->
+    <string name="routing_update_failed">Last update failed</string>
+
+    <string name="routing_empty_title">No rule sets yet</string>
+    <string name="routing_empty_message">Create a rule set to block, proxy or route traffic directly by domain or address.</string>
+
+    <!-- Rule set editor (Task 16). §5.6: the name field is the only user-supplied value this
+         screen echoes back — every entry field below only ever displays what the user themself
+         typed into it, never logs it, and EntryProblem's own mapping below carries no entry
+         text either. -->
+    <string name="rule_set_editor_title">Rule set</string>
+    <string name="rule_set_editor_back_description">Back</string>
+    <string name="rule_set_editor_save_button">Save</string>
+    <string name="rule_set_editor_name_label">Name</string>
+
+    <string name="rule_set_editor_order_label">Rule order</string>
+    <string name="rule_set_editor_move_earlier_description">Move %1$s earlier</string>
+    <string name="rule_set_editor_move_later_description">Move %1$s later</string>
+
+    <string name="rule_set_editor_domain_strategy_label">Domain strategy</string>
+    <string name="rule_set_editor_domain_strategy_as_is">As is</string>
+    <string name="rule_set_editor_domain_strategy_ip_if_non_match">IP if no domain match</string>
+    <string name="rule_set_editor_domain_strategy_ip_on_demand">IP on demand</string>
+
+    <string name="rule_set_editor_outcome_block">Block</string>
+    <string name="rule_set_editor_outcome_proxy">Proxy</string>
+    <string name="rule_set_editor_outcome_direct">Direct</string>
+    <string name="rule_set_editor_field_sites">Sites</string>
+    <string name="rule_set_editor_field_ips">IPs</string>
+    <!-- "%1$s → %2$s", e.g. "Block → Sites" -->
+    <string name="rule_set_editor_section_title">%1$s → %2$s</string>
+
+    <string name="rule_set_editor_entry_hint">Domain, address or geosite:/geoip: code</string>
+    <string name="rule_set_editor_add_description">Add entry</string>
+    <!-- §5.6: deliberately does not interpolate the entry itself, unlike routing_edit_description's
+         rule-set name (a label the user chose, not a value it routes) — this row's own visible Text
+         already carries the entry for a screen reader to reach. -->
+    <string name="rule_set_editor_remove_entry_description">Remove entry</string>
+    <string name="rule_set_editor_browse_categories_description">Browse categories</string>
+    <!-- "%1$s (%2$d rules)", e.g. "category-ads-all (42 rules)" -->
+    <string name="rule_set_editor_category_row">%1$s (%2$d rules)</string>
+
+    <string name="rule_set_editor_problem_blank">Entry cannot be blank</string>
+    <string name="rule_set_editor_problem_missing_geo_code">Add a code after the colon, e.g. geosite:cn</string>
+    <string name="rule_set_editor_problem_malformed_ext_reference">Reference must be ext:file.dat:code</string>
+    <string name="rule_set_editor_problem_malformed_address">Not a valid address or CIDR range</string>
+    <string name="rule_set_editor_problem_malformed_domain">Not a valid domain entry</string>
+    <string name="rule_set_editor_problem_illegal_character">Entry cannot contain a quote or backslash</string>
+
+    <!-- Save-time problems (fix round 1, Findings 7/8) — distinct from the per-entry problems
+         above, shown once near the Save button rather than on any one field. -->
+    <string name="rule_set_editor_save_problem_invalid_entry">One of the stored entries is no longer valid. Remove or fix it before saving.</string>
+    <string name="rule_set_editor_save_problem_write_failed">Could not save. Try again.</string>
+    <!-- %1$s is the conflicting rule set's own name — exempt from §5.6, see SaveProblem.NameConflict's own KDoc. -->
+    <string name="rule_set_editor_save_problem_name_conflict">A rule set named \"%1$s\" already exists. Choose a different name.</string>
+</resources>
+

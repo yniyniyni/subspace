@@ -16,7 +16,7 @@ license.
 | Component | Version pin | License | Obligation |
 |---|---|---|---|
 | [Xray-core](https://github.com/XTLS/Xray-core) | v26.7.11 | MPL-2.0 | File-level copyleft. GPL/AGPL-compatible. Consumed as a binary through libXray; not modified. |
-| [libXray](https://github.com/XTLS/libXray) | v26.7.11 | MIT | Attribution only. |
+| [libXray](https://github.com/XTLS/libXray) | v26.7.11 / commit `294fb37343205b9b0cb7b7b1b423d3d4b60d9998`, **patched** | MIT | Attribution only. **Modified**: `third_party/libxray-patches/0001-restore-invoke-env.patch` re-applies upstream's own PR #133 (26 lines, `invoke.go` + `invoke_model.go`) to restore the `env` object on the invoke request. Without it `geoip:`/`geosite:`/`ext:` rules cannot resolve on Android at all — Go is started with an empty environment there, so `Os.setenv` from Java never reaches it (research §2b). MIT permits modification with the notice retained, which the patch does not touch; the AAR is built by `scripts/build-libxray.sh`, not downloaded. Upstream removed this in PR #134 three days before v26.7.11 was tagged; when it returns, delete the env patch and the build can revert to the official release. The source commit is verified after cloning so a moved tag cannot silently change the artifact. |
 | [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) | 2.16.0 (git submodule, `third_party/`) | MIT | Attribution only. Compiled from source into `libtun2socks.so`. One file, `src/hev-jni.c`, is excluded — it registers JNI natives against upstream's own app class and aborts any other process that loads it. See `service/src/main/jni/Android.mk`. Its vendored dependencies (yaml, lwip, hev-task-system) are built unmodified. |
 | [ZXing](https://github.com/zxing/zxing) (`com.google.zxing:core`) | 3.5.3 | Apache-2.0 | **Used for:** Decoding QR codes from camera frames (`QrAnalyzer`, Task 20). **Justification (§10.7):** ARCHITECTURE.md §2 specifies ZXing over ML Kit — ML Kit is proprietary and depends on Google Play Services, which would foreclose the IzzyOnDroid distribution path §14.7 depends on. `zxing:core` only, never `zxing-android-embedded` — that artifact ships its own `CaptureActivity` and theming, and this app is Compose-only. Licence verified from the artifact's own POM (`<license>Apache License, Version 2.0</license>`, fetched directly from Maven Central), not the project README. Attribution + NOTICE. |
 | [AndroidX CameraX](https://developer.android.com/jetpack/androidx/releases/camera) (`androidx.camera:camera-core`/`camera-camera2`/`camera-lifecycle`/`camera-view`) | 1.5.0 | Apache-2.0 | **Used for:** Camera preview and the frame stream feeding ZXing (`QrScanScreen`, Task 20). **Justification (§10.7):** the platform Camera2 API requires hand-rolling capture-session and lifecycle management that CameraX already solves correctly across OEMs; hand-rolling it is the kind of small-problem-sized custom code §10.7 warns against adding a dependency to avoid rather than for. AndroidX, not a Play-Services-backed camera API — no proprietary dependency, same reasoning as the ZXing choice above. Licence verified from `camera-core`'s own POM (`<name>The Apache Software License, Version 2.0</name>`, fetched directly from Google's Maven), not a project README. Attribution only. |
@@ -32,11 +32,31 @@ license.
 | [AndroidX WorkManager](https://developer.android.com/jetpack/androidx/releases/work) (`androidx.work:work-runtime-ktx`, resolves `work-runtime` transitively) | 2.11.0 | Apache-2.0 | **Used for:** `RefreshScheduler`/`SubscriptionRefreshWorker` (Task 12), the self-rescheduling one-shot job that refreshes each subscription on its own provider-supplied `profile-update-interval` (spec D9). **Justification (§10.7):** ARCHITECTURE.md §A.2 requires auto-update on an interval; `AlarmManager` and a bare coroutine both lose to Doze (§9) and neither survives process death or reboot. WorkManager is the platform's answer, and is what M7's always-on VPN needs regardless — with always-on the tunnel runs for weeks without the app being opened, and a stale server list then breaks a tunnel with no UI open to fix it. Licence verified from `work-runtime-ktx`'s own POM (`<license><name>The Apache Software License, Version 2.0</name></license>`, fetched directly from Google's Maven), not a project README. Attribution only. |
 | [AndroidX Hilt Work](https://developer.android.com/jetpack/androidx/releases/hilt) (`androidx.hilt:hilt-work`, `androidx.hilt:hilt-compiler` for the `@HiltWorker` KSP processor) | 1.3.0 | Apache-2.0 | **Used for:** injecting `RefreshScheduler` into `SubscriptionRefreshWorker` via `@HiltWorker`/`@AssistedInject`, and the `HiltWorkerFactory` `SubspaceApplication`'s `Configuration.Provider` hands to WorkManager. **Justification (§10.7):** the alternative is a hand-rolled `WorkerFactory` that switches on class name to construct every worker manually, which does not scale and is exactly the kind of small-problem-sized custom code §10.7 warns against a dependency to avoid. `hilt-compiler` is a KSP-only annotation processor (not shipped in the APK) recorded alongside `hilt-work` because they are versioned and used together for this one feature, the same way `androidx.hilt:hilt-compiler`'s Dagger counterpart (`hilt-android-compiler`) is not separately listed from `hilt-android` elsewhere in this file. Licence verified from `hilt-work`'s own POM (`<license><name>The Apache Software License, Version 2.0</name></license>`, fetched directly from Google's Maven), not a project README. Attribution only. |
 
-Bundled `geoip.dat` / `geosite.dat` originate from
-[v2fly/domain-list-community](https://github.com/v2fly/domain-list-community)
-(MIT) and [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat)
-(GPL-3.0 for the build tooling; the emitted `.dat` files are data). Record the
-exact source and release tag in the assets README when they are first added.
+## Build-time dependencies
+
+| Component | Version pin | License | Obligation |
+|---|---|---|---|
+| [Go mobile](https://go.googlesource.com/mobile/) (`gobind`, `gomobile`) | `v0.0.0-20260816165457-f98cc9b3c733` | BSD-3-Clause | Build tooling for the patched libXray Android AAR; not an app runtime dependency. **Justification (§10.7):** libXray's supported Android build invokes these tools, but its v26.7.11 script resolves `@latest` on every build. `0002-pin-gomobile-version.patch` replaces that moving input with the version used for this branch's tested AAR, so local and CI rebuilds select the same toolchain and dependency graph. Preserve the upstream licence notice in the downloaded module cache; no source is copied into this repository. |
+
+## Downloadable geo databases
+
+`geoip.dat`/`geosite.dat` are **not bundled** in the APK (ARCHITECTURE.md §6,
+M5). The app fetches one on demand, from a source the user picks. Because the
+bytes are never redistributed by this project — only fetched by the user's own
+device, on request, from the upstream's own release URL — this table records
+an attribution note for each catalogue source rather than a distribution
+obligation: **it removes a licensing question this file used to carry, rather
+than adding one.** A custom source a user adds of their own accord carries
+whatever licence that source declares; this project makes no claim about it.
+
+Sources are `GeoSourceCatalogue.kt` (`:core:model`), the single place new rows
+must be added — do not hand-transcribe a licence from memory (§10.5):
+
+| Source | Files | License | Note |
+|---|---|---|---|
+| [v2fly/geoip](https://github.com/v2fly/geoip) + [v2fly/domain-list-community](https://github.com/v2fly/domain-list-community) | `geoip.dat`, `geosite.dat` (published as `dlc.dat`) | MIT | Default catalogue entry (`GeoSourceCatalogue.DEFAULT_SOURCE_ID`). Upstream, politically neutral, smallest combined download of the curated sets. |
+| [Loyalsoldier/v2ray-rules-dat](https://github.com/Loyalsoldier/v2ray-rules-dat) | `geoip.dat`, `geosite.dat` | GPL-3.0 (build tooling) / CC-BY-SA-4.0 (per `GeoSourceCatalogue.kt`'s recorded `licence` field) | Curated ruleset variant, not consumed as code — fetched as data by the user's own device. |
+| [runetfreedom/russia-v2ray-rules-dat](https://github.com/runetfreedom/russia-v2ray-rules-dat) | `geoip.dat`, `geosite.dat` | GPL-3.0 | Ruleset tuned for Russia-focused routing. The 73.7 MB `geosite.dat` is the largest catalogue entry (`docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md` §7) and the reason the download is streamed and validated before install rather than held in memory. |
 
 All versions above are the **resolved** coordinates from
 `./gradlew :core:parser:dependencies --configuration runtimeClasspath`, and each

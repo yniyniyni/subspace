@@ -19,6 +19,12 @@ public sealed interface ConnectionState {
     public data class Connected(
         val sinceEpochMillis: Long,
         val socksPort: Int,
+        /**
+         * The loopback HTTP proxy port, or 0 when the tunnel carries no HTTP
+         * inbound. `:main` dials this so subscription and geo fetches travel
+         * through the tunnel (spec §5.4).
+         */
+        val httpProxyPort: Int = 0,
     ) : ConnectionState
 
     public data object Disconnecting : ConnectionState
@@ -107,6 +113,17 @@ public enum class FailureReason {
      * to something other than what the user chose.
      */
     ProfileDecodeFailed,
+
+    /**
+     * The active routing rule set references a geo database that is not on disk.
+     *
+     * Distinct from [ConfigRejected], which is what `testXray` would report for
+     * the same config. §10.4: the specific reason is the difference between a
+     * user who re-downloads their geo files and one who goes looking for a broken
+     * server. The activation gate normally prevents this — it is reachable when
+     * a file is deleted, or storage is cleared, after activation.
+     */
+    GeoDataMissing,
 }
 
 /**

@@ -49,4 +49,53 @@
     <string name="settings_ping_on_launch_summary">Measures each group once when you open the server list.</string>
     <string name="settings_ping_on_launch_metered">Also on mobile data</string>
     <string name="settings_ping_on_launch_metered_summary">Off by default — testing a large list uses real data. Manual tests always work.</string>
+
+    <string name="settings_section_routing">Routing</string>
+    <string name="settings_routing_row_label">Rule sets</string>
+    <string name="settings_routing_row_summary">Block, proxy or route traffic directly by domain or address</string>
+
+    <string name="settings_section_geo">Geo databases</string>
+    <!-- %1$s is the size (e.g. "23.1 MB"), %2$s the install status. -->
+    <string name="settings_geo_row_summary">%1$s • %2$s</string>
+    <string name="settings_geo_size_mb">%1$.1f MB</string>
+    <string name="settings_geo_status_not_installed">Not installed yet</string>
+    <string name="settings_geo_status_installed">Installed</string>
+    <string name="settings_geo_status_updating">Updating…</string>
+    <!-- §A.3.1's persistent error marker — shown when a past attempt failed and no fresh
+         result from this session has replaced it yet. -->
+    <string name="settings_geo_status_error">Last update failed</string>
+    <!-- §10.4: one string per GeoInstallResult member. Do not collapse these to a single
+         pass/fail message — the user needs to tell a failed download from a rejected file
+         from a failed local install. -->
+    <string name="settings_geo_result_installed">Updated</string>
+    <string name="settings_geo_result_download_failed">Download failed — check your connection</string>
+    <string name="settings_geo_result_rejected">Downloaded file was not a valid geo database</string>
+    <string name="settings_geo_result_install_failed">Downloaded, but installing it failed</string>
+    <!-- The persisted lastFailure marker (§A.3.1): distinct from the four results above, and
+         shown when no fresh result from this session has replaced it. One string per
+         GeoAssetFailure/GeoValidation member — see lastFailureMessageRes's own KDoc for why a
+         permanent "not a geo database" must not read the same as a transient network failure. -->
+    <string name="settings_geo_persisted_invalid_filename">The install filename was rejected</string>
+    <string name="settings_geo_persisted_download_failed">Last update failed to download — check your connection</string>
+    <string name="settings_geo_persisted_install_failed">Downloaded, but installing it failed last time</string>
+    <string name="settings_geo_persisted_recovery_failed">Installing it failed and could not fully recover — try again</string>
+    <string name="settings_geo_persisted_unreadable">Last download could not be read as a geo database</string>
+    <string name="settings_geo_persisted_not_geo_data">This is not a valid geo database for the type chosen</string>
+    <!-- %1$s is the install filename — a custom row's real identity (§5.6: filenames are shape,
+         not a secret), so two custom sources never render as identical rows. -->
+    <string name="settings_geo_custom_source_label">Custom (%1$s)</string>
+    <!-- %1$s is a formatted date, e.g. "2026-08-11". -->
+    <string name="settings_geo_installed_at">Installed %1$s</string>
+    <string name="settings_geo_update_now">Update %1$s now</string>
+    <!-- %1$s is the row's display name — a custom source only, so this button never appears on a
+         catalogue row (branch review, Finding 3). -->
+    <string name="settings_geo_remove_custom_source">Remove %1$s</string>
+    <string name="settings_geo_kind_domain">Domain list</string>
+    <string name="settings_geo_kind_ip">IP list</string>
+    <string name="settings_geo_add_custom_title">Add custom source</string>
+    <string name="settings_geo_add_custom_url">Download URL</string>
+    <string name="settings_geo_add_custom_filename">Install filename (e.g. geoip.dat)</string>
+    <string name="settings_geo_add_custom_action">Add</string>
+    <string name="settings_geo_metered_title">Update over mobile data</string>
+    <string name="settings_geo_metered_summary">Off by default — the largest database is over 70 MB. \"Update now\" always works, on any network.</string>
 </resources>

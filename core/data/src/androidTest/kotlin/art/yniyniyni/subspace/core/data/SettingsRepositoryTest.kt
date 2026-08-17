@@ -112,6 +112,32 @@ class SettingsRepositoryTest {
         }
 
     @Test
+    fun activeRoutingRuleSetIdDefaultsToNull() =
+        runTest {
+            repository.activeRoutingRuleSetId.first() shouldBe null
+        }
+
+    @Test
+    fun activeRoutingRuleSetIdRoundTrips() =
+        runTest {
+            repository.setActiveRoutingRuleSetId(7L)
+
+            repository.activeRoutingRuleSetId.first() shouldBe 7L
+        }
+
+    // Routing off is a real state, not an absent one — clearing must read back
+    // as null rather than as 0, which would be a rule set id.
+    @Test
+    fun clearingActiveRoutingRuleSetIdReadsBackAsNull() =
+        runTest {
+            repository.setActiveRoutingRuleSetId(7L)
+
+            repository.setActiveRoutingRuleSetId(null)
+
+            repository.activeRoutingRuleSetId.first() shouldBe null
+        }
+
+    @Test
     fun launchPingTogglesRoundTrip() =
         runTest {
             repository.setPingOnLaunch(false)
@@ -119,5 +145,22 @@ class SettingsRepositoryTest {
 
             repository.setPingOnLaunchMetered(true)
             repository.pingOnLaunchMetered.first() shouldBe true
+        }
+
+    // Branch review: this was previously only an in-memory ViewModel default, reset to
+    // GeoSourceCatalogue.defaults() on every construction, so a deliberate picker switch was
+    // forgotten the moment Settings was reopened.
+    @Test
+    fun selectedGeoSourceIdsIsEmptyUntilSet() =
+        runTest {
+            repository.selectedGeoSourceIds.first() shouldBe emptySet()
+        }
+
+    @Test
+    fun selectedGeoSourceIdsRoundTrips() =
+        runTest {
+            repository.setSelectedGeoSourceIds(setOf("loyalsoldier-geoip", "v2fly-geosite"))
+
+            repository.selectedGeoSourceIds.first() shouldBe setOf("loyalsoldier-geoip", "v2fly-geosite")
         }
 }

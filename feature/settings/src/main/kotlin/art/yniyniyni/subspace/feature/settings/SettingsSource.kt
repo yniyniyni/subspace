@@ -61,6 +61,24 @@ internal interface SettingsSource {
     suspend fun setPingOnLaunch(enabled: Boolean)
 
     suspend fun setPingOnLaunchMetered(enabled: Boolean)
+
+    /**
+     * Whether a *scheduled* geo-database refresh may run on a metered network. See
+     * [SettingsRepository.geoRefreshOnMetered]. A manual "Update now" is unaffected by this — see
+     * [GeoAssetSource.install]'s KDoc.
+     */
+    val geoRefreshOnMetered: Flow<Boolean>
+
+    suspend fun setGeoRefreshOnMetered(enabled: Boolean)
+
+    /**
+     * Which catalogue source id backs each geo install slot. See
+     * [SettingsRepository.selectedGeoSourceIds] — persisted, not a ViewModel default, so a
+     * deliberate picker switch survives a process restart (branch review, Finding 1).
+     */
+    val selectedGeoSourceIds: Flow<Set<String>>
+
+    suspend fun setSelectedGeoSourceIds(ids: Set<String>)
 }
 
 @Singleton
@@ -93,4 +111,14 @@ constructor(
 
     override suspend fun setPingOnLaunchMetered(enabled: Boolean) =
         settingsRepository.setPingOnLaunchMetered(enabled)
+
+    override val geoRefreshOnMetered: Flow<Boolean> = settingsRepository.geoRefreshOnMetered
+
+    override suspend fun setGeoRefreshOnMetered(enabled: Boolean) =
+        settingsRepository.setGeoRefreshOnMetered(enabled)
+
+    override val selectedGeoSourceIds: Flow<Set<String>> = settingsRepository.selectedGeoSourceIds
+
+    override suspend fun setSelectedGeoSourceIds(ids: Set<String>) =
+        settingsRepository.setSelectedGeoSourceIds(ids)
 }

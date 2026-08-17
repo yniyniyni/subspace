@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
+import art.yniyniyni.subspace.core.model.TunnelProxyLocator
 import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.HwidProvider
 import art.yniyniyni.subspace.core.network.SubscriptionSource
@@ -53,6 +54,9 @@ public class InMemorySubscriptionStack(
                 onFetch()
                 FetchOutcome.Success("", emptyMap())
             },
+            // No tunnel in this fixture; every fetch goes direct, same as
+            // production with nothing bound.
+            TunnelProxyLocator { null },
         )
 
     override fun close() {

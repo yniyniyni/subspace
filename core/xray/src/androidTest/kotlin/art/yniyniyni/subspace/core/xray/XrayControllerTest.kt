@@ -3,10 +3,14 @@ package art.yniyniyni.subspace.core.xray
 
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
+import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -144,6 +148,44 @@ class XrayControllerTest {
             }
         }
 
+    /**
+     * §10.5: an unverified inbound shape is exactly the kind of thing that gets
+     * a whole config rejected at connect. `XrayConfigGeneratorTest` proves the
+     * JSON *looks* right; only the real core proves it *is* right — and this is
+     * the first time a config carrying two inbounds is fed to it.
+     */
+    @Test
+    fun aTwoInboundConfigIsAcceptedByTheRealCore() =
+        runTest {
+            val controller = XrayController()
+            val ports = controller.allocatePorts(count = 2)
+            val settings =
+                TunnelSettings(
+                    socksPort = ports[0],
+                    dnsServer = "1.1.1.1",
+                    enableSniffing = true,
+                    httpPort = ports[1],
+                )
+            val profile = Profile(id = "id", name = "n", outbound = outbound)
+            val result = XrayConfigGenerator.generate(profile, settings)
+            check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            // Task-12 review, Finding 4: without this, the test would pass
+            // vacuously against a one-inbound config if the generator ever
+            // dropped httpPort — this cannot be re-run here (no device is
+            // reachable), so whoever runs it later needs it to mean something.
+            result.json shouldContain "http-in"
+            val configFile = File(cacheDir, "instr-two-inbound.json").apply { writeText(result.json) }
+
+            try {
+                controller.validate(configFile)
+            } catch (e: XrayException) {
+                // §5.6: the message can quote the config back.
+                fail("the core rejected a two-inbound config: ${e.javaClass.simpleName}")
+            } finally {
+                configFile.delete()
+            }
+        }
+
     @Test
     fun malformedConfigIsRejectedWithARealError() =
         runTest {
@@ -164,6 +206,68 @@ class XrayControllerTest {
                 configFile.delete()
             }
         }
+
+    /**
+     * The M5 regression itself, proven end to end on the real core rather than
+     * against a hand-built request like `AssetLocationProbeTest`.
+     *
+     * A `geosite:TEST` rule can only resolve if `XrayController` actually wires
+     * the invoke `env` object through to `testXray` — research §2b, the
+     * `XrayController`/`LibXrayInvoke` KDocs. Stages its own minimal
+     * `geosite.dat` (same encoding `LibXrayGeoDataValidatorTest` uses) rather
+     * than depending on the device's installed one: this must pass on any
+     * device, not just one that has already run a geo source install.
+     */
+    @Test
+    fun geositeRulesResolveThroughTheEnvObject() =
+        runTest {
+            val geoDir = File(cacheDir, "instr-controller-geo-${System.nanoTime()}").apply { mkdirs() }
+            File(geoDir, "geosite.dat").writeBytes(minimalGeositeDat())
+
+            val controller = XrayController(geoAssetDir = geoDir)
+            val ruleSet =
+                RoutingRuleSet(
+                    name = "geosite-test",
+                    buckets = mapOf(RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:TEST"))),
+                )
+            val settings =
+                TunnelSettings(
+                    socksPort = controller.allocatePort(),
+                    dnsServer = "1.1.1.1",
+                    enableSniffing = true,
+                    routing = ruleSet,
+                )
+            val profile = Profile(id = "id", name = "n", outbound = outbound)
+            val result = XrayConfigGenerator.generate(profile, settings)
+            check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            val configFile = File(cacheDir, "instr-geosite.json").apply { writeText(result.json) }
+
+            try {
+                controller.validate(configFile)
+            } catch (e: XrayException) {
+                // §5.6: the message can quote the config back.
+                fail("the core rejected a geosite: rule against a real geosite.dat: ${e.javaClass.simpleName}")
+            } finally {
+                configFile.delete()
+                geoDir.deleteRecursively()
+            }
+        }
+
+    /**
+     * `GeoSiteList { entry { country_code: "TEST", domain { type: Domain, value: "example.com" } } }`
+     * — the same hand-encoded protobuf `LibXrayGeoDataValidatorTest` and
+     * `AssetLocationProbeTest` use, kept local rather than shared so this test
+     * has no dependency on either.
+     */
+    private fun minimalGeositeDat(): ByteArray {
+        val domain =
+            byteArrayOf(0x08, 0x02) +
+                byteArrayOf(0x12, 0x0b) + "example.com".toByteArray()
+        val geoSite =
+            byteArrayOf(0x0a, 0x04) + "TEST".toByteArray() +
+                byteArrayOf(0x12, domain.size.toByte()) + domain
+        return byteArrayOf(0x0a, geoSite.size.toByte()) + geoSite
+    }
 
     @Test
     fun reportsNotRunningBeforeStart() =

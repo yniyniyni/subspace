@@ -57,3 +57,34 @@ data object QrScan
  */
 @Serializable
 data class SubscriptionDetail(val subscriptionId: Long)
+
+/**
+ * The routing rule set list, pushed on top of the top-level destinations —
+ * reached from Settings rather than the navigation bar, which stays at three
+ * entries (Home, Servers, Settings). The pill hides while this is on screen,
+ * same reasoning as [Editor].
+ */
+@Serializable
+data object RoutingList
+
+/**
+ * One rule set's editor.
+ *
+ * @param ruleSetId the row id being edited, or [NEW_RULE_SET] to create one —
+ *   the same create-new convention [Editor] uses for profiles.
+ */
+@Serializable
+data class RuleSetEditor(val ruleSetId: Long)
+
+/**
+ * Passed as [RuleSetEditor.ruleSetId] to start the create-new-rule-set flow.
+ *
+ * [Editor.profileId] uses the identical "an id that does not resolve to an
+ * existing row" convention without a named constant — this one is named
+ * because `SubspaceNavHost` and this file's own KDoc above both need to
+ * reference the sentinel without duplicating it. Note `:feature:routing` never
+ * sees this constant: the list screen exposes an `onCreateRuleSet` callback and
+ * `SubspaceNavHost` supplies the id, because a feature module cannot depend on
+ * `:app` (§4).
+ */
+const val NEW_RULE_SET = 0L

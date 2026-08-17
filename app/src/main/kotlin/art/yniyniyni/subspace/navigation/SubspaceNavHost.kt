@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -28,6 +29,8 @@ import art.yniyniyni.subspace.feature.profiles.editor.EditorScreen
 import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
 import art.yniyniyni.subspace.feature.profiles.subscription.SubscriptionDetailScreen
+import art.yniyniyni.subspace.feature.routing.RoutingListScreen
+import art.yniyniyni.subspace.feature.routing.RuleSetEditorScreen
 import art.yniyniyni.subspace.feature.settings.SettingsScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
 
@@ -36,33 +39,37 @@ private const val SERVERS_VALUE = "servers"
 private const val SETTINGS_VALUE = "settings"
 
 /**
- * Wires [Home], [Servers], [Settings], [Editor] and [QrScan] into a
- * [NavHost] behind [FloatingNavigationBar].
+ * Wires [Home], [Servers], [Settings], [Editor], [QrScan], [SubscriptionDetail],
+ * [RoutingList] and [RuleSetEditor] into a [NavHost] behind [FloatingNavigationBar].
  *
  * [Home], [Servers] and [Settings] are top-level: selecting one navigates
  * with `launchSingleTop` plus `popUpTo(startDestination) { saveState = true }`
  * and `restoreState = true`, so re-selecting the already-active destination
  * neither stacks a duplicate back-stack entry nor loses that destination's
  * own scroll/input state, and switching between the three restores each
- * one's state rather than recreating it. [Editor] and [QrScan] are pushed on
- * top of whichever top-level destination was active and hide the pill while
- * they are on screen — they are single-purpose flows a user is pushed into
- * and pops back out of, not places they "switch" between.
+ * one's state rather than recreating it. Every other route is pushed on top
+ * of whichever top-level destination was active and hides the pill while it
+ * is on screen — each is a single-purpose flow a user is pushed into and
+ * pops back out of, not a place they "switch" between.
  *
  * Every destination renders its real screen directly: `Home` ([HomeScreen],
- * from `:feature:home`), `Servers` ([ServersScreen], from
- * `:feature:profiles`, wired in Task 18's fix round 1 after code review
- * found it built, tested and unreachable), `QrScan`
+ * from `:feature:home`), `Servers` ([ServersScreen], from `:feature:profiles`,
+ * wired in Task 18's fix round 1 after code review found it built, tested and
+ * unreachable), `QrScan`
  * ([QrScanRoute][art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute],
  * from `:feature:profiles`, wired in Task 20's fix round 1 for the identical
  * reason), `Editor` ([EditorScreen], from `:feature:profiles`, wired in
- * Task 21 — the same "no later task owns this" treatment) and, as of Task
- * 22, `Settings` ([SettingsScreen], from `:feature:settings`) — the same
- * treatment again, and the last placeholder route this graph had. Every
- * top-level and pushed destination now resolves a `ViewModel` through
- * `hiltViewModel()`, which is why [SubspaceNavHostTest] can no longer drive
- * the real [SubspaceNavHost] Hilt-free for any of them — see that file's own
- * KDoc for what that means for its coverage.
+ * Task 21 — the same "no later task owns this" treatment), `Settings`
+ * ([SettingsScreen], from `:feature:settings`, Task 22), `RoutingList`
+ * ([RoutingListScreen], from `:feature:routing`, Task 15) and, as of Task 16,
+ * `RuleSetEditor` ([RuleSetEditorScreen], from `:feature:routing` — Task 15's
+ * own brief had declared both routes ahead of this one existing, wired to a
+ * `PlaceholderScreen`, since `RoutingListScreen`'s create/edit actions already
+ * needed somewhere real to push to; this task retires that placeholder). Every
+ * destination resolves a `ViewModel` through `hiltViewModel()`, which is why
+ * [SubspaceNavHostTest] cannot drive the real [SubspaceNavHost] Hilt-free for
+ * any of them — see that file's own KDoc for what that means for its
+ * coverage.
  *
  * Root layout is a plain [Box], not a [androidx.compose.material3.Scaffold].
  * [FloatingNavigationBar] already applies its own `navigationBars`
@@ -136,10 +143,9 @@ fun SubspaceNavHost(
                 // Task 22: SettingsScreen replaces the placeholder outright — the same
                 // "no later task owns this" treatment ServersScreen (Task 18 fix round 1),
                 // QrScanScreen (Task 20 fix round 1) and EditorScreen (Task 21) already got.
-                // This closes the last placeholder route in this graph — see PlaceholderScreen's
-                // own KDoc below and SubspaceNavHostTest's file-level KDoc for what that means
-                // for this file's own Hilt-free test harness.
-                SettingsScreen()
+                // Task 15 (M5): SettingsScreen's new "Routing" row navigates here, to
+                // RoutingList — see that composable below.
+                SettingsScreen(onNavigateToRouting = { navController.navigate(RoutingList) })
             }
             composable<Editor> { entry ->
                 // Task 21: EditorScreen replaces the placeholder outright — the same
@@ -180,6 +186,7 @@ fun SubspaceNavHost(
                     onDone = { navController.popBackStack() },
                 )
             }
+            routingDestinations(navController)
         }
 
         if (selected != null) {
@@ -194,8 +201,13 @@ fun SubspaceNavHost(
 }
 
 /**
- * `null` for [Editor] and [QrScan] (and for no current destination yet) — the pill's cue to
- * hide.
+ * `null` for [Editor], [QrScan], [SubscriptionDetail], [RoutingList] and [RuleSetEditor] (and for
+ * no current destination yet) — the pill's cue to hide. The `else -> null` branch is what covers
+ * the last three: only [Home], [Servers] and [Settings] get an explicit branch, since those are
+ * the only three destinations this graph ever wants the pill visible for — Task 15 (M5) confirms
+ * [RoutingList] and [RuleSetEditor] fall into that same default bucket alongside [Editor] and
+ * [QrScan], rather than adding branches for them that would need to (incorrectly) return one of
+ * [HOME_VALUE]/[SERVERS_VALUE]/[SETTINGS_VALUE].
  *
  * `internal`, not `private`, since Task 21: [SubspaceNavHostTest] exercises this mapping
  * directly against a small local graph rather than through [SubspaceNavHost] itself — see
@@ -270,5 +282,31 @@ internal fun NavHostController.navigateToTopLevel(value: String) {
         popUpTo(graph.findStartDestination().id) { saveState = true }
         launchSingleTop = true
         restoreState = true
+    }
+}
+
+/**
+ * [RoutingList] and [RuleSetEditor] — extracted out of [SubspaceNavHost] itself (adding these two
+ * destinations pushed that function past detekt's `LongMethod` line budget, the same reason
+ * [art.yniyniyni.subspace.core.ui.component.GroupCard]'s own header row is split out), so this is
+ * purely an extraction, not a behaviour change: every line below is unmodified from
+ * [SubspaceNavHost]'s previous body.
+ */
+private fun NavGraphBuilder.routingDestinations(navController: NavHostController) {
+    composable<RoutingList> {
+        // Task 15 (M5): the rule set list — the activation gate screen.
+        RoutingListScreen(
+            onCreateRuleSet = { navController.navigate(RuleSetEditor(ruleSetId = NEW_RULE_SET)) },
+            onEditRuleSet = { id -> navController.navigate(RuleSetEditor(ruleSetId = id)) },
+            onBack = { navController.popBackStack() },
+        )
+    }
+    composable<RuleSetEditor> { entry ->
+        // Task 16: RuleSetEditorScreen replaces the placeholder outright — the same
+        // "no later task owns this" treatment ServersScreen (Task 18 fix round 1),
+        // QrScanScreen (Task 20 fix round 1), EditorScreen (Task 21) and SettingsScreen/
+        // SubscriptionDetailScreen (Task 15/22) each got.
+        val route: RuleSetEditor = entry.toRoute()
+        RuleSetEditorScreen(ruleSetId = route.ruleSetId, onDone = { navController.popBackStack() })
     }
 }

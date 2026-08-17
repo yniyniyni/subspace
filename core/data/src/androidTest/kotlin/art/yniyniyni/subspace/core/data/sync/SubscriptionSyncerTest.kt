@@ -7,6 +7,7 @@ import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
+import art.yniyniyni.subspace.core.model.TunnelProxyLocator
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.network.FetchFailure
 import art.yniyniyni.subspace.core.network.FetchOutcome
@@ -68,8 +69,11 @@ class SubscriptionSyncerTest {
         responseForRequest(request)
     }
 
+    /** No tunnel bound by default; individual tests override to assert the port is threaded through. */
+    private var proxyPort: Int? = null
+
     private fun syncer() =
-        SubscriptionSyncer(db.subscriptionDao(), subscriptions, settings, source)
+        SubscriptionSyncer(db.subscriptionDao(), subscriptions, settings, source, TunnelProxyLocator { proxyPort })
 
     @Before
     fun setUp() {
@@ -119,6 +123,28 @@ class SubscriptionSyncerTest {
         syncer().sync(id)
 
         lastRequest?.hwidEnabled shouldBe false
+    }
+
+    @Test
+    fun aRunningTunnelsProxyPortIsThreadedIntoTheFetch() = runTest {
+        val id = addSubscription()
+        proxyPort = 18080
+
+        syncer().sync(id)
+
+        lastRequest?.proxyPort shouldBe 18080
+    }
+
+    @Test
+    fun noBoundTunnelFetchesDirectly() = runTest {
+        // §5.4/spec: a background refresh with nothing bound gets null and
+        // goes direct rather than failing the sync outright.
+        val id = addSubscription()
+        proxyPort = null
+
+        syncer().sync(id)
+
+        lastRequest?.proxyPort shouldBe null
     }
 
     @Test

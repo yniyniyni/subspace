@@ -1,0 +1,42 @@
+diff --git a/build/app/build.py b/build/app/build.py
+index f10471d..0aa7072 100644
+--- a/build/app/build.py
++++ b/build/app/build.py
+@@ -12,5 +12,6 @@ XRAY_CORE_MOD_NAME = "github.com/xtls/xray-core"
+ DEFAULT_XRAY_CORE_VERSION = "v1.260327.1-0.20260711155151-50231eaff98c"
+ LOCAL_XRAY_CORE_DIR_NAME = "Xray-core"
++GOMOBILE_VERSION = "v0.0.0-20260816165457-f98cc9b3c733"
+-
+-
++
++
+ class Builder(object):
+@@ -116,18 +117,2 @@ class Builder(object):
+     def prepare_gomobile(self):
+-        result = subprocess.run(
+-            [
+-                "go",
+-                "list",
+-                "-m",
+-                "-f",
+-                "{{.Version}}",
+-                "golang.org/x/mobile@latest",
+-            ],
+-            capture_output=True,
+-            text=True,
+-        )
+-        version = result.stdout.strip()
+-        if result.returncode != 0 or not version:
+-            raise Exception("resolve latest gomobile version failed")
+-
+         ret = subprocess.run(
+@@ -137,3 +122,3 @@ class Builder(object):
+                 "-tool",
+-                f"golang.org/x/mobile/cmd/gobind@{version}",
++                f"golang.org/x/mobile/cmd/gobind@{GOMOBILE_VERSION}",
+             ]
+@@ -147,3 +132,3 @@ class Builder(object):
+                 "install",
+-                f"golang.org/x/mobile/cmd/gomobile@{version}",
++                f"golang.org/x/mobile/cmd/gomobile@{GOMOBILE_VERSION}",
+             ]

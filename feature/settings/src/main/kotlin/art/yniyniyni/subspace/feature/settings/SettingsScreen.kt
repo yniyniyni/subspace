@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -29,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
 import art.yniyniyni.subspace.core.ui.component.SectionHeader
@@ -39,25 +41,36 @@ private val HWID_VALUE_START_PADDING = 56.dp
 private val HWID_VALUE_BOTTOM_PADDING = 8.dp
 
 /**
- * The Settings screen: Appearance, Device ID and About.
+ * The Settings screen: Appearance, Device ID, Latency testing, Routing, Geo databases and About.
  *
  * **Not drawn**, each because a later milestone owns it, not because it was
  * forgotten:
  *  - Always-on VPN and a log viewer — M7.
- *  - Per-app proxy and routing rules — M5.
- *  - Subscriptions, ping-on-connect and a refresh interval — M4.
+ *  - Per-app proxy — M5.5.
  *
  * None of these get a stub, a disabled row, or a "coming soon" entry — an
  * empty control that looks like a feature is worse than no control at all.
+ * Routing itself is drawn as of Task 15 (M5): a single row that navigates to
+ * `RoutingList` (`:feature:routing`) rather than a stub, since that screen is
+ * real and reachable now.
  *
  * Theme selection here does not (yet) repaint [art.yniyniyni.subspace.core.ui.theme.SubspaceTheme]
  * itself — `MainActivity` still always renders with the system setting.
  * Wiring that through is a rendering concern for whichever task first needs
  * it; this task's scope is the setting existing and surviving a restart, which
  * [SettingsViewModel]'s own test proves.
+ *
+ * @param onNavigateToRouting the "Routing" row's action, forwarded verbatim to
+ *   `SubspaceNavHost`, which navigates to `RoutingList` — the same "this screen has no
+ *   `NavController` of its own" reasoning
+ *   [ServersScreen][art.yniyniyni.subspace.feature.profiles.list.ServersScreen]'s own navigation
+ *   callbacks document.
  */
 @Composable
-fun SettingsScreen(modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    onNavigateToRouting: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val viewModel: SettingsViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -72,7 +85,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             onPingTimeoutChanged = viewModel::onPingTimeoutChanged,
             onPingOnLaunchChanged = viewModel::onPingOnLaunchChanged,
             onPingOnLaunchMeteredChanged = viewModel::onPingOnLaunchMeteredChanged,
+            onGeoSourceSelected = viewModel::onGeoSourceSelected,
+            onGeoUpdateNow = viewModel::onGeoUpdateNow,
+            onAddCustomGeoSource = viewModel::onAddCustomGeoSource,
+            onGeoRefreshOnMeteredChanged = viewModel::onGeoRefreshOnMeteredChanged,
+            onRemoveCustomGeoSource = viewModel::onRemoveCustomGeoSource,
         ),
+        onNavigateToRouting = onNavigateToRouting,
         modifier = modifier,
     )
 }
@@ -93,6 +112,11 @@ internal data class SettingsActions(
     val onPingTimeoutChanged: (Int) -> Unit,
     val onPingOnLaunchChanged: (Boolean) -> Unit,
     val onPingOnLaunchMeteredChanged: (Boolean) -> Unit,
+    val onGeoSourceSelected: (String) -> Unit,
+    val onGeoUpdateNow: (GeoRow) -> Unit,
+    val onAddCustomGeoSource: (url: String, fileName: String, geoType: GeoDataKind) -> Unit,
+    val onGeoRefreshOnMeteredChanged: (Boolean) -> Unit,
+    val onRemoveCustomGeoSource: (String) -> Unit,
 )
 
 /**
@@ -103,6 +127,7 @@ internal data class SettingsActions(
 internal fun SettingsScreenContent(
     state: SettingsState,
     actions: SettingsActions,
+    onNavigateToRouting: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val onThemeChanged = actions.onThemeChanged
@@ -132,6 +157,17 @@ internal fun SettingsScreenContent(
 
         SectionHeader(stringResource(R.string.settings_latency_section))
         LatencyControls(state = state, actions = actions)
+
+        SectionHeader(stringResource(R.string.settings_section_routing))
+        SettingRow(
+            icon = Icons.AutoMirrored.Filled.List,
+            label = stringResource(R.string.settings_routing_row_label),
+            supportingText = stringResource(R.string.settings_routing_row_summary),
+            onClick = onNavigateToRouting,
+        )
+
+        SectionHeader(stringResource(R.string.settings_section_geo))
+        SettingsGeoSection(state = state, actions = actions)
 
         SectionHeader(stringResource(R.string.settings_section_about))
         SettingRow(

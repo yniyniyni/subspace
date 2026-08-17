@@ -16,12 +16,16 @@ import javax.inject.Singleton
 // table directly. No other module is meant to know these strings.
 private const val KEY_THEME = "theme"
 private const val KEY_ACTIVE_PROFILE = "active_profile_id"
+private const val KEY_ACTIVE_ROUTING_RULE_SET = "active_routing_rule_set_id"
 private const val KEY_HWID_ENABLED = "hwid_enabled"
 private const val KEY_PING_MODE = "ping_mode"
 private const val KEY_PING_CHECK_URL = "ping_check_url"
 private const val KEY_PING_TIMEOUT_SECONDS = "ping_timeout_seconds"
 private const val KEY_PING_ON_LAUNCH = "ping_on_launch"
 private const val KEY_PING_ON_LAUNCH_METERED = "ping_on_launch_metered"
+private const val KEY_GEO_REFRESH_ON_METERED = "geo_refresh_on_metered"
+private const val KEY_SELECTED_GEO_SOURCE_IDS = "selected_geo_source_ids"
+private const val SELECTED_GEO_SOURCE_ID_DELIMITER = ","
 
 /**
  * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
@@ -47,6 +51,7 @@ public enum class ThemePreference { System, Light, Dark }
  * is not multi-process safe, and this app runs `:main` and `:bg` as separate processes. One
  * storage engine means one invalidation mechanism and one place to reason about concurrency.
  */
+@Suppress("TooManyFunctions") // One typed getter/setter pair per setting; splitting the class would not shrink this.
 @Singleton
 public class SettingsRepository
 @Inject
@@ -82,6 +87,26 @@ internal constructor(
      */
     public suspend fun setActiveProfile(id: Long?) {
         dao.put(SettingEntity(key = KEY_ACTIVE_PROFILE, value = id?.toString().orEmpty()))
+    }
+
+    /**
+     * The active routing rule set, or null when routing is off.
+     *
+     * Null is the ordinary state, not an error: it produces the `"rules": []`
+     * block M1's proven tunnel has always carried.
+     */
+    public val activeRoutingRuleSetId: Flow<Long?> =
+        dao.observe(KEY_ACTIVE_ROUTING_RULE_SET).map { stored -> stored?.toLongOrNull() }
+
+    /**
+     * Sets the active rule set, or turns routing off when [id] is null.
+     *
+     * Clearing writes an empty string for the same reason [setActiveProfile]
+     * does: [SettingDao] exposes no delete, and `toLongOrNull()` reads `""` back
+     * as null — the same result as a key that was never written.
+     */
+    public suspend fun setActiveRoutingRuleSetId(id: Long?) {
+        dao.put(SettingEntity(key = KEY_ACTIVE_ROUTING_RULE_SET, value = id?.toString() ?: ""))
     }
 
     /** Whether the global Device ID header gate is enabled; defaults to on for provider compatibility. */
@@ -180,5 +205,52 @@ internal constructor(
 
     public suspend fun setPingOnLaunchMetered(enabled: Boolean) {
         dao.put(SettingEntity(key = KEY_PING_ON_LAUNCH_METERED, value = enabled.toString()))
+    }
+
+    /**
+     * Whether a *scheduled* geo-database refresh may run on a metered network.
+     *
+     * Off by default: the largest measured source is 73.7 MB (`GeoSourceCatalogue`), and pulling
+     * that unannounced over cellular is hostile. A manual "Update now" is unaffected by this
+     * setting — it always runs, ignoring both the metered constraint and the freshness cap
+     * (§A.5). This module does not know about the scheduler that reads this flag; `:app`'s
+     * `GeoRefreshScheduler` is the caller (§4 forbids the reverse dependency).
+     */
+    public val geoRefreshOnMetered: Flow<Boolean> =
+        dao.observe(KEY_GEO_REFRESH_ON_METERED).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    public suspend fun setGeoRefreshOnMetered(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_GEO_REFRESH_ON_METERED, value = enabled.toString()))
+    }
+
+    /**
+     * Which catalogue source id backs each geo install slot, empty until the user opens the
+     * picker and explicitly changes one.
+     *
+     * A branch review found the previous, unpersisted version of this setting: it lived only in
+     * `SettingsState`'s default, reset to `GeoSourceCatalogue.defaults()` on every ViewModel
+     * construction, so a deliberate switch away from v2fly was forgotten the moment Settings was
+     * left and reopened. Empty (not the defaults pair) is the correct persisted default — the
+     * fallback to `GeoSourceCatalogue.defaults()` when nothing is selected *and* nothing is
+     * installed belongs to `:feature:settings`' own row-assembly logic, not to this flag's stored
+     * value, so that logic stays free to distinguish "the user has never chosen" from "the user
+     * chose the v2fly pair on purpose".
+     *
+     * Stored as a comma-joined id list: [art.yniyniyni.subspace.core.model.GeoSource] ids are
+     * plain hyphenated identifiers the catalogue defines (never user-supplied text or a URL), so a
+     * plain split is safe and carries nothing §5.6 would otherwise redact.
+     */
+    public val selectedGeoSourceIds: Flow<Set<String>> =
+        dao.observe(KEY_SELECTED_GEO_SOURCE_IDS).map { stored ->
+            stored
+                ?.split(SELECTED_GEO_SOURCE_ID_DELIMITER)
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: emptySet()
+        }
+
+    public suspend fun setSelectedGeoSourceIds(ids: Set<String>) {
+        val value = ids.joinToString(SELECTED_GEO_SOURCE_ID_DELIMITER)
+        dao.put(SettingEntity(key = KEY_SELECTED_GEO_SOURCE_IDS, value = value))
     }
 }

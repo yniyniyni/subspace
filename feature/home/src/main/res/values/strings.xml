@@ -40,6 +40,7 @@
     <string name="failure_revoked">VPN permission was revoked</string>
     <string name="failure_protocol_not_supported">This protocol is not supported yet</string>
     <string name="failure_profile_decode">This profile could not be read</string>
+    <string name="failure_geo_data_missing">Required geo data is missing</string>
     <string name="home_latency_label">Latency</string>
     <!-- An em-dash, not "0 ms": nothing has been measured, and a substituted
          number would look measured (ARCHITECTURE.md §10.1). -->

@@ -17,10 +17,34 @@ import java.io.File
  *
  * Instances are single-use: create one per connection, so a stale protector
  * reference cannot survive a service recreation (§5.1).
+ *
+ * @param geoAssetDir Where `geoip.dat`/`geosite.dat` are installed —
+ *   `GeoAssetRepository.geoDirectory()` in production. A constructor
+ *   parameter rather than a per-call one on [validate]/[start]: this class is
+ *   already single-use per connection, the directory cannot change mid-session,
+ *   and threading it through the constructor means every call that needs it
+ *   ([validate], [start]) gets it from one place instead of every call site
+ *   having to remember to pass it. Sent on **every** [validate] and [start]
+ *   call rather than tracked as "already sent" — `applyEnv` calls
+ *   `os.Setenv` inside Go, which is sticky for the process's whole lifetime
+ *   (`AssetLocationProbeTest`), so resending is redundant but harmless, and a
+ *   dumb always-send beats a flag that could drift out of sync with reality.
+ *   Null when routing is off and no rule needs geo data — callers are not
+ *   required to have one.
  */
 public class XrayController(
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val geoAssetDir: File? = null,
 ) {
+    /**
+     * The `env` object attached to every [validate]/[start] call. Built once per
+     * instance rather than per call — the directory is fixed for the life of a
+     * single-use controller (see the class KDoc) — and null when [geoAssetDir]
+     * is null, so [LibXrayInvoke.call] omits `env` entirely rather than sending
+     * one with nothing in it.
+     */
+    private val env: XrayEnv? = geoAssetDir?.let { XrayEnv(assetLocation = it.absolutePath) }
+
     /**
      * §10.6: never a hardcoded port. A fixed port collides with other proxy apps.
      *
@@ -30,13 +54,33 @@ public class XrayController(
      */
     public suspend fun allocatePort(): Int =
         withContext(io) {
-            val data = LibXrayInvoke.call("getFreePorts", JSONObject().put("count", 1))
-            val ports = data?.optJSONArray("ports")
-            if (ports == null || ports.length() == 0) {
-                throw XrayException("libXray returned no free port")
-            }
-            ports.getInt(0)
+            fetchFreePorts(1).first()
         }
+
+    /**
+     * Requests [count] **distinct** free ports.
+     *
+     * See [allocateDistinctPorts] for why a single `getFreePorts` call is not
+     * enough on its own to guarantee that — `docs/agent/research/libxray-api.md`
+     * §5 has the upstream source. This is the seam `TunnelService` uses to
+     * allocate the SOCKS and loopback HTTP ports together (§10.6: neither is
+     * ever a literal).
+     *
+     * @throws XrayException when [count] distinct ports could not be obtained.
+     */
+    public suspend fun allocatePorts(count: Int): List<Int> =
+        withContext(io) {
+            allocateDistinctPorts(count) { n -> fetchFreePorts(n) }
+        }
+
+    private fun fetchFreePorts(count: Int): List<Int> {
+        val data = LibXrayInvoke.call("getFreePorts", JSONObject().put("count", count))
+        val ports = data?.optJSONArray("ports")
+        if (ports == null || ports.length() == 0) {
+            throw XrayException("libXray returned no free ports")
+        }
+        return List(ports.length()) { i -> ports.getInt(i) }
+    }
 
     /**
      * §6: validate before starting. A malformed config makes libXray fail in a way
@@ -44,10 +88,19 @@ public class XrayController(
      *
      * Takes a [File] because `testXray` accepts only a path — and validating the
      * same file [start] then runs means the bytes checked are the bytes used.
+     *
+     * Carries [env]: `testXray` builds a real core (`StartXray` under the hood,
+     * research §4), so a `geoip:`/`geosite:`/`ext:` rule resolves geo data here
+     * exactly as it would on a live start — validation only means something if it
+     * exercises the same asset-location path [start] does.
      */
     public suspend fun validate(configFile: File) {
         withContext(io) {
-            LibXrayInvoke.call("testXray", JSONObject().put("configPath", configFile.absolutePath))
+            LibXrayInvoke.call(
+                "testXray",
+                JSONObject().put("configPath", configFile.absolutePath),
+                env,
+            )
         }
     }
 
@@ -61,6 +114,10 @@ public class XrayController(
      * There is deliberately no DNS call: libXray v26.7.11 has no `setDNS`. §5.2 is
      * satisfied entirely by the config's `dns` block and
      * `VpnService.Builder.addDnsServer()`.
+     *
+     * Carries [env] on the same call as `configPath`, not a separate call before
+     * it: `applyEnv` runs before `Invoke` dispatches on `method` (see the patch),
+     * so one request both sets the asset location and starts the core.
      */
     public suspend fun start(
         configFile: File,
@@ -75,7 +132,11 @@ public class XrayController(
             LibXray.registerListenerController(ProtectorHolder)
             ProtectorHolder.target = protector
 
-            LibXrayInvoke.call("runXray", JSONObject().put("configPath", configFile.absolutePath))
+            LibXrayInvoke.call(
+                "runXray",
+                JSONObject().put("configPath", configFile.absolutePath),
+                env,
+            )
         }
     }
 

@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.xray
 
+import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingRuleSet
+import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.ShadowsocksOutbound
 import art.yniyniyni.subspace.core.model.SocksOutbound
@@ -15,6 +19,7 @@ import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
+import io.kotest.matchers.string.shouldStartWith
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.Test
 
@@ -43,6 +48,8 @@ class XrayConfigGeneratorTest {
             dnsServer = "1.1.1.1",
             enableSniffing = true,
         )
+
+    private val profile = Profile(id = "id", name = "n", outbound = outbound)
 
     /**
      * `generate` now returns a [ConfigResult], not a bare String. Every test
@@ -138,6 +145,98 @@ class XrayConfigGeneratorTest {
     fun `matches the golden file`() {
         val golden = checkNotNull(javaClass.getResource("/golden/vless-reality.json")).readText()
         generateJson(outbound, settings) shouldBe golden.trimEnd()
+    }
+
+    // The M1 tunnel is proven on hardware. Routing must not drift it, so this
+    // pins the exact block a null rule set produces — byte for byte.
+    @Test
+    fun `no rule set produces the M1 routing block unchanged`() {
+        val json = (XrayConfigGenerator.generate(profile, settings) as ConfigResult.Ok).json
+
+        json shouldContain
+            """
+            |  "routing": {
+            |    "domainStrategy": "IPIfNonMatch",
+            |    "rules": []
+            |  }
+            """.trimMargin()
+    }
+
+    @Test
+    @Suppress("Indentation") // ktlint requires this nested constructor indentation; detekt disagrees.
+    fun `a rule set is emitted into the routing block`() {
+        val routed =
+            settings.copy(
+                routing =
+                    RoutingRuleSet(
+                        name = "test",
+                        buckets =
+                            mapOf(
+                                RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:category-ads-all")),
+                                RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8")),
+                            ),
+                        domainStrategy = DomainStrategy.AS_IS,
+                    ),
+            )
+
+        val json = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        json shouldContain
+            """
+            |  "routing": {
+            |    "domainStrategy": "AsIs",
+            |    "rules": [
+            |      { "type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block" },
+            |      { "type": "field", "ip": ["10.0.0.0/8"], "outboundTag": "direct" }
+            |    ]
+            |  }
+            """.trimMargin()
+    }
+
+    @Test
+    fun `routing output escapes entries when callers bypass entry validation`() {
+        val unvalidatedEntry = "safe\"\n\u0001\"outboundTag\": \"block"
+        val routing =
+            RoutingRuleSet(
+                name = "test",
+                buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf(unvalidatedEntry))),
+            )
+        val routed = settings.copy(routing = routing)
+
+        val json = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        json shouldContain
+            """{ "type": "field", "domain": ["safe\"\n\u0001\"outboundTag\": \"block"], "outboundTag": "proxy" }"""
+    }
+
+    @Test
+    fun `IP on demand strategy uses the Xray wire value`() {
+        val routed =
+            settings.copy(
+                routing = RoutingRuleSet(name = "test", domainStrategy = DomainStrategy.IP_ON_DEMAND),
+            )
+
+        val json = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        json shouldContain """"domainStrategy": "IPOnDemand"""
+    }
+
+    @Test
+    @Suppress("Indentation") // ktlint requires this nested constructor indentation; detekt disagrees.
+    fun `generation stays deterministic with a rule set`() {
+        val routed =
+            settings.copy(
+                routing =
+                    RoutingRuleSet(
+                        name = "test",
+                        buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("a.example", "b.example"))),
+                    ),
+            )
+
+        val first = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+        val second = (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
+
+        first shouldBe second
     }
 
     /**
@@ -282,6 +381,67 @@ class XrayConfigGeneratorTest {
                 (json.count { it == '[' } - json.count { it == ']' }) shouldBe 0
             }
         }
+    }
+
+    // ── Loopback HTTP inbound ────────────────────────────────────────────────
+
+    @Test
+    fun `no http port emits only the socks inbound`() {
+        val json = (XrayConfigGenerator.generate(profile, settings) as ConfigResult.Ok).json
+
+        json shouldNotContain """"protocol": "http""""
+    }
+
+    @Test
+    fun `an http port emits a second loopback inbound`() {
+        val json =
+            (XrayConfigGenerator.generate(profile, settings.copy(httpPort = 10809)) as ConfigResult.Ok).json
+
+        json shouldContain """      "tag": "http-in","""
+        json shouldContain """      "protocol": "http","""
+        json shouldContain """      "port": 10809,"""
+    }
+
+    // §6: never 0.0.0.0. An open HTTP proxy on the LAN is trivially usable from
+    // any browser on the network.
+    @Test
+    fun `the http inbound binds to loopback only`() {
+        val json =
+            (XrayConfigGenerator.generate(profile, settings.copy(httpPort = 10809)) as ConfigResult.Ok).json
+
+        json shouldNotContain "0.0.0.0"
+        json.split(""""listen": """).drop(1).forEach { it shouldStartWith "\"127.0.0.1\"" }
+    }
+
+    /**
+     * Task-12 review, Finding 1: `produces parseable json` below only balances
+     * brace/bracket counts, and a missing separator between the socks and http
+     * inbound objects changes neither count — so a hardcoded
+     * `trailingComma = false` would pass that test, the golden file test, and
+     * every case above it while emitting invalid JSON. That fails at connect
+     * as `ConfigRejected` with nothing in the message to explain why (the core
+     * quotes the config back, and §5.6 forbids logging it). This asserts the
+     * actual separator between the two inbound objects rather than relying on
+     * a check that cannot see it.
+     */
+    @Test
+    fun `the socks and http inbounds are comma-separated, not merely adjacent`() {
+        val json =
+            (XrayConfigGenerator.generate(profile, settings.copy(httpPort = 10809)) as ConfigResult.Ok).json
+
+        // Anchored on the http-in tag, not just any "},\n    {" run: the outbounds
+        // array a few lines down has its own "proxy" → "direct" separator with the
+        // same shape, and an earlier draft of this assertion matched *that* one —
+        // passing regardless of whether the inbounds separator was present at all.
+        json shouldContain "    },\n    {\n      \"tag\": \"http-in\""
+    }
+
+    @Test
+    fun `the config with an http inbound is still deterministic`() {
+        val routed = settings.copy(httpPort = 10809)
+
+        (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json shouldBe
+            (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json
     }
 
     @Test

@@ -1,0 +1,71 @@
+diff --git a/invoke.go b/invoke.go
+index a785a1d..842518a 100644
+--- a/invoke.go
++++ b/invoke.go
+@@ -4,11 +4,13 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"os"
+ 
+ 	"github.com/xtls/libxray/geo"
+ 	"github.com/xtls/libxray/nodep"
+ 	"github.com/xtls/libxray/share"
+ 	"github.com/xtls/libxray/xray"
++	"github.com/xtls/xray-core/common/platform"
+ )
+ 
+ type invokeResponse struct {
+@@ -33,6 +35,7 @@ func Invoke(requestJSON string) string {
+ 	if err := validateAPIVersion(request.APIVersion); err != nil {
+ 		return encodeInvokeResponse(nil, err)
+ 	}
++	applyEnv(request.Env)
+ 
+ 	switch request.Method {
+ 	case LibXrayMethodGetFreePorts:
+@@ -61,6 +64,23 @@ func Invoke(requestJSON string) string {
+ 		return encodeInvokeResponse(nil, errors.New("unknown method"))
+ 	}
+ }
++
++func applyEnv(env *LibXrayEnvJson) {
++	if env == nil {
++		return
++	}
++	setEnvIfNotEmpty(platform.AssetLocation, env.AssetLocation)
++	setEnvIfNotEmpty(platform.CertLocation, env.CertLocation)
++	setEnvIfNotEmpty(platform.TunFdKey, env.TunFd)
++}
++
++func setEnvIfNotEmpty(key string, value string) {
++	if value == "" {
++		return
++	}
++	_ = os.Setenv(key, value)
++}
++
+ func validateAPIVersion(version int) error {
+ 	if version == 0 || version == 1 {
+ 		return nil
+diff --git a/invoke_model.go b/invoke_model.go
+index 66d2732..68c9eff 100644
+--- a/invoke_model.go
++++ b/invoke_model.go
+@@ -22,9 +22,16 @@ const (
+ type LibXrayInvokeRequest struct {
+ 	APIVersion int             `json:"apiVersion,omitempty"`
+ 	Method     LibXrayMethod   `json:"method,omitempty"`
++	Env        *LibXrayEnvJson `json:"env,omitempty"`
+ 	Payload    json.RawMessage `json:"payload,omitempty"`
+ }
+ 
++type LibXrayEnvJson struct {
++	AssetLocation string `json:"xray.location.asset,omitempty"`
++	CertLocation  string `json:"xray.location.cert,omitempty"`
++	TunFd         string `json:"xray.tun.fd,omitempty"`
++}
++
+ type GetFreePortsRequest struct {
+ 	Count int `json:"count,omitempty"`
+ }

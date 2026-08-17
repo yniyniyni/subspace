@@ -11,6 +11,8 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
@@ -140,6 +142,20 @@ constructor(
                 .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .apply {
+                    // Proxy.Type.HTTP, never SOCKS. Whether a Java SOCKS proxy resolves the
+                    // hostname locally before connecting — which would leak it to the local
+                    // resolver while appearing to fetch through the tunnel (§5.2) — is not
+                    // verified (research §8: "Not verified. Do not treat as fact.", §10.5). HTTP
+                    // sidesteps the question rather than answering it: an HTTP proxy receives the
+                    // hostname in absolute-form and resolves it at the far end by construction,
+                    // so there is nothing to verify for this path regardless. A fresh client is
+                    // already built per attempt (the timeout chain above is per-request), so
+                    // there is no pool to share by caching one per port here.
+                    request.proxyPort?.let { port ->
+                        proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port)))
+                    }
+                }
                 .build()
                 .newCall(request.toOkHttpRequest())
         }.getOrNull() ?: return FetchOutcome.Failed(FetchFailure.NotFound)

@@ -306,12 +306,21 @@ Rules:
   GitHub error page is valid HTTP and invalid protobuf), then installs
   **atomically**: same-filesystem renames move the `.json` sidecar into place
   first and the `.dat` file last, so a process killed mid-install can only
-  ever leave a stale-but-consistent live pair, never a half-written one. `:app`
-  points xray-core at the install directory by setting `XRAY_LOCATION_ASSET`
-  from `SubspaceApplication.attachBaseContext` (`GeoAssetPath.kt`), before
-  anything touches a `libXray.*` class — the ordering is load-bearing, §10.2's
-  category: it looks like boilerplate and is not, and a wrong ordering fails
-  silently (no exception, no log line) rather than loudly.
+  ever leave a stale-but-consistent live pair, never a half-written one.
+  xray-core is pointed at the install directory through the invoke `env`
+  object PR #133 restored upstream (`third_party/libxray-patches/`) —
+  `XrayController` builds it from `GeoAssetRepository.geoDirectory()` and
+  sends it on every `testXray`/`runXray` call. **Not**
+  `android.system.Os.setenv`: an earlier version of this design used it, every
+  automated test passed, and it does not work — Go's Android shared-library
+  entry point starts the runtime with an empty environment, so `os.LookupEnv`
+  inside Go can never see anything a Java-side `setenv` writes, in any
+  process, at any point. Verified on hardware by `AssetLocationProbeTest`;
+  full derivation in
+  `docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md` §2b. This is
+  still §10.2's category — it looks like wiring that could move without
+  consequence, and the wrong mechanism here fails silently (no exception, no
+  log line) rather than loudly.
 
   **Why not bundled.** Measured per-file sizes range 2.3–73.7 MB depending on
   source (`docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md`

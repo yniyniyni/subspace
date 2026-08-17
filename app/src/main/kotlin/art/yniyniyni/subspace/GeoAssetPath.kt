@@ -2,76 +2,42 @@
 package art.yniyniyni.subspace
 
 import android.content.Context
-import android.system.ErrnoException
-import android.system.Os
-import android.util.Log
 import java.io.File
 
-private const val TAG = "GeoAssetPath"
-
 /**
- * The environment variable xray-core reads to find `geoip.dat` and `geosite.dat`.
+ * Where installed geo databases (`geoip.dat`, `geosite.dat`, and any custom
+ * `.dat` a user adds) live. Internal storage, not cache — same reasoning as
+ * the config file (§5.6).
  *
- * `common/platform/platform.go` declares `AssetLocation = "xray.location.asset"`,
- * and `EnvFlag.GetValue` checks that literal first and then `NormalizeEnvName`'s
- * upper-cased, dot-to-underscore form. Setting the normalised name is enough.
+ * This lives in `:app` rather than `:core:data` because `GeoModule` — the one
+ * module with both `GeoAssetRepository` and this `Context`-scoped path in
+ * scope (§4) — needs it to supply `GeoAssetRoot`, and `:core:xray`'s
+ * `XrayController` needs the identical path, so the two must read it from one
+ * function rather than risk two copies drifting apart.
+ *
+ * ## This directory is *not* how xray-core finds it
+ *
+ * A prior version of this file also set `XRAY_LOCATION_ASSET` via
+ * `android.system.Os.setenv`, called from
+ * [SubspaceApplication.attachBaseContext] before anything could touch a
+ * `libXray.*` class. That mechanism does not work, was never proven on
+ * hardware until it was, and is the reason this file's own history is worth
+ * knowing before "fixing" it back.
+ *
+ * `Os.setenv` writes libc's `environ`. Go's Android shared-library entry point
+ * (`runtime/rt0_android_arm64.s`) starts the Go runtime with a synthetic argv
+ * and an **empty envv**, so a gomobile-built library — which is what libXray
+ * is — begins with no environment at all, regardless of what the process's C
+ * `environ` holds at any point, in any process. `os.LookupEnv` inside Go
+ * therefore never sees anything `Os.setenv` writes. Full derivation, verified
+ * on a Pixel 8 by `AssetLocationProbeTest`:
+ * `docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md` §2b.
+ *
+ * The only route that works is a Go-side `os.Setenv`, which libXray performs
+ * when the invoke request carries an `env` object — upstream's own PR #133,
+ * restored by `third_party/libxray-patches/0001-restore-invoke-env.patch`.
+ * `XrayController` sends it on every `testXray`/`runXray` call, built from the
+ * directory this function returns. See `XrayController`'s KDoc for why a
+ * constructor parameter and not a call here.
  */
-private const val ASSET_LOCATION_ENV = "XRAY_LOCATION_ASSET"
-
-/** Where installed geo databases live. Internal storage, not cache — same reasoning as the config file (§5.6). */
 public fun geoAssetDirectory(context: Context): File = File(context.filesDir, "geo")
-
-/**
- * Points xray-core at [geoAssetDirectory].
- *
- * ## Do not move this call
- *
- * **Without it, no `geoip:` or `geosite:` rule can ever resolve on Android.**
- * `GetAssetLocation` falls back to `filepath.Dir(os.Executable())`, which in an
- * Android app is `/system/bin` (the process executable is `app_process64`), plus
- * `/usr/local/share/xray`, `/usr/share/xray` and `/opt/share/xray` — none of
- * which exists or is writable. libXray v26.7.11 offers no hook of its own:
- * `RunXrayRequest` carries only `configPath` and there is no `initEnv`, unlike
- * AndroidLibXrayLite. Sources: research §1 and §2.
- *
- * **It must run before anything touches a `libXray.*` class.** Go copies the C
- * `environ` when its native library loads, and `os.LookupEnv` reads that copy —
- * so a `setenv` afterwards is silently ignored. Any reference to a `libXray`
- * class triggers `Seq.touch()` and therefore `System.loadLibrary`. This is called
- * from [SubspaceApplication.attachBaseContext], which is the earliest point a
- * `Context` exists and is strictly before Hilt's generated `onCreate` injects
- * anything that could reach `:core:xray`.
- *
- * **This is §10.2's category**: it looks like boilerplate that belongs beside the
- * other Xray setup in `TunnelService`, and moving it there produces a tunnel that
- * starts, connects, carries traffic, and silently ignores every routing rule —
- * with no exception and no log line anywhere. Device checklist item 2 exists to
- * observe the mechanism rather than trust this comment.
- *
- * @return true when the variable was set. A false is logged and not fatal: the
- *   tunnel still works, only geo-referencing rules cannot resolve, and the
- *   activation gate plus `testXray` both surface that specifically. This
- *   covers both ways that can happen: [Os.setenv] itself failing, and
- *   [geoAssetDirectory] not existing and failing to be created — `mkdirs()`'s
- *   own return value can't be trusted for the second case, since it returns
- *   `false` for a directory that already exists just as it does for one it
- *   could not create, so the directory is checked directly instead.
- */
-public fun installGeoAssetPath(context: Context): Boolean {
-    val dir = geoAssetDirectory(context)
-    dir.mkdirs()
-    if (!dir.isDirectory) {
-        // §5.6: no path in the message — dir's name ("geo") is fixed, only
-        // its parent (internal storage) is per-install state.
-        Log.e(TAG, "could not create the $ASSET_LOCATION_ENV directory")
-        return false
-    }
-    return try {
-        Os.setenv(ASSET_LOCATION_ENV, dir.absolutePath, true)
-        true
-    } catch (e: ErrnoException) {
-        // §5.6: class name only. Nothing here quotes a path to the log.
-        Log.e(TAG, "could not set $ASSET_LOCATION_ENV: ${e.javaClass.simpleName}")
-        false
-    }
-}

@@ -1,0 +1,143 @@
+diff --git a/go.mod b/go.mod
+index 09946bb..9b728a8 100644
+--- a/go.mod
++++ b/go.mod
+@@ -39,15 +39,16 @@ require (
+ 	github.com/wlynxg/anet v0.0.5 // indirect
+ 	github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f // indirect
+ 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
+-	golang.org/x/crypto v0.54.0 // indirect
++	golang.org/x/crypto v0.55.0 // indirect
+ 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
+-	golang.org/x/mod v0.37.0 // indirect
+-	golang.org/x/net v0.57.0 // indirect
++	golang.org/x/mobile v0.0.0-20260816165457-f98cc9b3c733 // indirect
++	golang.org/x/mod v0.39.0 // indirect
++	golang.org/x/net v0.58.0 // indirect
+ 	golang.org/x/sync v0.22.0 // indirect
+ 	golang.org/x/sys v0.47.0 // indirect
+-	golang.org/x/text v0.40.0 // indirect
++	golang.org/x/text v0.41.0 // indirect
+ 	golang.org/x/time v0.14.0 // indirect
+-	golang.org/x/tools v0.47.0 // indirect
++	golang.org/x/tools v0.49.0 // indirect
+ 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+ 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb // indirect
+ 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
+@@ -57,3 +58,5 @@ require (
+ 	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0 // indirect
+ 	lukechampine.com/blake3 v1.4.1 // indirect
+ )
++
++tool golang.org/x/mobile/cmd/gobind
+diff --git a/go.sum b/go.sum
+index 65df90a..f8afbe0 100644
+--- a/go.sum
++++ b/go.sum
+@@ -94,12 +94,20 @@ go4.org/netipx v0.0.0-20231129151722-fdeea329fbba h1:0b9z3AuHCjxk0x/opv64kcgZLBs
+ go4.org/netipx v0.0.0-20231129151722-fdeea329fbba/go.mod h1:PLyyIXexvUFg3Owu6p/WfdlivPbZJsZdgWZlrGope/Y=
+ golang.org/x/crypto v0.54.0 h1:YLIA59K4fiNzHzjnZt2tUJQjQtUWfWbeHBqKtk3eScw=
+ golang.org/x/crypto v0.54.0/go.mod h1:KWL8ny2AZdGR2cWmzeHrp2azQPGogOv+HeQaVEXC2dk=
++golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
++golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
+ golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 h1:vr/HnozRka3pE4EsMEg1lgkXJkTFJCVUX+S/ZT6wYzM=
+ golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842/go.mod h1:XtvwrStGgqGPLc4cjQfWqZHG1YFdYs6swckp8vpsjnc=
++golang.org/x/mobile v0.0.0-20260816165457-f98cc9b3c733 h1:XKMObIaAElmkdO+4SQh1iCfzwciZHJi1OblnX9BED9k=
++golang.org/x/mobile v0.0.0-20260816165457-f98cc9b3c733/go.mod h1:jMwjxoDSx9jqhNaZqPnr6nnKzb7cs+Dy1Czk7wdX+R8=
+ golang.org/x/mod v0.37.0 h1:vF1DjpVEshcIqoEaauuHebaLk1O1forxjxBaVn884JQ=
+ golang.org/x/mod v0.37.0/go.mod h1:m8S8VeM9r4dzDwjrKO0a1sZP3YjeMamRRlD+fmR2Q/0=
++golang.org/x/mod v0.39.0 h1:UF5zwQdCRRUpHfyPwr7d4UrGiVeldIsogtzWVnczL74=
++golang.org/x/mod v0.39.0/go.mod h1:bvIbwjQ0HUFFf5AKukeeYQG4ZBUG9yxQbR9aEweIwYY=
+ golang.org/x/net v0.57.0 h1:K5+3DljvIuDG9/Jv9rvyMywYNFCQ9RSUY6OOTTkT+tE=
+ golang.org/x/net v0.57.0/go.mod h1:KpXc8iv+r3XplLAG/f7Jsf9RPszJzdR0f58q9vGOuEU=
++golang.org/x/net v0.58.0 h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=
++golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=
+ golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
+ golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
+ golang.org/x/sys v0.2.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+@@ -108,10 +116,14 @@ golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+ golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+ golang.org/x/text v0.40.0 h1:Ub2Z6/xjgF1WrYQz2nuITOEegKFtiIy+rieRJ5lHZKs=
+ golang.org/x/text v0.40.0/go.mod h1:hpnzDAfGV753zIKo+wk3u1bVKCGPbrnF7+7LBF/UHVY=
++golang.org/x/text v0.41.0 h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=
++golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
+ golang.org/x/time v0.14.0 h1:MRx4UaLrDotUKUdCIqzPC48t1Y9hANFKIRpNx+Te8PI=
+ golang.org/x/time v0.14.0/go.mod h1:eL/Oa2bBBK0TkX57Fyni+NgnyQQN4LitPmob2Hjnqw4=
+ golang.org/x/tools v0.47.0 h1:7Kn5x/d1svx/PzryTsqeoZN4TZwqeH5pGWjefhLi/1Q=
+ golang.org/x/tools v0.47.0/go.mod h1:dFHnyTvFWY212G+h7ZY4Vsp/K3U4/7W9TyVaAul8uCA=
++golang.org/x/tools v0.49.0 h1:3NI7VXzL9+1WZD52Dx2ttoPwD5DWrFGpl9mFZDlmisI=
++golang.org/x/tools v0.49.0/go.mod h1:SJNXV9DBKT0UbdttsQjbfJlAE/q+y36++zo3uL3N0Oo=
+ golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 h1:B82qJJgjvYKsXS9jeunTOisW56dUokqW/FOteYJJ/yg=
+ golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2/go.mod h1:deeaetjYA+DHMHg+sMSMI58GrEteJUUzzw7en6TJQcI=
+ golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb h1:whnFRlWMcXI9d+ZbWg+4sHnLp52d5yiIPUxMBSt4X9A=
+diff --git a/invoke.go b/invoke.go
+index a785a1d..842518a 100644
+--- a/invoke.go
++++ b/invoke.go
+@@ -4,11 +4,13 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"os"
+ 
+ 	"github.com/xtls/libxray/geo"
+ 	"github.com/xtls/libxray/nodep"
+ 	"github.com/xtls/libxray/share"
+ 	"github.com/xtls/libxray/xray"
++	"github.com/xtls/xray-core/common/platform"
+ )
+ 
+ type invokeResponse struct {
+@@ -33,6 +35,7 @@ func Invoke(requestJSON string) string {
+ 	if err := validateAPIVersion(request.APIVersion); err != nil {
+ 		return encodeInvokeResponse(nil, err)
+ 	}
++	applyEnv(request.Env)
+ 
+ 	switch request.Method {
+ 	case LibXrayMethodGetFreePorts:
+@@ -61,6 +64,23 @@ func Invoke(requestJSON string) string {
+ 		return encodeInvokeResponse(nil, errors.New("unknown method"))
+ 	}
+ }
++
++func applyEnv(env *LibXrayEnvJson) {
++	if env == nil {
++		return
++	}
++	setEnvIfNotEmpty(platform.AssetLocation, env.AssetLocation)
++	setEnvIfNotEmpty(platform.CertLocation, env.CertLocation)
++	setEnvIfNotEmpty(platform.TunFdKey, env.TunFd)
++}
++
++func setEnvIfNotEmpty(key string, value string) {
++	if value == "" {
++		return
++	}
++	_ = os.Setenv(key, value)
++}
++
+ func validateAPIVersion(version int) error {
+ 	if version == 0 || version == 1 {
+ 		return nil
+diff --git a/invoke_model.go b/invoke_model.go
+index 66d2732..68c9eff 100644
+--- a/invoke_model.go
++++ b/invoke_model.go
+@@ -22,9 +22,16 @@ const (
+ type LibXrayInvokeRequest struct {
+ 	APIVersion int             `json:"apiVersion,omitempty"`
+ 	Method     LibXrayMethod   `json:"method,omitempty"`
++	Env        *LibXrayEnvJson `json:"env,omitempty"`
+ 	Payload    json.RawMessage `json:"payload,omitempty"`
+ }
+ 
++type LibXrayEnvJson struct {
++	AssetLocation string `json:"xray.location.asset,omitempty"`
++	CertLocation  string `json:"xray.location.cert,omitempty"`
++	TunFd         string `json:"xray.tun.fd,omitempty"`
++}
++
+ type GetFreePortsRequest struct {
+ 	Count int `json:"count,omitempty"`
+ }

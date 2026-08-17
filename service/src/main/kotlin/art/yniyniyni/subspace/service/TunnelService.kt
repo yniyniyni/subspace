@@ -280,7 +280,11 @@ class TunnelService : VpnService() {
         goForeground(R.string.notification_connecting)
 
         scope.launch {
-            val xray = XrayController()
+            // geoAssetRepository.geoDirectory() is where GeoAssetRepository installs
+            // geoip.dat/geosite.dat (§6). Passing it here — not leaving the
+            // controller to point nowhere — is what makes a geoip:/geosite:/ext:
+            // rule resolvable at all: research §2b, XrayController's own KDoc.
+            val xray = XrayController(geoAssetDir = geoAssetRepository.geoDirectory())
             synchronized(lock) {
                 if (gen != generation) return@launch
                 controller = xray

@@ -30,12 +30,14 @@ import javax.inject.Qualifier
  *
  * [GeoAssetRepository] needs the concrete path, but this module must not compute
  * it itself: `art.yniyniyni.subspace.geoAssetDirectory` lives in `:app`,
- * downstream of `:core:data` (§4), and is also the exact value
- * `installGeoAssetPath` points `XRAY_LOCATION_ASSET` at — the two must never
- * disagree, so `:app`'s `GeoModule` is the only place allowed to supply it. Hilt
- * aggregates every `@InstallIn(SingletonComponent::class)` module at the app
- * component, so `DataModule.geoAssetRepository` can depend on a binding declared
- * in `:app` without `:core:data` gaining a Gradle dependency on it.
+ * downstream of `:core:data` (§4), and is also the exact directory
+ * `:service`'s `TunnelService` reads via `geoDirectory()` to build the invoke
+ * `env` object `XrayController` sends xray-core (research §2b) — the two must
+ * never disagree, so `:app`'s `GeoModule` is the only place allowed to supply
+ * it. Hilt aggregates every `@InstallIn(SingletonComponent::class)` module at
+ * the app component, so `DataModule.geoAssetRepository` can depend on a
+ * binding declared in `:app` without `:core:data` gaining a Gradle dependency
+ * on it.
  *
  * Follows the qualifier precedent at `core/network/.../di/AppVersion.kt`: a bare
  * `File` has no type of its own to distinguish "the geo root" from any other

@@ -32,15 +32,27 @@ public class XrayException(
 internal object LibXrayInvoke {
     private const val API_VERSION = 1
 
-    /** @return the `data` object, or null for methods that return no data. */
+    /**
+     * @param env The `env` object PR #133 restored on the invoke request —
+     *   `third_party/libxray-patches/0001-restore-invoke-env.patch` — and the
+     *   only route by which xray-core learns `XRAY_LOCATION_ASSET` on Android
+     *   (research §2b). Included only when non-null: an unpatched libXray
+     *   silently drops an unknown `env` key, so omitting it when there is
+     *   nothing to say keeps the request byte-identical to before this existed.
+     * @return the `data` object, or null for methods that return no data.
+     */
     fun call(
         method: String,
         payload: JSONObject? = null,
+        env: XrayEnv? = null,
     ): JSONObject? {
         val request =
             JSONObject()
                 .put("apiVersion", API_VERSION)
                 .put("method", method)
+        if (env != null) {
+            request.put("env", env.toJson())
+        }
         if (payload != null) {
             request.put("payload", payload)
         }
@@ -73,4 +85,33 @@ internal object LibXrayInvoke {
         }
         return envelope.optJSONObject("data")
     }
+}
+
+/**
+ * The `env` object on a libXray invoke request.
+ *
+ * Field names are upstream's own — `LibXrayEnvJson` in
+ * `third_party/libxray-patches/0001-restore-invoke-env.patch` (PR #133),
+ * copied rather than renamed. Matching the wire shape exactly is what keeps
+ * that patch reversible: when upstream ships `env` again, only the pin in
+ * `scripts/fetch-native.sh` changes and nothing here does (see that patch
+ * directory's README).
+ *
+ * Only [assetLocation] has a production caller today — `XrayController`
+ * points it at [art.yniyniyni.subspace.core.data.GeoAssetRepository]'s
+ * install directory (research §2b). [certLocation] and [tunFd] exist because
+ * they are part of upstream's shape, not because this project uses them.
+ */
+internal data class XrayEnv(
+    val assetLocation: String? = null,
+    val certLocation: String? = null,
+    val tunFd: String? = null,
+) {
+    /** Omits absent fields rather than sending them empty — matches `omitempty` on the Go struct. */
+    fun toJson(): JSONObject =
+        JSONObject().apply {
+            assetLocation?.let { put("xray.location.asset", it) }
+            certLocation?.let { put("xray.location.cert", it) }
+            tunFd?.let { put("xray.tun.fd", it) }
+        }
 }

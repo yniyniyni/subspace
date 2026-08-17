@@ -13,8 +13,9 @@ import javax.inject.Singleton
  * §5.5: the service owns connection state and this reads it, rather than keeping
  * a local flag about whether a tunnel is up — except for the one flag it does
  * keep, [TunnelClient.isBound], which is not a guess about the tunnel: it is an
- * honest record of whether this client currently has a live link to the process
- * that would tell it the truth. **`TunnelClient.state` alone is not enough to
+ * honest record that the Binder handshake completed and this client currently
+ * has a live link to the process that would tell it the truth.
+ * **`TunnelClient.state` alone is not enough to
  * answer this.** It is a plain field, refreshed only while bound; once
  * `TunnelClient.unbind()` runs — every time the UI backgrounds — nothing updates
  * it again, so it can go on reporting a `Connected(port)` from a session that
@@ -26,7 +27,8 @@ import javax.inject.Singleton
  * secret) would be sent there. [isBound] is what lets this decline to answer
  * instead of guessing: unbound means no live link to the source of truth, so no
  * port is handed out, full stop — regardless of what [TunnelClient.state] still
- * says.
+ * says. A bind request which Android accepted but has not connected yet is also
+ * unbound for this purpose, so the old cache cannot escape during rebind.
  *
  * `TunnelClient.state` is a `StateFlow`, so `.value` is a plain synchronous read
  * of the last published value. That is what lets [httpProxyPortOrNull] stay a

@@ -43,15 +43,18 @@ public class TunnelClient @Inject constructor(
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     /**
-     * Whether [bind] has been called without a matching [unbind] since.
+     * Whether the Binder handshake has completed since the latest [bind].
      *
      * [state] is a **cache**: it is a plain field, so once nothing calls [unbind]'s
      * `_state.value = ...` again, it holds whatever it last held forever — including across
      * an app backgrounding that outlives the tunnel itself (§9's `onRevoke()`, `:bg` killed).
      * Neither of those can notify a client that has unregistered its callback, so [state] alone
      * cannot answer "is this still true"; only [isBound] can, and only by admitting when it
-     * cannot answer at all. [art.yniyniyni.subspace.tunnel.TunnelProxyBinding] consults this
-     * before ever reading [state] for exactly that reason: this is §5.5's "declining to guess"
+     * cannot answer at all. It stays false while [Context.bindService] has merely accepted a
+     * pending request and becomes true only after [ServiceConnection.onServiceConnected]
+     * registers [callback] and re-reads the real service state. Otherwise the foreground refresh
+     * that starts alongside an activity bind could consume the previous session's stale proxy
+     * port before the asynchronous handshake replaces it. This is §5.5's "declining to guess"
      * applied to a cache that has gone stale rather than one that was never populated.
      *
      * `@Volatile` because [bind]/[unbind] run on the main thread (Activity lifecycle callbacks)
@@ -77,17 +80,24 @@ public class TunnelClient @Inject constructor(
                 binder: IBinder?,
             ) {
                 val svc = ITunnelService.Stub.asInterface(binder)
-                service = svc
                 try {
                     svc.registerCallback(callback)
                     // §5.5: re-read the real state on every bind.
                     _state.value = svc.state.toState()
+                    service = svc
+                    // Publish this last. A worker that observes true must also
+                    // observe the refreshed state above, never the stale cache.
+                    isBound = true
                 } catch (e: android.os.RemoteException) {
+                    isBound = false
+                    service = null
+                    runCatching { svc.unregisterCallback(callback) }
                     Log.w(TAG, "bind handshake failed: ${e.javaClass.simpleName}")
                 }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {
+                isBound = false
                 service = null
                 // Deliberately NOT Disconnected: :bg died, which says nothing
                 // about whether the tunnel is down. Claiming Disconnected here
@@ -96,36 +106,14 @@ public class TunnelClient @Inject constructor(
             }
         }
 
-    /**
-     * Review round 3, Residual 1: [Context.bindService]'s `Boolean` return matters — `false` means
-     * ActivityManager refused the bind outright (rare, but real: e.g. the process is in a state
-     * that cannot host new bindings), and when that happens [connection] is never invoked for this
-     * attempt, so nothing would otherwise correct [isBound] back to false. Left as an unconditional
-     * `true`, a previous session's stale `Connected(port)` becomes servable again the next time
-     * [isBound] is consulted — the exact failure Finding 1 closed, reached through a different door.
-     *
-     * The ordering below is deliberate, not incidental: [isBound] is set `true` *before* calling
-     * [Context.bindService], and only ever corrected to `false` *after*, and only when the call
-     * itself reports rejection. [Context.bindService] can invoke [ServiceConnection.onServiceConnected]
-     * synchronously, before returning — writing `isBound = context.bindService(...)` in one line
-     * would still be race-free for that specific case (a synchronous connect only happens when the
-     * call itself is about to return `true`), but assigning the *raw return value* unconditionally
-     * after the call, rather than only ever narrowing `true` down to `false` on rejection, is the
-     * shape that stays correct even if a future change makes [connection] itself start touching
-     * [isBound]: this can only ever downgrade an optimistic `true` to `false`, never overwrite a
-     * `true` something else legitimately established with a stale value of its own.
-     */
+    /** Starts a bind attempt. [isBound] remains false until its handshake completes. */
     public fun bind() {
-        isBound = true
-        val accepted =
-            context.bindService(
-                Intent(context, TunnelService::class.java),
-                connection,
-                Context.BIND_AUTO_CREATE,
-            )
-        if (!accepted) {
-            isBound = false
-        }
+        isBound = false
+        context.bindService(
+            Intent(context, TunnelService::class.java),
+            connection,
+            Context.BIND_AUTO_CREATE,
+        )
     }
 
     /**

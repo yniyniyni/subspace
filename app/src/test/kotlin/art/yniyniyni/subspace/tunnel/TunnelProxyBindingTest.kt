@@ -66,14 +66,14 @@ class TunnelProxyBindingTest {
      * refuse to hand that out rather than trust a state it has no live link to.
      */
     @Test
-    fun `an unbound client offers no port even with a stale Connected state`() {
+    fun `a client without a completed handshake offers no stale port`() {
         val stale = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080, httpProxyPort = 1081)
 
         resolveHttpProxyPort(bound = false, state = stale) shouldBe null
     }
 
     @Test
-    fun `a bound client with a live Connected state offers its port`() {
+    fun `a completed handshake with a live Connected state offers its port`() {
         val connected = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080, httpProxyPort = 1081)
 
         resolveHttpProxyPort(bound = true, state = connected) shouldBe 1081

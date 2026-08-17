@@ -26,6 +26,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # libXray v26.7.11 declares Go 1.26.3. The patched AAR is built from
+      # source below, so CI needs the same compiler rather than whichever Go
+      # version happens to be preinstalled on ubuntu-latest.
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+
       # compileSdk is 37 (see app/build.gradle.kts and the note in
       # subspace.android.library).
       #
@@ -50,17 +57,17 @@ jobs:
       - name: Install Android SDK platform 37
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'
+          # NDK r29 is the version libXray's own v26.7.11 release workflow uses.
+          packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0 ndk;29.0.14206865'
 
       - uses: gradle/actions/setup-gradle@v4
 
       # The libXray AAR is ~95 MB and gitignored (§10.7), so a fresh clone
-      # does not have it and :core:xray cannot resolve its dependency. This
-      # script is the committed, reproducible way to obtain it, and it
-      # verifies a pinned SHA-256 — so a compromised or swapped release
-      # artifact fails the build rather than shipping.
-      - name: Fetch pinned native artifacts (libXray)
-        run: ./scripts/fetch-native.sh
+      # does not have it and :core:xray cannot resolve its dependency. M5 needs
+      # the committed env patch; fetch-native.sh correctly refuses to replace
+      # it with the stock release, so CI builds the pinned source plus patches.
+      - name: Build pinned patched libXray AAR
+        run: ./scripts/build-libxray.sh
 
       - name: Verify module boundaries, format, static analysis, licence headers
         run: ./gradlew checkAll

@@ -1,8 +1,9 @@
 # libXray patches
 
-Patches applied on top of a pristine upstream `XTLS/libXray` checkout before
-building the Android AAR. Each is upstream's own code, re-applied — not a
-rewrite — so that dropping one is a delete rather than a merge.
+Patches applied on top of a pristine, commit-verified `XTLS/libXray` checkout
+before building the Android AAR. The functional env patch is upstream's own
+code, re-applied rather than rewritten. The separate build-tool patch pins an
+upstream `@latest` lookup so the resulting toolchain is reproducible.
 
 `scripts/build-libxray.sh` clones the pinned tag, applies every `*.patch` here
 in filename order, and builds. Nothing is forked on GitHub; the patch files in
@@ -69,6 +70,25 @@ To return to stock, in order:
 Nothing else is coupled to the patch. If upstream instead adds a *different*
 mechanism (for example `datDir` back on `RunXrayRequest`, as the pre-`invoke`
 API had), only `XrayEnv` and its single call site in `XrayController` change.
+
+---
+
+## `0002-pin-gomobile-version.patch`
+
+**What it does.** Replaces libXray's build-time
+`golang.org/x/mobile@latest` lookup with the exact pseudo-version
+`v0.0.0-20260816165457-f98cc9b3c733` for both `gobind` and `gomobile`.
+
+**Why it is separate.** The env patch must remain the 26-line upstream change
+described above. A previous generated patch accidentally captured the temporary
+`go.mod`/`go.sum` rewrites performed by libXray's build script, mixing unrelated
+dependency upgrades into that functional change. Keeping the tool pin in its
+own patch makes both concerns reviewable and stops a rebuild next week from
+silently selecting a different compiler tool and transitive dependency graph.
+
+The pin is build-only and is recorded in `THIRD_PARTY.md`. When updating it,
+rebuild the AAR, run the real-libXray instrumented tests, and record the tested
+version here rather than returning to `@latest`.
 
 ### Upstream tracking
 

@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 LIBXRAY_VERSION="v26.7.11"
+LIBXRAY_COMMIT="294fb37343205b9b0cb7b7b1b423d3d4b60d9998"
 LIBXRAY_SHA256="205ab07d998aa488db0361f2d3804efef4c2f8fce1d07dd19c1073b4d844da96"
 DEST="core/xray/libs"
 

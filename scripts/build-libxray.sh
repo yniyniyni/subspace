@@ -18,6 +18,7 @@ cd "$(git rev-parse --show-toplevel)"
 # duplicated, so the two can never disagree about which upstream revision this
 # project is built against.
 LIBXRAY_VERSION="$(grep -E '^LIBXRAY_VERSION=' scripts/fetch-native.sh | cut -d'"' -f2)"
+LIBXRAY_COMMIT="$(grep -E '^LIBXRAY_COMMIT=' scripts/fetch-native.sh | cut -d'"' -f2)"
 PATCH_DIR="third_party/libxray-patches"
 WORK=".native-cache/libxray-src"
 DEST="core/xray/libs"
@@ -47,6 +48,13 @@ echo "NDK       $ANDROID_NDK_HOME"
 rm -rf "$WORK"
 mkdir -p "$(dirname "$WORK")"
 git clone -q --depth 1 --branch "$LIBXRAY_VERSION" https://github.com/XTLS/libXray.git "$WORK"
+actual_commit="$(git -C "$WORK" rev-parse HEAD)"
+if [ "$actual_commit" != "$LIBXRAY_COMMIT" ]; then
+    echo "COMMIT MISMATCH for libXray $LIBXRAY_VERSION" >&2
+    echo "  expected: $LIBXRAY_COMMIT" >&2
+    echo "  actual:   $actual_commit" >&2
+    exit 1
+fi
 
 # Applied in filename order, and `git apply` fails loudly on a patch that no
 # longer matches — which is the signal that upstream changed the code the patch

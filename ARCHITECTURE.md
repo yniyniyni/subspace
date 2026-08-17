@@ -887,7 +887,7 @@ Mandatory rules:
       would let one provider rearrange another provider's rows. Precedence is
       user override, then provider, then the screen default, and a group ordered
       by its provider says so on the card.
-- [ ] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
+- [x] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
 - [ ] Per-app proxy: off / include-list / bypass-list
 - [ ] Traffic counters, live log viewer
 - [ ] Always-on VPN, boot autostart, kill switch

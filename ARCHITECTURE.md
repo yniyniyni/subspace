@@ -527,6 +527,24 @@ Read this section twice.
 | Compose screens | Compose UI tests for state rendering |
 | Tunnel, DNS, per-app, network transitions | **Manual, on device, every time** |
 
+**Disable animations on the test device before any Compose instrumented run.**
+
+```
+adb shell settings put global window_animation_scale 0
+adb shell settings put global transition_animation_scale 0
+adb shell settings put global animator_duration_scale 0
+```
+
+With animations on, `waitForIdle` never settles and node lookups fail
+non-deterministically. This does not look like a configuration problem: it
+looks like flaky product code. During M5's verification it produced a full
+green run, then scattered failures across `:core:ui`, `:feature:profiles` and
+`:feature:routing` — modules that milestone never touched — with a *different*
+test failing on each pass, which is exactly the shape of a real race. Three
+`settings put` calls turned 268 tests from failing back to green with no code
+change. The scales reset when the device reboots, so re-check them rather than
+assuming a device that once ran the suite still will.
+
 `:core:data`'s repositories (`ProfileRepository`, `SubscriptionRepository`,
 `SubscriptionSyncer`, ...) take their DAO/`SubspaceDatabase` dependencies
 through `internal` constructors on purpose — production code reaches them only

@@ -77,5 +77,28 @@
     <string name="rule_set_editor_save_problem_write_failed">Could not save. Try again.</string>
     <!-- %1$s is the conflicting rule set's own name — exempt from §5.6, see SaveProblem.NameConflict's own KDoc. -->
     <string name="rule_set_editor_save_problem_name_conflict">A rule set named \"%1$s\" already exists. Choose a different name.</string>
+
+    <!-- Per-app proxy picker (Task 8). §5.6: a package name and an app's own label are the only
+         user-visible values this screen shows — never logged, see AppRow's own KDoc. -->
+    <string name="per_app_title">Per-app proxy</string>
+    <string name="per_app_mode_off">Off</string>
+    <string name="per_app_mode_off_summary">Every app uses the tunnel.</string>
+    <string name="per_app_mode_allow">Only selected apps</string>
+    <string name="per_app_mode_allow_summary">Selected apps use the tunnel; everything else connects directly.</string>
+    <string name="per_app_mode_deny">All except selected</string>
+    <string name="per_app_mode_deny_summary">Selected apps connect directly; everything else uses the tunnel.</string>
+    <string name="per_app_search_hint">Search apps</string>
+    <string name="per_app_not_installed">Not installed</string>
+    <string name="per_app_empty_allow_list">Select at least one app, or switch the mode off. A tunnel no app can use looks connected but carries nothing.</string>
+    <string name="per_app_reconnect_notice">Saving will reconnect the tunnel.</string>
+    <string name="per_app_save">Save</string>
+    <string name="per_app_discard_title">Discard changes?</string>
+    <string name="per_app_discard_confirm">Discard</string>
+    <string name="per_app_discard_cancel">Keep editing</string>
+    <string name="per_app_back">Back</string>
+    <plurals name="per_app_selected_count">
+        <item quantity="one">%d app selected</item>
+        <item quantity="other">%d apps selected</item>
+    </plurals>
 </resources>
 

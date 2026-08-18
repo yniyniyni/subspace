@@ -106,3 +106,53 @@ internal fun builderPlan(resolution: PerAppResolution): BuilderPlan? =
                 else -> BuilderPlan.Disallow(resolution.packages)
             }
     }
+
+/**
+ * The outcome of offering a [BuilderPlan]'s packages to a `VpnService.Builder`.
+ *
+ * @property requested how many packages the plan carried.
+ * @property skipped how many the builder refused because they are no longer
+ *   installed. §8 says skip and continue: one package uninstalled since it was
+ *   selected must not abort tunnel setup.
+ */
+internal data class PackageApplication(
+    val requested: Int,
+    val skipped: Int,
+) {
+    /**
+     * Nothing at all reached the builder.
+     *
+     * Cosmetic for a deny list — excluding nothing extra degrades towards
+     * [BuilderPlan.DisallowOwnOnly], which is the safe direction. **Fatal for an
+     * allow list.** `VpnService.Builder.addAllowedApplication` verifies the
+     * package *before* it lazily creates the allowed-applications list
+     * (`android/net/VpnService.java`, ~806-817), so a run in which every add
+     * threw leaves that list null — and a null list means no per-app filtering
+     * at all, i.e. every installed app tunnelled. The allow-list arm
+     * deliberately calls no `addDisallowedApplication` (spec §2.2), so nothing
+     * else would exclude us either: the user's "only these apps" would silently
+     * invert into "everything, including ourselves" — §8's rule broken and
+     * §5.1's loop built, reported as one `Log.w` with a count.
+     */
+    val nothingApplied: Boolean get() = skipped >= requested
+}
+
+/**
+ * Offers each package to [add] in turn, counting instead of aborting.
+ *
+ * Split out of `establishTun` so the all-skipped case is decided somewhere a JVM
+ * test can reach: a `VpnService.Builder` cannot be constructed off-device, but
+ * this can be handed a lambda that refuses everything.
+ *
+ * @param add false when the package is no longer installed. Never throws — the
+ *   caller swallows `NameNotFoundException`, because the only thing it carries
+ *   is the package name and §5.6 forbids logging that.
+ */
+internal fun applyEach(
+    packages: Set<String>,
+    add: (String) -> Boolean,
+): PackageApplication =
+    PackageApplication(
+        requested = packages.size,
+        skipped = packages.count { !add(it) },
+    )

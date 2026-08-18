@@ -69,4 +69,45 @@ class PerAppBuilderPlanTest {
     fun anEmptyAllowListHasNoPlan() {
         builderPlan(PerAppResolution.EmptyAllowList) shouldBe null
     }
+
+    // The second way an allow list can end up allowing nothing, and the one no
+    // resolver can see: the packages were selected while installed and are gone
+    // by the time the builder is asked for them. AOSP never creates the
+    // allowed-applications list if every add throws, and a null list is "tunnel
+    // everything" — the exact inversion of what the user configured.
+    @Test
+    fun anAllowListWhoseEveryPackageIsGoneAppliesNothing() {
+        val applied = applyEach(setOf("com.example.gone", "com.example.alsoGone")) { false }
+
+        applied shouldBe PackageApplication(requested = 2, skipped = 2)
+        applied.nothingApplied shouldBe true
+    }
+
+    @Test
+    fun oneSurvivingPackageIsEnoughToApply() {
+        val applied =
+            applyEach(setOf("com.example.here", "com.example.gone")) { name ->
+                name == "com.example.here"
+            }
+
+        applied shouldBe PackageApplication(requested = 2, skipped = 1)
+        applied.nothingApplied shouldBe false
+    }
+
+    // §8's skip-and-continue: a single uninstalled package is counted, not fatal.
+    @Test
+    fun everyInstalledPackageAppliesWithNothingSkipped() {
+        val applied = applyEach(setOf("com.example.a", "com.example.b")) { true }
+
+        applied shouldBe PackageApplication(requested = 2, skipped = 0)
+        applied.nothingApplied shouldBe false
+    }
+
+    // Defensive: the resolver guarantees a non-empty Selected, but if an empty
+    // set ever reached here the allow-list arm must still refuse rather than
+    // hand the builder a plan that filters nothing.
+    @Test
+    fun anEmptySetAppliesNothing() {
+        applyEach(emptySet()) { true }.nothingApplied shouldBe true
+    }
 }

@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
 import art.yniyniyni.subspace.core.data.GeoAssetRepository
+import art.yniyniyni.subspace.core.data.PerAppRepository
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
@@ -102,6 +103,9 @@ class TunnelService : VpnService() {
     lateinit var settingsRepository: SettingsRepository
 
     @Inject
+    lateinit var perAppRepository: PerAppRepository
+
+    @Inject
     lateinit var geoAssetRepository: GeoAssetRepository
 
     // Built in onCreate, once profileRepository is injected. Wraps the
@@ -114,6 +118,10 @@ class TunnelService : VpnService() {
     // suspend-lambda indirection as connectionRecorder, for the same reason —
     // see RoutingResolver's KDoc.
     private lateinit var routingResolver: RoutingResolver
+
+    // Built in onCreate for the same reason routingResolver is, and reading the
+    // selection at resolve time rather than at construction — see PerAppResolver.
+    private lateinit var perAppResolver: PerAppResolver
 
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
@@ -197,6 +205,11 @@ class TunnelService : VpnService() {
                 activeRuleSetId = { settingsRepository.activeRoutingRuleSetId.first() },
                 loadRuleSet = { id -> routingRepository.ruleSet(id) },
                 installedGeoFiles = { geoAssetRepository.installedFileNames() },
+            )
+        perAppResolver =
+            PerAppResolver(
+                selection = { perAppRepository.selection.first() },
+                ownPackage = { packageName },
             )
     }
 
@@ -475,7 +488,20 @@ class TunnelService : VpnService() {
         rowId: Long,
     ) {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
-        val fd = establishTun()
+        val plan = builderPlan(perAppResolver.resolve())
+        if (plan == null) {
+            // §5.4, as on every other failure path in this function: the core
+            // [startCore] left running must not outlive a start we are refusing.
+            xray.stop()
+            failStart(
+                gen,
+                FailureReason.PerAppAllowListEmpty,
+                IllegalStateException("allow-list mode with no application selected"),
+                rowId,
+            )
+            return
+        }
+        val fd = establishTun(plan)
         if (fd == null) {
             xray.stop()
             failStart(
@@ -596,8 +622,17 @@ class TunnelService : VpnService() {
         return file
     }
 
-    /** §5.2, half two. The `dns` block in the generated config is half one. */
-    private fun establishTun(): ParcelFileDescriptor? {
+    /**
+     * §5.2, half two. The `dns` block in the generated config is half one.
+     *
+     * @param plan §8's per-app decision, already made — see [builderPlan] for why
+     *   the decision is a type rather than a pair of booleans checked here.
+     */
+    // Two of the three returns are the same fatal own-package failure reached
+    // from two arms of the plan; folding them together would mean building the
+    // whole interface before discovering we cannot exclude ourselves.
+    @Suppress("ReturnCount")
+    private fun establishTun(plan: BuilderPlan): ParcelFileDescriptor? {
         val builder =
             Builder()
                 .setSession(getString(R.string.tunnel_session_name))
@@ -608,18 +643,69 @@ class TunnelService : VpnService() {
                 .addRoute("::", 0)
                 .addDnsServer(DNS_SERVER)
 
-        // §8: the app must never be routed through itself. Unlike a user-selected
-        // package — where §8 says skip and continue — failing here would build
-        // §5.1's loop by construction, so it is fatal.
-        try {
-            builder.addDisallowedApplication(packageName)
-        } catch (e: PackageManager.NameNotFoundException) {
-            Log.e(TAG, "cannot exclude own package: ${e.javaClass.simpleName}")
-            return null
+        when (plan) {
+            BuilderPlan.DisallowOwnOnly -> if (!excludeSelf(builder)) return null
+            is BuilderPlan.Disallow -> {
+                if (!excludeSelf(builder)) return null
+                // §8: skip and continue. One package uninstalled since it was
+                // selected must never abort the whole tunnel setup.
+                val skipped = builder.addEachDisallowed(plan.packages)
+                if (skipped > 0) Log.w(TAG, "per-app: skipped $skipped uninstalled package(s)")
+            }
+            // No excludeSelf() here, and that is not an omission. Calling
+            // addDisallowedApplication after addAllowedApplication throws
+            // UnsupportedOperationException (spec §2.2). We are excluded by being
+            // absent from the allow list, which PerAppResolver guarantees.
+            is BuilderPlan.Allow -> {
+                val skipped = builder.addEachAllowed(plan.packages)
+                if (skipped > 0) Log.w(TAG, "per-app: skipped $skipped uninstalled package(s)")
+            }
         }
 
         return builder.establish()
     }
+
+    /**
+     * §8: the app must never be routed through itself. Unlike a user-selected
+     * package — where §8 says skip and continue — failing here would build §5.1's
+     * loop by construction, so it is fatal.
+     */
+    private fun excludeSelf(builder: Builder): Boolean =
+        try {
+            builder.addDisallowedApplication(packageName)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            Log.e(TAG, "cannot exclude own package: ${e.javaClass.simpleName}")
+            false
+        }
+
+    /** @return how many packages were skipped. Never the names — §5.6. */
+    // Swallowed deliberately: the only thing this exception carries is the
+    // package name, and §5.6 forbids logging it. The count is the whole report.
+    @Suppress("SwallowedException")
+    private fun Builder.addEachDisallowed(packages: Set<String>): Int =
+        packages.count { name ->
+            try {
+                addDisallowedApplication(name)
+                false
+            } catch (e: PackageManager.NameNotFoundException) {
+                true
+            }
+        }
+
+    /** @return how many packages were skipped. Never the names — §5.6. */
+    // Swallowed deliberately, as in addEachDisallowed: the exception carries only
+    // the package name, which §5.6 forbids logging.
+    @Suppress("SwallowedException")
+    private fun Builder.addEachAllowed(packages: Set<String>): Int =
+        packages.count { name ->
+            try {
+                addAllowedApplication(name)
+                false
+            } catch (e: PackageManager.NameNotFoundException) {
+                true
+            }
+        }
 
     private fun goForeground(textRes: Int) {
         val notification = TunnelNotification.build(this, getString(textRes))

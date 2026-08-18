@@ -69,3 +69,40 @@ internal class PerAppResolver(
         }
     }
 }
+
+/**
+ * What to call on `VpnService.Builder`, decided without touching one.
+ *
+ * The variants are exhaustive and non-overlapping **by construction**, which is
+ * the point: a builder holds allowed applications or disallowed ones, never both
+ * (spec §2.2). Making that a type rather than a discipline means the mistake
+ * cannot be made in `establishTun()`, where it would surface only as an
+ * `UnsupportedOperationException` on a device.
+ */
+internal sealed interface BuilderPlan {
+    /** Pre-M5.5 behaviour: exclude ourselves and nothing else. */
+    data object DisallowOwnOnly : BuilderPlan
+
+    /** Exclude ourselves **and** these. Deny-list mode. */
+    data class Disallow(val packages: Set<String>) : BuilderPlan
+
+    /**
+     * Include only these. Allow-list mode.
+     *
+     * Our own package is absent and must stay absent — in this mode exclusion is
+     * structural, because `addDisallowedApplication` cannot be called at all.
+     */
+    data class Allow(val packages: Set<String>) : BuilderPlan
+}
+
+/** @return null for [PerAppResolution.EmptyAllowList] — that start is refused, not planned. */
+internal fun builderPlan(resolution: PerAppResolution): BuilderPlan? =
+    when (resolution) {
+        PerAppResolution.Off -> BuilderPlan.DisallowOwnOnly
+        PerAppResolution.EmptyAllowList -> null
+        is PerAppResolution.Selected ->
+            when (resolution.mode) {
+                PerAppMode.AllowList -> BuilderPlan.Allow(resolution.packages)
+                else -> BuilderPlan.Disallow(resolution.packages)
+            }
+    }

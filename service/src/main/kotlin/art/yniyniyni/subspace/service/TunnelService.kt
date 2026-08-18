@@ -173,8 +173,13 @@ class TunnelService : VpnService() {
      * rebuild the tunnel without :main re-supplying one (§5.5: what is connected
      * is this process's fact, not the UI's).
      *
-     * Cleared by [stopTunnel] so a settled-down service cannot be restarted into
-     * a session the user ended.
+     * Cleared by both terminal paths a start can take: [stopTunnel] (disconnect,
+     * revoke, `onDestroy`) so a settled-down service cannot be restarted into a
+     * session the user ended, and [failStart] so a session that never came up
+     * does not linger here either. The binder's `reapplyPerApp` additionally
+     * gates on [ownTunnelActive] rather than trusting this field's nullness
+     * alone, but a stale non-null value here would still be a latent trap for
+     * the next reader, not just a harmless one.
      */
     private var liveSession: Pair<Profile, Long>? = null
 
@@ -685,6 +690,7 @@ class TunnelService : VpnService() {
                 configFile?.delete()
                 configFile = null
                 controller = null
+                liveSession = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             },
@@ -1049,8 +1055,18 @@ class TunnelService : VpnService() {
                 }
                 val (profile, rowId) = session
                 // Not stopSelf() after stopTunnel, unlike disconnect(): the service
-                // must survive to start again. startTunnel's own generation check is
-                // what makes a save racing a user disconnect resolve to one winner.
+                // must survive to start again. A save racing a user disconnect is
+                // NOT ordered by startTunnel's generation check — stopTunnel below
+                // always leaves currentState Disconnected, so the following
+                // startTunnel passes that guard regardless of whether a disconnect()
+                // landed in between. What actually orders them today is that
+                // disconnect() and reapplyPerApp() are both `oneway` AIDL calls: the
+                // only caller is TunnelClient, on :main's main thread, and Android
+                // serialises oneway transactions from one calling thread to one
+                // Binder object in FIFO order. That guarantee is implicit in "one
+                // client, one calling thread" — it would silently stop holding if a
+                // second client bound, or if either call started being issued from a
+                // different thread.
                 stopTunnel(ConnectionState.Disconnected)
                 startTunnel(profile, rowId)
             }

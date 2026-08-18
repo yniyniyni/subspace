@@ -18,4 +18,8 @@ internal object RoutingModule {
     @Provides
     @Singleton
     fun routingSource(impl: BoundRoutingSource): RoutingSource = impl
+
+    @Provides
+    @Singleton
+    fun perAppSource(impl: BoundPerAppSource): PerAppSource = impl
 }

@@ -77,6 +77,15 @@ data object RoutingList
 data class RuleSetEditor(val ruleSetId: Long)
 
 /**
+ * The per-app proxy picker, pushed on top of the top-level destinations —
+ * reached from Settings rather than the navigation bar, which stays at three
+ * entries (Home, Servers, Settings). The pill hides while this is on screen,
+ * same reasoning as [RoutingList].
+ */
+@Serializable
+data object PerApp
+
+/**
  * Passed as [RuleSetEditor.ruleSetId] to start the create-new-rule-set flow.
  *
  * [Editor.profileId] uses the identical "an id that does not resolve to an

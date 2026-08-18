@@ -53,6 +53,8 @@
     <string name="settings_section_routing">Routing</string>
     <string name="settings_routing_row_label">Rule sets</string>
     <string name="settings_routing_row_summary">Block, proxy or route traffic directly by domain or address</string>
+    <string name="settings_per_app_row_label">Per-app proxy</string>
+    <string name="settings_per_app_row_summary">Choose which apps use the tunnel</string>
 
     <string name="settings_section_geo">Geo databases</string>
     <!-- %1$s is the size (e.g. "23.1 MB"), %2$s the install status. -->

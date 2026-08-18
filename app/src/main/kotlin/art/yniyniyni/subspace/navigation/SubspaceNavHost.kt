@@ -29,6 +29,7 @@ import art.yniyniyni.subspace.feature.profiles.editor.EditorScreen
 import art.yniyniyni.subspace.feature.profiles.list.ServersScreen
 import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
 import art.yniyniyni.subspace.feature.profiles.subscription.SubscriptionDetailScreen
+import art.yniyniyni.subspace.feature.routing.PerAppScreen
 import art.yniyniyni.subspace.feature.routing.RoutingListScreen
 import art.yniyniyni.subspace.feature.routing.RuleSetEditorScreen
 import art.yniyniyni.subspace.feature.settings.SettingsScreen
@@ -40,7 +41,7 @@ private const val SETTINGS_VALUE = "settings"
 
 /**
  * Wires [Home], [Servers], [Settings], [Editor], [QrScan], [SubscriptionDetail],
- * [RoutingList] and [RuleSetEditor] into a [NavHost] behind [FloatingNavigationBar].
+ * [RoutingList], [RuleSetEditor] and [PerApp] into a [NavHost] behind [FloatingNavigationBar].
  *
  * [Home], [Servers] and [Settings] are top-level: selecting one navigates
  * with `launchSingleTop` plus `popUpTo(startDestination) { saveState = true }`
@@ -65,7 +66,10 @@ private const val SETTINGS_VALUE = "settings"
  * `RuleSetEditor` ([RuleSetEditorScreen], from `:feature:routing` — Task 15's
  * own brief had declared both routes ahead of this one existing, wired to a
  * `PlaceholderScreen`, since `RoutingListScreen`'s create/edit actions already
- * needed somewhere real to push to; this task retires that placeholder). Every
+ * needed somewhere real to push to; this task retires that placeholder) and,
+ * as of Task 9 (M5.5), `PerApp` ([PerAppScreen], from `:feature:routing`,
+ * reached from Settings' new "Per-app proxy" row the same way `RoutingList`
+ * is reached from its "Routing" row). Every
  * destination resolves a `ViewModel` through `hiltViewModel()`, which is why
  * [SubspaceNavHostTest] cannot drive the real [SubspaceNavHost] Hilt-free for
  * any of them — see that file's own KDoc for what that means for its
@@ -145,7 +149,12 @@ fun SubspaceNavHost(
                 // QrScanScreen (Task 20 fix round 1) and EditorScreen (Task 21) already got.
                 // Task 15 (M5): SettingsScreen's new "Routing" row navigates here, to
                 // RoutingList — see that composable below.
-                SettingsScreen(onNavigateToRouting = { navController.navigate(RoutingList) })
+                // Task 9 (M5.5): SettingsScreen's new "Per-app proxy" row navigates to
+                // PerApp, same pattern — see routingDestinations below.
+                SettingsScreen(
+                    onNavigateToRouting = { navController.navigate(RoutingList) },
+                    onNavigateToPerApp = { navController.navigate(PerApp) },
+                )
             }
             composable<Editor> { entry ->
                 // Task 21: EditorScreen replaces the placeholder outright — the same
@@ -201,12 +210,13 @@ fun SubspaceNavHost(
 }
 
 /**
- * `null` for [Editor], [QrScan], [SubscriptionDetail], [RoutingList] and [RuleSetEditor] (and for
- * no current destination yet) — the pill's cue to hide. The `else -> null` branch is what covers
- * the last three: only [Home], [Servers] and [Settings] get an explicit branch, since those are
- * the only three destinations this graph ever wants the pill visible for — Task 15 (M5) confirms
- * [RoutingList] and [RuleSetEditor] fall into that same default bucket alongside [Editor] and
- * [QrScan], rather than adding branches for them that would need to (incorrectly) return one of
+ * `null` for [Editor], [QrScan], [SubscriptionDetail], [RoutingList], [RuleSetEditor] and
+ * [PerApp] (and for no current destination yet) — the pill's cue to hide. The `else -> null`
+ * branch is what covers the last four: only [Home], [Servers] and [Settings] get an explicit
+ * branch, since those are the only three destinations this graph ever wants the pill visible for
+ * — Task 15 (M5) confirms [RoutingList] and [RuleSetEditor] fall into that same default bucket
+ * alongside [Editor] and [QrScan], and Task 9 (M5.5) confirms [PerApp] falls into it too, rather
+ * than adding branches for any of them that would need to (incorrectly) return one of
  * [HOME_VALUE]/[SERVERS_VALUE]/[SETTINGS_VALUE].
  *
  * `internal`, not `private`, since Task 21: [SubspaceNavHostTest] exercises this mapping
@@ -289,8 +299,10 @@ internal fun NavHostController.navigateToTopLevel(value: String) {
  * [RoutingList] and [RuleSetEditor] — extracted out of [SubspaceNavHost] itself (adding these two
  * destinations pushed that function past detekt's `LongMethod` line budget, the same reason
  * [art.yniyniyni.subspace.core.ui.component.GroupCard]'s own header row is split out), so this is
- * purely an extraction, not a behaviour change: every line below is unmodified from
- * [SubspaceNavHost]'s previous body.
+ * purely an extraction, not a behaviour change: every line below was originally unmodified from
+ * [SubspaceNavHost]'s previous body. [PerApp] joined them in Task 9 (M5.5) — it is reached from
+ * Settings the same way [RoutingList] is, so it belongs in this same grouping rather than back in
+ * [SubspaceNavHost]'s own body.
  */
 private fun NavGraphBuilder.routingDestinations(navController: NavHostController) {
     composable<RoutingList> {
@@ -308,5 +320,10 @@ private fun NavGraphBuilder.routingDestinations(navController: NavHostController
         // SubscriptionDetailScreen (Task 15/22) each got.
         val route: RuleSetEditor = entry.toRoute()
         RuleSetEditorScreen(ruleSetId = route.ruleSetId, onDone = { navController.popBackStack() })
+    }
+    composable<PerApp> {
+        // Task 9 (M5.5): the per-app proxy picker, reached from Settings' new
+        // "Per-app proxy" row.
+        PerAppScreen(onBack = { navController.popBackStack() })
     }
 }

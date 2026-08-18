@@ -181,7 +181,7 @@ internal fun PerAppScreenContent(
         AppRowList(
             rows = state.rows,
             onToggle = actions.onToggle,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).padding(horizontal = CONTENT_HORIZONTAL_PADDING),
         )
 
         Button(
@@ -452,9 +452,15 @@ private fun PackageManager.appIconOrNull(packageName: String): ImageBitmap? {
  * Confirms losing the draft before [PerAppScreen] actually pops — see
  * [PerAppScreen]'s own `showDiscardDialog` comment for why this is raised
  * from there rather than from [PerAppScreenContent].
+ *
+ * `internal`, not `private`: [PerAppScreen] itself needs no Hilt binding to
+ * render (its ViewModel lookup is the only reason [PerAppScreenContentTest]
+ * cannot exercise it directly), so this one composable is tested on its own —
+ * content and callback wiring — rather than leaving the back-gesture
+ * confirmation's UI with zero coverage. See `DiscardChangesDialogTest`.
  */
 @Composable
-private fun DiscardChangesDialog(
+internal fun DiscardChangesDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {

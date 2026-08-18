@@ -453,20 +453,94 @@ declines to do anything at all for three of the four container shapes.
 
 ## 8. Per-app proxy
 
-Two modes, mutually exclusive:
+Shipped in M5.5: a mode (`Off` / `AllowList` / `DenyList`) plus a package
+selection, applied to the TUN interface at `establish()` time.
+`PerAppMode`/`PerAppSelection` live in `:core:model`; the mode and package set
+are stored through `SettingsRepository` (Room, §3 — no DataStore), and
+`PerAppRepository` computes the one effective selection that both the
+`:feature:routing` picker and `:service` read, so the UI cannot disagree with
+the tunnel. `PerAppResolver` and `builderPlan()` (`:service`) turn that
+selection into the branch below, inside `TunnelService.establishTun()`.
 
-- **Deny-list** — `addDisallowedApplication()` for selected packages
-- **Allow-list** — `addAllowedApplication()` for selected packages
+**The two modes are mutually exclusive at the platform level, not just by
+convention.** `VpnService.Builder` may hold allowed applications or
+disallowed ones, never both: calling `addAllowedApplication` after
+`addDisallowedApplication` (or the mirror order) throws
+`UnsupportedOperationException`. Verified against AOSP
+`android/net/VpnService.java` (android-9.0.0_r35) and the current
+`developer.android.com/reference/android/net/VpnService.Builder`, both
+accessed 2026-08-18. This is why the per-app decision is a sealed type
+(`BuilderPlan`) decided once, before `Builder` is touched, rather than a pair
+of booleans checked inline — the mistake is then unrepresentable in
+`establishTun()` instead of merely undesirable.
 
-Notes:
+| Mode | Calls | Own package |
+|---|---|---|
+| `Off` | `addDisallowedApplication(ours)` | fatal on `NameNotFoundException`, unchanged from M1 |
+| `DenyList` | `addDisallowedApplication(ours)` + each selected | fatal for ours; per-package catch/skip/continue for the rest |
+| `AllowList` | `addAllowedApplication(selected)` only | **excluded by omission — never disallowed** |
 
-- Enumerating installed apps needs `QUERY_ALL_PACKAGES`. That permission
-  requires a Play Store declaration; VPN clients are an accepted use case,
-  but expect review friction. F-Droid does not care.
-- Both calls throw `NameNotFoundException` if a package was uninstalled
-  since selection. Catch per-package, skip, continue. Do not let one stale
-  entry abort the whole tunnel setup.
-- The app's own package must never be routed through itself.
+**In allow-list mode the app's own package is excluded by omission, not by an
+explicit call.** `addDisallowedApplication` cannot be called in that branch —
+the constraint above — so our own traffic going direct depends entirely on
+`PerAppResolver` having already stripped our package out of the selection
+before it ever reaches the builder. There is no second mechanism backing this
+up in that mode; if the resolver ever stopped filtering it, nothing else in
+`establishTun()` would catch the omission.
+
+**A code review caught a Critical here, worth recording because it is not
+obvious from the method names.** AOSP's `addAllowedApplication` calls
+`verifyApp()` — which can throw `NameNotFoundException` — *before* it lazily
+creates the allowed-applications list (`android/net/VpnService.java`,
+~806–817). If every package offered to an allow-list connect throws (all
+uninstalled since selection), the list is never created at all. A null
+allowed-applications list means **no per-app filtering whatsoever**: every
+app is tunnelled, including this one — exactly the routing loop §5.1
+describes, produced by an allow-list whose contents had quietly gone stale
+rather than by a bug in the filtering code. `applyEach()`/`PackageApplication
+.nothingApplied` in `PerAppResolver.kt` detect this case (`skipped >=
+requested`), and the `Allow` arm in `establishTun()` refuses to call
+`builder.establish()` when it holds — logged as `"per-app: allow list empty
+at the builder; refusing"` and returned as `TunResult.AllowListEmptied`.
+
+**An empty allow-list is refused, not started.** Whether empty from the
+start (`PerAppResolver.resolve()` returns `EmptyAllowList` when nothing
+survives stripping the app's own package) or emptied at the builder as above,
+the service refuses with `FailureReason.PerAppAllowListEmpty` rather than
+producing a tunnel nothing can use — §10.1's "connected, no traffic, no
+error" signature, this time built by configuration instead of a bug.
+
+**Per-package `NameNotFoundException` is caught, counted, and skipped** —
+one stale entry (uninstalled since it was selected) must never abort the
+whole tunnel setup. Only the **count** is logged (`Log.w`, "skipped N
+uninstalled package(s)"); §5.6 forbids logging the package name itself,
+because a package name identifies an app the user has installed. **Failing
+to exclude our own package is the one exception that stays fatal**, in every
+mode — see the table above — because that failure builds §5.1's loop by
+construction rather than merely narrowing the selection.
+
+**Enumerating installed apps needs `QUERY_ALL_PACKAGES`.** Declared in
+`:core:data`'s manifest (next to `InstalledAppsSource`, the one class that
+needs it — the same pattern `:service`'s manifest uses for its own
+permissions), not in `:app`. That permission requires a Play Store
+declaration if this project is ever published there; VPN clients are an
+accepted use case, but expect review friction. F-Droid and IzzyOnDroid do
+not care (§14.7). A `<queries>` element filtered on a `LAUNCHER` intent was
+considered and rejected: it hides apps with no launcher activity that still
+use the network, and a user cannot exclude an app the picker never shows — a
+silently partial list reads as a bug, not as a policy.
+
+Saving a changed selection while the tunnel is running rebuilds it **once**,
+via `reapplyPerApp()` on `ITunnelService` — a deliberate choice over
+reconnecting per toggle, which would drop the tunnel repeatedly through a
+multi-app edit.
+
+**Status.** The mechanism above is implemented and unit-tested
+(`PerAppResolverTest`, `PerAppBuilderPlanTest`). It has not been exercised on
+a physical device — see §A.2, which stays unticked until it has (§10.1) —
+and as of 2026-08-18 there is no UI path to reach the picker at all (the
+Compose screen and its navigation entry point are the two outstanding tasks
+of the M5.5 plan; see `docs/agent/roadmap.md`).
 
 ---
 
@@ -893,6 +967,14 @@ Mandatory rules:
       by its provider says so on the card.
 - [x] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
 - [ ] Per-app proxy: off / include-list / bypass-list
+
+      The mechanism (§8) is implemented and unit-tested on
+      `feat/m5.5-per-app-proxy`, but the box stays unticked: the spec's §9
+      device checklist has not run — no device was attached at the time of
+      writing (2026-08-18) — and there is currently no UI path to the picker
+      at all, pending the two outstanding M5.5 tasks (`docs/agent/roadmap.md`).
+      §10.1 governs: this is not "code-complete, tick pending," it is "not yet
+      reachable, not yet verified."
 - [ ] Traffic counters, live log viewer
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization
@@ -1229,6 +1311,25 @@ here rather than somewhere else.
   `crypto-link`, `provider-id`, `examples-of-links-and-parameters`).
   Markdown versions are available by appending `.md` to any page URL, and
   `happ.su/main/llms.txt` is a full index.
+
+  **Correction, 2026-08-18: this URL is dead, and the documentation is not.**
+  `happ.su/main/dev-docs` now 301s to `happ.info`, which 404s — a bare "the
+  docs are gone" reading of that chain is wrong and would send the next agent
+  looking for a replacement source that already exists. The RU path under
+  `www.happ.su` still serves the same content:
+  `https://www.happ.su/main/ru/dev-docs/app-management` was the working
+  source for §8's directive semantics, confirmed reachable on 2026-08-18.
+  Prefer that host for any future fetch from this documentation set, and
+  re-verify the `happ.su`/`happ.info` chain before concluding it has
+  recovered.
+- **INCY** (`https://incy.gitbook.io/docs/docs-en/app-management.en`) — a
+  Happ-compatible client's documentation of the same directive surface.
+  Useful as a cross-check, but its key set **diverges** from Happ's: it
+  documents a separate `per-app-proxy-enable` key with no Happ equivalent,
+  and uses mode value `proxy` where Happ's `per-app-proxy-mode` says `on`.
+  Where the two disagree, **Happ is authoritative** — `DirectiveRegistry` was
+  built against Happ, and Remnawave (the panel most target providers run)
+  emits Happ's header set, not INCY's. Accessed 2026-08-18.
 - Community routing profiles: `github.com/hydraponique/roscomvpn-routing`,
   `github.com/demontmk/happ-routing` — real-world examples of the deeplink
   profile format.

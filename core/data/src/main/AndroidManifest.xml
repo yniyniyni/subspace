@@ -1,2 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      ARCHITECTURE.md §8: the per-app proxy picker has to enumerate installed
+      apps, and from API 30 a package list is invisible without this. Declared
+      here rather than in :app for the same reason :service declares its own
+      permissions: the permission belongs next to the one class that needs it,
+      which is InstalledAppsSource.
+
+      A <queries> element filtering on a LAUNCHER intent would avoid the
+      permission, and was rejected: it omits apps with no launcher activity that
+      still use the network, and a user cannot exclude an app the picker does not
+      show. A silently partial list reads as a bug, not as a policy.
+
+      §14.7's distribution targets are GitHub Releases and IzzyOnDroid, neither of
+      which cares. Nothing here forecloses Play — VPN clients are an accepted use
+      case for this permission, and that is a Console declaration rather than a
+      code change.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+</manifest>

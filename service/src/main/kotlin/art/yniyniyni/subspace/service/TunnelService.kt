@@ -169,6 +169,16 @@ class TunnelService : VpnService() {
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
     /**
+     * The profile the live session was started from, so a per-app change can
+     * rebuild the tunnel without :main re-supplying one (§5.5: what is connected
+     * is this process's fact, not the UI's).
+     *
+     * Cleared by [stopTunnel] so a settled-down service cannot be restarted into
+     * a session the user ended.
+     */
+    private var liveSession: Pair<Profile, Long>? = null
+
+    /**
      * Commits a terminal outcome in an order teardown cannot interleave with — see
      * [TerminalOutcome] for the race this closes and why it is a separate class.
      *
@@ -284,6 +294,7 @@ class TunnelService : VpnService() {
                     Log.w(TAG, "connect ignored: a session is already active")
                     return
                 }
+                liveSession = profile to rowId
                 ++generation
             }
 
@@ -867,6 +878,7 @@ class TunnelService : VpnService() {
             controller = null
             tunInterface = null
             configFile = null
+            liveSession = null
             publishLocked(ConnectionState.Disconnecting)
         }
 
@@ -1023,6 +1035,24 @@ class TunnelService : VpnService() {
             override fun disconnect() {
                 stopTunnel(ConnectionState.Disconnected)
                 stopSelf()
+            }
+
+            override fun reapplyPerApp() {
+                // §8: the allow/deny calls apply at establish() time only, so the
+                // running interface keeps whatever selection it was built with.
+                // Rebuilding is the only way to change it.
+                val session = synchronized(lock) { liveSession.takeIf { ownTunnelActive() } }
+                if (session == null) {
+                    // Not an error: the UI saves whether or not a tunnel is up, and
+                    // a disconnected save simply takes effect at the next connect.
+                    return
+                }
+                val (profile, rowId) = session
+                // Not stopSelf() after stopTunnel, unlike disconnect(): the service
+                // must survive to start again. startTunnel's own generation check is
+                // what makes a save racing a user disconnect resolve to one winner.
+                stopTunnel(ConnectionState.Disconnected)
+                startTunnel(profile, rowId)
             }
 
             override fun getState(): ConnectionStateParcel =

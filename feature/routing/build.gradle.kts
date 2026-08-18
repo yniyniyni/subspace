@@ -12,6 +12,10 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
     implementation(project(":core:ui"))
+    // PerAppSource.reapply(): VpnService.Builder's allow/deny calls apply at
+    // establish() time only, so a changed selection needs the tunnel rebuilt
+    // (§8). :feature:home already declares this same dependency.
+    implementation(project(":service"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)

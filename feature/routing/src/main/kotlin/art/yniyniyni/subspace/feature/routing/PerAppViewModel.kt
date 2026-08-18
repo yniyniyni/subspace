@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -58,6 +60,11 @@ constructor(
             allRows = installedRows + ghostRows(selected - installedNames)
             _state.update { it.copy(mode = stored.mode, rows = visibleRows(it.query)) }
         }
+        // So the screen can say a Save will reconnect before the user commits,
+        // and so save() below knows whether there is a tunnel to rebuild.
+        source.isConnected
+            .onEach { connected -> _state.update { it.copy(isConnected = connected) } }
+            .launchIn(viewModelScope)
     }
 
     /**
@@ -114,12 +121,16 @@ constructor(
      */
     fun save() {
         if (_state.value.isEmptyAllowList) return
+        if (!_state.value.isDirty) return
         val mode = _state.value.mode
         val packages = selected
         viewModelScope.launch {
             source.apply(mode, packages)
             stored = PerAppSelection(mode, packages)
             refresh()
+            // One reconnect, at the explicit Save. Guarded on isDirty above so a
+            // Save on an unchanged draft never costs the user their connection.
+            if (_state.value.isConnected) source.reapply()
         }
     }
 }

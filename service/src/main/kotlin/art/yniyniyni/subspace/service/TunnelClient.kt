@@ -166,6 +166,15 @@ public class TunnelClient @Inject constructor(
         }
     }
 
+    /** §8: rebuild the tunnel so a changed per-app selection takes effect. No-op when disconnected. */
+    public fun reapplyPerApp() {
+        try {
+            service?.reapplyPerApp()
+        } catch (e: android.os.RemoteException) {
+            Log.e(TAG, "reapplyPerApp failed: ${e.javaClass.simpleName}")
+        }
+    }
+
     /**
      * Held so the binder callback is not collected mid-run.
      *

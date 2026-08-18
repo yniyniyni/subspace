@@ -26,6 +26,21 @@ interface ITunnelService {
     oneway void disconnect();
 
     /**
+     * Rebuilds the tunnel so a changed per-app selection takes effect.
+     *
+     * `VpnService.Builder`'s allow/deny calls apply at establish() time only, so a
+     * live session keeps whatever selection it was built with (ARCHITECTURE.md §8).
+     * This restarts the current session with the profile :bg already holds — the UI
+     * does not re-supply one, because §5.5 makes the service the source of truth for
+     * what is connected.
+     *
+     * A no-op when nothing is connected. `oneway` for the reason disconnect() is: it
+     * performs a full teardown, and charging that to the caller's UI thread is the
+     * freeze §5.3 forbids.
+     */
+    oneway void reapplyPerApp();
+
+    /**
      * §5.5: after process death the UI must rebind and re-read actual state.
      * This is that call. The UI never infers connection state locally — an app
      * showing "Disconnected" while the tunnel is up is worse than one that

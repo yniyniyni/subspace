@@ -26,14 +26,22 @@ class PerAppViewModelTest {
     ) : PerAppSource {
         val stored = MutableStateFlow(initial)
         var applyCount = 0
+        val connected = MutableStateFlow(false)
+        var reapplyCount = 0
 
         override val selection = stored
+
+        override val isConnected = connected
 
         override suspend fun installed(): List<InstalledApp> = installedApps
 
         override suspend fun apply(mode: PerAppMode, packages: Set<String>) {
             applyCount++
             stored.value = PerAppSelection(mode, packages)
+        }
+
+        override suspend fun reapply() {
+            reapplyCount++
         }
     }
 
@@ -155,5 +163,59 @@ class PerAppViewModelTest {
         model.setMode(PerAppMode.AllowList)
 
         model.state.value.isDirty shouldBe true
+    }
+
+    @Test
+    fun savingWhileDisconnectedDoesNotReconnect() = runTest(dispatcher) {
+        val source = FakeSource(apps)
+        val model = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.toggle("com.example.bank")
+        model.save()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        source.reapplyCount shouldBe 0
+    }
+
+    // Once, at the explicit Save. Per-toggle would drop the tunnel repeatedly
+    // through a multi-app edit (spec §7.3).
+    @Test
+    fun aMultiAppEditReconnectsExactlyOnce() = runTest(dispatcher) {
+        val source = FakeSource(apps).apply { connected.value = true }
+        val model = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.setMode(PerAppMode.DenyList)
+        model.toggle("com.example.bank")
+        model.toggle("com.example.maps")
+        model.save()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        source.applyCount shouldBe 1
+        source.reapplyCount shouldBe 1
+    }
+
+    // Nothing changed means nothing to reapply — a Save on a clean draft must not
+    // cost the user their connection.
+    @Test
+    fun savingACleanDraftNeverReconnects() = runTest(dispatcher) {
+        val source = FakeSource(apps).apply { connected.value = true }
+        val model = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.save()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        source.reapplyCount shouldBe 0
+    }
+
+    @Test
+    fun aConnectedTunnelIsReflectedInState() = runTest(dispatcher) {
+        val source = FakeSource(apps).apply { connected.value = true }
+        val model = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.state.value.isConnected shouldBe true
     }
 }

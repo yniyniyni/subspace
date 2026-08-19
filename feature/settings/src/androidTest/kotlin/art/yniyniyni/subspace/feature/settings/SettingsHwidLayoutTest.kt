@@ -47,6 +47,7 @@ class SettingsHwidLayoutTest {
                         onRemoveCustomGeoSource = {},
                     ),
                     onNavigateToRouting = {},
+                    onNavigateToPerApp = {},
                 )
             }
         }

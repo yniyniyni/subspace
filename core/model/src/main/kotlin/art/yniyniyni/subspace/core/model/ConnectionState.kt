@@ -124,6 +124,17 @@ public enum class FailureReason {
      * a file is deleted, or storage is cleared, after activation.
      */
     GeoDataMissing,
+
+    /**
+     * Allow-list mode is on and no application is selected.
+     *
+     * Refused rather than started: the TUN would come up with no application
+     * permitted to use it, which presents as "connected, nothing works, no log
+     * line" — §10.1's signature, produced by configuration rather than by a bug.
+     * §10.4: the specific reason is the difference between a user who opens the
+     * per-app screen and one who goes looking for a broken server.
+     */
+    PerAppAllowListEmpty,
 }
 
 /**

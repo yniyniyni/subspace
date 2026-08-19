@@ -3,7 +3,10 @@ package art.yniyniyni.subspace.core.data
 
 import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SettingEntity
+import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PingMode
+import art.yniyniyni.subspace.core.model.perAppModeFrom
+import art.yniyniyni.subspace.core.model.perAppModeWire
 import art.yniyniyni.subspace.core.model.pingModeFrom
 import art.yniyniyni.subspace.core.network.HwidProvider
 import kotlinx.coroutines.flow.Flow
@@ -26,6 +29,9 @@ private const val KEY_PING_ON_LAUNCH_METERED = "ping_on_launch_metered"
 private const val KEY_GEO_REFRESH_ON_METERED = "geo_refresh_on_metered"
 private const val KEY_SELECTED_GEO_SOURCE_IDS = "selected_geo_source_ids"
 private const val SELECTED_GEO_SOURCE_ID_DELIMITER = ","
+private const val KEY_PER_APP_MODE = "per_app_mode"
+private const val KEY_PER_APP_USER_PACKAGES = "per_app_user_packages"
+private const val PER_APP_PACKAGE_DELIMITER = ","
 
 /**
  * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
@@ -252,5 +258,44 @@ internal constructor(
     public suspend fun setSelectedGeoSourceIds(ids: Set<String>) {
         val value = ids.joinToString(SELECTED_GEO_SOURCE_ID_DELIMITER)
         dao.put(SettingEntity(key = KEY_SELECTED_GEO_SOURCE_IDS, value = value))
+    }
+
+    /**
+     * Which apps use the tunnel (§8), defaulting to [PerAppMode.Off].
+     *
+     * Stored as Happ's wire word rather than the enum name — see [perAppModeFrom]
+     * for why, and for why an unreadable value falls back to `Off` rather than to
+     * whatever was most recently set.
+     */
+    public val perAppMode: Flow<PerAppMode> =
+        dao.observe(KEY_PER_APP_MODE).map { stored -> perAppModeFrom(stored) }
+
+    public suspend fun setPerAppMode(mode: PerAppMode) {
+        dao.put(SettingEntity(key = KEY_PER_APP_MODE, value = perAppModeWire(mode)))
+    }
+
+    /**
+     * The packages the **user** selected, which is not the same as the packages in
+     * force: `PerAppRepository` unions this with any approved provider layer, and
+     * that union is what reaches the tunnel.
+     *
+     * Comma-joined for the reason [selectedGeoSourceIds] is: Android package names
+     * match `[A-Za-z0-9_.]+`, so they cannot contain the delimiter. The blank
+     * filter is load-bearing rather than defensive — [SettingDao] exposes no
+     * delete, so clearing the selection writes `""`, and a naive split would read
+     * that back as a set containing one empty package name.
+     */
+    public val perAppUserPackages: Flow<Set<String>> =
+        dao.observe(KEY_PER_APP_USER_PACKAGES).map { stored ->
+            stored
+                ?.split(PER_APP_PACKAGE_DELIMITER)
+                ?.filter { it.isNotBlank() }
+                ?.toSet()
+                ?: emptySet()
+        }
+
+    public suspend fun setPerAppUserPackages(packages: Set<String>) {
+        val value = packages.sorted().joinToString(PER_APP_PACKAGE_DELIMITER)
+        dao.put(SettingEntity(key = KEY_PER_APP_USER_PACKAGES, value = value))
     }
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.MaterialTheme
@@ -46,13 +47,13 @@ private val HWID_VALUE_BOTTOM_PADDING = 8.dp
  * **Not drawn**, each because a later milestone owns it, not because it was
  * forgotten:
  *  - Always-on VPN and a log viewer — M7.
- *  - Per-app proxy — M5.5.
  *
  * None of these get a stub, a disabled row, or a "coming soon" entry — an
  * empty control that looks like a feature is worse than no control at all.
  * Routing itself is drawn as of Task 15 (M5): a single row that navigates to
  * `RoutingList` (`:feature:routing`) rather than a stub, since that screen is
- * real and reachable now.
+ * real and reachable now. Per-app proxy is drawn the same way as of Task 9
+ * (M5.5): a row beneath it that navigates to `PerApp` (`:feature:routing`).
  *
  * Theme selection here does not (yet) repaint [art.yniyniyni.subspace.core.ui.theme.SubspaceTheme]
  * itself — `MainActivity` still always renders with the system setting.
@@ -65,10 +66,14 @@ private val HWID_VALUE_BOTTOM_PADDING = 8.dp
  *   `NavController` of its own" reasoning
  *   [ServersScreen][art.yniyniyni.subspace.feature.profiles.list.ServersScreen]'s own navigation
  *   callbacks document.
+ * @param onNavigateToPerApp the "Per-app proxy" row's action, forwarded verbatim to
+ *   `SubspaceNavHost`, which navigates to `PerApp` — the same reasoning as
+ *   [onNavigateToRouting].
  */
 @Composable
 fun SettingsScreen(
     onNavigateToRouting: () -> Unit,
+    onNavigateToPerApp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: SettingsViewModel = hiltViewModel()
@@ -92,6 +97,7 @@ fun SettingsScreen(
             onRemoveCustomGeoSource = viewModel::onRemoveCustomGeoSource,
         ),
         onNavigateToRouting = onNavigateToRouting,
+        onNavigateToPerApp = onNavigateToPerApp,
         modifier = modifier,
     )
 }
@@ -128,6 +134,7 @@ internal fun SettingsScreenContent(
     state: SettingsState,
     actions: SettingsActions,
     onNavigateToRouting: () -> Unit,
+    onNavigateToPerApp: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val onThemeChanged = actions.onThemeChanged
@@ -164,6 +171,12 @@ internal fun SettingsScreenContent(
             label = stringResource(R.string.settings_routing_row_label),
             supportingText = stringResource(R.string.settings_routing_row_summary),
             onClick = onNavigateToRouting,
+        )
+        SettingRow(
+            icon = Icons.Filled.CheckCircle,
+            label = stringResource(R.string.settings_per_app_row_label),
+            supportingText = stringResource(R.string.settings_per_app_row_summary),
+            onClick = onNavigateToPerApp,
         )
 
         SectionHeader(stringResource(R.string.settings_section_geo))

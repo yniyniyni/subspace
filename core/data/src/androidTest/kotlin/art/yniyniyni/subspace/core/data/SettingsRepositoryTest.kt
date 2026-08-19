@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.db.SettingEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
+import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.flow.first
@@ -162,5 +163,56 @@ class SettingsRepositoryTest {
             repository.setSelectedGeoSourceIds(setOf("loyalsoldier-geoip", "v2fly-geosite"))
 
             repository.selectedGeoSourceIds.first() shouldBe setOf("loyalsoldier-geoip", "v2fly-geosite")
+        }
+
+    @Test
+    fun perAppDefaultsToOffWithNothingSelected() =
+        runTest {
+            // Off is the default because it is the only mode that cannot change
+            // which traffic leaves the device before the user has chosen anything.
+            repository.perAppMode.first() shouldBe PerAppMode.Off
+            repository.perAppUserPackages.first() shouldBe emptySet()
+        }
+
+    @Test
+    fun aStoredPerAppModeRoundTrips() =
+        runTest {
+            repository.setPerAppMode(PerAppMode.AllowList)
+            repository.perAppMode.first() shouldBe PerAppMode.AllowList
+
+            repository.setPerAppMode(PerAppMode.DenyList)
+            repository.perAppMode.first() shouldBe PerAppMode.DenyList
+
+            repository.setPerAppMode(PerAppMode.Off)
+            repository.perAppMode.first() shouldBe PerAppMode.Off
+        }
+
+    @Test
+    fun anUninterpretableStoredPerAppModeFallsBackToOff() =
+        runTest {
+            db.settingDao().put(SettingEntity(key = "per_app_mode", value = "AllowList"))
+
+            repository.perAppMode.first() shouldBe PerAppMode.Off
+        }
+
+    @Test
+    fun perAppPackagesRoundTripAndClear() =
+        runTest {
+            repository.setPerAppUserPackages(setOf("com.example.bank", "com.example.maps"))
+            repository.perAppUserPackages.first() shouldBe setOf("com.example.bank", "com.example.maps")
+
+            repository.setPerAppUserPackages(emptySet())
+            repository.perAppUserPackages.first() shouldBe emptySet()
+        }
+
+    // SettingDao exposes no delete, so an empty set is stored as "". Reading that
+    // back as a one-element set containing the empty string would put a package
+    // named "" into a VpnService.Builder call.
+    @Test
+    fun anEmptyStoredPackageListIsAnEmptySetNotABlankEntry() =
+        runTest {
+            db.settingDao().put(SettingEntity(key = "per_app_user_packages", value = ""))
+
+            repository.perAppUserPackages.first() shouldBe emptySet()
         }
 }

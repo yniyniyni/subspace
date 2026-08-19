@@ -10,6 +10,7 @@ import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
 import art.yniyniyni.subspace.core.data.GeoAssetRepository
+import art.yniyniyni.subspace.core.data.PerAppRepository
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
@@ -102,6 +103,9 @@ class TunnelService : VpnService() {
     lateinit var settingsRepository: SettingsRepository
 
     @Inject
+    lateinit var perAppRepository: PerAppRepository
+
+    @Inject
     lateinit var geoAssetRepository: GeoAssetRepository
 
     // Built in onCreate, once profileRepository is injected. Wraps the
@@ -114,6 +118,10 @@ class TunnelService : VpnService() {
     // suspend-lambda indirection as connectionRecorder, for the same reason —
     // see RoutingResolver's KDoc.
     private lateinit var routingResolver: RoutingResolver
+
+    // Built in onCreate for the same reason routingResolver is, and reading the
+    // selection at resolve time rather than at construction — see PerAppResolver.
+    private lateinit var perAppResolver: PerAppResolver
 
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
@@ -161,6 +169,21 @@ class TunnelService : VpnService() {
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
     /**
+     * The profile the live session was started from, so a per-app change can
+     * rebuild the tunnel without :main re-supplying one (§5.5: what is connected
+     * is this process's fact, not the UI's).
+     *
+     * Cleared by both terminal paths a start can take: [stopTunnel] (disconnect,
+     * revoke, `onDestroy`) so a settled-down service cannot be restarted into a
+     * session the user ended, and [failStart] so a session that never came up
+     * does not linger here either. The binder's `reapplyPerApp` additionally
+     * gates on [ownTunnelActive] rather than trusting this field's nullness
+     * alone, but a stale non-null value here would still be a latent trap for
+     * the next reader, not just a harmless one.
+     */
+    private var liveSession: Pair<Profile, Long>? = null
+
+    /**
      * Commits a terminal outcome in an order teardown cannot interleave with — see
      * [TerminalOutcome] for the race this closes and why it is a separate class.
      *
@@ -197,6 +220,11 @@ class TunnelService : VpnService() {
                 activeRuleSetId = { settingsRepository.activeRoutingRuleSetId.first() },
                 loadRuleSet = { id -> routingRepository.ruleSet(id) },
                 installedGeoFiles = { geoAssetRepository.installedFileNames() },
+            )
+        perAppResolver =
+            PerAppResolver(
+                selection = { perAppRepository.selection.first() },
+                ownPackage = { packageName },
             )
     }
 
@@ -271,6 +299,7 @@ class TunnelService : VpnService() {
                     Log.w(TAG, "connect ignored: a session is already active")
                     return
                 }
+                liveSession = profile to rowId
                 ++generation
             }
 
@@ -458,6 +487,110 @@ class TunnelService : VpnService() {
         }
     }
 
+    /** [RoutingGateResult]'s shape, for [resolvePerApp]. */
+    private sealed interface PerAppGateResult {
+        data class Proceed(val plan: BuilderPlan) : PerAppGateResult
+
+        /** [failStart] has already run — [attachTun] must return without doing anything else. */
+        data object Failed : PerAppGateResult
+    }
+
+    /**
+     * §8's gate, extracted from [attachTun] for the reason [resolveRouting] is
+     * extracted from [startCore]: to keep the caller under detekt's length
+     * threshold, and to keep one failure shape in one place.
+     *
+     * [PerAppResolver.resolve] reaches Room through the lambda built in
+     * [onCreate], and nothing narrows what that read can throw — the same gap
+     * [resolveRouting] documents, with a worse consequence here, because by now
+     * [startCore] has left a core running. Unguarded, the failure reaches
+     * [errorHandler], which publishes [FailureReason.CoreStartFailed] but skips
+     * both `xray.stop()` and failStart's §5.4 cleanup: a live Go runtime, a
+     * non-null `controller`, the config file still on disk (§5.6) and a stuck
+     * foreground notification, while `Failed` invites a second connect that would
+     * overwrite `controller` and orphan the first core.
+     */
+    // Room's failure shape, not ours to narrow — as in resolveRouting.
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun resolvePerApp(
+        gen: Int,
+        xray: XrayController,
+        rowId: Long,
+    ): PerAppGateResult {
+        val resolution =
+            try {
+                perAppResolver.resolve()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                xray.stop()
+                failStart(gen, FailureReason.CoreStartFailed, e, rowId)
+                return PerAppGateResult.Failed
+            }
+        val plan = builderPlan(resolution)
+        return if (plan == null) {
+            failAfterCore(
+                gen,
+                xray,
+                FailureReason.PerAppAllowListEmpty,
+                "allow-list mode with no application selected",
+                rowId,
+            )
+            PerAppGateResult.Failed
+        } else {
+            PerAppGateResult.Proceed(plan)
+        }
+    }
+
+    /**
+     * §5.4, the shape every failure past [startCore] shares: the core it left
+     * running must not outlive a start we are abandoning.
+     */
+    private suspend fun failAfterCore(
+        gen: Int,
+        xray: XrayController,
+        reason: FailureReason,
+        detail: String,
+        rowId: Long,
+    ) {
+        xray.stop()
+        failStart(gen, reason, IllegalStateException(detail), rowId)
+    }
+
+    /**
+     * [establishTun] plus its two §10.4 failures, kept out of [attachTun] so that
+     * function stays under detekt's length threshold.
+     *
+     * @return null when [failStart] has already run — unlike [RoutingGateResult]
+     *   there is no third outcome to conflate, so a nullable fd says exactly what
+     *   a sealed type would.
+     */
+    private suspend fun establishOrFail(
+        gen: Int,
+        xray: XrayController,
+        plan: BuilderPlan,
+        rowId: Long,
+    ): ParcelFileDescriptor? =
+        when (val result = establishTun(plan)) {
+            is TunResult.Established -> result.fd
+            // §10.4: the same reason an empty selection gets, because after the
+            // skipping there is genuinely no application left to allow.
+            TunResult.AllowListEmptied -> {
+                failAfterCore(
+                    gen,
+                    xray,
+                    FailureReason.PerAppAllowListEmpty,
+                    "every allow-listed application is no longer installed",
+                    rowId,
+                )
+                null
+            }
+            TunResult.Failed -> {
+                failAfterCore(gen, xray, FailureReason.TunEstablishFailed, "establish() returned null", rowId)
+                null
+            }
+        }
+
     /**
      * Builds the TUN interface and hands its fd to tun2socks.
      *
@@ -475,17 +608,12 @@ class TunnelService : VpnService() {
         rowId: Long,
     ) {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
-        val fd = establishTun()
-        if (fd == null) {
-            xray.stop()
-            failStart(
-                gen,
-                FailureReason.TunEstablishFailed,
-                IllegalStateException("establish() returned null"),
-                rowId,
-            )
-            return
-        }
+        val plan =
+            when (val gate = resolvePerApp(gen, xray, rowId)) {
+                is PerAppGateResult.Proceed -> gate.plan
+                PerAppGateResult.Failed -> return
+            }
+        val fd = establishOrFail(gen, xray, plan, rowId) ?: return
         synchronized(lock) {
             if (gen != generation) {
                 // Superseded while establishing. Close what we just made rather
@@ -562,6 +690,7 @@ class TunnelService : VpnService() {
                 configFile?.delete()
                 configFile = null
                 controller = null
+                liveSession = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             },
@@ -596,8 +725,37 @@ class TunnelService : VpnService() {
         return file
     }
 
-    /** §5.2, half two. The `dns` block in the generated config is half one. */
-    private fun establishTun(): ParcelFileDescriptor? {
+    /**
+     * How [establishTun] ended.
+     *
+     * A sealed type rather than a nullable fd for the reason [RoutingGateResult]
+     * is one: an emptied allow list and a refused `establish()` are different
+     * §10.4 failures, and a single null would have sent a user whose selected
+     * apps were uninstalled looking for a broken tunnel instead of a broken
+     * selection.
+     */
+    private sealed interface TunResult {
+        data class Established(val fd: ParcelFileDescriptor) : TunResult
+
+        /** The builder refused, or our own package could not be excluded. */
+        data object Failed : TunResult
+
+        /** Allow-list mode, and every package in it is gone — see [PackageApplication.nothingApplied]. */
+        data object AllowListEmptied : TunResult
+    }
+
+    /**
+     * §5.2, half two. The `dns` block in the generated config is half one.
+     *
+     * @param plan §8's per-app decision, already made — see [builderPlan] for why
+     *   the decision is a type rather than a pair of booleans checked here.
+     */
+    // Each return is a distinct outcome: the fatal own-package failure reached
+    // from two arms of the plan, the emptied allow list, and success. Folding
+    // them would mean building the whole interface before discovering we cannot
+    // exclude ourselves, and would lose which failure the user is looking at.
+    @Suppress("ReturnCount")
+    private fun establishTun(plan: BuilderPlan): TunResult {
         val builder =
             Builder()
                 .setSession(getString(R.string.tunnel_session_name))
@@ -608,18 +766,83 @@ class TunnelService : VpnService() {
                 .addRoute("::", 0)
                 .addDnsServer(DNS_SERVER)
 
-        // §8: the app must never be routed through itself. Unlike a user-selected
-        // package — where §8 says skip and continue — failing here would build
-        // §5.1's loop by construction, so it is fatal.
-        try {
-            builder.addDisallowedApplication(packageName)
-        } catch (e: PackageManager.NameNotFoundException) {
-            Log.e(TAG, "cannot exclude own package: ${e.javaClass.simpleName}")
-            return null
+        when (plan) {
+            BuilderPlan.DisallowOwnOnly -> if (!excludeSelf(builder)) return TunResult.Failed
+            is BuilderPlan.Disallow -> {
+                if (!excludeSelf(builder)) return TunResult.Failed
+                // §8: skip and continue. One package uninstalled since it was
+                // selected must never abort the whole tunnel setup, and excluding
+                // nothing extra degrades towards DisallowOwnOnly — the safe way.
+                logSkipped(applyEach(plan.packages) { builder.disallowOrSkip(it) })
+            }
+            // No excludeSelf() here, and that is not an omission. Calling
+            // addDisallowedApplication after addAllowedApplication throws
+            // UnsupportedOperationException (spec §2.2). We are excluded by being
+            // absent from the allow list, which PerAppResolver guarantees.
+            is BuilderPlan.Allow -> {
+                val applied = applyEach(plan.packages) { builder.allowOrSkip(it) }
+                // If nothing was added, AOSP never created the allowed list, and
+                // a null list is "no filtering" — every app tunnelled, ourselves
+                // included, because this arm excludes nobody explicitly. Refusing
+                // is the only safe reading of "only these apps" when there are no
+                // longer any. See PackageApplication.nothingApplied.
+                if (applied.nothingApplied) {
+                    // §5.6: no names. "Empty at the builder", not "empty" —
+                    // the user selected apps; the system no longer has them.
+                    Log.e(TAG, "per-app: allow list empty at the builder; refusing")
+                    return TunResult.AllowListEmptied
+                }
+                logSkipped(applied)
+            }
         }
 
-        return builder.establish()
+        return builder.establish()?.let { TunResult.Established(it) } ?: TunResult.Failed
     }
+
+    /** §5.6: the count, never the names. A package name identifies an installed app. */
+    private fun logSkipped(applied: PackageApplication) {
+        if (applied.skipped > 0) {
+            Log.w(TAG, "per-app: skipped ${applied.skipped} uninstalled package(s)")
+        }
+    }
+
+    /**
+     * §8: the app must never be routed through itself. Unlike a user-selected
+     * package — where §8 says skip and continue — failing here would build §5.1's
+     * loop by construction, so it is fatal.
+     */
+    private fun excludeSelf(builder: Builder): Boolean =
+        try {
+            builder.addDisallowedApplication(packageName)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            Log.e(TAG, "cannot exclude own package: ${e.javaClass.simpleName}")
+            false
+        }
+
+    /** @return false when the package is no longer installed. See [applyEach]. */
+    // Swallowed deliberately: the only thing this exception carries is the
+    // package name, and §5.6 forbids logging it. The count is the whole report.
+    @Suppress("SwallowedException")
+    private fun Builder.disallowOrSkip(name: String): Boolean =
+        try {
+            addDisallowedApplication(name)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        }
+
+    /** @return false when the package is no longer installed. See [applyEach]. */
+    // Swallowed deliberately, as in disallowOrSkip: the exception carries only
+    // the package name, which §5.6 forbids logging.
+    @Suppress("SwallowedException")
+    private fun Builder.allowOrSkip(name: String): Boolean =
+        try {
+            addAllowedApplication(name)
+            true
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        }
 
     private fun goForeground(textRes: Int) {
         val notification = TunnelNotification.build(this, getString(textRes))
@@ -661,6 +884,7 @@ class TunnelService : VpnService() {
             controller = null
             tunInterface = null
             configFile = null
+            liveSession = null
             publishLocked(ConnectionState.Disconnecting)
         }
 
@@ -817,6 +1041,45 @@ class TunnelService : VpnService() {
             override fun disconnect() {
                 stopTunnel(ConnectionState.Disconnected)
                 stopSelf()
+            }
+
+            override fun reapplyPerApp() {
+                // §8: the allow/deny calls apply at establish() time only, so the
+                // running interface keeps whatever selection it was built with.
+                // Rebuilding is the only way to change it.
+                val session = synchronized(lock) { liveSession.takeIf { ownTunnelActive() } }
+                if (session == null) {
+                    // Not an error: the UI saves whether or not a tunnel is up, and
+                    // a disconnected save simply takes effect at the next connect.
+                    return
+                }
+                val (profile, rowId) = session
+                // Not stopSelf() after stopTunnel, unlike disconnect(): the service
+                // must survive to start again. A save racing a user disconnect is
+                // NOT ordered by startTunnel's generation check — stopTunnel below
+                // always leaves currentState Disconnected, so the following
+                // startTunnel passes that guard regardless of whether a disconnect()
+                // landed in between. What keeps the stop+start pair below from
+                // being interleaved with another transaction on this Stub is
+                // binder's per-node serialization: a binder node dispatches its
+                // async (`oneway`) transactions one at a time, so a second
+                // reapplyPerApp or a disconnect() runs strictly before or strictly
+                // after this one — not part-way through it. That holds regardless of
+                // how many clients bind or which threads they call from; it is a
+                // property of the node, not of "one client, one calling thread".
+                //
+                // It does NOT extend to onRevoke(). That arrives on VpnService's own
+                // binder, a different node, so it is not serialized against this
+                // one: a revoke landing between the ownTunnelActive() gate above and
+                // the stopTunnel below would have its Revoked state overwritten by
+                // this rebuild's generic outcome. Narrow, and pre-existing in shape
+                // — the revoke has already torn the interface down, so nothing is
+                // left running and no core is orphaned; what is lost is the specific
+                // reason shown to the user. Recorded rather than fixed: closing it
+                // means a lock discipline spanning two binder nodes, which is a
+                // larger change than the mislabelled failure it would prevent.
+                stopTunnel(ConnectionState.Disconnected)
+                startTunnel(profile, rowId)
             }
 
             override fun getState(): ConnectionStateParcel =

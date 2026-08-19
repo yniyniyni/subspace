@@ -536,11 +536,11 @@ reconnecting per toggle, which would drop the tunnel repeatedly through a
 multi-app edit.
 
 **Status.** The mechanism above is implemented and unit-tested
-(`PerAppResolverTest`, `PerAppBuilderPlanTest`). It has not been exercised on
-a physical device — see §A.2, which stays unticked until it has (§10.1) —
-and as of 2026-08-18 there is no UI path to reach the picker at all (the
-Compose screen and its navigation entry point are the two outstanding tasks
-of the M5.5 plan; see `docs/agent/roadmap.md`).
+(`PerAppResolverTest`, `PerAppBuilderPlanTest`), and the picker is reachable:
+`PerAppScreen` (`:feature:routing`) is pushed from Settings, covered by
+`PerAppViewModelTest` and `PerAppScreenContentTest`. What is still missing is
+the only part that counts here — it has not been exercised on a physical
+device. §A.2 stays unticked until it has (§10.1).
 
 ---
 
@@ -621,6 +621,42 @@ adb shell settings put global animator_duration_scale 0
 Keep the screen **on and unlocked** too: a locked device fails Compose tests
 that navigate, and it looks like a routing or back-stack bug rather than a
 lock screen.
+
+"On" means awake, not merely unlocked. A device that is unlocked but has
+dozed off fails the same way, and worse: every run aborts with `No compose
+hierarchies found in the app`, with the animation scales already at 0 and no
+lock screen to blame. The message names Compose, so it reads as the screen
+never composing — a Hilt injection failure, a crashed activity, a `setContent`
+that never ran — and the obvious checks all pass, because the configuration
+really is correct. Diagnose it before assuming anything about the code:
+
+```
+adb shell dumpsys power | grep mWakefulness
+```
+
+Anything other than `mWakefulness=Awake` — `Dozing` is what M5.5's per-app
+picker run hit — is the answer, and waking it is one call:
+
+```
+adb shell input keyevent KEYCODE_WAKEUP
+```
+
+**A one-shot wake is not enough for a suite that takes more than a few
+seconds.** M5.5's `:feature:routing` run is 23 tests over ~59s, and a device
+woken immediately beforehand dozed off *partway through it*: the first tests
+passed and two later ones failed with the message above, which reads exactly
+like a real, isolated product bug in whichever class happened to be running
+when the screen went dark. Pin it awake for the duration instead:
+
+```
+adb shell svc power stayon true
+adb shell settings put system screen_off_timeout 1800000
+```
+
+Unlike the animation scales, none of this is sticky across a reboot, and the
+doze timer runs regardless — so a suite that ran green an hour ago can fail on
+the next invocation with nothing changed. Check wakefulness on every failing
+run, not once.
 
 With animations on, `waitForIdle` never settles and node lookups fail
 non-deterministically. This does not look like a configuration problem: it
@@ -969,12 +1005,11 @@ Mandatory rules:
 - [ ] Per-app proxy: off / include-list / bypass-list
 
       The mechanism (§8) is implemented and unit-tested on
-      `feat/m5.5-per-app-proxy`, but the box stays unticked: the spec's §9
-      device checklist has not run — no device was attached at the time of
-      writing (2026-08-18) — and there is currently no UI path to the picker
-      at all, pending the two outstanding M5.5 tasks (`docs/agent/roadmap.md`).
+      `feat/m5.5-per-app-proxy`, and the picker is now reachable from Settings,
+      but the box stays unticked: the spec's §9 device checklist has not run.
       §10.1 governs: this is not "code-complete, tick pending," it is "not yet
-      reachable, not yet verified."
+      verified on a device," and per-app routing is one of the things §11 says
+      is verified manually, every time, or not at all.
 - [ ] Traffic counters, live log viewer
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization

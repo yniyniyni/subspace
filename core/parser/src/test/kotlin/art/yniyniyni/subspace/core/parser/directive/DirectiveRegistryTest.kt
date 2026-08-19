@@ -8,6 +8,32 @@ import org.junit.Test
 
 class DirectiveRegistryTest {
     @Test
+    fun consumerVocabularyIsClosed() {
+        Consumer.entries.map { it.name }.toSet() shouldBe setOf(
+            "Subscriptions",
+            "LatencySorting",
+            "Routing",
+            "RoutingProfiles",
+            "ProfileDns",
+            "Passthrough",
+            "PlatformHardening",
+            "CensorshipResistance",
+            "Release",
+            "None",
+        )
+    }
+
+    @Test
+    fun sniffingIsConsumedByPlatformHardening() {
+        DirectiveRegistry.spec("sniffing-enable")?.consumer shouldBe Consumer.PlatformHardening
+    }
+
+    @Test
+    fun announceIsConsumedByRelease() {
+        DirectiveRegistry.spec("announce")?.consumer shouldBe Consumer.Release
+    }
+
+    @Test
     fun `profile-update-interval is whole hours, minimum one`() {
         // Research file: "must be a multiple of one hour". A web search for this
         // key returns profile-title's description attached to it; anyone taking
@@ -15,7 +41,7 @@ class DirectiveRegistryTest {
         val spec = DirectiveRegistry.spec("profile-update-interval").shouldNotBeNull()
         spec.kind shouldBe DirectiveKind.Integer(min = 1, max = 8760)
         spec.disposition shouldBe Disposition.Accept
-        spec.consumer shouldBe Consumer.M4
+        spec.consumer shouldBe Consumer.Subscriptions
     }
 
     @Test
@@ -124,7 +150,7 @@ class DirectiveRegistryTest {
         // Pins spec §1.1's scope. Adding a consumer without amending the spec
         // fails here, deliberately.
         DirectiveRegistry.specs.values
-            .filter { it.consumer == Consumer.M4 }
+            .filter { it.consumer == Consumer.Subscriptions }
             .map { it.key }
             .toSet() shouldBe
             setOf(

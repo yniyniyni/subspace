@@ -1002,14 +1002,31 @@ Mandatory rules:
       user override, then provider, then the screen default, and a group ordered
       by its provider says so on the card.
 - [x] Rule-based routing: geoip/geosite, domain, IP; direct/proxy/block sets
-- [ ] Per-app proxy: off / include-list / bypass-list
+- [x] Per-app proxy: off / include-list / bypass-list
 
-      The mechanism (§8) is implemented and unit-tested on
-      `feat/m5.5-per-app-proxy`, and the picker is now reachable from Settings,
-      but the box stays unticked: the spec's §9 device checklist has not run.
-      §10.1 governs: this is not "code-complete, tick pending," it is "not yet
-      verified on a device," and per-app routing is one of the things §11 says
-      is verified manually, every time, or not at all.
+      Verified on a Pixel 8 / Android 17, 2026-08-20. Both list modes were
+      observed **from the platform's own VPN UID ranges**, not from an app's
+      reported exit IP: a deny-list left the selected package and this app
+      outside the tunnel with everything else inside, and an allow-list produced
+      the exact inverse — `Uids: <{10225-10225, 20225-20225}>`, only the listed
+      app inside. §8's own-package rule holds in all three modes, including
+      allow-list, where nothing calls `addDisallowedApplication` at all and the
+      exclusion is structural.
+
+      Ten of the eleven checklist items passed. **One was not reachable** and is
+      recorded as such rather than skipped: saving while the tunnel is still
+      `Connecting` cannot be driven by hand, because connect completes in about
+      half a second on the test subscription. Its logic is covered by a JVM test,
+      and the ViewModel no longer has a `Connected`-only gate — the service
+      decides, and it already accepts every `Connecting` stage.
+
+      One pre-existing defect surfaced during verification and is **not** fixed
+      here: `android.util.Log` output from the `:bg` process never reaches
+      logcat, which silently disables every diagnostic in `TunnelService`,
+      including §5.1's protect-failure line. That line is the only signal of the
+      §5.1 failure mode, because libXray discards the protect result. It predates
+      this milestone. Full evidence:
+      `docs/agent/research/2026-08-19-m5.5-device-verification.md`.
 - [ ] Traffic counters, live log viewer
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization

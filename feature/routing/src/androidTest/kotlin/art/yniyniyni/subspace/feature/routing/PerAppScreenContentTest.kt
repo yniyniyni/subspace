@@ -79,16 +79,38 @@ class PerAppScreenContentTest {
     }
 
     // Spec §7.3: the user is told before committing, not after the tunnel drops.
+    // isTunnelActive covers Connecting as well as Connected — the notice has to
+    // reach the cold-start window, which is where a save is most likely to
+    // surprise someone.
     @Test
-    fun aConnectedTunnelIsAnnouncedBeforeSaving() {
+    fun anActiveTunnelIsAnnouncedBeforeSaving() {
         rule.setContent {
             PerAppScreenContent(
-                PerAppState(mode = PerAppMode.DenyList, rows = rows, isDirty = true, isConnected = true),
+                PerAppState(mode = PerAppMode.DenyList, rows = rows, isDirty = true, isTunnelActive = true),
                 noopActions,
             )
         }
 
         rule.onNodeWithText("Saving will reconnect the tunnel.").assertIsDisplayed()
+    }
+
+    // The count is the whole selection, not the visible slice of it: a query that
+    // hides the ticked rows must not read as "0 apps selected".
+    @Test
+    fun theCountReportsTheSelectionRatherThanTheFilteredRows() {
+        rule.setContent {
+            PerAppScreenContent(
+                PerAppState(
+                    mode = PerAppMode.DenyList,
+                    rows = emptyList(),
+                    selectedCount = 2,
+                    query = "zzzz",
+                ),
+                noopActions,
+            )
+        }
+
+        rule.onNodeWithText("2 apps selected").assertIsDisplayed()
     }
 
     @Test

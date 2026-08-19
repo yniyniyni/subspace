@@ -87,6 +87,52 @@ class PerAppRepositoryTest {
             repository.selection.first() shouldBe PerAppSelection(PerAppMode.AllowList, emptySet())
         }
 
+    // The picker's flow, and the reason it is a second one. The effective flow
+    // above reports OFF here on purpose; a picker seeded from that would show an
+    // empty list, and its next save would write that emptiness back — the user
+    // loses both the list and the mode, in two saves, silently.
+    @Test
+    fun theRawSelectionKeepsPackagesParkedBehindOff() =
+        runTest {
+            repository.setUserPackages(setOf("com.example.bank"))
+            repository.setMode(PerAppMode.Off)
+
+            repository.selection.first() shouldBe PerAppSelection.OFF
+            repository.userSelection.first() shouldBe
+                PerAppSelection(PerAppMode.Off, setOf("com.example.bank"))
+        }
+
+    // The other collapsing case, for the same reason: a deny-list the user has
+    // emptied is still deny-list *mode* as far as the picker is concerned, even
+    // though the tunnel is built as though per-app routing were off.
+    @Test
+    fun theRawSelectionKeepsTheModeOfAnEmptyDenyList() =
+        runTest {
+            repository.setMode(PerAppMode.DenyList)
+            repository.setUserPackages(emptySet())
+
+            repository.selection.first() shouldBe PerAppSelection.OFF
+            repository.userSelection.first() shouldBe PerAppSelection(PerAppMode.DenyList, emptySet())
+        }
+
+    // Save a deny-list, switch to Off and save, re-open: the packages are still
+    // there. The round trip the picker performs, over the real store.
+    @Test
+    fun aSavedListSurvivesARoundTripThroughOff() =
+        runTest {
+            repository.setUserPackages(setOf("com.example.bank", "com.example.maps"))
+            repository.setMode(PerAppMode.DenyList)
+
+            // What the picker would write on a save with the mode switched to Off:
+            // the same packages it was seeded with, under the new mode.
+            val seeded = repository.userSelection.first()
+            repository.setUserPackages(seeded.packages)
+            repository.setMode(PerAppMode.Off)
+
+            repository.userSelection.first().packages shouldBe
+                setOf("com.example.bank", "com.example.maps")
+        }
+
     @Test
     fun theSelectionFlowTracksLaterWrites() =
         runTest {

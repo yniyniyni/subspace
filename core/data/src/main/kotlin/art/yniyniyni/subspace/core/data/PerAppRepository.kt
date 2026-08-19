@@ -11,15 +11,28 @@ import javax.inject.Singleton
 /**
  * The one place the effective per-app selection is computed (§8).
  *
- * "Effective" rather than "selected": both the picker and the tunnel read
- * [selection], so they cannot disagree about which packages are in force. A
- * second derivation somewhere else is exactly the divergence §5.5 warns about,
- * one layer down.
+ * Two flows come out of here and they are **not** interchangeable:
+ *
+ * - [selection] is the **effective** set — what the tunnel is built with. It is
+ *   deliberately lossy: [combineSelection] collapses whole categories of stored
+ *   state down to [PerAppSelection.OFF] so a mode the user switched off cannot
+ *   reach `VpnService.Builder`.
+ * - [userSelection] is the **raw** set — exactly what is in Room, nothing
+ *   collapsed. It is what the picker edits, because the picker round-trips it:
+ *   it seeds its draft from this and writes back through [setUserPackages].
+ *
+ * Reading the effective flow into an editor and writing the raw one back is a
+ * lossy round trip — a deny-list saved, switched to `Off`, then re-opened would
+ * come back empty and the next save would erase it for real. Which flow you want
+ * is decided by whether you *consume* the selection (effective) or *edit* it
+ * (raw); there is no third answer, and no second place either is derived.
  *
  * Part 2 extends [combineSelection] with approved provider layers — union with
  * the user's set, never replacing it. That is a change to this one function body
  * rather than a new source of truth, which is the whole reason the computation
- * is here and not inlined at its two call sites.
+ * is here and not inlined at its two call sites. Note that it extends the
+ * *effective* flow only: a provider layer must never be written back into the
+ * user's own row, so [userSelection] stays raw under Part 2 as well.
  */
 @Singleton
 public class PerAppRepository
@@ -27,10 +40,31 @@ public class PerAppRepository
 constructor(
     private val settings: SettingsRepository,
 ) {
-    /** The mode and the packages in force under it. */
+    /**
+     * The **effective** selection: the mode and the packages in force under it.
+     *
+     * This is what `:service` resolves a start against. See [combineSelection]
+     * for the two cases it collapses, and the class KDoc for why an editor must
+     * not read it.
+     */
     public val selection: Flow<PerAppSelection> =
         combine(settings.perAppMode, settings.perAppUserPackages) { mode, userPackages ->
             combineSelection(mode, userPackages)
+        }
+
+    /**
+     * The **raw** selection the user last saved, uncollapsed.
+     *
+     * The picker reads this and only this. The mode is reported as stored even
+     * when it is [PerAppMode.Off], and the packages are reported whatever the
+     * mode is — a list parked behind `Off` is still the user's list, and it must
+     * come back ticked when they switch a mode on again. `:service` must never
+     * read it: it says what the user chose, not what the tunnel does, and the
+     * difference between the two is exactly [combineSelection].
+     */
+    public val userSelection: Flow<PerAppSelection> =
+        combine(settings.perAppMode, settings.perAppUserPackages) { mode, userPackages ->
+            PerAppSelection(mode, userPackages)
         }
 
     public suspend fun setMode(mode: PerAppMode) {

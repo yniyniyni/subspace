@@ -30,11 +30,13 @@ internal sealed interface PerAppResolution {
  * Decides the per-app half of a start attempt.
  *
  * Takes suspend lambdas rather than the repository itself, for the reason
- * [RoutingResolver] does: `PerAppRepository` and `SettingsRepository` have
- * `internal` constructors scoped to `:core:data`, so `:service` cannot build one,
- * and this project carries no mocking library (§10.7 does not justify adding one
- * for two reads). That indirection is what makes [PerAppResolverTest] a plain JVM
- * test rather than an instrumented one.
+ * [RoutingResolver] does: `:service` cannot build a `PerAppRepository` by hand.
+ * Its own constructor is public, but it takes a `SettingsRepository`, whose
+ * constructor **is** `internal` to `:core:data` (§3) — so the barrier is
+ * transitive rather than direct, and no less real for it. This project carries no
+ * mocking library either (§10.7 does not justify adding one for two reads). That
+ * indirection is what makes [PerAppResolverTest] a plain JVM test rather than an
+ * instrumented one.
  *
  * @param ownPackage a lambda rather than a `String` so the test need not stand up
  *   a `Context`, and so the value is read at resolve time rather than captured at

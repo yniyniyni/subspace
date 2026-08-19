@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.routing
 import art.yniyniyni.subspace.core.data.InstalledApp
 import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PerAppSelection
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -20,18 +21,32 @@ import org.junit.Test
 class PerAppViewModelTest {
     private val dispatcher = StandardTestDispatcher()
 
+    /**
+     * Models the **raw** store, the way `SettingsRepository` does: a mode cell and
+     * a packages cell, each written as given and read back as written.
+     *
+     * The distinction is the whole of the round-trip bug this fake used to hide.
+     * `PerAppRepository` exposes two flows over these two cells —
+     * `selection`, which collapses `Off` and the empty deny-list to no packages,
+     * and `userSelection`, which does not. A fake that stored whatever `apply`
+     * was handed and served it back as `selection` agreed with the ViewModel's
+     * old mistaken assumption instead of with Room, so the ViewModel could seed
+     * from the collapsing flow and no test noticed. `PerAppSource` now offers the
+     * raw flow only, and this stores raw.
+     */
     private class FakeSource(
         private val installedApps: List<InstalledApp>,
         initial: PerAppSelection = PerAppSelection.OFF,
     ) : PerAppSource {
+        /** The two Room cells, raw. Nothing here collapses anything. */
         val stored = MutableStateFlow(initial)
         var applyCount = 0
-        val connected = MutableStateFlow(false)
+        val tunnelActive = MutableStateFlow(false)
         var reapplyCount = 0
 
-        override val selection = stored
+        override val userSelection = stored
 
-        override val isConnected = connected
+        override val isTunnelActive = tunnelActive
 
         override suspend fun installed(): List<InstalledApp> = installedApps
 
@@ -42,6 +57,20 @@ class PerAppViewModelTest {
 
         override suspend fun reapply() {
             reapplyCount++
+        }
+
+        /**
+         * What `PerAppRepository.selection` would report for the same cells — the
+         * effective set the tunnel would be built with. Not part of
+         * [PerAppSource]; kept here so a test can assert that the picker survives
+         * a state the *service* sees as OFF.
+         */
+        fun effective(): PerAppSelection {
+            val raw = stored.value
+            val collapses =
+                raw.mode == PerAppMode.Off ||
+                    (raw.mode == PerAppMode.DenyList && raw.packages.isEmpty())
+            return if (collapses) PerAppSelection.OFF else raw
         }
     }
 
@@ -165,8 +194,16 @@ class PerAppViewModelTest {
         model.state.value.isDirty shouldBe true
     }
 
+    // A disconnected save must not cost the user anything — but that guarantee
+    // belongs to the service, not here. `reapplyPerApp` gates on
+    // `ownTunnelActive()` and returns without touching the tunnel when nothing is
+    // running, and `TunnelClient.reapplyPerApp` is a documented no-op when it is
+    // not bound to one. Re-deciding it from the UI's view of the connection state
+    // is what dropped the rebuild for a save landing mid-`Connecting` (see
+    // aSaveWhileTheTunnelIsStartingStillRebuilds), so what is asserted now is that
+    // the ViewModel always asks and never second-guesses.
     @Test
-    fun savingWhileDisconnectedDoesNotReconnect() = runTest(dispatcher) {
+    fun savingWhileDisconnectedStillAsksTheServiceWhichNoOps() = runTest(dispatcher) {
         val source = FakeSource(apps)
         val model = PerAppViewModel(source)
         dispatcher.scheduler.advanceUntilIdle()
@@ -175,14 +212,32 @@ class PerAppViewModelTest {
         model.save()
         dispatcher.scheduler.advanceUntilIdle()
 
-        source.reapplyCount shouldBe 0
+        source.reapplyCount shouldBe 1
+    }
+
+    // The start sequence takes seconds (geo resolution, config validation), and a
+    // save landing inside that window may be racing the read of the selection the
+    // tunnel is about to be built with. Skipping the rebuild here is what leaves
+    // the tunnel on the old selection with nothing to reconcile it.
+    @Test
+    fun aSaveWhileTheTunnelIsStartingStillRebuilds() = runTest(dispatcher) {
+        val source = FakeSource(apps).apply { tunnelActive.value = true }
+        val model = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.setMode(PerAppMode.DenyList)
+        model.toggle("com.example.bank")
+        model.save()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        source.reapplyCount shouldBe 1
     }
 
     // Once, at the explicit Save. Per-toggle would drop the tunnel repeatedly
     // through a multi-app edit (spec §7.3).
     @Test
     fun aMultiAppEditReconnectsExactlyOnce() = runTest(dispatcher) {
-        val source = FakeSource(apps).apply { connected.value = true }
+        val source = FakeSource(apps).apply { tunnelActive.value = true }
         val model = PerAppViewModel(source)
         dispatcher.scheduler.advanceUntilIdle()
 
@@ -200,7 +255,7 @@ class PerAppViewModelTest {
     // cost the user their connection.
     @Test
     fun savingACleanDraftNeverReconnects() = runTest(dispatcher) {
-        val source = FakeSource(apps).apply { connected.value = true }
+        val source = FakeSource(apps).apply { tunnelActive.value = true }
         val model = PerAppViewModel(source)
         dispatcher.scheduler.advanceUntilIdle()
 
@@ -211,11 +266,88 @@ class PerAppViewModelTest {
     }
 
     @Test
-    fun aConnectedTunnelIsReflectedInState() = runTest(dispatcher) {
-        val source = FakeSource(apps).apply { connected.value = true }
+    fun anActiveTunnelIsReflectedInState() = runTest(dispatcher) {
+        val source = FakeSource(apps).apply { tunnelActive.value = true }
         val model = PerAppViewModel(source)
         dispatcher.scheduler.advanceUntilIdle()
 
-        model.state.value.isConnected shouldBe true
+        model.state.value.isTunnelActive shouldBe true
+    }
+
+    // The round trip the picker performs: seed a draft from the store, write it
+    // back. It must go through the RAW selection both ways. The store keeps a
+    // list parked behind Off; the *effective* selection reports OFF for it, and a
+    // picker seeded from that would show nothing ticked and then save the nothing
+    // — two saves to lose both the list and the mode, always silently.
+    @Test
+    fun aSelectionSurvivesARoundTripThroughOff() = runTest(dispatcher) {
+        val source = FakeSource(apps)
+
+        val first = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+        first.setMode(PerAppMode.DenyList)
+        first.toggle("com.example.bank")
+        first.save()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        // Off, saved. The service now sees no packages at all...
+        val second = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+        second.setMode(PerAppMode.Off)
+        second.save()
+        dispatcher.scheduler.advanceUntilIdle()
+        source.effective() shouldBe PerAppSelection.OFF
+
+        // ...but the user's list is still theirs, and the picker still shows it.
+        val third = PerAppViewModel(source)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        third.state.value.rows.first { it.packageName == "com.example.bank" }.isSelected shouldBe true
+        third.state.value.selectedCount shouldBe 1
+
+        // And switching the mode back on restores exactly what was stored, rather
+        // than committing an empty list that would collapse straight back to Off.
+        third.setMode(PerAppMode.DenyList)
+        third.save()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        source.stored.value shouldBe PerAppSelection(PerAppMode.DenyList, setOf("com.example.bank"))
+        source.effective() shouldBe PerAppSelection(PerAppMode.DenyList, setOf("com.example.bank"))
+    }
+
+    // A search filters the view, never the selection. Deriving either the count or
+    // the empty-allow-list warning from the visible rows turns a query that
+    // happens to match nothing into "you have selected no apps" plus a disabled
+    // Save — a security warning about a state the user is not in.
+    @Test
+    fun aQueryThatMatchesNothingDoesNotEmptyTheAllowList() = runTest(dispatcher) {
+        val model = PerAppViewModel(FakeSource(apps))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.setMode(PerAppMode.AllowList)
+        model.toggle("com.example.bank")
+        model.search("zzzz")
+
+        model.state.value.rows.shouldBeEmpty()
+        model.state.value.selectedCount shouldBe 1
+        model.state.value.isEmptyAllowList shouldBe false
+    }
+
+    // §7.2: selected first, each group still by label. Fixed at load — see
+    // PerAppViewModel.selectedFirst for why it does not re-sort under a finger.
+    @Test
+    fun selectedRowsSortAheadOfUnselectedOnes() = runTest(dispatcher) {
+        val stored = PerAppSelection(PerAppMode.DenyList, setOf("com.example.maps"))
+        val model = PerAppViewModel(FakeSource(apps, stored))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        model.state.value.rows.map { it.packageName } shouldBe
+            listOf("com.example.maps", "com.example.bank")
+
+        // Ticking does not reshuffle the list out from under the tap.
+        model.toggle("com.example.bank")
+
+        model.state.value.rows.map { it.packageName } shouldBe
+            listOf("com.example.maps", "com.example.bank")
     }
 }

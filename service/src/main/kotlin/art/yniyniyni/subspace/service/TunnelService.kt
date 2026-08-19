@@ -1059,14 +1059,25 @@ class TunnelService : VpnService() {
                 // NOT ordered by startTunnel's generation check — stopTunnel below
                 // always leaves currentState Disconnected, so the following
                 // startTunnel passes that guard regardless of whether a disconnect()
-                // landed in between. What actually orders them today is that
-                // disconnect() and reapplyPerApp() are both `oneway` AIDL calls: the
-                // only caller is TunnelClient, on :main's main thread, and Android
-                // serialises oneway transactions from one calling thread to one
-                // Binder object in FIFO order. That guarantee is implicit in "one
-                // client, one calling thread" — it would silently stop holding if a
-                // second client bound, or if either call started being issued from a
-                // different thread.
+                // landed in between. What keeps the stop+start pair below from
+                // being interleaved with another transaction on this Stub is
+                // binder's per-node serialization: a binder node dispatches its
+                // async (`oneway`) transactions one at a time, so a second
+                // reapplyPerApp or a disconnect() runs strictly before or strictly
+                // after this one — not part-way through it. That holds regardless of
+                // how many clients bind or which threads they call from; it is a
+                // property of the node, not of "one client, one calling thread".
+                //
+                // It does NOT extend to onRevoke(). That arrives on VpnService's own
+                // binder, a different node, so it is not serialized against this
+                // one: a revoke landing between the ownTunnelActive() gate above and
+                // the stopTunnel below would have its Revoked state overwritten by
+                // this rebuild's generic outcome. Narrow, and pre-existing in shape
+                // — the revoke has already torn the interface down, so nothing is
+                // left running and no core is orphaned; what is lost is the specific
+                // reason shown to the user. Recorded rather than fixed: closing it
+                // means a lock discipline spanning two binder nodes, which is a
+                // larger change than the mislabelled failure it would prevent.
                 stopTunnel(ConnectionState.Disconnected)
                 startTunnel(profile, rowId)
             }

@@ -160,7 +160,7 @@ internal fun PerAppScreenContent(
             if (state.isEmptyAllowList) {
                 EmptyAllowListWarning()
             }
-            if (state.isConnected && state.isDirty) {
+            if (state.isTunnelActive && state.isDirty) {
                 ReconnectNotice()
             }
 
@@ -173,7 +173,9 @@ internal fun PerAppScreenContent(
             }
 
             SelectedCountText(
-                count = state.rows.count { it.isSelected },
+                // The whole selection, never the visible slice of it: typing a
+                // query must not appear to untick what the user chose.
+                count = state.selectedCount,
                 modifier = Modifier.padding(top = ROW_GAP),
             )
         }

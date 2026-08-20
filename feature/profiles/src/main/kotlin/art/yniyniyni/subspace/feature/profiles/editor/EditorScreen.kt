@@ -598,6 +598,14 @@ private fun RawJsonFields(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // The specific cost of running a converted copy, not a restatement of
+        // the notice above: this config's own routing and dns blocks are
+        // discarded silently, and until M7 nothing else says so.
+        Text(
+            text = stringResource(R.string.editor_raw_json_not_passthrough),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(text = stringResource(R.string.editor_raw_json_label), style = MaterialTheme.typography.labelLarge)
         Text(
             text = state.rawJson.orEmpty(),

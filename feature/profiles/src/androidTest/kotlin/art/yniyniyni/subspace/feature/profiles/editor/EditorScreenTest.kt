@@ -246,4 +246,30 @@ class EditorScreenTest {
                 "actually use yet. Only the name can be changed — everything else is shown for reference.",
         ).assertExists()
     }
+
+    // M6 Task 15 / spec §6. The notice above says the file is not run; it does
+    // not say what that costs. Now that a user can import a routing profile
+    // deliberately, "my config's own routing block does nothing" is a question
+    // they will actually ask, and the app must answer it before they ask.
+    @Test
+    fun aRawJsonProfileSaysItsOwnRoutingAndDnsAreNotApplied() {
+        setContent(state = rawJsonState)
+
+        composeRule.onNodeWithText(
+            "Routing and DNS settings inside this config are not applied.",
+            substring = true,
+        ).assertExists()
+    }
+
+    // A typed profile has no config of its own to discard, so the marker would
+    // be a warning about nothing.
+    @Test
+    fun aTypedProfileDoesNotClaimAnythingIsDiscarded() {
+        setContent(state = rawJsonState.copy(kind = ProfileKind.TYPED, rawJson = null))
+
+        composeRule.onNodeWithText(
+            "Routing and DNS settings inside this config are not applied.",
+            substring = true,
+        ).assertDoesNotExist()
+    }
 }

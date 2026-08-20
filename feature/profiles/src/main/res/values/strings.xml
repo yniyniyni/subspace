@@ -223,6 +223,15 @@
         the file itself, so editing the text here would show you something the app does not
         actually use yet. Only the name can be changed — everything else is shown for reference.
     </string>
+    <!-- §6: a RAW_JSON profile connects through the typed projection, so its own
+         routing and dns blocks never reach the core. The notice above says the
+         file is not run; this says what that costs, which is the question a
+         user asks once M6 lets them import a routing profile on purpose. M7 —
+         raw config passthrough — is what will remove this string. -->
+    <string name="editor_raw_json_not_passthrough">
+        Routing and DNS settings inside this config are not applied.
+    </string>
+
     <string name="editor_raw_json_label">Pasted config (read-only)</string>
 
     <!-- Same closed-vocabulary shape as import_failure_* above, minus the

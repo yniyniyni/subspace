@@ -1,0 +1,18 @@
+{
+  "Name": "SyntheticSelectiveVpn",
+  "GlobalProxy": false,
+  "RouteOrder": "proxy-direct-block",
+  "ProxySites": [
+    "video.synthetic.test",
+    "chat.synthetic.test",
+    "ai.synthetic.test"
+  ],
+  "DirectSites": [],
+  "BlockSites": [],
+  "RemoteDNSType": "DoH",
+  "RemoteDNSDomain": "https://resolver.synthetic.test/dns-query",
+  "RemoteDNSIP": "203.0.113.3",
+  "DomesticDNSType": "DoH",
+  "DomesticDNSDomain": "https://domestic.synthetic.test/dns-query",
+  "DomesticDNSIP": "203.0.113.4"
+}

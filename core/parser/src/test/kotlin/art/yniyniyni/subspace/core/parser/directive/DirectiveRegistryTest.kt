@@ -9,18 +9,19 @@ import org.junit.Test
 class DirectiveRegistryTest {
     @Test
     fun consumerVocabularyIsClosed() {
-        Consumer.entries.map { it.name }.toSet() shouldBe setOf(
-            "Subscriptions",
-            "LatencySorting",
-            "Routing",
-            "RoutingProfiles",
-            "ProfileDns",
-            "Passthrough",
-            "PlatformHardening",
-            "CensorshipResistance",
-            "Release",
-            "None",
-        )
+        Consumer.entries.map { it.name }.toSet() shouldBe
+            setOf(
+                "Subscriptions",
+                "LatencySorting",
+                "Routing",
+                "RoutingProfiles",
+                "ProfileDns",
+                "Passthrough",
+                "PlatformHardening",
+                "CensorshipResistance",
+                "Release",
+                "None",
+            )
     }
 
     @Test

@@ -1,0 +1,43 @@
+{
+  "Name": "SyntheticRussiaInside",
+  "GlobalProxy": "false",
+  "UseChunkFiles": "true",
+  "RemoteDNSType": "DoU",
+  "RemoteDNSDomain": "https://resolver.synthetic.test/dns-query",
+  "RemoteDNSIP": "203.0.113.1",
+  "DomesticDNSType": "DoU",
+  "DomesticDNSDomain": "https://domestic.synthetic.test/dns-query",
+  "DomesticDNSIP": "203.0.113.2",
+  "Geoipurl": "https://geo.synthetic.test/allow-subnets.dat",
+  "Geositeurl": "https://geo.synthetic.test/russia-inside.dat",
+  "LastUpdated": "not-a-timestamp",
+  "DnsHosts": {
+    "resolver.synthetic.test": "203.0.113.1",
+    "domestic.synthetic.test": "203.0.113.2"
+  },
+  "RouteOrder": "block-direct-proxy",
+  "DirectSites": [],
+  "DirectIp": ["geoip:private-synthetic"],
+  "ProxySites": [
+    "domain:connectivity.synthetic.test",
+    "domain:static.synthetic.test",
+    "geosite:synthetic-list"
+  ],
+  "ProxyIp": [
+    "geoip:one",
+    "geoip:two",
+    "geoip:three",
+    "geoip:four",
+    "geoip:five",
+    "geoip:six",
+    "geoip:seven",
+    "geoip:eight",
+    "geoip:nine",
+    "geoip:ten",
+    "geoip:eleven"
+  ],
+  "BlockSites": [],
+  "BlockIp": [],
+  "DomainStrategy": "IPIfNonMatch",
+  "FakeDNS": "true"
+}

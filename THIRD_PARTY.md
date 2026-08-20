@@ -63,6 +63,19 @@ All versions above are the **resolved** coordinates from
 licence is the one declared in that artifact's own POM — neither is transcribed
 from a project README.
 
+## Compatibility-only routing-profile references
+
+The following repositories were inspected only to learn JSON field/type shapes
+for the parser's **sanitized, repository-authored** test fixtures. No upstream
+bytes are copied, bundled, or redistributed, and neither repository declared a
+licence or reuse grant when checked on 2026-08-20 (their GitHub licence endpoints
+returned 404). They are not dependencies or code-adaptation sources.
+
+| Reference | Inspected source | SHA-256 | Use |
+|---|---|---|---|
+| [KazZzeL/allow-domains-happ-routing](https://github.com/KazZzeL/allow-domains-happ-routing) | `russia-inside.json`, read 2026-08-20 | `18cfa801b7385ea4a16cfd7cb3e7268d402b44375946ba689d6d8b1a89f782d1` | String booleans, `RouteOrder`, `UseChunkFiles`, DNS fields, and all six routing buckets. |
+| [grechixa/happ_routing-profile](https://github.com/grechixa/happ_routing-profile) | `routing.json`, read 2026-08-20 | `7511eb0da8afad3b625b821f7e8562cbc9bbfb8a68c8cbed401e1293c44dab25` | Real JSON `GlobalProxy: false` and proxy-site-only shape. |
+
 ---
 
 ## Test dependencies

@@ -37,10 +37,36 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.Subspace">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- M6: routing profile deeplinks (§A.3.1). A second intent-filter,
+                 not extra data tags on the LAUNCHER one — merging them would
+                 make the launcher entry disappear.
+
+                 `happ` is the ecosystem's scheme rather than one vendor's, so
+                 claiming it is intended: with Happ installed Android shows a
+                 chooser, and the user picking beats either app winning
+                 silently. `subspace` is registered alongside it and costs one
+                 line.
+
+                 launchMode="singleTop" above pairs with onNewIntent in
+                 MainActivity: without both, a second link arriving while the
+                 app is already foregrounded is silently dropped, because
+                 onCreate does not run again and getIntent() still returns the
+                 first one. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="happ" android:host="routing" />
+                <data android:scheme="subspace" android:host="routing" />
             </intent-filter>
         </activity>
     </application>

@@ -51,6 +51,10 @@ class RoutingViewModelTest {
             buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8"))),
         )
 
+    // LongParameterList: one flow per RoutingSource axis, each defaulted so a
+    // test names only the axis it is about. Bundling them would make every
+    // test build a holder to change one field.
+    @Suppress("LongParameterList")
     private class FakeSource(
         val sets: MutableStateFlow<List<StoredRuleSet>>,
         val activeId: MutableStateFlow<Long?> = MutableStateFlow(null),
@@ -58,6 +62,7 @@ class RoutingViewModelTest {
         val failed: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet()),
         val names: MutableStateFlow<Map<Long, String>> = MutableStateFlow(emptyMap()),
         val downloads: MutableStateFlow<Map<Long, GeoDownloadProgress>> = MutableStateFlow(emptyMap()),
+        val pending: MutableStateFlow<String?> = MutableStateFlow(null),
     ) : RoutingSource {
         override val ruleSets = sets
         override val activeRuleSetId = activeId
@@ -79,6 +84,12 @@ class RoutingViewModelTest {
 
         override fun cancelDownload(id: Long) {
             cancelled = id
+        }
+
+        override val pendingLink = pending
+
+        override fun consumePendingLink(link: String) {
+            if (pending.value == link) pending.value = null
         }
 
         override suspend fun ruleSet(id: Long): RoutingRuleSet? =
@@ -374,6 +385,37 @@ class RoutingViewModelTest {
             )
 
         RoutingViewModel(source).state.value.ruleSets.single().hasUnappliedDns shouldBe true
+    }
+
+    // Task 14. A deeplink reaches the sheet through this flow rather than a
+    // navigation argument — the back stack is persisted and a base64 profile is
+    // config material (§5.6).
+    @Test
+    fun `a delivered deeplink is offered for review`() = runTest {
+        val source =
+            FakeSource(
+                sets = MutableStateFlow(emptyList()),
+                pending = MutableStateFlow("happ://routing/off"),
+            )
+
+        RoutingViewModel(source).pendingLink.value shouldBe "happ://routing/off"
+    }
+
+    // A second link delivered by onNewIntent while the first was being handed
+    // over must not be discarded unread.
+    @Test
+    fun `consuming clears only the link that was taken`() = runTest {
+        val source =
+            FakeSource(
+                sets = MutableStateFlow(emptyList()),
+                pending = MutableStateFlow("happ://routing/off"),
+            )
+        val viewModel = RoutingViewModel(source)
+
+        source.pending.value = "happ://routing/add/second"
+        viewModel.consumePendingLink("happ://routing/off")
+
+        source.pending.value shouldBe "happ://routing/add/second"
     }
 
     @Test

@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.routing
 import art.yniyniyni.subspace.core.data.GeoAssetRepository
 import art.yniyniyni.subspace.core.data.GeoDownloadProgress
 import art.yniyniyni.subspace.core.data.GeoDownloadProgressRegistry
+import art.yniyniyni.subspace.core.data.PendingRoutingImport
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.RoutingProfileImporter
 import art.yniyniyni.subspace.core.data.RoutingRepository
@@ -112,8 +113,20 @@ internal interface RoutingSource {
      */
     val downloadProgress: Flow<Map<Long, GeoDownloadProgress>> get() = flowOf(emptyMap())
 
+    /**
+     * A routing link an `ACTION_VIEW` intent delivered, awaiting review. See
+     * [PendingRoutingImport].
+     *
+     * Reaches the screen through this source, not through a navigation
+     * argument: the link is config material and the back stack is persisted.
+     */
+    val pendingLink: Flow<String?> get() = flowOf(null)
+
     /** Sets the active rule set, or turns routing off when [id] is `null`. */
     suspend fun setActive(id: Long?)
+
+    /** Clears [link] once the review sheet has taken it. */
+    fun consumePendingLink(link: String) = Unit
 
     /**
      * Stops the generation [id] is materialising. A no-op when nothing is.
@@ -204,6 +217,7 @@ constructor(
     private val profileRepository: ProfileRepository,
     private val progressRegistry: GeoDownloadProgressRegistry,
     private val importer: RoutingProfileImporter,
+    private val pendingRoutingImport: PendingRoutingImport,
 ) : RoutingSource {
     override val ruleSets: Flow<List<StoredRuleSet>> = routingRepository.observeAllStored()
 
@@ -252,6 +266,10 @@ constructor(
     override suspend fun setActive(id: Long?) = settingsRepository.setActiveRoutingRuleSetId(id)
 
     override fun cancelDownload(id: Long) = progressRegistry.cancel(id)
+
+    override val pendingLink: Flow<String?> = pendingRoutingImport.link
+
+    override fun consumePendingLink(link: String) = pendingRoutingImport.consume(link)
 
     /**
      * Deletes through [RoutingProfileImporter], not [RoutingRepository].

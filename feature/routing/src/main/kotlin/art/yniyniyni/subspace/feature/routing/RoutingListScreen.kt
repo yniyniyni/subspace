@@ -32,6 +32,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -122,6 +123,18 @@ fun RoutingListScreen(
         ),
         modifier = modifier,
     )
+
+    // A deeplink navigated here; the sheet is what the user actually confirms
+    // (rule 1: nothing is stored before approval, with no per-channel
+    // exemption). Consumed by value so a link that arrived while this one was
+    // being handed over is not discarded unread.
+    val pendingLink by viewModel.pendingLink.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingLink) {
+        pendingLink?.let { link ->
+            importViewModel.offer(link, RoutingSourceKind.Deeplink)
+            viewModel.consumePendingLink(link)
+        }
+    }
 
     ImportReviewSheet(
         state = importState,

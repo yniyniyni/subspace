@@ -8,11 +8,13 @@ import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -101,6 +103,25 @@ constructor(
                 ),
             )
         }
+    }
+
+    /**
+     * A routing link an `ACTION_VIEW` intent delivered, awaiting review.
+     *
+     * Exposed rather than acted on here: applying it is the import sheet's
+     * job, and this ViewModel does not own that sheet.
+     */
+    val pendingLink: StateFlow<String?> =
+        // Eagerly, not WhileSubscribed: a link delivered between this
+        // ViewModel's creation and the screen's first composition would
+        // otherwise never be observed, and a deeplink's whole job is to arrive
+        // before the screen does. The upstream is an in-memory StateFlow, so an
+        // always-on collector costs nothing.
+        source.pendingLink.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Clears [link] once the sheet has taken it. */
+    fun consumePendingLink(link: String) {
+        source.consumePendingLink(link)
     }
 
     /** Stops the download [id] is running, leaving its previous generation live. */

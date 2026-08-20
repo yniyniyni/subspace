@@ -319,7 +319,7 @@ internal constructor(
         if (generation == null) {
             deleteTreeNoFollow(child)
         } else {
-            GenerationRetention.requestDelete(root, setId, generation) {
+            GenerationRetention.requestDelete(root, setId, generation, child) {
                 deleteGenerationAndEmptySet(child)
             }
         }

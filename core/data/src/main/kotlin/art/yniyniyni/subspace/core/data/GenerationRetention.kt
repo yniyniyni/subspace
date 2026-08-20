@@ -44,15 +44,60 @@ public interface RuleSetAssetScope {
     ): ResolvedAssetUse<T>
 }
 
+/** One acquired generation lock whose backend owns every OS resource. */
+internal fun interface GenerationFileLock {
+    fun release()
+}
+
+/** Blocking lock acquisition, injectable so the cross-process protocol can be interleaved deterministically. */
+internal fun interface GenerationFileLockBackend {
+    fun acquire(lockPath: Path): GenerationFileLock?
+}
+
+private object NioGenerationFileLockBackend : GenerationFileLockBackend {
+    @Suppress("ReturnCount") // Every failed filesystem stage closes its own resources and fails closed.
+    override fun acquire(lockPath: Path): GenerationFileLock? {
+        // Never unlink a lock-path symlink. Replacing it would create a new
+        // inode that can be locked independently of a process using the old one.
+        if (Files.isSymbolicLink(lockPath)) return null
+        val channel =
+            try {
+                FileChannel.open(lockPath, setOf<OpenOption>(CREATE, WRITE, NOFOLLOW_LINKS))
+            } catch (_: IOException) {
+                return null
+            } catch (_: SecurityException) {
+                return null
+            }
+        val lock =
+            try {
+                channel.lock()
+            } catch (_: OverlappingFileLockException) {
+                channel.closeQuietly()
+                return null
+            } catch (_: IOException) {
+                channel.closeQuietly()
+                return null
+            }
+        return GenerationFileLock {
+            lock.releaseQuietly()
+            channel.closeQuietly()
+        }
+    }
+}
+
 /**
- * Process-local reference ownership backed by cross-process OS file locks.
+ * One process's ownership registry. Separate Android processes own separate
+ * instances while coordinating through [GenerationFileLockBackend].
  *
  * Lock inodes live outside `sets/<id>/<generation>`, so deleting a generation
  * never unlinks an inode another process is still using for coordination. The
  * lock files deliberately remain after release: unlinking one while another
  * process has opened it would permit a second lock on a replacement inode.
  */
-internal object GenerationRetention {
+@Suppress("TooManyFunctions") // Protocol stages stay together so their marker/lock ordering is reviewable.
+internal class GenerationRetentionRegistry(
+    private val lockBackend: GenerationFileLockBackend = NioGenerationFileLockBackend,
+) {
     private val guards = ConcurrentHashMap<Path, Any>()
     private val held = ConcurrentHashMap<Path, HeldLock>()
 
@@ -69,80 +114,57 @@ internal object GenerationRetention {
         synchronized(guard) {
             held[paths.lock]?.let { existing ->
                 existing.references += 1
-                return GenerationLease(paths.lock, existing, deleteGeneration)
+                return GenerationLease(this, paths.lock, generationDir, existing, deleteGeneration)
             }
 
-            val channel = openLockChannel(paths) ?: return null
-            val lock =
-                try {
-                    channel.lock()
-                } catch (_: OverlappingFileLockException) {
-                    channel.closeQuietly()
-                    return null
-                } catch (_: IOException) {
-                    channel.closeQuietly()
-                    return null
-                }
+            val lock = acquireFileLock(paths) ?: return null
 
             if (markerExists(paths.marker)) {
                 reapMarkedGeneration(paths.marker, generationDir, deleteGeneration)
-                lock.releaseQuietly()
-                channel.closeQuietly()
+                lock.release()
                 return null
             }
 
-            val entry = HeldLock(channel, lock)
+            val entry = HeldLock(lock)
             held[paths.lock] = entry
-            return GenerationLease(paths.lock, entry, deleteGeneration)
+            return GenerationLease(this, paths.lock, generationDir, entry, deleteGeneration)
         }
     }
 
-    /** Deletes now when unleased, or records a safe delete-on-release request. */
-    @Suppress("ReturnCount") // Leased, lock failure, delete success, and deferred delete are distinct outcomes.
+    /**
+     * Records delete intent before waiting for ownership, then consumes it
+     * under the same lock a lease holder releases.
+     *
+     * Marker-first ordering covers every crash point: a holder can consume the
+     * marker, this caller can acquire after the holder and consume it, or a
+     * later operation can recover a marker left by process death.
+     */
+    @Suppress("ReturnCount") // Unsafe paths, local leases, lock failures, and consumed intent differ.
     fun requestDelete(
         root: File,
         setId: Long,
         generation: Long,
+        generationDir: File,
         deleteGeneration: () -> Boolean,
     ): Boolean {
         val paths = retentionPaths(root, setId, generation)
+        if (!createMarker(paths)) return false
         val guard = guards.computeIfAbsent(paths.lock) { Any() }
         synchronized(guard) {
-            if (held.containsKey(paths.lock)) {
-                createMarker(paths)
-                return false
-            }
+            if (held.containsKey(paths.lock)) return false
 
-            val channel = openLockChannel(paths)
-            if (channel == null) {
-                createMarker(paths)
-                return false
-            }
-            val lock =
-                try {
-                    channel.tryLock()
-                } catch (_: OverlappingFileLockException) {
-                    null
-                } catch (_: IOException) {
-                    null
-                }
-            if (lock == null) {
-                channel.closeQuietly()
-                createMarker(paths)
-                return false
-            }
+            // Blocking is deliberate: if a holder passed its final marker read,
+            // this caller must acquire after unlock and perform the recheck.
+            val lock = acquireFileLock(paths) ?: return false
 
             return try {
-                if (deleteGeneration()) {
-                    deleteMarker(paths.marker)
-                    true
+                if (markerExists(paths.marker)) {
+                    reapMarkedGeneration(paths.marker, generationDir, deleteGeneration)
                 } else {
-                    createMarker(paths)
-                    false
+                    !entryExists(generationDir)
                 }
             } finally {
-                lock.releaseQuietly()
-                channel.closeQuietly()
+                lock.release()
             }
         }
     }
@@ -160,11 +182,10 @@ internal object GenerationRetention {
                     lease.lockPath.fileName.toString().removeSuffix(LOCK_SUFFIX) + DELETE_SUFFIX,
                 )
             if (markerExists(marker)) {
-                if (lease.deleteGeneration()) deleteMarker(marker)
+                reapMarkedGeneration(marker, lease.generationDir, lease.deleteGeneration)
             }
             held.remove(lease.lockPath, entry)
-            entry.lock.releaseQuietly()
-            entry.channel.closeQuietly()
+            entry.lock.release()
         }
     }
 
@@ -211,28 +232,25 @@ internal object GenerationRetention {
             false
         }
 
-    private fun openLockChannel(paths: RetentionPaths): FileChannel? {
+    private fun acquireFileLock(paths: RetentionPaths): GenerationFileLock? {
         if (!ensureRetentionDirectory(paths)) return null
-        return try {
-            if (Files.isSymbolicLink(paths.lock)) Files.deleteIfExists(paths.lock)
-            FileChannel.open(paths.lock, setOf<OpenOption>(CREATE, WRITE, NOFOLLOW_LINKS))
-        } catch (_: IOException) {
-            null
-        } catch (_: SecurityException) {
-            null
-        }
+        return lockBackend.acquire(paths.lock)
     }
 
-    private fun createMarker(paths: RetentionPaths) {
-        if (!ensureRetentionDirectory(paths)) return
-        try {
+    private fun createMarker(paths: RetentionPaths): Boolean {
+        if (!ensureRetentionDirectory(paths)) return false
+        return try {
             if (!Files.exists(paths.marker, NOFOLLOW_LINKS)) Files.createFile(paths.marker)
+            true
         } catch (_: FileAlreadyExistsException) {
             // Any no-follow entry at the exact marker path already means delete requested.
+            true
         } catch (_: IOException) {
             // Best effort. A later sweep can retry without risking a live generation.
+            markerExists(paths.marker)
         } catch (_: SecurityException) {
             // Best effort, as above.
+            false
         }
     }
 
@@ -247,10 +265,13 @@ internal object GenerationRetention {
         marker: Path,
         generationDir: File,
         deleteGeneration: () -> Boolean,
-    ) {
-        if (Files.exists(generationDir.toPath(), NOFOLLOW_LINKS) && !deleteGeneration()) return
+    ): Boolean {
+        if (entryExists(generationDir) && !deleteGeneration()) return false
         deleteMarker(marker)
+        return !entryExists(generationDir) && !markerExists(marker)
     }
+
+    private fun entryExists(entry: File): Boolean = Files.exists(entry.toPath(), NOFOLLOW_LINKS)
 
     /** `deleteIfExists` removes a marker symlink itself, never its destination. */
     private fun deleteMarker(marker: Path) {
@@ -264,7 +285,9 @@ internal object GenerationRetention {
     }
 
     internal class GenerationLease internal constructor(
+        private val owner: GenerationRetentionRegistry,
         internal val lockPath: Path,
+        internal val generationDir: File,
         internal val entry: HeldLock,
         internal val deleteGeneration: () -> Boolean,
     ) {
@@ -272,13 +295,12 @@ internal object GenerationRetention {
 
         /** Idempotent so cancellation and explicit teardown may converge safely. */
         fun release() {
-            if (released.compareAndSet(false, true)) GenerationRetention.release(this)
+            if (released.compareAndSet(false, true)) owner.release(this)
         }
     }
 
     internal class HeldLock(
-        val channel: FileChannel,
-        val lock: FileLock,
+        val lock: GenerationFileLock,
         var references: Int = 1,
     )
 
@@ -289,6 +311,9 @@ internal object GenerationRetention {
         val marker: Path,
     )
 }
+
+/** Production registry, process-local by construction. */
+internal val GenerationRetention: GenerationRetentionRegistry = GenerationRetentionRegistry()
 
 private fun FileLock.releaseQuietly() {
     try {

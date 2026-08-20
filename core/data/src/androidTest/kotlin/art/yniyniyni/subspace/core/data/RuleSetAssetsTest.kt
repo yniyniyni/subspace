@@ -222,6 +222,66 @@ class RuleSetAssetsTest {
     }
 
     @Test
+    fun aSymlinkedLockPathMakesLeaseAcquisitionFailClosedWithoutReplacingIt() = runTest {
+        val root = temp.newFolder("symlinked-acquire-lock")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        val external = temp.newFile("external-acquire-lock-target").apply { writeText("outside") }
+        val retention = File(root, ".routing-generation-retention/7").apply(File::mkdirs)
+        val lockPath = File(retention, "1.lock")
+        Files.createSymbolicLink(lockPath.toPath(), external.toPath())
+
+        subject.withResolvedAssetDir(7, 1, hasOwnSources = true) {
+            error("unsafe lock must not expose assets")
+        } shouldBe ResolvedAssetUse.GenerationUnavailable
+
+        Files.isSymbolicLink(lockPath.toPath()) shouldBe true
+        Files.readSymbolicLink(lockPath.toPath()) shouldBe external.toPath()
+        external.readText() shouldBe "outside"
+        subject.generationDir(7, 1).isDirectory shouldBe true
+    }
+
+    @Test
+    fun aSymlinkedLockPathMakesSweepFailClosedWithoutReplacingIt() = runTest {
+        val root = temp.newFolder("symlinked-delete-lock")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        subject.prepareGeneration(7, 2)
+        val external = temp.newFile("external-delete-lock-target").apply { writeText("outside") }
+        val retention = File(root, ".routing-generation-retention/7").apply(File::mkdirs)
+        val lockPath = File(retention, "1.lock")
+        Files.createSymbolicLink(lockPath.toPath(), external.toPath())
+
+        subject.sweepExcept(setId = 7, keep = 2)
+
+        Files.isSymbolicLink(lockPath.toPath()) shouldBe true
+        Files.readSymbolicLink(lockPath.toPath()) shouldBe external.toPath()
+        external.readText() shouldBe "outside"
+        subject.generationDir(7, 1).isDirectory shouldBe true
+        Files.exists(File(retention, "1.delete").toPath(), NOFOLLOW_LINKS) shouldBe true
+    }
+
+    @Test
+    fun aSymlinkedRetentionParentMakesLeaseAcquisitionFailClosed() = runTest {
+        val root = temp.newFolder("symlinked-acquire-parent")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        val external = temp.newFolder("external-acquire-retention").apply {
+            File(this, "keep").writeText("outside")
+        }
+        val retentionRoot = File(root, ".routing-generation-retention").apply(File::mkdirs)
+        Files.createSymbolicLink(File(retentionRoot, "7").toPath(), external.toPath())
+
+        subject.withResolvedAssetDir(7, 1, hasOwnSources = true) {
+            error("unsafe parent must not expose assets")
+        } shouldBe ResolvedAssetUse.GenerationUnavailable
+
+        File(external, "keep").readText() shouldBe "outside"
+        external.listFiles().orEmpty().map(File::getName) shouldBe listOf("keep")
+        subject.generationDir(7, 1).isDirectory shouldBe true
+    }
+
+    @Test
     fun anOverlappingExternalLockIsTreatedAsLeasedAndReapedLater() = runTest {
         val root = temp.newFolder("overlapping-lock")
         val subject = RuleSetAssets(root)

@@ -17,6 +17,7 @@ import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.HwidProvider
 import art.yniyniyni.subspace.core.network.SubscriptionRequest
 import art.yniyniyni.subspace.core.network.SubscriptionSource
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.CompletableDeferred
@@ -27,6 +28,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.util.Base64
 
 // The brief's verbatim helper used pbk=abc, which VlessLink's already-implemented
 // (Task 1-5) validateRealityPublicKey rejects outright: a REALITY public key must be
@@ -59,6 +61,16 @@ private fun link(name: String, host: String = "example.com", uuid: String = uuid
 // ProfileRepositoryTest avoids them: runTest {}'s lambda inherits the
 // enclosing test method's JVM name, and this module's minSdk 26 makes D8
 // reject spaces in the resulting synthetic class name below DEX 040.
+/**
+ * A routing deeplink a provider could send. §5.6: the payload is a fixture
+ * profile with no real domain in it.
+ */
+private val ROUTING_HEADER_LINK =
+    "happ://routing/add/" +
+        Base64.getUrlEncoder().withoutPadding().encodeToString(
+            """{"Name":"FromHeader","DirectSites":["domain:header.example"]}""".toByteArray(),
+        )
+
 class SubscriptionSyncerTest {
     private lateinit var db: SubspaceDatabase
     private lateinit var subscriptions: SubscriptionRepository
@@ -113,6 +125,53 @@ class SubscriptionSyncerTest {
 
     private suspend fun addSubscription() =
         subscriptions.add("https://example.com/sub", name = "Provider").id
+
+    // M6 Task 16. The `routing` header is the channel §A.1's threat model is
+    // written about: whoever controls the subscription URL can use it to change
+    // what is proxied and which host the device downloads geo data from. A sync
+    // stores the directive and applies nothing (rule 1) — the routing screen
+    // raises the review sheet over it.
+    @Test
+    fun aRoutingHeaderIsStoredAsADirectiveAndAppliesNothing() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(link("Tokyo"), mapOf("routing" to ROUTING_HEADER_LINK))
+
+        syncer().sync(id)
+
+        subscriptions.effective(id, "routing", default = null).value shouldBe ROUTING_HEADER_LINK
+        RoutingRepository(db.routingRuleSetDao()).observeAllStored().first().shouldBeEmpty()
+        settings.activeRoutingRuleSetId.first() shouldBe null
+    }
+
+    // A bare deeplink is the body form of the same directive. Without the
+    // splitter consuming it, this line reaches SubscriptionParser, which reads
+    // it as a server (§A.1) — so the server count is what pins it.
+    @Test
+    fun aBareRoutingLinkInTheBodyDoesNotBecomeAServer() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success("$ROUTING_HEADER_LINK\n${link("Tokyo")}", emptyMap())
+
+        syncer().sync(id)
+
+        subscriptions.effective(id, "routing", default = null).value shouldBe ROUTING_HEADER_LINK
+        profiles.observeGroups().first().single().profiles.map { it.name } shouldBe listOf("Tokyo")
+    }
+
+    // Header wins over body (§A.1), and the body line is still consumed.
+    @Test
+    fun aRoutingHeaderWinsOverABodyLine() = runTest {
+        val id = addSubscription()
+        response =
+            FetchOutcome.Success(
+                "happ://routing/add/frombody\n${link("Tokyo")}",
+                mapOf("routing" to ROUTING_HEADER_LINK),
+            )
+
+        syncer().sync(id)
+
+        subscriptions.effective(id, "routing", default = null).value shouldBe ROUTING_HEADER_LINK
+        profiles.observeGroups().first().single().profiles.map { it.name } shouldBe listOf("Tokyo")
+    }
 
     @Test
     fun aFirstSyncInsertsEveryServer() = runTest {

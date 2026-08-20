@@ -62,7 +62,7 @@ class RoutingViewModelTest {
         val failed: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet()),
         val names: MutableStateFlow<Map<Long, String>> = MutableStateFlow(emptyMap()),
         val downloads: MutableStateFlow<Map<Long, GeoDownloadProgress>> = MutableStateFlow(emptyMap()),
-        val pending: MutableStateFlow<String?> = MutableStateFlow(null),
+        val pending: MutableStateFlow<RoutingImportOffer?> = MutableStateFlow(null),
     ) : RoutingSource {
         override val ruleSets = sets
         override val activeRuleSetId = activeId
@@ -86,10 +86,10 @@ class RoutingViewModelTest {
             cancelled = id
         }
 
-        override val pendingLink = pending
+        override val pendingOffer = pending
 
-        override fun consumePendingLink(link: String) {
-            if (pending.value == link) pending.value = null
+        override fun consumePendingOffer(offer: RoutingImportOffer) {
+            if (pending.value == offer) pending.value = null
         }
 
         override suspend fun ruleSet(id: Long): RoutingRuleSet? =
@@ -392,30 +392,35 @@ class RoutingViewModelTest {
     // config material (§5.6).
     @Test
     fun `a delivered deeplink is offered for review`() = runTest {
-        val source =
-            FakeSource(
-                sets = MutableStateFlow(emptyList()),
-                pending = MutableStateFlow("happ://routing/off"),
-            )
+        val offer = RoutingImportOffer.Deeplink("happ://routing/off")
+        val source = FakeSource(MutableStateFlow(emptyList()), pending = MutableStateFlow(offer))
 
-        RoutingViewModel(source).pendingLink.value shouldBe "happ://routing/off"
+        RoutingViewModel(source).pendingOffer.value shouldBe offer
     }
 
-    // A second link delivered by onNewIntent while the first was being handed
-    // over must not be discarded unread.
+    // The provider channels are the ones §A.1's threat model is written about,
+    // and they carry the subscription that owns the row.
     @Test
-    fun `consuming clears only the link that was taken`() = runTest {
-        val source =
-            FakeSource(
-                sets = MutableStateFlow(emptyList()),
-                pending = MutableStateFlow("happ://routing/off"),
-            )
+    fun `a provider directive is offered with its subscription`() = runTest {
+        val offer = RoutingImportOffer.Provider("happ://routing/add/x", subscriptionId = 5L)
+        val source = FakeSource(MutableStateFlow(emptyList()), pending = MutableStateFlow(offer))
+
+        RoutingViewModel(source).pendingOffer.value shouldBe offer
+    }
+
+    // A second offer delivered while the first was being handed over must not
+    // be discarded unread.
+    @Test
+    fun `consuming clears only the offer that was taken`() = runTest {
+        val first = RoutingImportOffer.Deeplink("happ://routing/off")
+        val second = RoutingImportOffer.Deeplink("happ://routing/add/second")
+        val source = FakeSource(MutableStateFlow(emptyList()), pending = MutableStateFlow(first))
         val viewModel = RoutingViewModel(source)
 
-        source.pending.value = "happ://routing/add/second"
-        viewModel.consumePendingLink("happ://routing/off")
+        source.pending.value = second
+        viewModel.consumePendingOffer(first)
 
-        source.pending.value shouldBe "happ://routing/add/second"
+        source.pending.value shouldBe second
     }
 
     @Test

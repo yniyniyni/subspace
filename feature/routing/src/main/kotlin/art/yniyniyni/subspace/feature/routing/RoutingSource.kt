@@ -11,12 +11,16 @@ import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
+import art.yniyniyni.subspace.core.data.isDirectiveEnabled
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
+import art.yniyniyni.subspace.core.parser.routing.ImportResult
+import art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -50,6 +54,38 @@ internal fun categorySidecarFileName(field: BucketField): String {
  * [RoutingViewModel] goes through this interface instead, so
  * [RoutingViewModelTest] can exercise it against a plain JVM fake.
  */
+/** The `routing` directive key — the header transport for a routing deeplink. */
+private const val ROUTING_DIRECTIVE_KEY = "routing"
+
+/** The `routing-enable` directive key — the directive form of `/off` (spec §5.6). */
+private const val ROUTING_ENABLE_DIRECTIVE_KEY = "routing-enable"
+
+/** What `routing-enable: false` means, expressed as the link the parser already reads. */
+private const val DISABLE_ROUTING_LINK = "happ://routing/off"
+
+/**
+ * One routing import waiting for the user's review, and where it came from.
+ *
+ * The channel is carried rather than inferred because it becomes the row's
+ * provenance badge — the only place the user ever learns their provider, and
+ * not they, installed a rule set.
+ */
+internal sealed interface RoutingImportOffer {
+    /** The link text to hand to the review sheet. */
+    val text: String
+
+    /** An `ACTION_VIEW` intent the user tapped. */
+    data class Deeplink(
+        override val text: String,
+    ) : RoutingImportOffer
+
+    /** A `routing` or `routing-enable` directive a subscription sync delivered. */
+    data class Provider(
+        override val text: String,
+        val subscriptionId: Long,
+    ) : RoutingImportOffer
+}
+
 internal interface RoutingSource {
     /**
      * Every stored rule set, with its import provenance and asset state. See
@@ -114,19 +150,35 @@ internal interface RoutingSource {
     val downloadProgress: Flow<Map<Long, GeoDownloadProgress>> get() = flowOf(emptyMap())
 
     /**
-     * A routing link an `ACTION_VIEW` intent delivered, awaiting review. See
-     * [PendingRoutingImport].
+     * The next routing import awaiting the user's review, or null.
      *
-     * Reaches the screen through this source, not through a navigation
-     * argument: the link is config material and the back stack is persisted.
+     * One flow for all four channels that do not start on this screen: an
+     * `ACTION_VIEW` deeplink, and the two provider directives (`routing` and
+     * `routing-enable`) delivered by a subscription sync. Clipboard and QR
+     * start here and go straight to the sheet, so they never travel this way.
+     *
+     * A deeplink wins when both are waiting: the user tapped it a second ago,
+     * while a provider directive has been sitting in the database since
+     * whenever the last sync ran.
+     *
+     * Reaches the screen through this source rather than a navigation
+     * argument: the link is config material and the back stack is persisted
+     * (see [PendingRoutingImport]).
      */
-    val pendingLink: Flow<String?> get() = flowOf(null)
+    val pendingOffer: Flow<RoutingImportOffer?> get() = flowOf(null)
 
     /** Sets the active rule set, or turns routing off when [id] is `null`. */
     suspend fun setActive(id: Long?)
 
-    /** Clears [link] once the review sheet has taken it. */
-    fun consumePendingLink(link: String) = Unit
+    /**
+     * Clears [offer] once the review sheet has taken it.
+     *
+     * A no-op for a provider directive: the directive stays in the database
+     * (the provider still sends it), and what stops it being offered again is
+     * the fingerprint gate, not a consumed flag. Only the in-memory deeplink
+     * has anything to clear.
+     */
+    fun consumePendingOffer(offer: RoutingImportOffer) = Unit
 
     /**
      * Stops the generation [id] is materialising. A no-op when nothing is.
@@ -267,9 +319,69 @@ constructor(
 
     override fun cancelDownload(id: Long) = progressRegistry.cancel(id)
 
-    override val pendingLink: Flow<String?> = pendingRoutingImport.link
+    /**
+     * A deeplink if one is waiting, otherwise the first provider directive that
+     * would actually change something.
+     *
+     * The `New`/`Changed` filter is rule 2 of this milestone made structural:
+     * a subscription re-delivers its `routing` header on every sync, hourly,
+     * and a sheet the user sees hourly is a sheet they stop reading.
+     * [RoutingRepository.decideFor] answers with the same fingerprint gate the
+     * importer applies, so "would this change anything" has exactly one
+     * definition.
+     *
+     * `routing-enable: false` becomes a synthetic `/off` link rather than a
+     * separate path: it *is* the directive form of `/off` (spec §5.6), the
+     * parser already reads that verb, and the sheet already renders it. A
+     * `true` value is not an offer at all — it asks for nothing to change.
+     */
+    override val pendingOffer: Flow<RoutingImportOffer?> =
+        combine(
+            pendingRoutingImport.link,
+            subscriptionRepository.observeDirectiveValues(ROUTING_DIRECTIVE_KEY),
+            subscriptionRepository.observeDirectiveValues(ROUTING_ENABLE_DIRECTIVE_KEY),
+        ) { deeplink, routingValues, enableValues ->
+            Triple(deeplink, routingValues, enableValues)
+        }.map { (deeplink, routingValues, enableValues) ->
+            deeplink?.let { return@map RoutingImportOffer.Deeplink(it) }
+            firstUnappliedProfile(routingValues) ?: firstDisableRequest(enableValues)
+        }
 
-    override fun consumePendingLink(link: String) = pendingRoutingImport.consume(link)
+    /** The first provider `routing` value whose profile is not already stored as sent. */
+    private suspend fun firstUnappliedProfile(values: Map<Long, String>): RoutingImportOffer? =
+        values.entries.firstNotNullOfOrNull { (subscriptionId, value) ->
+            val parsed = RoutingProfileImport.parse(value)
+            val changes =
+                when (parsed) {
+                    is ImportResult.Imported ->
+                        routingRepository.decideFor(parsed.profile) in
+                            setOf(RoutingRepository.UpdateDecision.New, RoutingRepository.UpdateDecision.Changed)
+                    // A provider that sends /off in the `routing` key means it,
+                    // and there is no fingerprint to compare — so offer it only
+                    // while routing is actually on.
+                    ImportResult.DisableRouting -> settingsRepository.activeRoutingRuleSetId.first() != null
+                    // §5.6: the key is logged elsewhere on rejection; the value
+                    // never is, and a malformed one is simply not offered —
+                    // raising a sheet that only says "this is broken" for
+                    // something the user never asked for is noise.
+                    is ImportResult.Invalid -> false
+                }
+            if (changes) RoutingImportOffer.Provider(value, subscriptionId) else null
+        }
+
+    /** `routing-enable: false`, as the `/off` link it means, and only while routing is on. */
+    private suspend fun firstDisableRequest(values: Map<Long, String>): RoutingImportOffer? {
+        // Nothing to disable is not an offer: a sheet asking to turn off what
+        // is already off would be a confirmation with no consequence.
+        if (settingsRepository.activeRoutingRuleSetId.first() == null) return null
+        return values.entries
+            .firstOrNull { (_, value) -> !isDirectiveEnabled(value) }
+            ?.let { (subscriptionId, _) -> RoutingImportOffer.Provider(DISABLE_ROUTING_LINK, subscriptionId) }
+    }
+
+    override fun consumePendingOffer(offer: RoutingImportOffer) {
+        if (offer is RoutingImportOffer.Deeplink) pendingRoutingImport.consume(offer.text)
+    }
 
     /**
      * Deletes through [RoutingProfileImporter], not [RoutingRepository].

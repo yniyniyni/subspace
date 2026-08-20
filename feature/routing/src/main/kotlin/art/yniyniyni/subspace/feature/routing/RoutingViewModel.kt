@@ -106,22 +106,22 @@ constructor(
     }
 
     /**
-     * A routing link an `ACTION_VIEW` intent delivered, awaiting review.
+     * The next routing import awaiting review — a deeplink or a
+     * provider-delivered directive.
      *
      * Exposed rather than acted on here: applying it is the import sheet's
      * job, and this ViewModel does not own that sheet.
      */
-    val pendingLink: StateFlow<String?> =
-        // Eagerly, not WhileSubscribed: a link delivered between this
+    val pendingOffer: StateFlow<RoutingImportOffer?> =
+        // Eagerly, not WhileSubscribed: an offer delivered between this
         // ViewModel's creation and the screen's first composition would
         // otherwise never be observed, and a deeplink's whole job is to arrive
-        // before the screen does. The upstream is an in-memory StateFlow, so an
-        // always-on collector costs nothing.
-        source.pendingLink.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        // before the screen does.
+        source.pendingOffer.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    /** Clears [link] once the sheet has taken it. */
-    fun consumePendingLink(link: String) {
-        source.consumePendingLink(link)
+    /** Clears [offer] once the sheet has taken it. */
+    fun consumePendingOffer(offer: RoutingImportOffer) {
+        source.consumePendingOffer(offer)
     }
 
     /** Stops the download [id] is running, leaving its previous generation live. */

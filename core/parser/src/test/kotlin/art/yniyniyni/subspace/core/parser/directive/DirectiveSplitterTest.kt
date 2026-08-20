@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.parser.directive
 
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import org.junit.Test
@@ -101,6 +102,73 @@ class DirectiveSplitterTest {
             listOf(
                 RawDirective("profile-title", "Name  VPN", DirectiveSource.BodyLine),
             )
+    }
+
+    // M6 Task 16. A bare deeplink is how the routing directive can arrive in a
+    // body — it carries no `#key:` prefix, so until now it fell straight
+    // through to the share-link parser, which would try to read it as a server.
+    @Test
+    fun `a bare routing link in the body is consumed as a directive`() {
+        val body =
+            """
+            #profile-title: NameVPN
+            happ://routing/add/eyJOYW1lIjoiUCJ9
+            vless://uuid@host:443?type=tcp#Server
+            """.trimIndent()
+
+        val result = DirectiveSplitter.split(emptyMap(), body)
+
+        result.directives.map { it.key } shouldContain "routing"
+        // The remaining body handed onward must not contain it (§A.1).
+        result.remainingBody.contains("happ://routing") shouldBe false
+        result.remainingBody.contains("vless://") shouldBe true
+    }
+
+    @Test
+    fun `a subspace scheme routing link is consumed too`() {
+        val result = DirectiveSplitter.split(emptyMap(), "subspace://routing/off")
+
+        result.directives.map { it.key } shouldContain "routing"
+        result.remainingBody.isBlank() shouldBe true
+    }
+
+    // Header wins over body (§A.1), and the body line is still consumed rather
+    // than left for the share-link parser to choke on.
+    @Test
+    fun `a routing header wins over a body link and still consumes it`() {
+        val result =
+            DirectiveSplitter.split(
+                mapOf("routing" to "happ://routing/add/fromheader"),
+                "happ://routing/add/frombody\nvless://uuid@host:443#Server",
+            )
+
+        result.directives.single { it.key == "routing" } shouldBe
+            RawDirective("routing", "happ://routing/add/fromheader", DirectiveSource.Header)
+        result.remainingBody.contains("happ://routing") shouldBe false
+    }
+
+    // A share link's fragment is a server name. Consuming a mid-line match
+    // would destroy it, the same trap asBodyDirective's own KDoc documents.
+    @Test
+    fun `a routing link inside a share link fragment is left alone`() {
+        val body = "vless://uuid@host:443?type=tcp#happ://routing/add/x"
+
+        val result = DirectiveSplitter.split(emptyMap(), body)
+
+        result.directives.shouldBeEmpty()
+        result.remainingBody shouldBe body
+    }
+
+    // Only `routing/` under a supported scheme. A profile share link is not a
+    // routing directive and must reach the share-link parser intact.
+    @Test
+    fun `a non-routing happ link stays in the body`() {
+        val body = "happ://add/vless://uuid@host:443"
+
+        val result = DirectiveSplitter.split(emptyMap(), body)
+
+        result.directives.shouldBeEmpty()
+        result.remainingBody shouldBe body
     }
 
     @Test

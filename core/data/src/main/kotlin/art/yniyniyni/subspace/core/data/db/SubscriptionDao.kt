@@ -103,6 +103,15 @@ internal interface SubscriptionDao {
     @Query("SELECT * FROM subscription_directives WHERE subscriptionId = :id")
     suspend fun directives(id: Long): List<SubscriptionDirectiveEntity>
 
+    /**
+     * Every subscription's value for [key], for the one caller that asks the
+     * question across subscriptions rather than about one of them: the routing
+     * screen, which must raise a review sheet for a `routing` directive
+     * whichever provider sent it.
+     */
+    @Query("SELECT * FROM subscription_directives WHERE key = :key")
+    fun observeDirectivesWithKey(key: String): Flow<List<SubscriptionDirectiveEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putDirectives(directives: List<SubscriptionDirectiveEntity>)
 

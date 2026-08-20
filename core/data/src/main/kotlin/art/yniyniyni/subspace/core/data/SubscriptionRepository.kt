@@ -129,6 +129,10 @@ public fun isDirectiveEnabled(value: String?): Boolean {
  * `ProfileGroupEntity` was built with.
  */
 @Singleton
+// TooManyFunctions: the subscription contract's read/write surface plus its
+// directive-resolution members. Splitting it would put "what did the provider
+// send" and "what is stored" in different classes for the same table.
+@Suppress("TooManyFunctions")
 public class SubscriptionRepository
 @Inject
 internal constructor(
@@ -286,6 +290,21 @@ internal constructor(
         val pinned = dao.overrides(id).firstOrNull { it.key == key }?.value
         return resolveEffective(key, providerValue, pinned, default)
     }
+
+    /**
+     * Every subscription's provider-sent value for [key], keyed by subscription
+     * id, recomposing on any directive change.
+     *
+     * Provider values only — a pinned override is deliberately not applied
+     * here. The one caller is the routing screen's provider-import channel,
+     * which is about what the provider *sent*; an override is the user's answer
+     * to that, and conflating them would make a pinned value look like a fresh
+     * delivery.
+     */
+    public fun observeDirectiveValues(key: String): Flow<Map<Long, String>> =
+        dao.observeDirectivesWithKey(key).map { rows ->
+            rows.associate { it.subscriptionId to it.value }
+        }
 
     /**
      * Resolves [key] the same way [effective] does, recomposing on every

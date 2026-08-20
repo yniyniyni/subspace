@@ -124,15 +124,26 @@ fun RoutingListScreen(
         modifier = modifier,
     )
 
-    // A deeplink navigated here; the sheet is what the user actually confirms
-    // (rule 1: nothing is stored before approval, with no per-channel
-    // exemption). Consumed by value so a link that arrived while this one was
-    // being handed over is not discarded unread.
-    val pendingLink by viewModel.pendingLink.collectAsStateWithLifecycle()
-    LaunchedEffect(pendingLink) {
-        pendingLink?.let { link ->
-            importViewModel.offer(link, RoutingSourceKind.Deeplink)
-            viewModel.consumePendingLink(link)
+    // A deeplink navigated here, or a sync left a provider directive waiting.
+    // Either way the sheet is what the user actually confirms — rule 1 has no
+    // per-channel exemption, and the provider channels are the ones §A.1's
+    // threat model is written about. Consumed by value so an offer that
+    // arrived while this one was being handed over is not discarded unread.
+    val pendingOffer by viewModel.pendingOffer.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingOffer) {
+        pendingOffer?.let { offer ->
+            when (offer) {
+                is RoutingImportOffer.Deeplink ->
+                    importViewModel.offer(offer.text, RoutingSourceKind.Deeplink)
+                // Header, not Body: the transport a provider actually uses is
+                // the response header, and M4 established Remnawave emits no
+                // body directives at all. A body line reaching here is
+                // defensive, and calling it Header would only mislabel a
+                // channel nothing exercises.
+                is RoutingImportOffer.Provider ->
+                    importViewModel.offer(offer.text, RoutingSourceKind.Header, offer.subscriptionId)
+            }
+            viewModel.consumePendingOffer(offer)
         }
     }
 

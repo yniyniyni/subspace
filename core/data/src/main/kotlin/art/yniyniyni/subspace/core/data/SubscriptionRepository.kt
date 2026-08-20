@@ -135,6 +135,7 @@ internal constructor(
     private val dao: SubscriptionDao,
     private val profiles: ProfileRepository,
     private val database: SubspaceDatabase,
+    private val routingDeletion: RoutingProfileDeletion,
 ) {
     // add() is a read (does this url exist?) followed by a conditional write,
     // the same shape ProfileRepository.defaultGroupId() guards — and the same
@@ -230,16 +231,15 @@ internal constructor(
         }
 
     /**
-     * Deletes a subscription, its group, its servers, its directives and its
-     * overrides.
+     * Deletes a subscription and everything it owns, including routing profiles and generations.
      *
-     * Implemented by deleting the **group**: §A.1 requires deletion to cascade,
-     * and the foreign keys make that one statement rather than five remembered
-     * ones.
+     * [RoutingProfileDeletion] serialises this lifecycle against imports and activation changes,
+     * clears the active routing id conditionally in the same Room transaction as the group
+     * cascade, then removes the now-unreferenced generation trees.
      */
     public suspend fun delete(id: Long) {
         val subscription = dao.subscription(id) ?: return
-        profiles.deleteGroup(subscription.groupId)
+        routingDeletion.deleteSubscription(id, subscription.groupId)
     }
 
     /** Toggles the HWID header (§A.4.1) for [id]. A no-op if the subscription no longer exists. */

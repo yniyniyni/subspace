@@ -4,6 +4,9 @@ package art.yniyniyni.subspace.core.data.sync
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.RoutingProfileDeletion
+import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.RuleSetAssets
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
@@ -23,6 +26,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 // The brief's verbatim helper used pbk=abc, which VlessLink's already-implemented
 // (Task 1-5) validateRealityPublicKey rejects outright: a REALITY public key must be
@@ -60,6 +64,7 @@ class SubscriptionSyncerTest {
     private lateinit var subscriptions: SubscriptionRepository
     private lateinit var settings: SettingsRepository
     private lateinit var profiles: ProfileRepository
+    private lateinit var root: File
 
     private var response: FetchOutcome = FetchOutcome.Success("", emptyMap())
     private var lastRequest: SubscriptionRequest? = null
@@ -82,12 +87,29 @@ class SubscriptionSyncerTest {
             SubspaceDatabase::class.java,
         ).build()
         profiles = ProfileRepository(db.profileDao())
-        subscriptions = SubscriptionRepository(db.subscriptionDao(), profiles, db)
         settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
+        root =
+            File(
+                InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,
+                "subscription-syncer-${System.nanoTime()}",
+            ).apply { mkdirs() }
+        val deletion =
+            RoutingProfileDeletion(
+                db,
+                RoutingRepository(db.routingRuleSetDao()),
+                RuleSetAssets(root),
+                settings,
+                profiles,
+            )
+        subscriptions = SubscriptionRepository(db.subscriptionDao(), profiles, db, deletion)
         responseForRequest = { response }
     }
 
-    @After fun tearDown() = db.close()
+    @After
+    fun tearDown() {
+        db.close()
+        root.deleteRecursively()
+    }
 
     private suspend fun addSubscription() =
         subscriptions.add("https://example.com/sub", name = "Provider").id

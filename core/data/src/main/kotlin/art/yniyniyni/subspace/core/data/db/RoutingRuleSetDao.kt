@@ -21,6 +21,9 @@ internal interface RoutingRuleSetDao {
     @Query("SELECT * FROM routing_rule_sets WHERE name = :name")
     suspend fun byName(name: String): RoutingRuleSetEntity?
 
+    @Query("SELECT * FROM routing_rule_sets WHERE subscriptionId = :subscriptionId ORDER BY name")
+    suspend fun bySubscriptionId(subscriptionId: Long): List<RoutingRuleSetEntity>
+
     @Insert
     suspend fun insert(entity: RoutingRuleSetEntity): Long
 

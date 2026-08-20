@@ -127,6 +127,8 @@ public data class InstalledGeoAsset(
     val lastAttemptedAt: Long?,
     /** A closed-vocabulary failure name, or null. §A.3.1's persistent error marker. */
     val lastFailure: String?,
+    /** Digest recorded only after these bytes validated and published successfully. */
+    val sha256: String? = null,
 )
 
 /**
@@ -613,6 +615,7 @@ internal constructor(
             installedAt = installedAt,
             lastAttemptedAt = lastAttemptedAt,
             lastFailure = lastFailure,
+            sha256 = sha256,
         )
 
     /** A live file and, if it existed, its forced rollback copy in staging. */

@@ -95,6 +95,10 @@ internal constructor(
     /** The stored rule set with [id], including provenance, or null after deletion. */
     public suspend fun stored(id: Long): StoredRuleSet? = dao.byId(id)?.toStored()
 
+    /** Every imported routing profile currently owned by [subscriptionId]. */
+    public suspend fun storedForSubscription(subscriptionId: Long): List<StoredRuleSet> =
+        dao.bySubscriptionId(subscriptionId).map { it.toStored() }
+
     /**
      * The rule set named [name], or null when no row has it.
      *

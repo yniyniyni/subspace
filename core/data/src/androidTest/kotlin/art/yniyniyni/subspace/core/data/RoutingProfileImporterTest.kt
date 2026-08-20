@@ -19,15 +19,26 @@ import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.io.IOException
+import java.security.MessageDigest
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
+@Suppress("LargeClass") // One real Room/filesystem fixture exercises the lifecycle as a single integration boundary.
 class RoutingProfileImporterTest {
     private lateinit var database: SubspaceDatabase
     private lateinit var root: File
@@ -36,11 +47,15 @@ class RoutingProfileImporterTest {
     private lateinit var assets: RuleSetAssets
     private lateinit var geoAssets: GeoAssetRepository
     private lateinit var importer: RoutingProfileImporter
+    private lateinit var deletion: RoutingProfileDeletion
 
-    private val downloads = mutableListOf<String>()
-    private val downloadTargets = mutableListOf<File>()
+    private val downloads = CopyOnWriteArrayList<String>()
+    private val downloadTargets = CopyOnWriteArrayList<File>()
     private var downloadFails = false
     private var downloadDelayMillis = 0L
+    private var beforeDownload: suspend (String, File) -> Unit = { _, _ -> }
+    private var validationDelayMillis = 0L
+    private var validationCalls = 0
 
     private val validator =
         object : GeoDataValidator {
@@ -49,6 +64,8 @@ class RoutingProfileImporterTest {
                 name: String,
                 kind: GeoDataKind,
             ): GeoValidation {
+                validationCalls += 1
+                delay(validationDelayMillis)
                 val file = File(datDir, "$name.dat")
                 return when {
                     !file.isFile -> GeoValidation.Unreadable
@@ -65,10 +82,11 @@ class RoutingProfileImporterTest {
         GeoDownloader { url, target ->
             downloads += url
             downloadTargets += target
+            beforeDownload(url, target)
             delay(downloadDelayMillis)
             if (downloadFails) throw IOException("injected download failure")
             target.writeText("valid:$url")
-            target.length() to "test-digest"
+            target.length() to target.sha256()
         }
 
     @Before
@@ -91,6 +109,14 @@ class RoutingProfileImporterTest {
                 download = downloader::download,
                 clock = { TEST_NOW_MILLIS },
             )
+        deletion =
+            RoutingProfileDeletion(
+                database,
+                repository,
+                assets,
+                settings,
+                ProfileRepository(database.profileDao()),
+            )
         importer =
             RoutingProfileImporter(
                 repository = repository,
@@ -99,6 +125,7 @@ class RoutingProfileImporterTest {
                 settings = settings,
                 validator = validator,
                 downloader = downloader,
+                deletion = deletion,
             )
     }
 
@@ -121,6 +148,185 @@ class RoutingProfileImporterTest {
         downloads.shouldBeEmpty()
         downloadTargets.shouldBeEmpty()
         repository.observeAllStored().first().single().assetGeneration shouldBe 1L
+    }
+
+    @Test
+    fun anUnchangedFailedProfileIsStillAnUnconditionalNoOp() = runTest {
+        val profile = geoIpOnlyProfile()
+        downloadFails = true
+        val failed =
+            importer
+                .apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Failed>()
+        val before = repository.stored(failed.id).shouldNotBeNull()
+        val treeBefore = assets.setsRoot().walkTopDown().map { it.relativeTo(root).path }.toList()
+        downloads.clear()
+        downloadTargets.clear()
+        validationCalls = 0
+        downloadFails = false
+
+        importer.apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Header, null) shouldBe
+            ImportOutcome.Unchanged
+
+        repository.stored(failed.id) shouldBe before
+        assets.setsRoot().walkTopDown().map { it.relativeTo(root).path }.toList() shouldBe treeBefore
+        downloads.shouldBeEmpty()
+        downloadTargets.shouldBeEmpty()
+        validationCalls shouldBe 0
+        settings.activeRoutingRuleSetId.first() shouldBe null
+    }
+
+    @Test
+    fun importerInstancesSerializeTheWholeLifecycleForOneProfileName() {
+        runBlocking {
+            val firstEntered = CompletableDeferred<Unit>()
+            val releaseFirst = CompletableDeferred<Unit>()
+            val secondEntered = CompletableDeferred<Unit>()
+            val releaseSecond = CompletableDeferred<Unit>()
+            val calls = AtomicInteger()
+            beforeDownload = { _, _ ->
+                when (calls.incrementAndGet()) {
+                    1 -> {
+                        firstEntered.complete(Unit)
+                        releaseFirst.await()
+                    }
+                    2 -> {
+                        secondEntered.complete(Unit)
+                        releaseSecond.await()
+                    }
+                }
+            }
+            val otherImporter =
+                RoutingProfileImporter(repository, assets, geoAssets, settings, validator, downloader, deletion)
+            val older = geoIpOnlyProfile()
+            val newer =
+                older.copy(
+                    lastUpdated = older.lastUpdated.shouldNotBeNull() + 60,
+                    buckets = mapOf(
+                        RouteOutcome.DIRECT to
+                            RuleBucket(
+                                sites = listOf("domain:newer.example"),
+                                ips = listOf("geoip:private"),
+                            ),
+                    ),
+                )
+
+            val olderResult = async { importer.apply(older, RoutingVerb.Add, RoutingSourceKind.Header, null) }
+            firstEntered.await()
+            val newerResult = async {
+                otherImporter.apply(newer, RoutingVerb.Add, RoutingSourceKind.Header, null)
+            }
+
+            withTimeoutOrNull(CONCURRENCY_PROBE_MILLIS) { secondEntered.await() } shouldBe null
+            releaseFirst.complete(Unit)
+            olderResult.await().shouldBeInstanceOf<ImportOutcome.Activated>()
+            withTimeout(CONCURRENCY_PROBE_MILLIS) { secondEntered.await() }
+            releaseSecond.complete(Unit)
+            newerResult.await().shouldBeInstanceOf<ImportOutcome.Stored>()
+
+            val stored = repository.observeAllStored().first().single()
+            stored.lastUpdated shouldBe newer.lastUpdated
+            stored.ruleSet.bucket(RouteOutcome.DIRECT) shouldBe newer.bucket(RouteOutcome.DIRECT)
+            stored.assetGeneration shouldBe 2L
+            File(assets.generationDir(stored.ruleSet.id, 2), "geoip.dat").isFile shouldBe true
+            assets.generationDir(stored.ruleSet.id, 1).exists() shouldBe false
+        }
+    }
+
+    @Test
+    fun cancellingAWaitingLifecycleDoesNotBlockTheNextImporter() {
+        runBlocking {
+            val ownerEntered = CompletableDeferred<Unit>()
+            val releaseOwner = CompletableDeferred<Unit>()
+            val owner =
+                launch {
+                    RoutingProfileProcessCoordinator.withImport("Cancelled waiter", null) {
+                        ownerEntered.complete(Unit)
+                        releaseOwner.await()
+                    }
+                }
+            ownerEntered.await()
+            val cancelledWaiter =
+                launch {
+                    RoutingProfileProcessCoordinator.withImport("Cancelled waiter", null) {
+                        error("cancelled waiter entered its lifecycle")
+                    }
+                }
+            delay(WAITER_REGISTRATION_MILLIS)
+            cancelledWaiter.cancelAndJoin()
+            releaseOwner.complete(Unit)
+            owner.join()
+
+            withTimeout(CONCURRENCY_PROBE_MILLIS) {
+                RoutingProfileProcessCoordinator.withImport("Cancelled waiter", null) { Unit }
+            }
+        }
+    }
+
+    @Test
+    @Suppress("LongMethod") // The before/during/after assertions pin every cancellation checkpoint.
+    fun cancellationPreservesThePreviousFailureMarkerAndGeneration() {
+        runBlocking {
+            val original = geoIpOnlyProfile()
+            val id =
+                importer
+                    .apply(original, RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
+                    .shouldBeInstanceOf<ImportOutcome.Activated>()
+                    .id
+            downloadFails = true
+            val failedUpdate =
+                original.copy(
+                    lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    buckets = mapOf(
+                        RouteOutcome.DIRECT to
+                            RuleBucket(
+                                sites = listOf("domain:failed.example"),
+                                ips = listOf("geoip:private"),
+                            ),
+                    ),
+                )
+            importer.apply(failedUpdate, RoutingVerb.Add, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Failed>()
+            val marker = repository.stored(id).shouldNotBeNull()
+            marker.assetState shouldBe RuleSetAssetState.Failed
+            marker.assetFailure shouldBe RuleSetAssetFailure.DownloadFailed
+
+            downloadFails = false
+            val entered = CompletableDeferred<Unit>()
+            val neverRelease = CompletableDeferred<Unit>()
+            beforeDownload = { _, _ ->
+                entered.complete(Unit)
+                neverRelease.await()
+            }
+            val retry =
+                failedUpdate.copy(
+                    lastUpdated = failedUpdate.lastUpdated.shouldNotBeNull() + 60,
+                    buckets = mapOf(
+                        RouteOutcome.DIRECT to
+                            RuleBucket(
+                                sites = listOf("domain:cancelled.example"),
+                                ips = listOf("geoip:private"),
+                            ),
+                    ),
+                )
+            val job = launch { importer.apply(retry, RoutingVerb.Add, RoutingSourceKind.Header, null) }
+            entered.await()
+
+            repository.stored(id).shouldNotBeNull().let { during ->
+                during.assetState shouldBe RuleSetAssetState.Failed
+                during.assetFailure shouldBe RuleSetAssetFailure.DownloadFailed
+                during.assetGeneration shouldBe 1L
+            }
+            job.cancelAndJoin()
+
+            repository.stored(id).shouldNotBeNull().let { after ->
+                after.assetState shouldBe RuleSetAssetState.Failed
+                after.assetFailure shouldBe RuleSetAssetFailure.DownloadFailed
+                after.assetGeneration shouldBe 1L
+                after.ruleSet shouldBe marker.ruleSet
+            }
+            File(assets.generationDir(id, 1), "geoip.dat").isFile shouldBe true
+        }
     }
 
     @Test
@@ -175,6 +381,40 @@ class RoutingProfileImporterTest {
     }
 
     @Test
+    fun concurrentAddsProduceExactlyOneActivatedOutcome() {
+        runBlocking {
+            val entered = AtomicInteger()
+            val bothEntered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            beforeDownload = { _, _ ->
+                if (entered.incrementAndGet() == 2) bothEntered.complete(Unit)
+                release.await()
+            }
+            val firstImporter =
+                RoutingProfileImporter(repository, assets, geoAssets, settings, validator, downloader, deletion)
+            val secondImporter =
+                RoutingProfileImporter(repository, assets, geoAssets, settings, validator, downloader, deletion)
+            val firstProfile = geoIpOnlyProfile().copy(name = "First concurrent")
+            val secondProfile = geoIpOnlyProfile().copy(name = "Second concurrent")
+
+            val first = async {
+                firstImporter.apply(firstProfile, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            }
+            val second = async {
+                secondImporter.apply(secondProfile, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            }
+            withTimeout(CONCURRENCY_PROBE_MILLIS) { bothEntered.await() }
+            release.complete(Unit)
+            val outcomes = listOf(first.await(), second.await())
+
+            outcomes.count { it is ImportOutcome.Activated } shouldBe 1
+            outcomes.count { it is ImportOutcome.Stored } shouldBe 1
+            val activatedId = outcomes.single { it is ImportOutcome.Activated } as ImportOutcome.Activated
+            settings.activeRoutingRuleSetId.first() shouldBe activatedId.id
+        }
+    }
+
+    @Test
     fun aProfileWithNoGeoReferencesActivatesWithZeroDownloads() = runTest {
         val lanOnly =
             sampleProfile().copy(
@@ -220,14 +460,48 @@ class RoutingProfileImporterTest {
     }
 
     @Test
-    fun aDownloadThatOverrunsTheTimeoutIsAbandoned() = runTest {
-        downloadDelayMillis = GEO_DOWNLOAD_TIMEOUT_MILLIS + 1
+    fun aDownloadThatOverrunsTheTimeoutIsAbandoned() {
+        runBlocking {
+            downloadDelayMillis = SLOW_VALIDATION_MILLIS
 
-        val outcome = importer.apply(sampleProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
+            val outcome =
+                shortTimeoutImporter().apply(
+                    sampleProfile(),
+                    RoutingVerb.OnAdd,
+                    RoutingSourceKind.Deeplink,
+                    null,
+                )
 
-        outcome.shouldBeInstanceOf<ImportOutcome.Failed>().failure shouldBe RuleSetAssetFailure.TimedOut
-        repository.observeAllStored().first().single().assetState shouldBe RuleSetAssetState.Failed
-        assets.setsRoot().listFiles().orEmpty().shouldBeEmpty()
+            outcome.shouldBeInstanceOf<ImportOutcome.Failed>().failure shouldBe RuleSetAssetFailure.TimedOut
+            repository.observeAllStored().first().single().assetState shouldBe RuleSetAssetState.Failed
+            assets.setsRoot().listFiles().orEmpty().shouldBeEmpty()
+        }
+    }
+
+    @Test
+    fun theSingleTimeoutAlsoBoundsLocalCandidateValidation() {
+        runBlocking {
+            importer.apply(geoIpOnlyProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+            validationDelayMillis = SLOW_VALIDATION_MILLIS
+            downloads.clear()
+            val shortTimeoutImporter = shortTimeoutImporter()
+
+            val outcome =
+                shortTimeoutImporter.apply(
+                    geoIpOnlyProfile().copy(name = "Slow local copy"),
+                    RoutingVerb.Add,
+                    RoutingSourceKind.Deeplink,
+                    null,
+                )
+
+            outcome.shouldBeInstanceOf<ImportOutcome.Failed>().failure shouldBe RuleSetAssetFailure.TimedOut
+            downloads.shouldBeEmpty()
+            val stored = repository.observeAllStored().first().first { it.ruleSet.name == "Slow local copy" }
+            stored.assetGeneration shouldBe 0L
+            stored.assetState shouldBe RuleSetAssetState.Failed
+            File(assets.setsRoot(), stored.ruleSet.id.toString()).exists() shouldBe false
+        }
     }
 
     @Test
@@ -296,7 +570,7 @@ class RoutingProfileImporterTest {
                 target.length() to "test-digest"
             }
         importer =
-            RoutingProfileImporter(repository, assets, geoAssets, settings, validator, rejectingDownloader)
+            RoutingProfileImporter(repository, assets, geoAssets, settings, validator, rejectingDownloader, deletion)
 
         val outcome = importer.apply(sampleProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
 
@@ -308,14 +582,21 @@ class RoutingProfileImporterTest {
     }
 
     @Test
-    fun aFailedFirstInstallCanBeRetried() = runTest {
+    fun aFailedFirstInstallCanBeRetriedWithChangedContent() = runTest {
+        val failedProfile = sampleProfile()
         downloadFails = true
-        importer.apply(sampleProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
+        importer.apply(failedProfile, RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
             .shouldBeInstanceOf<ImportOutcome.Failed>()
         downloadFails = false
         downloads.clear()
+        val retryProfile =
+            failedProfile.copy(
+                lastUpdated = failedProfile.lastUpdated.shouldNotBeNull() + 60,
+                buckets = failedProfile.buckets +
+                    (RouteOutcome.BLOCK to RuleBucket(sites = listOf("domain:ads.example"))),
+            )
 
-        val retry = importer.apply(sampleProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
+        val retry = importer.apply(retryProfile, RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
 
         retry.shouldBeInstanceOf<ImportOutcome.Activated>()
         downloads shouldHaveSize 2
@@ -372,6 +653,43 @@ class RoutingProfileImporterTest {
     }
 
     @Test
+    fun previewRejectsACorruptCandidateWithoutWritingAnything() = runTest {
+        geoAssets.install(
+            GeoInstallRequest(
+                fileName = "geoip.dat",
+                sourceUrl = sampleProfile().geoIpUrl.shouldNotBeNull(),
+                geoType = GeoDataKind.IP,
+            ),
+        ) shouldBe GeoInstallResult.Installed
+        File(root, "geoip.dat").writeText("corrupt-after-validation")
+        downloads.clear()
+        validationCalls = 0
+        val before = fileTreeSnapshot(root)
+
+        val preview = importer.preview(sampleProfile().copy(geoSiteUrl = null))
+
+        preview.geoFiles.single().alreadyOnDevice shouldBe false
+        validationCalls shouldBe 0
+        downloads.shouldBeEmpty()
+        fileTreeSnapshot(root) shouldBe before
+    }
+
+    @Test
+    fun previewConservativelyWarnsForAnotherSetsUnverifiableGeneration() = runTest {
+        importer.apply(geoIpOnlyProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
+        downloads.clear()
+        validationCalls = 0
+        val before = fileTreeSnapshot(root)
+
+        val preview = importer.preview(geoIpOnlyProfile().copy(name = "Sibling"))
+
+        preview.geoFiles.single().alreadyOnDevice shouldBe false
+        validationCalls shouldBe 0
+        downloads.shouldBeEmpty()
+        fileTreeSnapshot(root) shouldBe before
+    }
+
+    @Test
     fun disablingRoutingKeepsTheStoredSet() = runTest {
         importer.apply(sampleProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
 
@@ -397,6 +715,35 @@ class RoutingProfileImporterTest {
         settings.activeRoutingRuleSetId.first() shouldBe null
     }
 
+    @Test
+    fun deletingASubscriptionRemovesOwnedGenerationTreesAndActiveSelection() = runTest {
+        val subscriptions =
+            SubscriptionRepository(
+                database.subscriptionDao(),
+                ProfileRepository(database.profileDao()),
+                database,
+                deletion,
+            )
+        val subscription =
+            subscriptions.add("https://subscription.example/config", "Provider")
+        val id =
+            importer
+                .apply(
+                    geoIpOnlyProfile(),
+                    RoutingVerb.OnAdd,
+                    RoutingSourceKind.Header,
+                    subscription.id,
+                ).shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        assets.generationDir(id, 1).isDirectory shouldBe true
+
+        subscriptions.delete(subscription.id)
+
+        repository.stored(id) shouldBe null
+        File(assets.setsRoot(), id.toString()).exists() shouldBe false
+        settings.activeRoutingRuleSetId.first() shouldBe null
+    }
+
     private fun sampleProfile(): RoutingProfile =
         RoutingProfile(
             name = "Provider routing",
@@ -413,7 +760,45 @@ class RoutingProfileImporterTest {
             lastUpdated = 1_800_000_000L,
         )
 
+    private fun geoIpOnlyProfile(): RoutingProfile =
+        sampleProfile().copy(
+            geoSiteUrl = null,
+            buckets = mapOf(
+                RouteOutcome.DIRECT to RuleBucket(ips = listOf("geoip:private")),
+            ),
+        )
+
+    private fun shortTimeoutImporter(): RoutingProfileImporter =
+        RoutingProfileImporter(
+            repository,
+            assets,
+            geoAssets,
+            settings,
+            validator,
+            downloader,
+            deletion,
+            TEST_MATERIALISATION_TIMEOUT_MILLIS,
+        )
+
+    private fun fileTreeSnapshot(directory: File): List<String> =
+        directory
+            .walkTopDown()
+            .map { file ->
+                val path = file.relativeTo(directory).path
+                if (file.isFile) "$path:${file.length()}:${file.sha256()}" else "$path/"
+            }.toList()
+
+    private fun File.sha256(): String =
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest(readBytes())
+            .joinToString("") { byte -> "%02x".format(byte) }
+
     private companion object {
         const val TEST_NOW_MILLIS = 1_800_000_000_000L
+        const val CONCURRENCY_PROBE_MILLIS = 1_000L
+        const val WAITER_REGISTRATION_MILLIS = 100L
+        const val TEST_MATERIALISATION_TIMEOUT_MILLIS = 100L
+        const val SLOW_VALIDATION_MILLIS = 1_000L
     }
 }

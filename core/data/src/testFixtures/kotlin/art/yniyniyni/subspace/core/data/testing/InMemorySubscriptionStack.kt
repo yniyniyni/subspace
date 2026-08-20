@@ -4,6 +4,9 @@ package art.yniyniyni.subspace.core.data.testing
 import android.content.Context
 import androidx.room.Room
 import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.RoutingProfileDeletion
+import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.RuleSetAssets
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
@@ -12,6 +15,7 @@ import art.yniyniyni.subspace.core.model.TunnelProxyLocator
 import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.HwidProvider
 import art.yniyniyni.subspace.core.network.SubscriptionSource
+import java.io.File
 
 /**
  * A [SubscriptionRepository] + [SubscriptionSyncer] pair backed by an in-memory Room database, for
@@ -43,8 +47,12 @@ public class InMemorySubscriptionStack(
     private val db: SubspaceDatabase = Room.inMemoryDatabaseBuilder(context, SubspaceDatabase::class.java).build()
     private val profiles = ProfileRepository(db.profileDao())
     private val settings = SettingsRepository(db.settingDao(), HwidProvider { "test-hwid" })
+    private val root = File(context.cacheDir, "subscription-stack-${System.nanoTime()}").apply(File::mkdirs)
+    private val routing = RoutingRepository(db.routingRuleSetDao())
+    private val deletion = RoutingProfileDeletion(db, routing, RuleSetAssets(root), settings, profiles)
 
-    public val repository: SubscriptionRepository = SubscriptionRepository(db.subscriptionDao(), profiles, db)
+    public val repository: SubscriptionRepository =
+        SubscriptionRepository(db.subscriptionDao(), profiles, db, deletion)
     public val syncer: SubscriptionSyncer =
         SubscriptionSyncer(
             db.subscriptionDao(),
@@ -61,5 +69,6 @@ public class InMemorySubscriptionStack(
 
     override fun close() {
         db.close()
+        root.deleteRecursively()
     }
 }

@@ -11,10 +11,16 @@ import art.yniyniyni.subspace.core.model.RuleSetAssetState
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -86,7 +92,10 @@ public data class ImportPreview(
  * and only then sweep `n` (spec §7.4).
  */
 @Singleton
-@Suppress("TooManyFunctions") // One lifecycle owns its gates, candidate lookup, validation, swap, and cleanup.
+@Suppress(
+    "LongParameterList", // The injected constructor names each lifecycle boundary; bundling them would hide ownership.
+    "TooManyFunctions", // One lifecycle owns its gates, candidate lookup, validation, swap, and cleanup.
+)
 public class RoutingProfileImporter
 @Inject
 internal constructor(
@@ -96,7 +105,25 @@ internal constructor(
     private val settings: SettingsRepository,
     private val validator: GeoDataValidator,
     private val downloader: GeoDownloader,
+    private val deletion: RoutingProfileDeletion,
 ) {
+    private var materialisationTimeoutMillis: Long = GEO_DOWNLOAD_TIMEOUT_MILLIS
+
+    /** Test seam for a real-time deadline short enough for deterministic instrumented tests. */
+    internal constructor(
+        repository: RoutingRepository,
+        assets: RuleSetAssets,
+        geoAssets: GeoAssetRepository,
+        settings: SettingsRepository,
+        validator: GeoDataValidator,
+        downloader: GeoDownloader,
+        deletion: RoutingProfileDeletion,
+        materialisationTimeoutMillis: Long,
+    ) : this(repository, assets, geoAssets, settings, validator, downloader, deletion) {
+        require(materialisationTimeoutMillis > 0) { "Materialisation timeout must be positive" }
+        this.materialisationTimeoutMillis = materialisationTimeoutMillis
+    }
+
     /**
      * Builds confirmation data without staging, downloading, validating, or writing.
      *
@@ -113,7 +140,7 @@ internal constructor(
         val previews =
             requested.mapNotNull { request ->
                 val url = request.url ?: return@mapNotNull null
-                val candidate = localCandidate(url, request.kind, existingId, stored, recordedAssets)
+                val candidate = previewCandidate(url, request.kind, recordedAssets)
                 GeoFilePreview(
                     fileName = request.fileName,
                     url = url,
@@ -146,17 +173,24 @@ internal constructor(
         verb: RoutingVerb,
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
+    ): ImportOutcome =
+        RoutingProfileProcessCoordinator.withImport(profile.name, subscriptionId) {
+            applySerialized(profile, verb, sourceKind, subscriptionId)
+        }
+
+    @Suppress(
+        "CyclomaticComplexMethod", // Explicit gates prevent stale, partial, or failed assets from reaching publication.
+        "LongMethod", // Keeping the gate → stage → swap → sweep sequence linear makes its order reviewable.
+        "ReturnCount", // Every early return protects a distinct no-I/O or no-publication guarantee.
+    )
+    private suspend fun applySerialized(
+        profile: RoutingProfile,
+        verb: RoutingVerb,
+        sourceKind: RoutingSourceKind,
+        subscriptionId: Long?,
     ): ImportOutcome {
         when (repository.decideFor(profile)) {
-            RoutingRepository.UpdateDecision.Unchanged -> {
-                val failed =
-                    repository
-                        .observeAllStored()
-                        .first()
-                        .firstOrNull { it.ruleSet.name == profile.name }
-                        ?.assetState == RuleSetAssetState.Failed
-                if (!failed) return ImportOutcome.Unchanged
-            }
+            RoutingRepository.UpdateDecision.Unchanged -> return ImportOutcome.Unchanged
             RoutingRepository.UpdateDecision.Stale -> return ImportOutcome.Stale
             RoutingRepository.UpdateDecision.New,
             RoutingRepository.UpdateDecision.Changed,
@@ -190,34 +224,11 @@ internal constructor(
         }
 
         val nextGeneration = stored.assetGeneration + 1
-        repository.markAssets(id, RuleSetAssetState.Pending)
-        val staged =
-            try {
-                assets.prepareGeneration(id, nextGeneration)
-            } catch (_: IOException) {
-                null
-            } catch (_: SecurityException) {
-                null
-            }
-        if (staged == null) {
-            repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.InstallFailed)
-            return ImportOutcome.Failed(id, RuleSetAssetFailure.InstallFailed)
-        }
-
-        // Room dispatches independently of runTest's virtual scheduler. Resolve
-        // read-only candidates before starting the upstream download clock so a
-        // database emission is never mistaken for a three-minute network stall.
-        val storedSets = repository.observeAllStored().first()
-        val recordedAssets = geoAssets.observeAll().first()
-        val preparation = prepareLocalFiles(id, requested, staged, storedSets, recordedAssets)
-        if (preparation.failure != null) {
-            removeUnpublishedGenerations(id, stored.assetGeneration)
-            repository.markAssets(id, RuleSetAssetState.Failed, preparation.failure)
-            return ImportOutcome.Failed(id, preparation.failure)
-        }
         val materialisation =
-            withTimeoutOrNull(GEO_DOWNLOAD_TIMEOUT_MILLIS) {
-                Materialisation(downloadFiles(preparation.pendingDownloads, staged))
+            withContext(Dispatchers.Default) {
+                withTimeoutOrNull(materialisationTimeoutMillis) {
+                    Materialisation(materialise(id, nextGeneration, requested))
+                }
             }
         val failure =
             if (materialisation == null) {
@@ -236,18 +247,36 @@ internal constructor(
         return activateIfAppropriate(id, verb)
     }
 
+    /** Everything that can delay generation readiness shares one deadline. */
+    private suspend fun materialise(
+        setId: Long,
+        generation: Long,
+        requested: List<RequestedGeoFile>,
+    ): RuleSetAssetFailure? {
+        val staged =
+            try {
+                assets.prepareGeneration(setId, generation)
+            } catch (_: IOException) {
+                null
+            } catch (_: SecurityException) {
+                null
+            }
+        if (staged == null) return RuleSetAssetFailure.InstallFailed
+        val storedSets = repository.observeAllStored().first()
+        val recordedAssets = geoAssets.observeAll().first()
+        val preparation = prepareLocalFiles(setId, requested, staged, storedSets, recordedAssets)
+        return preparation.failure ?: downloadFiles(preparation.pendingDownloads, staged)
+    }
+
     /** Turns routing off without deleting any stored profile. */
     public suspend fun disableRouting() {
-        settings.setActiveRoutingRuleSetId(null)
+        RoutingProfileProcessCoordinator.withSettings {
+            settings.setActiveRoutingRuleSetId(null)
+        }
     }
 
     /** Deletes one row and generation tree, clearing its active reference when necessary. */
-    public suspend fun delete(id: Long) {
-        val wasActive = settings.activeRoutingRuleSetId.first() == id
-        repository.delete(id)
-        assets.removeSet(id)
-        if (wasActive) settings.setActiveRoutingRuleSetId(null)
-    }
+    public suspend fun delete(id: Long) = deletion.deleteRuleSet(id)
 
     @Suppress(
         "NestedBlockDepth", // Copy, validation, and fallback download are one ordered per-file decision.
@@ -330,17 +359,19 @@ internal constructor(
     private suspend fun activateIfAppropriate(
         id: Long,
         verb: RoutingVerb,
-    ): ImportOutcome {
-        val activate =
-            verb == RoutingVerb.OnAdd ||
-                (verb == RoutingVerb.Add && settings.activeRoutingRuleSetId.first() == null)
-        return if (activate) {
-            settings.setActiveRoutingRuleSetId(id)
-            ImportOutcome.Activated(id)
-        } else {
-            ImportOutcome.Stored(id)
+    ): ImportOutcome =
+        RoutingProfileProcessCoordinator.withSettings {
+            val activated =
+                when (verb) {
+                    RoutingVerb.OnAdd -> {
+                        settings.setActiveRoutingRuleSetId(id)
+                        true
+                    }
+                    RoutingVerb.Add -> settings.activateRoutingRuleSetIfNone(id)
+                    RoutingVerb.Off -> false
+                }
+            if (activated) ImportOutcome.Activated(id) else ImportOutcome.Stored(id)
         }
-    }
 
     private suspend fun removeUnpublishedGenerations(
         setId: Long,
@@ -407,6 +438,58 @@ internal constructor(
         }
         return null
     }
+
+    /**
+     * Proves reuse from immutable persisted evidence without invoking the sidecar-writing validator.
+     *
+     * Other sets' generations have no persisted digest, so preview conservatively warns for them;
+     * apply may still copy and validate those bytes after approval.
+     */
+    private suspend fun previewCandidate(
+        url: String,
+        kind: GeoDataKind,
+        recordedAssets: List<InstalledGeoAsset>,
+    ): LocalCandidate? {
+        val row =
+            recordedAssets.firstOrNull { asset ->
+                asset.sourceUrl == url &&
+                    asset.geoType == kind &&
+                    asset.installedAt != null &&
+                    asset.sha256 != null
+            }
+        return if (row == null) {
+            null
+        } else {
+            val file = File(geoAssets.geoDirectory(), row.fileName)
+            if (file.isFile && row.sizeBytes == file.length() && file.sha256ReadOnly() == row.sha256) {
+                LocalCandidate(file, row.sizeBytes)
+            } else {
+                null
+            }
+        }
+    }
+
+    @Suppress("MagicNumber") // 64 KiB streams large geo databases without retaining them in memory.
+    private suspend fun File.sha256ReadOnly(): String? =
+        withContext(Dispatchers.IO) {
+            try {
+                val digest = MessageDigest.getInstance("SHA-256")
+                FileInputStream(this@sha256ReadOnly).buffered().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                }
+                digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+            } catch (_: IOException) {
+                null
+            } catch (_: SecurityException) {
+                null
+            }
+        }
 
     private fun sharedFile(
         fileName: String,

@@ -3,7 +3,9 @@ package art.yniyniyni.subspace.core.data.testing
 
 import android.content.Context
 import androidx.room.Room
+import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 
 /**
@@ -20,8 +22,14 @@ public class InMemoryRoutingStack(context: Context) {
             .inMemoryDatabaseBuilder(context, SubspaceDatabase::class.java)
             .allowMainThreadQueries()
             .build()
+    private val profiles: ProfileRepository = ProfileRepository(database.profileDao())
 
+    /** The real routing repository under test. */
     public val repository: RoutingRepository = RoutingRepository(database.routingRuleSetDao())
+
+    /** A real subscription repository sharing this database, for foreign-key cascade tests. */
+    public val subscriptionRepository: SubscriptionRepository =
+        SubscriptionRepository(database.subscriptionDao(), profiles, database)
 
     public fun close() {
         database.close()

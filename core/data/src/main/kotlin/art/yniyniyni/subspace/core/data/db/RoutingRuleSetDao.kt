@@ -50,6 +50,57 @@ internal interface RoutingRuleSetDao {
         }
     }
 
+    /** Updates the persistent asset state and failure as one inseparable pair. */
+    @Query("UPDATE routing_rule_sets SET assetState = :state, assetFailure = :failure WHERE id = :id")
+    suspend fun updateAssetState(
+        id: Long,
+        state: String,
+        failure: String?,
+    )
+
+    /**
+     * Atomically publishes a fully materialised profile generation (spec §7.4).
+     *
+     * Rules and [generation] move in one statement, together with the successful
+     * state/failure pair, so no observer can see rules referring to a generation
+     * that is not live yet. This guarantee is why these columns are deliberately
+     * not split across repository calls.
+     */
+    @Query(
+        """
+        UPDATE routing_rule_sets SET
+            directSites = :directSites, directIps = :directIps,
+            proxySites = :proxySites, proxyIps = :proxyIps,
+            blockSites = :blockSites, blockIps = :blockIps,
+            routeOrder = :routeOrder, domainStrategy = :domainStrategy,
+            globalProxy = :globalProxy, lastUpdated = :lastUpdated,
+            fingerprint = :fingerprint, geoIpUrl = :geoIpUrl, geoSiteUrl = :geoSiteUrl,
+            dnsJson = :dnsJson, useChunkFiles = :useChunkFiles,
+            assetGeneration = :generation, assetState = 'Ready', assetFailure = NULL
+        WHERE id = :id
+        """,
+    )
+    @Suppress("LongParameterList") // One parameter per column that the atomic publication moves.
+    suspend fun commitGeneration(
+        id: Long,
+        directSites: String,
+        directIps: String,
+        proxySites: String,
+        proxyIps: String,
+        blockSites: String,
+        blockIps: String,
+        routeOrder: String,
+        domainStrategy: String,
+        globalProxy: Boolean?,
+        lastUpdated: Long?,
+        fingerprint: String?,
+        geoIpUrl: String?,
+        geoSiteUrl: String?,
+        dnsJson: String?,
+        useChunkFiles: Boolean?,
+        generation: Long,
+    )
+
     @Query("DELETE FROM routing_rule_sets WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

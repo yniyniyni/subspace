@@ -11,6 +11,9 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
+    // Routing deeplink parse lives here. Architecture §4 allows :feature:* to
+    // depend on :core:parser; :feature:home and :feature:profiles already do.
+    implementation(project(":core:parser"))
     // Shared camera surfaces, including M6's generic QR scanner, live here;
     // routing never reaches across to :feature:profiles (§4).
     implementation(project(":core:ui"))

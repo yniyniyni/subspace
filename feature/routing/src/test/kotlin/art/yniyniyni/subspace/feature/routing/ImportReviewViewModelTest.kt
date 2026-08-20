@@ -1,0 +1,353 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+package art.yniyniyni.subspace.feature.routing
+
+import art.yniyniyni.subspace.core.data.GeoFilePreview
+import art.yniyniyni.subspace.core.data.ImportOutcome
+import art.yniyniyni.subspace.core.data.ImportPreview
+import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.StoredRuleSet
+import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingProfile
+import art.yniyniyni.subspace.core.model.RoutingSourceKind
+import art.yniyniyni.subspace.core.model.RuleBucket
+import art.yniyniyni.subspace.core.model.RuleSetAssetState
+import art.yniyniyni.subspace.core.model.requiredGeoFiles
+import art.yniyniyni.subspace.core.parser.routing.ImportProblem
+import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import java.util.Base64
+
+/**
+ * Task 12: every routing-profile import stops at the review sheet until the
+ * user confirms. Collaborators are in-memory fakes of the preview/apply
+ * contract; parse is the real [art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport].
+ *
+ * `viewModelScope` needs a Main dispatcher outside Android — same gap
+ * [RoutingViewModelTest] documents and closes with [UnconfinedTestDispatcher].
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class ImportReviewViewModelTest {
+    private val downloads = mutableListOf<String>()
+    private lateinit var repository: FakeRoutingRepository
+    private lateinit var settings: FakeSettingsRepository
+    private lateinit var viewModel: ImportReviewViewModel
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        downloads.clear()
+        repository = FakeRoutingRepository()
+        settings = FakeSettingsRepository()
+        viewModel =
+            ImportReviewViewModel(
+                FakeImportReviewSource(repository, settings, downloads),
+            )
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun aProfileThatReplacesAnExistingOneSaysSo() = runTest {
+        repository.upsertProfile(sampleProfile(), RoutingSourceKind.Deeplink, null)
+        viewModel.offer(linkFor(sampleProfile().copy(lastUpdated = 1_800_000_000L, buckets = emptyMap())))
+        viewModel.state.value.replacesExisting shouldBe true
+    }
+
+    @Test
+    fun globalProxyFalseIsRenderedAsADefaultRouteNotACount() = runTest {
+        viewModel.offer(linkFor(sampleProfile().copy(globalProxy = false)))
+        viewModel.state.value.defaultRouteIsDirect shouldBe true
+    }
+
+    @Test
+    fun aDnsCarryingProfileFlagsItAsUnapplied() = runTest {
+        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.state.value.hasUnappliedDns shouldBe true
+    }
+
+    @Test
+    fun geoHostsAreShownBeforeAnythingIsFetched() = runTest {
+        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.state.value.geoDownloads.map { it.host } shouldBe listOf("example.test", "example.test")
+        downloads.shouldBeEmpty()
+    }
+
+    @Test
+    fun nothingIsStoredUntilConfirmIsCalled() = runTest {
+        viewModel.offer(linkFor(sampleProfile()))
+        repository.observeAllStored().first().shouldBeEmpty()
+        viewModel.confirm()
+        repository.observeAllStored().first().size shouldBe 1
+    }
+
+    @Test
+    fun dismissingStoresNothing() = runTest {
+        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.dismiss()
+        repository.observeAllStored().first().shouldBeEmpty()
+    }
+
+    @Test
+    fun anUnchangedProfileNeverReachesTheSheet() = runTest {
+        val link = linkFor(sampleProfile())
+        viewModel.offer(link)
+        viewModel.confirm()
+
+        viewModel.offer(link)
+        // Spec §7.3: silent. A sheet the user sees hourly is a sheet they stop reading.
+        viewModel.state.value.stage shouldBe Stage.Done
+    }
+
+    @Test
+    fun aMalformedLinkNamesTheProblemRatherThanFailingSilently() = runTest {
+        viewModel.offer("happ://routing/add/!!!")
+        viewModel.state.value.stage shouldBe Stage.Rejected
+        viewModel.state.value.problem shouldBe ImportProblem.MalformedBase64
+    }
+
+    @Test
+    fun offIsConfirmedTooBecauseItDisablesTheUsersRules() = runTest {
+        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.confirm()
+        viewModel.offer("happ://routing/off")
+        viewModel.state.value.stage shouldBe Stage.Reviewing
+        settings.activeRoutingRuleSetId.first() shouldNotBe null
+        viewModel.confirm()
+        settings.activeRoutingRuleSetId.first() shouldBe null
+    }
+
+    private fun sampleProfile(): RoutingProfile {
+        val buckets =
+            mapOf(
+                RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:cn"), ips = listOf("geoip:cn")),
+                RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8")),
+            )
+        return RoutingProfile(
+            name = "RussiaInside",
+            globalProxy = false,
+            routeOrder = listOf(RouteOutcome.BLOCK, RouteOutcome.PROXY, RouteOutcome.DIRECT),
+            domainStrategy = DomainStrategy.IP_IF_NON_MATCH,
+            buckets = buckets,
+            geoIpUrl = "https://example.test/geoip.dat",
+            geoSiteUrl = "https://example.test/geosite.dat",
+            lastUpdated = 1_700_000_000L,
+            dnsJson = """{"RemoteDNSType":"DoH"}""",
+            useChunkFiles = true,
+        )
+    }
+
+    private fun linkFor(profile: RoutingProfile): String {
+        val encoded = Base64.getEncoder().encodeToString(happJson(profile).toByteArray())
+        return "happ://routing/add/$encoded"
+    }
+
+    /**
+     * Happ-shaped JSON that [art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport]
+     * round-trips into [profile]. DNS keys are merged at the root so a non-blank
+     * [RoutingProfile.dnsJson] survives parse as `hasUnappliedDns`.
+     */
+    private fun happJson(profile: RoutingProfile): String {
+        val members = mutableListOf<String>()
+        members += """"Name":"${profile.name}""""
+        profile.globalProxy?.let { members += """"GlobalProxy":"$it"""" }
+        members +=
+            """"RouteOrder":"${profile.routeOrder.joinToString("-") { it.name.lowercase() }}""""
+        members += """"DomainStrategy":"${profile.domainStrategy.wireValue}""""
+        profile.geoIpUrl?.let { members += """"Geoipurl":"$it"""" }
+        profile.geoSiteUrl?.let { members += """"Geositeurl":"$it"""" }
+        profile.lastUpdated?.let { members += """"LastUpdated":"$it"""" }
+        profile.useChunkFiles?.let { members += """"UseChunkFiles":"$it"""" }
+        profile.dnsJson
+            ?.trim()
+            ?.removePrefix("{")
+            ?.removeSuffix("}")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { members += it }
+        fun bucket(
+            sitesKey: String,
+            ipsKey: String,
+            bucket: RuleBucket,
+        ) {
+            if (bucket.sites.isNotEmpty()) {
+                members += """"$sitesKey":[${bucket.sites.joinToString(",") { "\"$it\"" }}]"""
+            }
+            if (bucket.ips.isNotEmpty()) {
+                members += """"$ipsKey":[${bucket.ips.joinToString(",") { "\"$it\"" }}]"""
+            }
+        }
+        bucket("DirectSites", "DirectIp", profile.bucket(RouteOutcome.DIRECT))
+        bucket("ProxySites", "ProxyIp", profile.bucket(RouteOutcome.PROXY))
+        bucket("BlockSites", "BlockIp", profile.bucket(RouteOutcome.BLOCK))
+        return "{${members.joinToString(",")}}"
+    }
+}
+
+/**
+ * In-memory [RoutingRepository] slice the ViewModel tests seed and assert on.
+ * Decide/upsert/observe match the real gates enough that unchanged, replace,
+ * and "nothing stored until confirm" are real behaviors, not mock stubs.
+ */
+private class FakeRoutingRepository {
+    private val stored = MutableStateFlow<List<StoredRuleSet>>(emptyList())
+    private var nextId = 1L
+
+    fun observeAllStored(): Flow<List<StoredRuleSet>> = stored
+
+    suspend fun upsertProfile(
+        profile: RoutingProfile,
+        sourceKind: RoutingSourceKind,
+        subscriptionId: Long?,
+    ): Long {
+        val existing = stored.value.firstOrNull { it.ruleSet.name == profile.name }
+        val id = existing?.ruleSet?.id ?: nextId++
+        val row =
+            StoredRuleSet(
+                ruleSet = profile.toRuleSet(id),
+                sourceKind = sourceKind,
+                subscriptionId = subscriptionId,
+                lastUpdated = profile.lastUpdated,
+                fingerprint = profile.fingerprint(),
+                geoIpUrl = profile.geoIpUrl,
+                geoSiteUrl = profile.geoSiteUrl,
+                hasUnappliedDns = profile.hasUnappliedDns,
+                assetGeneration = existing?.assetGeneration ?: 0L,
+                assetState = existing?.assetState ?: RuleSetAssetState.None,
+                assetFailure = existing?.assetFailure,
+            )
+        stored.value = stored.value.filterNot { it.ruleSet.name == profile.name } + row
+        return id
+    }
+
+    suspend fun decideFor(profile: RoutingProfile): RoutingRepository.UpdateDecision {
+        val existing =
+            stored.value.firstOrNull { it.ruleSet.name == profile.name }
+                ?: return RoutingRepository.UpdateDecision.New
+        val incoming = profile.lastUpdated
+        val storedUpdated = existing.lastUpdated
+        return when {
+            existing.fingerprint == profile.fingerprint() -> RoutingRepository.UpdateDecision.Unchanged
+            incoming != null && storedUpdated != null && incoming <= storedUpdated ->
+                RoutingRepository.UpdateDecision.Stale
+            else -> RoutingRepository.UpdateDecision.Changed
+        }
+    }
+}
+
+private class FakeSettingsRepository {
+    private val active = MutableStateFlow<Long?>(null)
+    val activeRoutingRuleSetId: Flow<Long?> = active
+
+    fun setActiveRoutingRuleSetId(id: Long?) {
+        active.value = id
+    }
+}
+
+/**
+ * Read-only [preview] never records [downloads]; [apply] is the only write and
+ * the only place a geo URL is treated as fetched.
+ */
+private class FakeImportReviewSource(
+    private val repository: FakeRoutingRepository,
+    private val settings: FakeSettingsRepository,
+    private val downloads: MutableList<String>,
+) : ImportReviewSource {
+    override suspend fun preview(profile: RoutingProfile): ImportPreview {
+        val decision = repository.decideFor(profile)
+        val existingId =
+            repository.observeAllStored().first().firstOrNull { it.ruleSet.name == profile.name }?.ruleSet?.id
+        return ImportPreview(
+            decision = decision,
+            profile = profile,
+            replacesExisting = existingId != null,
+            willActivate = settings.activeRoutingRuleSetId.first() == null,
+            geoFiles = geoPreviews(profile),
+        )
+    }
+
+    override suspend fun apply(
+        profile: RoutingProfile,
+        verb: RoutingVerb,
+        sourceKind: RoutingSourceKind,
+        subscriptionId: Long?,
+    ): ImportOutcome {
+        val blocked =
+            when (repository.decideFor(profile)) {
+                RoutingRepository.UpdateDecision.Unchanged -> ImportOutcome.Unchanged
+                RoutingRepository.UpdateDecision.Stale -> ImportOutcome.Stale
+                RoutingRepository.UpdateDecision.New,
+                RoutingRepository.UpdateDecision.Changed,
+                -> null
+            }
+        if (blocked != null) return blocked
+        val id = repository.upsertProfile(profile, sourceKind, subscriptionId)
+        geoPreviews(profile).forEach { preview ->
+            if (!preview.alreadyOnDevice) downloads += preview.url
+        }
+        val activated =
+            when (verb) {
+                RoutingVerb.OnAdd -> {
+                    settings.setActiveRoutingRuleSetId(id)
+                    true
+                }
+                RoutingVerb.Add -> {
+                    if (settings.activeRoutingRuleSetId.first() == null) {
+                        settings.setActiveRoutingRuleSetId(id)
+                        true
+                    } else {
+                        false
+                    }
+                }
+                RoutingVerb.Off -> false
+            }
+        return if (activated) ImportOutcome.Activated(id) else ImportOutcome.Stored(id)
+    }
+
+    override suspend fun disableRouting() {
+        settings.setActiveRoutingRuleSetId(null)
+    }
+
+    private fun geoPreviews(profile: RoutingProfile): List<GeoFilePreview> {
+        val required = profile.toRuleSet().requiredGeoFiles()
+        return listOfNotNull(
+            profile.geoIpUrl
+                ?.takeIf { "geoip.dat" in required }
+                ?.let { url ->
+                    GeoFilePreview(
+                        fileName = "geoip.dat",
+                        url = url,
+                        approximateBytes = null,
+                        alreadyOnDevice = false,
+                    )
+                },
+            profile.geoSiteUrl
+                ?.takeIf { "geosite.dat" in required }
+                ?.let { url ->
+                    GeoFilePreview(
+                        fileName = "geosite.dat",
+                        url = url,
+                        approximateBytes = null,
+                        alreadyOnDevice = false,
+                    )
+                },
+        )
+    }
+}

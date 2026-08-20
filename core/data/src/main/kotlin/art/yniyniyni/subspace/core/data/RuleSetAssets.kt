@@ -243,10 +243,16 @@ internal constructor(
     ): File? =
         withContext(Dispatchers.IO) {
             requireValidAssetFileName(fileName)
-            val directory = generationDir(setId, generation)
-            val data = File(directory, fileName)
-            val expected = readValidatedDigest(directory, fileName) ?: return@withContext null
-            data.takeIf { it.isFile && it.sha256() == expected }
+            try {
+                val directory = generationDir(setId, generation)
+                val data = File(directory, fileName)
+                val expected = readValidatedDigest(directory, fileName) ?: return@withContext null
+                data.takeIf { it.isFile && it.sha256() == expected }
+            } catch (_: IOException) {
+                null
+            } catch (_: SecurityException) {
+                null
+            }
         }
 
     /** Validates the set ID before deriving the only tree this class may delete. */

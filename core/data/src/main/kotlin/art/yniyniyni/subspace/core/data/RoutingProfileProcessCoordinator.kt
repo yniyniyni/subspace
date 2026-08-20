@@ -19,6 +19,7 @@ import kotlinx.coroutines.withContext
  * key or replace a mutex while another waiter still references it.
  */
 internal object RoutingProfileProcessCoordinator {
+    private val profileLockAuthority = Any()
     private val subscriptions = ReferenceCountedMutexes<Long>()
     private val profiles = ReferenceCountedMutexes<String>()
     private val settings = Mutex()
@@ -26,13 +27,13 @@ internal object RoutingProfileProcessCoordinator {
     suspend fun <T> withImport(
         profileName: String,
         subscriptionId: Long?,
-        block: suspend () -> T,
+        block: suspend (ProfileLocks) -> T,
     ): T =
         if (subscriptionId == null) {
-            profiles.withLock(profileName, block)
+            withProfiles(listOf(profileName), block)
         } else {
             subscriptions.withLock(subscriptionId) {
-                profiles.withLock(profileName, block)
+                withProfiles(listOf(profileName), block)
             }
         }
 
@@ -43,12 +44,22 @@ internal object RoutingProfileProcessCoordinator {
 
     suspend fun <T> withProfiles(
         profileNames: Collection<String>,
-        block: suspend () -> T,
-    ): T = withProfiles(profileNames.distinct().sorted(), index = 0, block)
+        block: suspend (ProfileLocks) -> T,
+    ): T {
+        val names = profileNames.distinct().sorted()
+        val locks = ProfileLocks(names.toSet(), profileLockAuthority)
+        return withProfileLocks(names, index = 0) {
+            try {
+                block(locks)
+            } finally {
+                locks.revoke(profileLockAuthority)
+            }
+        }
+    }
 
     suspend fun <T> withSettings(block: suspend () -> T): T = settings.withLock { block() }
 
-    private suspend fun <T> withProfiles(
+    private suspend fun <T> withProfileLocks(
         names: List<String>,
         index: Int,
         block: suspend () -> T,
@@ -57,9 +68,32 @@ internal object RoutingProfileProcessCoordinator {
             block()
         } else {
             profiles.withLock(names[index]) {
-                withProfiles(names, index + 1, block)
+                withProfileLocks(names, index + 1, block)
             }
         }
+
+    /** Unforgeable, revocable proof that the enclosing block owns these profile-name locks. */
+    internal class ProfileLocks internal constructor(
+        private val names: Set<String>,
+        authority: Any,
+    ) {
+        private var active = true
+
+        init {
+            check(authority === profileLockAuthority) { "Routing profile lock capability is not forgeable" }
+        }
+
+        internal fun holds(name: String): Boolean = active && name in names
+
+        internal fun requireHeld(name: String) {
+            check(holds(name)) { "Routing profile name lock is not held" }
+        }
+
+        internal fun revoke(authority: Any) {
+            check(authority === profileLockAuthority) { "Only the lock coordinator can revoke this capability" }
+            active = false
+        }
+    }
 }
 
 /** A keyed mutex map whose entries exist only while an owner or waiter references them. */

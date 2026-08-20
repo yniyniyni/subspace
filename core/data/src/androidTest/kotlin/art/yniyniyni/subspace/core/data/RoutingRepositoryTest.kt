@@ -20,12 +20,17 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -443,6 +448,50 @@ class RoutingRepositoryTest {
     }
 
     @Test
+    fun existingIdRenameRetriesWhenItsObservedAliasChangesBeforeLockAcquisition() {
+        runBlocking {
+            val original = sample.copy(name = "Z current alias")
+            val id = stack.repository.upsert(original)
+            val staleTarget = original.copy(id = id, name = "A stale target")
+            val intervening = original.copy(id = id, name = "B changed alias")
+            val staleTargetHeld = CompletableDeferred<Unit>()
+            val releaseStaleTarget = CompletableDeferred<Unit>()
+            val staleTargetHolder =
+                launch {
+                    RoutingProfileProcessCoordinator.withProfiles(listOf(staleTarget.name)) {
+                        staleTargetHeld.complete(Unit)
+                        releaseStaleTarget.await()
+                    }
+                }
+            staleTargetHeld.await()
+            val staleRename = async { stack.repository.upsert(staleTarget) }
+            delay(WAITER_REGISTRATION_MILLIS)
+
+            stack.repository.upsert(intervening) shouldBe id
+            val changedAliasHeld = CompletableDeferred<Unit>()
+            val releaseChangedAlias = CompletableDeferred<Unit>()
+            val changedAliasHolder =
+                launch {
+                    RoutingProfileProcessCoordinator.withProfiles(listOf(intervening.name)) {
+                        changedAliasHeld.complete(Unit)
+                        releaseChangedAlias.await()
+                    }
+                }
+            changedAliasHeld.await()
+
+            releaseStaleTarget.complete(Unit)
+            withTimeoutOrNull(CONCURRENCY_PROBE_MILLIS) { staleRename.await() } shouldBe null
+            stack.repository.ruleSet(id).shouldNotBeNull().name shouldBe intervening.name
+
+            releaseChangedAlias.complete(Unit)
+            staleRename.await() shouldBe id
+            staleTargetHolder.join()
+            changedAliasHolder.join()
+            stack.repository.ruleSet(id).shouldNotBeNull().name shouldBe staleTarget.name
+        }
+    }
+
+    @Test
     fun storedRuleSetCarriesEveryProfileFieldAndRedactsSensitiveValues() = runTest {
         val profile = sampleProfile()
         val id = stack.repository.upsertProfile(profile, RoutingSourceKind.Body, null)
@@ -630,6 +679,8 @@ class RoutingRepositoryTest {
         )
 
     private companion object {
+        const val CONCURRENCY_PROBE_MILLIS = 1_000L
+        const val WAITER_REGISTRATION_MILLIS = 100L
         const val SAMPLE_LAST_UPDATED = 1_700_000_000L
     }
 }

@@ -114,11 +114,34 @@ internal constructor(
     public suspend fun ruleSetNamed(name: String): RoutingRuleSet? = dao.byName(name)?.toModel()
 
     /** Inserts or updates under the same name lifecycle used by profile imports. */
-    public suspend fun upsert(set: RoutingRuleSet): Long =
-        RoutingProfileProcessCoordinator.withProfiles(listOf(set.name)) {
-            set.requireValidEntries()
-            dao.upsertByIdOrName(set.toEntity())
+    public suspend fun upsert(set: RoutingRuleSet): Long {
+        set.requireValidEntries()
+        if (set.id == 0L) {
+            return RoutingProfileProcessCoordinator.withProfiles(listOf(set.name)) { locks ->
+                upsertWithinProfileLocks(set, locks)
+            }
         }
+
+        var observedCurrentName = dao.byId(set.id)?.name
+        while (true) {
+            when (
+                val attempt =
+                    RoutingProfileProcessCoordinator.withProfiles(
+                        listOfNotNull(observedCurrentName, set.name),
+                    ) { locks ->
+                        val lockedCurrentName = dao.byId(set.id)?.name
+                        if (lockedCurrentName != null && !locks.holds(lockedCurrentName)) {
+                            RenameAttempt.Retry(lockedCurrentName)
+                        } else {
+                            RenameAttempt.Saved(upsertWithinProfileLocks(set, locks))
+                        }
+                    }
+            ) {
+                is RenameAttempt.Retry -> observedCurrentName = attempt.currentName
+                is RenameAttempt.Saved -> return attempt.id
+            }
+        }
+    }
 
     /**
      * Decides what an incoming [profile] means without writing anything.
@@ -157,18 +180,29 @@ internal constructor(
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
     ): Long =
-        RoutingProfileProcessCoordinator.withProfiles(listOf(profile.name)) {
-            upsertProfileWithinLifecycle(profile, sourceKind, subscriptionId)
+        RoutingProfileProcessCoordinator.withProfiles(listOf(profile.name)) { locks ->
+            upsertImportedProfile(profile, sourceKind, subscriptionId, locks)
         }
 
-    /** Import-only entry point for callers already holding [profile]'s process lifecycle lock. */
-    internal suspend fun upsertProfileWithinLifecycle(
+    /** Claims imported-profile ownership only when [locks] proves this name is serialized. */
+    internal suspend fun upsertImportedProfile(
         profile: RoutingProfile,
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
+        locks: RoutingProfileProcessCoordinator.ProfileLocks,
     ): Long {
+        locks.requireHeld(profile.name)
         profile.toRuleSet().requireValidEntries()
         return dao.upsertProfileByName(profile.toEntity(sourceKind, subscriptionId))
+    }
+
+    private suspend fun upsertWithinProfileLocks(
+        set: RoutingRuleSet,
+        locks: RoutingProfileProcessCoordinator.ProfileLocks,
+    ): Long {
+        locks.requireHeld(set.name)
+        dao.byId(set.id)?.name?.let(locks::requireHeld)
+        return dao.upsertByIdOrName(set.toEntity())
     }
 
     /** Writes [state] and [failure] together so observers never see a torn pair. */
@@ -218,6 +252,16 @@ internal constructor(
     public suspend fun delete(id: Long) {
         dao.deleteById(id)
     }
+}
+
+private sealed interface RenameAttempt {
+    data class Retry(
+        val currentName: String,
+    ) : RenameAttempt
+
+    data class Saved(
+        val id: Long,
+    ) : RenameAttempt
 }
 
 /**

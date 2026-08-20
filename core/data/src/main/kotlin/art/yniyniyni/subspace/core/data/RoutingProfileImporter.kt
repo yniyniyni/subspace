@@ -33,11 +33,12 @@ private const val DAT_SUFFIX = ".dat"
 private const val MISSING_SUBSCRIPTION_RULE_SET_ID = 0L
 
 /**
- * Hard cap on all geo downloads needed by one profile generation.
+ * Coroutine deadline around the complete materialisation of one profile generation.
  *
- * Happ stops the process after three minutes (research §4). The cap covers the
- * whole generation rather than resetting for each file, so two slow hosts do
- * not turn this into a six-minute operation.
+ * Network suspensions and chunked filesystem work observe cancellation cooperatively. Production
+ * validation reaches synchronous libXray JNI, which cannot be forcibly interrupted; if that native
+ * call hangs, this deadline is observed only after JNI returns. A strict native hard cap requires
+ * process isolation and a core API refactor outside M6.
  */
 public const val GEO_DOWNLOAD_TIMEOUT_MILLIS: Long = 3 * 60 * 1000L
 
@@ -114,8 +115,9 @@ internal constructor(
     private val deletion: RoutingProfileDeletion,
 ) {
     private var materialisationTimeoutMillis: Long = GEO_DOWNLOAD_TIMEOUT_MILLIS
+    private var beforeGenerationCommit: suspend (setId: Long, generation: Long) -> Unit = { _, _ -> }
 
-    /** Test seam for a real-time deadline short enough for deterministic instrumented tests. */
+    /** Instrumented seams for the real-time deadline and exact pre-publication boundary. */
     internal constructor(
         database: SubspaceDatabase,
         repository: RoutingRepository,
@@ -126,9 +128,11 @@ internal constructor(
         downloader: GeoDownloader,
         deletion: RoutingProfileDeletion,
         materialisationTimeoutMillis: Long,
+        beforeGenerationCommit: suspend (setId: Long, generation: Long) -> Unit = { _, _ -> },
     ) : this(database, repository, assets, geoAssets, settings, validator, downloader, deletion) {
         require(materialisationTimeoutMillis > 0) { "Materialisation timeout must be positive" }
         this.materialisationTimeoutMillis = materialisationTimeoutMillis
+        this.beforeGenerationCommit = beforeGenerationCommit
     }
 
     /**
@@ -181,8 +185,8 @@ internal constructor(
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
     ): ImportOutcome =
-        RoutingProfileProcessCoordinator.withImport(profile.name, subscriptionId) {
-            applySerialized(profile, verb, sourceKind, subscriptionId)
+        RoutingProfileProcessCoordinator.withImport(profile.name, subscriptionId) { locks ->
+            applySerialized(profile, verb, sourceKind, subscriptionId, locks)
         }
 
     @Suppress(
@@ -195,6 +199,7 @@ internal constructor(
         verb: RoutingVerb,
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
+        locks: RoutingProfileProcessCoordinator.ProfileLocks,
     ): ImportOutcome {
         if (subscriptionId != null && database.subscriptionDao().subscription(subscriptionId) == null) {
             return ImportOutcome.Failed(MISSING_SUBSCRIPTION_RULE_SET_ID, RuleSetAssetFailure.Rejected)
@@ -209,7 +214,7 @@ internal constructor(
 
         val id =
             try {
-                repository.upsertProfileWithinLifecycle(profile, sourceKind, subscriptionId)
+                repository.upsertImportedProfile(profile, sourceKind, subscriptionId, locks)
             } catch (error: SQLiteConstraintException) {
                 // A cross-process subscription deletion can land after the pre-row check despite
                 // this process's lifecycle lock. Map only that vanished-parent case; uniqueness
@@ -245,32 +250,40 @@ internal constructor(
         }
 
         val nextGeneration = stored.assetGeneration + 1
-        val materialisation =
-            try {
+        var publicationCommitted = false
+        try {
+            val materialisation =
                 withContext(Dispatchers.Default) {
                     withTimeoutOrNull(materialisationTimeoutMillis) {
                         Materialisation(materialise(id, nextGeneration, requested))
                     }
                 }
-            } catch (error: CancellationException) {
-                withContext(NonCancellable) {
-                    removeUnpublishedGenerations(id, stored.assetGeneration)
+            val failure =
+                if (materialisation == null) {
+                    RuleSetAssetFailure.TimedOut
+                } else {
+                    materialisation.failure
                 }
-                throw error
+            if (failure != null) {
+                removeUnpublishedGenerations(id, stored.assetGeneration)
+                repository.markAssets(id, RuleSetAssetState.Failed, failure)
+                return ImportOutcome.Failed(id, failure)
             }
-        val failure =
-            if (materialisation == null) {
-                RuleSetAssetFailure.TimedOut
-            } else {
-                materialisation.failure
-            }
-        if (failure != null) {
-            removeUnpublishedGenerations(id, stored.assetGeneration)
-            repository.markAssets(id, RuleSetAssetState.Failed, failure)
-            return ImportOutcome.Failed(id, failure)
-        }
 
-        repository.commitGeneration(id, profile, nextGeneration)
+            beforeGenerationCommit(id, nextGeneration)
+            repository.commitGeneration(id, profile, nextGeneration)
+            publicationCommitted = true
+        } catch (error: CancellationException) {
+            withContext(NonCancellable) {
+                reconcileCancelledGeneration(
+                    setId = id,
+                    oldGeneration = stored.assetGeneration,
+                    newGeneration = nextGeneration,
+                    publicationCommitted = publicationCommitted,
+                )
+            }
+            throw error
+        }
         assets.sweepExcept(id, keep = nextGeneration)
         return activateIfAppropriate(id, verb)
     }
@@ -381,6 +394,10 @@ internal constructor(
                 RuleSetAssetFailure.InstallFailed
             }
 
+    /**
+     * Production validation enters synchronous libXray JNI. Coroutine cancellation is observed
+     * after that call returns; M6 deliberately does not add process isolation solely to pre-empt it.
+     */
     @Suppress("TooGenericExceptionCaught") // GeoDataValidator is an injected boundary with arbitrary implementations.
     private suspend fun validate(
         file: File,
@@ -425,6 +442,27 @@ internal constructor(
             assets.sweepExcept(setId, keep = liveGeneration)
         } else {
             assets.removeSet(setId)
+        }
+    }
+
+    /** Cancellation cleanup consults publication state before deleting either generation. */
+    private suspend fun reconcileCancelledGeneration(
+        setId: Long,
+        oldGeneration: Long,
+        newGeneration: Long,
+        publicationCommitted: Boolean,
+    ) {
+        val liveGeneration =
+            if (publicationCommitted) {
+                newGeneration
+            } else {
+                repository.stored(setId)?.assetGeneration
+            }
+        when (liveGeneration) {
+            null -> assets.removeSet(setId)
+            newGeneration -> assets.sweepExcept(setId, keep = newGeneration)
+            oldGeneration -> removeUnpublishedGenerations(setId, oldGeneration)
+            else -> if (liveGeneration > 0) assets.sweepExcept(setId, keep = liveGeneration)
         }
     }
 
@@ -486,8 +524,9 @@ internal constructor(
     /**
      * Proves reuse from immutable persisted evidence without invoking the sidecar-writing validator.
      *
-     * Other sets' generations have no persisted digest, so preview conservatively warns for them;
-     * apply may still copy and validate those bytes after approval.
+     * Shared assets use their successful-install digest. Other sets use digest metadata committed
+     * inside their live generation. Missing, corrupt, disappearing, or unreadable evidence is a
+     * conservative cache miss; apply may still fetch or validate bytes after approval.
      */
     private suspend fun previewCandidate(
         url: String,

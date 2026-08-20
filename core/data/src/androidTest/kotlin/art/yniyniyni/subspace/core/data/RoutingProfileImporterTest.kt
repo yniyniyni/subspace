@@ -21,6 +21,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -38,6 +39,7 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.system.measureTimeMillis
 
 @Suppress("LargeClass") // One real Room/filesystem fixture exercises the lifecycle as a single integration boundary.
 class RoutingProfileImporterTest {
@@ -332,6 +334,120 @@ class RoutingProfileImporterTest {
     }
 
     @Test
+    @Suppress("LongMethod") // The staged, blocked, cancelled, and live states are all part of this boundary.
+    fun cancellationAtThePreCommitBarrierRemovesOnlyTheUnpublishedGeneration() {
+        runBlocking {
+            val original = geoIpOnlyProfile()
+            val id =
+                importer
+                    .apply(original, RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
+                    .shouldBeInstanceOf<ImportOutcome.Activated>()
+                    .id
+            repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.DownloadFailed)
+            val marker = repository.stored(id).shouldNotBeNull()
+            val preCommitEntered = CompletableDeferred<Unit>()
+            val neverCommit = CompletableDeferred<Unit>()
+            val barrierImporter =
+                RoutingProfileImporter(
+                    database,
+                    repository,
+                    assets,
+                    geoAssets,
+                    settings,
+                    validator,
+                    downloader,
+                    deletion,
+                    GEO_DOWNLOAD_TIMEOUT_MILLIS,
+                ) { committedId: Long, generation: Long ->
+                    committedId shouldBe id
+                    generation shouldBe 2L
+                    preCommitEntered.complete(Unit)
+                    neverCommit.await()
+                }
+            val update =
+                original.copy(
+                    lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    buckets = mapOf(
+                        RouteOutcome.DIRECT to
+                            RuleBucket(
+                                sites = listOf("domain:precommit.example"),
+                                ips = listOf("geoip:private"),
+                            ),
+                    ),
+                )
+            val applying = launch(Dispatchers.Default) {
+                barrierImporter.apply(update, RoutingVerb.Add, RoutingSourceKind.Header, null)
+            }
+            preCommitEntered.await()
+
+            assets.verifiedGenerationFile(id, 2, "geoip.dat").shouldNotBeNull()
+            repository.stored(id).shouldNotBeNull().assetGeneration shouldBe 1L
+            applying.cancelAndJoin()
+
+            val after = repository.stored(id).shouldNotBeNull()
+            after.assetGeneration shouldBe 1L
+            after.assetState shouldBe marker.assetState
+            after.assetFailure shouldBe marker.assetFailure
+            after.ruleSet shouldBe marker.ruleSet
+            File(assets.generationDir(id, 1), "geoip.dat").isFile shouldBe true
+            assets.generationDir(id, 2).exists() shouldBe false
+        }
+    }
+
+    @Test
+    fun cancellationObservedAfterPublicationNeverDeletesTheNewlyLiveGeneration() {
+        runBlocking {
+            val original = geoIpOnlyProfile()
+            val id =
+                importer
+                    .apply(original, RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
+                    .shouldBeInstanceOf<ImportOutcome.Activated>()
+                    .id
+            val update =
+                original.copy(
+                    lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    buckets = mapOf(
+                        RouteOutcome.DIRECT to
+                            RuleBucket(
+                                sites = listOf("domain:published-before-cancel.example"),
+                                ips = listOf("geoip:private"),
+                            ),
+                    ),
+                )
+            val publicationLanded = CompletableDeferred<Unit>()
+            val neverReturnFromCommit = CompletableDeferred<Unit>()
+            val barrierImporter =
+                RoutingProfileImporter(
+                    database,
+                    repository,
+                    assets,
+                    geoAssets,
+                    settings,
+                    validator,
+                    downloader,
+                    deletion,
+                    GEO_DOWNLOAD_TIMEOUT_MILLIS,
+                ) { committedId: Long, generation: Long ->
+                    repository.commitGeneration(committedId, update, generation)
+                    publicationLanded.complete(Unit)
+                    neverReturnFromCommit.await()
+                }
+            val applying = launch(Dispatchers.Default) {
+                barrierImporter.apply(update, RoutingVerb.Add, RoutingSourceKind.Header, null)
+            }
+            publicationLanded.await()
+
+            applying.cancelAndJoin()
+
+            val live = repository.stored(id).shouldNotBeNull()
+            live.assetGeneration shouldBe 2L
+            live.ruleSet.bucket(RouteOutcome.DIRECT) shouldBe update.bucket(RouteOutcome.DIRECT)
+            assets.generationDir(id, 1).exists() shouldBe false
+            File(assets.generationDir(id, 2), "geoip.dat").isFile shouldBe true
+        }
+    }
+
+    @Test
     fun manualSaveWaitsForImportAndPublishesOneConsistentRow() {
         runBlocking {
             val importEntered = CompletableDeferred<Unit>()
@@ -372,6 +488,60 @@ class RoutingProfileImporterTest {
             stored.geoIpUrl shouldBe null
             stored.assetGeneration shouldBe 0L
             stored.assetState shouldBe RuleSetAssetState.None
+        }
+    }
+
+    @Test
+    fun existingIdRenameLocksItsCurrentAliasAgainstAConcurrentImport() {
+        runBlocking {
+            val currentName = "A current manual alias"
+            val requestedName = "Z requested manual alias"
+            val original =
+                RoutingRuleSet(
+                    name = currentName,
+                    buckets = mapOf(RouteOutcome.BLOCK to RuleBucket(sites = listOf("domain:manual.example"))),
+                )
+            val id = repository.upsert(original)
+            val renamed = original.copy(id = id, name = requestedName)
+            val requestedHeld = CompletableDeferred<Unit>()
+            val releaseRequested = CompletableDeferred<Unit>()
+            val requestedHolder =
+                launch {
+                    RoutingProfileProcessCoordinator.withProfiles(listOf(requestedName)) {
+                        requestedHeld.complete(Unit)
+                        releaseRequested.await()
+                    }
+                }
+            requestedHeld.await()
+            val renaming = async { repository.upsert(renamed) }
+            delay(WAITER_REGISTRATION_MILLIS)
+            val importing = async {
+                importer.apply(
+                    geoIpOnlyProfile().copy(name = currentName),
+                    RoutingVerb.Add,
+                    RoutingSourceKind.Deeplink,
+                    null,
+                )
+            }
+
+            withTimeoutOrNull(CONCURRENCY_PROBE_MILLIS) { importing.await() } shouldBe null
+            releaseRequested.complete(Unit)
+            renaming.await() shouldBe id
+            importing.await().shouldBeInstanceOf<ImportOutcome.Activated>()
+            requestedHolder.join()
+
+            val stored = repository.observeAllStored().first()
+            stored.map { it.ruleSet.name }.toSet() shouldBe setOf(currentName, requestedName)
+            stored.first { it.ruleSet.name == requestedName }.let { manual ->
+                manual.ruleSet.bucket(RouteOutcome.BLOCK) shouldBe renamed.bucket(RouteOutcome.BLOCK)
+                manual.assetGeneration shouldBe 0L
+                manual.sourceKind shouldBe null
+            }
+            stored.first { it.ruleSet.name == currentName }.let { imported ->
+                imported.assetGeneration shouldBe 1L
+                imported.sourceKind shouldBe RoutingSourceKind.Deeplink
+                File(assets.generationDir(imported.ruleSet.id, 1), "geoip.dat").isFile shouldBe true
+            }
         }
     }
 
@@ -545,6 +715,48 @@ class RoutingProfileImporterTest {
             stored.assetGeneration shouldBe 0L
             stored.assetState shouldBe RuleSetAssetState.Failed
             File(assets.setsRoot(), stored.ruleSet.id.toString()).exists() shouldBe false
+        }
+    }
+
+    @Test
+    fun synchronousNativeStyleValidationCanOutliveTheDeadlineBeforeTimeoutIsObserved() {
+        runBlocking {
+            val blockingValidator =
+                object : GeoDataValidator {
+                    override suspend fun validate(
+                        datDir: File,
+                        name: String,
+                        kind: GeoDataKind,
+                    ): GeoValidation {
+                        Thread.sleep(SLOW_VALIDATION_MILLIS)
+                        return GeoValidation.Valid
+                    }
+                }
+            val blockingImporter =
+                RoutingProfileImporter(
+                    database,
+                    repository,
+                    assets,
+                    geoAssets,
+                    settings,
+                    blockingValidator,
+                    downloader,
+                    deletion,
+                    TEST_MATERIALISATION_TIMEOUT_MILLIS,
+                )
+            lateinit var outcome: ImportOutcome
+
+            val elapsed = measureTimeMillis {
+                outcome = blockingImporter.apply(
+                    geoIpOnlyProfile().copy(name = "Synchronous native validation"),
+                    RoutingVerb.Add,
+                    RoutingSourceKind.Deeplink,
+                    null,
+                )
+            }
+
+            outcome.shouldBeInstanceOf<ImportOutcome.Failed>().failure shouldBe RuleSetAssetFailure.TimedOut
+            (elapsed >= SLOW_VALIDATION_MILLIS) shouldBe true
         }
     }
 

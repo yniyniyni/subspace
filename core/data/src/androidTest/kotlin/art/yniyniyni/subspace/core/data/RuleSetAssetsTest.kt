@@ -281,6 +281,21 @@ class RuleSetAssetsTest {
         subject.sharedRoot().listFiles().orEmpty().none { it.name.endsWith(".sha256") } shouldBe true
     }
 
+    @Test
+    fun verifiedGenerationReturnsNullWhenTheCandidateBecomesUnreadable() = runTest {
+        val subject = assets()
+        val generation = subject.prepareGeneration(9, 1)
+        val data = File(generation, "geoip.dat").apply { writeText("validated bytes") }
+        subject.recordValidatedFile(9, 1, "geoip.dat") shouldBe true
+        data.setReadable(false, false) shouldBe true
+
+        try {
+            subject.verifiedGenerationFile(9, 1, "geoip.dat") shouldBe null
+        } finally {
+            data.setReadable(true, false)
+        }
+    }
+
     private companion object {
         const val COPY_CHUNK_BYTES = 64 * 1024
     }

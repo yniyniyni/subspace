@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.feature.routing
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -88,6 +89,14 @@ class ImportReviewSheetTest {
         setContent()
 
         composeRule.onNodeWithText(string(R.string.import_review_confirm)).assertIsNotFocused()
+    }
+
+    @Test
+    fun applyingDisablesCancelAndConfirm() {
+        setContent(reviewingState.copy(stage = Stage.Applying))
+
+        composeRule.onNodeWithText(string(R.string.import_review_dismiss)).assertIsNotEnabled()
+        composeRule.onNodeWithText(string(R.string.import_review_confirm)).assertIsNotEnabled()
     }
 
     private fun string(

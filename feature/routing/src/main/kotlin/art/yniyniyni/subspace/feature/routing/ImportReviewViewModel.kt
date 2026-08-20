@@ -15,6 +15,7 @@ import art.yniyniyni.subspace.core.parser.routing.ImportResult
 import art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport
 import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -105,6 +106,23 @@ constructor(
         if (_state.value.stage != Stage.Reviewing) return
         viewModelScope.launch {
             _state.update { it.copy(stage = Stage.Applying) }
+            applyPending(action)
+        }
+    }
+
+    /**
+     * [ImportReviewSource.apply] / [ImportReviewSource.disableRouting] can still throw
+     * (the importer rethrows unrelated `SQLiteConstraintException`). Without this
+     * catch, [Stage.Applying] sticks, Cancel is disabled, and [dismiss] is a no-op.
+     *
+     * [CancellationException] is rethrown unmodified — a cancelled
+     * `viewModelScope` means this [ViewModel] is being torn down, same as
+     * [RuleSetEditorViewModel.saveDraft].
+     */
+    // TooGenericExceptionCaught: apply/disable fail in ways this ViewModel cannot enumerate (§10.4).
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun applyPending(action: PendingImport) {
+        try {
             when (action) {
                 PendingImport.Disable -> source.disableRouting()
                 is PendingImport.Profile ->
@@ -117,6 +135,10 @@ constructor(
             }
             pending = null
             _state.update { it.copy(stage = Stage.Done) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            _state.update { it.copy(stage = Stage.Reviewing) }
         }
     }
 

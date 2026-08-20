@@ -93,6 +93,7 @@ internal fun ImportReviewSheet(
         titleRes = state.titleRes(),
         onDismiss = onDismiss,
         modifier = modifier,
+        dismissible = state.stage != Stage.Applying,
     ) {
         ImportReviewSheetContent(
             state = state,

@@ -30,6 +30,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import java.io.IOException
 import java.util.Base64
 
 /**
@@ -132,6 +133,46 @@ class ImportReviewViewModelTest {
         settings.activeRoutingRuleSetId.first() shouldNotBe null
         viewModel.confirm()
         settings.activeRoutingRuleSetId.first() shouldBe null
+    }
+
+    @Test
+    fun aThrownApplyLeavesTheSheetActionable() = runTest {
+        viewModel =
+            ImportReviewViewModel(
+                FakeImportReviewSource(
+                    repository,
+                    settings,
+                    downloads,
+                    failApplyWith = IOException("disk full"),
+                ),
+            )
+        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.confirm()
+
+        viewModel.state.value.stage shouldBe Stage.Reviewing
+        repository.observeAllStored().first().shouldBeEmpty()
+        viewModel.dismiss()
+        viewModel.state.value.stage shouldBe Stage.Done
+    }
+
+    @Test
+    fun aThrownDisableLeavesTheSheetActionable() = runTest {
+        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.confirm()
+        viewModel =
+            ImportReviewViewModel(
+                FakeImportReviewSource(
+                    repository,
+                    settings,
+                    downloads,
+                    failDisableWith = IOException("db unavailable"),
+                ),
+            )
+        viewModel.offer("happ://routing/off")
+        viewModel.confirm()
+
+        viewModel.state.value.stage shouldBe Stage.Reviewing
+        settings.activeRoutingRuleSetId.first() shouldNotBe null
     }
 
     private fun sampleProfile(): RoutingProfile {
@@ -269,6 +310,8 @@ private class FakeImportReviewSource(
     private val repository: FakeRoutingRepository,
     private val settings: FakeSettingsRepository,
     private val downloads: MutableList<String>,
+    private val failApplyWith: Throwable? = null,
+    private val failDisableWith: Throwable? = null,
 ) : ImportReviewSource {
     override suspend fun preview(profile: RoutingProfile): ImportPreview {
         val decision = repository.decideFor(profile)
@@ -289,6 +332,7 @@ private class FakeImportReviewSource(
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
     ): ImportOutcome {
+        failApplyWith?.let { throw it }
         val blocked =
             when (repository.decideFor(profile)) {
                 RoutingRepository.UpdateDecision.Unchanged -> ImportOutcome.Unchanged
@@ -322,6 +366,7 @@ private class FakeImportReviewSource(
     }
 
     override suspend fun disableRouting() {
+        failDisableWith?.let { throw it }
         settings.setActiveRoutingRuleSetId(null)
     }
 

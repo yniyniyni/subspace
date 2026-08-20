@@ -135,6 +135,7 @@
     <string name="import_review_problem_invalid_entry">This routing profile contains an entry that cannot be used.</string>
     <string name="import_review_problem_malformed_geo_url">This routing profile names a geo file with an unusable address.</string>
     <string name="import_review_problem_insecure_geo_url">This routing profile would fetch a geo file over unencrypted HTTP.</string>
+    <string name="import_review_problem_unknown">This link could not be read.</string>
     <string name="import_review_problem_too_large">This routing profile is too large to import.</string>
 </resources>
 

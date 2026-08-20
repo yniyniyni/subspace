@@ -64,6 +64,15 @@ internal data class GeoDownloadPreview(
  */
 internal data class ImportReviewState(
     val stage: Stage = Stage.Done,
+    /**
+     * Whether confirming turns routing **off** rather than importing a profile.
+     *
+     * Stated, not inferred. Deriving it from an empty [name] happens to work
+     * today only because a nameless profile is rejected during parse — a
+     * coincidence one upstream change away from silently rendering a real
+     * profile's rules as the "routing will be turned off" body.
+     */
+    val isDisableRouting: Boolean = false,
     val name: String = "",
     val replacesExisting: Boolean = false,
     val bucketCounts: Map<RouteOutcome, Int> = emptyMap(),
@@ -126,7 +135,7 @@ internal fun ImportReviewSheetContent(
     ) {
         when {
             state.stage == Stage.Rejected -> RejectedBody(state.problem)
-            state.isDisable -> {
+            state.isDisableRouting -> {
                 Text(
                     text = stringResource(R.string.import_review_disable_body),
                     style = MaterialTheme.typography.bodyMedium,
@@ -259,7 +268,7 @@ private fun ActionRow(
             TextButton(onClick = onConfirm, enabled = reviewing) {
                 Text(
                     stringResource(
-                        if (state.isDisable) {
+                        if (state.isDisableRouting) {
                             R.string.import_review_disable_confirm
                         } else {
                             R.string.import_review_confirm
@@ -279,13 +288,10 @@ private fun RouteOutcome.label(): String =
         RouteOutcome.DIRECT -> stringResource(R.string.rule_set_editor_outcome_direct)
     }
 
-private val ImportReviewState.isDisable: Boolean
-    get() = name.isEmpty() && problem == null && stage != Stage.Rejected
-
 private fun ImportReviewState.titleRes(): Int =
     when {
         stage == Stage.Rejected -> R.string.import_review_rejected_title
-        isDisable -> R.string.import_review_disable_title
+        isDisableRouting -> R.string.import_review_disable_title
         else -> R.string.import_review_title
     }
 
@@ -302,5 +308,9 @@ private fun ImportProblem?.messageRes(): Int =
         ImportProblem.MalformedGeoUrl -> R.string.import_review_problem_malformed_geo_url
         ImportProblem.InsecureGeoUrl -> R.string.import_review_problem_insecure_geo_url
         ImportProblem.TooLarge -> R.string.import_review_problem_too_large
-        null -> R.string.import_review_problem_malformed_json
+        // Unreachable: Stage.Rejected is only ever set alongside a problem.
+        // It still gets its own string rather than borrowing a specific one —
+        // naming a cause the parser never reported would be a guess presented
+        // to the user as a finding.
+        null -> R.string.import_review_problem_unknown
     }

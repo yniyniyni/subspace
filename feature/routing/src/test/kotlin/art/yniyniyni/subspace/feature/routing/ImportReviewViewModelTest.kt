@@ -68,32 +68,35 @@ class ImportReviewViewModelTest {
     @Test
     fun aProfileThatReplacesAnExistingOneSaysSo() = runTest {
         repository.upsertProfile(sampleProfile(), RoutingSourceKind.Deeplink, null)
-        viewModel.offer(linkFor(sampleProfile().copy(lastUpdated = 1_800_000_000L, buckets = emptyMap())))
+        viewModel.offer(
+            linkFor(sampleProfile().copy(lastUpdated = 1_800_000_000L, buckets = emptyMap())),
+            RoutingSourceKind.Deeplink,
+        )
         viewModel.state.value.replacesExisting shouldBe true
     }
 
     @Test
     fun globalProxyFalseIsRenderedAsADefaultRouteNotACount() = runTest {
-        viewModel.offer(linkFor(sampleProfile().copy(globalProxy = false)))
+        viewModel.offer(linkFor(sampleProfile().copy(globalProxy = false)), RoutingSourceKind.Deeplink)
         viewModel.state.value.defaultRouteIsDirect shouldBe true
     }
 
     @Test
     fun aDnsCarryingProfileFlagsItAsUnapplied() = runTest {
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         viewModel.state.value.hasUnappliedDns shouldBe true
     }
 
     @Test
     fun geoHostsAreShownBeforeAnythingIsFetched() = runTest {
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         viewModel.state.value.geoDownloads.map { it.host } shouldBe listOf("example.test", "example.test")
         downloads.shouldBeEmpty()
     }
 
     @Test
     fun nothingIsStoredUntilConfirmIsCalled() = runTest {
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         repository.observeAllStored().first().shouldBeEmpty()
         viewModel.confirm()
         repository.observeAllStored().first().size shouldBe 1
@@ -101,7 +104,7 @@ class ImportReviewViewModelTest {
 
     @Test
     fun dismissingStoresNothing() = runTest {
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         viewModel.dismiss()
         repository.observeAllStored().first().shouldBeEmpty()
     }
@@ -109,26 +112,26 @@ class ImportReviewViewModelTest {
     @Test
     fun anUnchangedProfileNeverReachesTheSheet() = runTest {
         val link = linkFor(sampleProfile())
-        viewModel.offer(link)
+        viewModel.offer(link, RoutingSourceKind.Deeplink)
         viewModel.confirm()
 
-        viewModel.offer(link)
+        viewModel.offer(link, RoutingSourceKind.Deeplink)
         // Spec §7.3: silent. A sheet the user sees hourly is a sheet they stop reading.
         viewModel.state.value.stage shouldBe Stage.Done
     }
 
     @Test
     fun aMalformedLinkNamesTheProblemRatherThanFailingSilently() = runTest {
-        viewModel.offer("happ://routing/add/!!!")
+        viewModel.offer("happ://routing/add/!!!", RoutingSourceKind.Deeplink)
         viewModel.state.value.stage shouldBe Stage.Rejected
         viewModel.state.value.problem shouldBe ImportProblem.MalformedBase64
     }
 
     @Test
     fun offIsConfirmedTooBecauseItDisablesTheUsersRules() = runTest {
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         viewModel.confirm()
-        viewModel.offer("happ://routing/off")
+        viewModel.offer("happ://routing/off", RoutingSourceKind.Deeplink)
         viewModel.state.value.stage shouldBe Stage.Reviewing
         settings.activeRoutingRuleSetId.first() shouldNotBe null
         viewModel.confirm()
@@ -146,7 +149,7 @@ class ImportReviewViewModelTest {
                     failApplyWith = IOException("disk full"),
                 ),
             )
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         viewModel.confirm()
 
         viewModel.state.value.stage shouldBe Stage.Reviewing
@@ -157,7 +160,7 @@ class ImportReviewViewModelTest {
 
     @Test
     fun aThrownDisableLeavesTheSheetActionable() = runTest {
-        viewModel.offer(linkFor(sampleProfile()))
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
         viewModel.confirm()
         viewModel =
             ImportReviewViewModel(
@@ -168,11 +171,43 @@ class ImportReviewViewModelTest {
                     failDisableWith = IOException("db unavailable"),
                 ),
             )
-        viewModel.offer("happ://routing/off")
+        viewModel.offer("happ://routing/off", RoutingSourceKind.Deeplink)
         viewModel.confirm()
 
         viewModel.state.value.stage shouldBe Stage.Reviewing
         settings.activeRoutingRuleSetId.first() shouldNotBe null
+    }
+
+    @Test
+    fun theChannelThatOfferedTheProfileIsTheChannelThatIsRecorded() = runTest {
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Clipboard)
+        viewModel.confirm()
+
+        repository.observeAllStored().first().single().sourceKind shouldBe RoutingSourceKind.Clipboard
+    }
+
+    @Test
+    fun aProviderDeliveredProfileRecordsItsSubscription() = runTest {
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Header, subscriptionId = 7L)
+        viewModel.confirm()
+
+        val stored = repository.observeAllStored().first().single()
+        stored.sourceKind shouldBe RoutingSourceKind.Header
+        stored.subscriptionId shouldBe 7L
+    }
+
+    @Test
+    fun offIsStatedAsADisableRatherThanInferredFromAnAbsentName() = runTest {
+        viewModel.offer("happ://routing/off", RoutingSourceKind.Deeplink)
+
+        viewModel.state.value.isDisableRouting shouldBe true
+    }
+
+    @Test
+    fun aProfileImportIsNeverMistakenForADisable() = runTest {
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
+
+        viewModel.state.value.isDisableRouting shouldBe false
     }
 
     private fun sampleProfile(): RoutingProfile {

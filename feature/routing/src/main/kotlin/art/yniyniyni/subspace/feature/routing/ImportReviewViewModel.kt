@@ -84,10 +84,27 @@ constructor(
 
     private var pending: PendingImport? = null
 
-    fun offer(text: String) {
+    /**
+     * Offers [text] for review as an import arriving over [sourceKind].
+     *
+     * [sourceKind] is a parameter rather than a constant because this sheet is
+     * the single funnel for all five channels of spec §5.2, and the channel is
+     * what a row's provenance badge and its read-only status are derived from.
+     * Recording every import as [RoutingSourceKind.Deeplink] would make the
+     * badge lie about where a profile came from — and the badge is the only
+     * place the user ever learns that their provider, not they, installed it.
+     *
+     * [subscriptionId] is set only by the provider channels (`Header`, `Body`),
+     * which own the row: deleting the subscription deletes its profiles.
+     */
+    fun offer(
+        text: String,
+        sourceKind: RoutingSourceKind,
+        subscriptionId: Long? = null,
+    ) {
         viewModelScope.launch {
             when (val result = RoutingProfileImport.parse(text)) {
-                is ImportResult.Imported -> onImported(result)
+                is ImportResult.Imported -> onImported(result, sourceKind, subscriptionId)
                 ImportResult.DisableRouting -> onDisable()
                 is ImportResult.Invalid -> {
                     pending = null
@@ -129,8 +146,8 @@ constructor(
                     source.apply(
                         action.profile,
                         action.verb,
-                        RoutingSourceKind.Deeplink,
-                        null,
+                        action.sourceKind,
+                        action.subscriptionId,
                     )
             }
             pending = null
@@ -148,14 +165,18 @@ constructor(
         _state.value = ImportReviewState(stage = Stage.Done)
     }
 
-    private suspend fun onImported(result: ImportResult.Imported) {
+    private suspend fun onImported(
+        result: ImportResult.Imported,
+        sourceKind: RoutingSourceKind,
+        subscriptionId: Long?,
+    ) {
         val preview = source.preview(result.profile)
         if (preview.decision == RoutingRepository.UpdateDecision.Unchanged) {
             pending = null
             _state.value = ImportReviewState(stage = Stage.Done)
             return
         }
-        pending = PendingImport.Profile(result.profile, result.verb)
+        pending = PendingImport.Profile(result.profile, result.verb, sourceKind, subscriptionId)
         _state.value =
             ImportReviewState(
                 stage = Stage.Reviewing,
@@ -171,7 +192,7 @@ constructor(
 
     private fun onDisable() {
         pending = PendingImport.Disable
-        _state.value = ImportReviewState(stage = Stage.Reviewing)
+        _state.value = ImportReviewState(stage = Stage.Reviewing, isDisableRouting = true)
     }
 }
 
@@ -179,6 +200,8 @@ private sealed interface PendingImport {
     data class Profile(
         val profile: RoutingProfile,
         val verb: RoutingVerb,
+        val sourceKind: RoutingSourceKind,
+        val subscriptionId: Long?,
     ) : PendingImport
 
     data object Disable : PendingImport

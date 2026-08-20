@@ -322,6 +322,31 @@ Rules:
   consequence, and the wrong mechanism here fails silently (no exception, no
   log line) rather than loudly.
 
+  **The install directory is no longer flat.** M5's single `filesDir/geo`
+  root held one `geoip.dat`/`geosite.dat` pair for the whole app, which
+  M6 broke: two imported routing profiles can name different upstreams for
+  the same filename, and the second would silently overwrite the first's
+  data under a name the first still references. So a profile's files live
+  in `filesDir/geo/sets/<ruleSetId>/<generation>/`, and
+  `XRAY_LOCATION_ASSET` points at the **active** rule set's current
+  generation rather than at one shared root — `TunnelService` therefore
+  resolves routing *before* constructing `XrayController`, since the
+  controller builds its `env` once per instance.
+
+  Generations are what make the swap atomic **by construction** rather than
+  by careful ordering. A new generation materialises alongside the live one;
+  publishing it is a single Room `UPDATE` that moves the rules and the
+  generation number together, so no reader can observe rule columns and the
+  live generation disagreeing. Nothing renames a directory and nothing
+  deletes the old generation until the new one is live. The user-visible
+  half of that promise is §A.3.1's: the core keeps running on the old
+  ruleset until every file lands.
+
+  Curated sources keep the flat root: `GeoAssetRepository` is unchanged, and
+  a profile that references a filename already installed there reuses it
+  rather than re-downloading (a 23–74 MB cellular fetch is not something to
+  repeat for a file the device already holds).
+
   **Why not bundled.** Measured per-file sizes range 2.3–73.7 MB depending on
   source (`docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md`
   §7), against an APK that is otherwise small. Bundling even the smallest
@@ -970,6 +995,29 @@ Mandatory rules:
   mutation) get **explicit user confirmation** in this project, even though
   Happ applies them silently. This is a deliberate divergence — see §A.5.
 
+  **As of M6 this is true rather than aspirational, for exactly one key.**
+  `routing` is the registry's first `Danger.Dangerous` entry with a real
+  consumer, and its confirmation is `:feature:routing`'s import review
+  sheet. Before anything is written or downloaded, the sheet names the
+  profile, says whether it replaces an existing one, gives the entry count
+  per bucket and the resulting default route in words, lists the **host**
+  of every geo file it would fetch and its size, notes any DNS block that
+  is stored but not applied, and says whether it will become active.
+  Confirm is deliberately not the default-focused action.
+
+  The sheet is the single funnel for every channel — deeplink, clipboard,
+  QR, response header, body line. The two the user initiated are not
+  exempt: consenting to tap a link is not consenting to an opaque base64
+  blob's contents. `routing-enable: false` passes through it too, since it
+  silently disables rules the user chose.
+
+  Two gates sit in front of the sheet, in this order: an unchanged content
+  fingerprint is a silent no-op (a subscription re-delivers its `routing`
+  header hourly, and a sheet seen hourly is a sheet nobody reads), and only
+  then is `LastUpdated` monotonicity checked. Both live in
+  `RoutingRepository.decideFor`, so "would this change anything" has one
+  definition rather than one per caller.
+
 ---
 
 ## A.2 Tier 1 — table stakes (MVP)
@@ -1035,6 +1083,14 @@ Mandatory rules:
 
 ### A.3.1 Routing profiles distributed as deeplinks
 
+**Status: implemented for rules in M6, pending device verification.** §10.1
+applies in full — a green build is not a working import, and nothing here
+is finished until the fourteen-item checklist in
+`docs/agent/specs/2026-08-20-m6-routing-profile-deeplinks-design.md` §11
+passes on physical hardware and is recorded in
+`docs/agent/research/2026-08-20-m6-device-verification.md`. The DNS half is
+M6.5; raw Xray JSON passthrough is M7.
+
 This is what the user asked about specifically and it is the strongest idea
 in Happ. Routing configuration is a **shareable artifact**, not something
 each user hand-builds. Community-maintained rule sets (RU/BY whitelists,
@@ -1080,8 +1136,30 @@ community profiles):
 ```
 
 Community profiles additionally use `RouteOrder` (e.g.
-`"block-proxy-direct"`) and `UseChunkFiles`. VERIFY these against current
-docs — they are not in the published schema example.
+`"block-proxy-direct"`) and `UseChunkFiles`. Neither is in the published
+schema example, and M6 resolved them differently — see
+`docs/agent/research/2026-08-20-happ-routing-profiles.md` for sources:
+
+- **`RouteOrder` is honoured.** It is real and it is self-describing:
+  `"block-proxy-direct"` states its own meaning, the order the three
+  outcome buckets are evaluated in, and getting it wrong is visible
+  (rules stop matching in the order the profile asked for). It maps
+  directly onto the evaluation order `RoutingRuleSet` already carries.
+- **`UseChunkFiles` is stored and ignored.** It is real — Remnawave's own
+  HAPP Routing Builder emits it — but it is documented nowhere, and §10.5
+  forbids guessing at upstream behaviour. Acting on a flag whose meaning
+  we inferred would be exactly the failure that section is about. It is
+  round-tripped so a future milestone can honour it without a migration,
+  and its presence is logged by key alone.
+
+**Booleans in this format are JSON strings** (`"true"` / `"false"`), not
+JSON booleans. A parser that reads them with a strict boolean decoder
+silently drops every one of them.
+
+M6 implements this surface for rules; the DNS half (`RemoteDNS*`,
+`DomesticDNS*`, `DnsHosts`, `FakeDNS`) is parsed and stored from day one
+but applied by M6.5. Until then the review sheet says so out loud on any
+profile carrying a DNS block, and the routing list repeats it on the row.
 
 **Lifecycle rules worth copying verbatim** — these are well designed:
 

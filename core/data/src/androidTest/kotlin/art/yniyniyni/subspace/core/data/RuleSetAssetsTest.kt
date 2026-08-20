@@ -8,6 +8,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 
@@ -146,6 +147,23 @@ class RuleSetAssetsTest {
         File(external, "keep.dat").readText() shouldBe "outside"
         Files.isSymbolicLink(generation.toPath()) shouldBe false
         generation.isDirectory shouldBe true
+    }
+
+    @Test
+    fun preparingWithASymlinkedSetAncestorFailsWithoutCreatingOutsideTheSetsRoot() = runTest {
+        val subject = assets()
+        val external = temp.newFolder("external-ancestor").apply {
+            File(this, "keep.dat").writeText("outside")
+        }
+        val setDirectory = File(subject.setsRoot(), "7")
+        setDirectory.parentFile?.mkdirs()
+        Files.createSymbolicLink(setDirectory.toPath(), external.toPath())
+
+        shouldThrow<IOException> { subject.prepareGeneration(7, 1) }
+
+        File(external, "keep.dat").readText() shouldBe "outside"
+        File(external, "1").exists() shouldBe false
+        Files.isSymbolicLink(setDirectory.toPath()) shouldBe true
     }
 
     @Test

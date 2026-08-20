@@ -72,6 +72,11 @@ internal constructor(
     ): File =
         withContext(Dispatchers.IO) {
             val directory = generationDir(setId, generation)
+            val rootPath = setsRoot().toPath().toAbsolutePath().normalize()
+            val directoryPath = directory.toPath().toAbsolutePath().normalize()
+            if (!isSafeTreeTarget(rootPath, directoryPath)) {
+                throw IOException("Refusing to create geo generation through a linked ancestor")
+            }
             if (Files.exists(directory.toPath(), NOFOLLOW_LINKS) && !deleteTreeNoFollow(directory)) {
                 throw IOException("Could not clear geo generation directory")
             }

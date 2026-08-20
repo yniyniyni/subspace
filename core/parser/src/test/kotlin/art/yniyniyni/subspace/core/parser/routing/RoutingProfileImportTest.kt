@@ -129,6 +129,44 @@ class RoutingProfileImportTest {
     }
 
     @Test
+    fun rejectsLargePayloadsBeforeNormalisingThem() {
+        val largePayload = "A".repeat(MAX_PROFILE_BYTES * 2)
+        val whitespaceHeavyPayload = (" \t\n".repeat(MAX_PROFILE_BYTES)) + "e30="
+
+        RoutingProfileImport
+            .parse("happ://routing/add/$largePayload")
+            .shouldBeInstanceOf<ImportResult.Invalid>()
+            .problem shouldBe ImportProblem.TooLarge
+        RoutingProfileImport
+            .parse("happ://routing/add/$whitespaceHeavyPayload")
+            .shouldBeInstanceOf<ImportResult.Invalid>()
+            .problem shouldBe ImportProblem.TooLarge
+    }
+
+    @Test
+    fun rejectsMalformedUtf8BeforeParsingJson() {
+        val bytes =
+            "{\"Name\":\"".toByteArray() +
+                byteArrayOf(0xC3.toByte(), 0x28) +
+                "\",\"ProxySites\":[\"a.test\"]}".toByteArray()
+
+        RoutingProfileImport
+            .parse(linkFor(bytes))
+            .shouldBeInstanceOf<ImportResult.Invalid>()
+            .problem shouldBe ImportProblem.MalformedJson
+    }
+
+    @Test
+    fun requiresAStringName() {
+        listOf("null", "1", "true").forEach { nonStringName ->
+            RoutingProfileImport
+                .parse(linkFor("""{"Name":$nonStringName,"ProxySites":["a.test"]}"""))
+                .shouldBeInstanceOf<ImportResult.Invalid>()
+                .problem shouldBe ImportProblem.MissingName
+        }
+    }
+
+    @Test
     fun defaultsAbsentRouteOrderAndUnknownDomainStrategy() {
         val result =
             RoutingProfileImport
@@ -180,6 +218,8 @@ class RoutingProfileImportTest {
     private fun linkFor(json: String): String = "happ://routing/add/${b64(json)}"
 
     private fun b64(text: String): String = Base64.getEncoder().encodeToString(text.toByteArray())
+
+    private fun linkFor(bytes: ByteArray): String = "happ://routing/add/${Base64.getEncoder().encodeToString(bytes)}"
 
     private fun oversizedProfile(): String = """{"Name":"P","Padding":"${"x".repeat(MAX_PROFILE_BYTES + 1)}"}"""
 

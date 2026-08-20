@@ -16,11 +16,14 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import java.net.URI
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.util.Base64
 
 private const val MAX_NAME_LENGTH = 64
 private const val BASE64_GROUP_SIZE = 4
 private const val BASE64_BYTES_PER_GROUP = 3
+private const val MAX_BASE64_WHITESPACE_CHARS = 4 * 1024
 private const val ROUTING_PATH = "routing/"
 private const val ADD_VERB = "add"
 private const val ON_ADD_VERB = "onadd"
@@ -59,7 +62,27 @@ private sealed interface DecodedPayload {
 }
 
 /** Reads a scalar profile value without treating objects and arrays as strings. */
-private fun JsonObject.stringOf(key: String): String? = (this[key] as? JsonPrimitive)?.content
+private fun JsonObject.stringOf(key: String): String? {
+    val primitive = this[key] as? JsonPrimitive
+    return primitive?.takeIf(JsonPrimitive::isString)?.content
+}
+
+/** Reads `LastUpdated` from a JSON string or number without widening other textual fields. */
+private fun JsonObject.lastUpdatedOf(key: String): Long? {
+    val primitive = this[key] as? JsonPrimitive
+    return primitive?.content?.trim()?.toLongOrNull()
+}
+
+/** Decodes profile bytes strictly, so malformed UTF-8 cannot become replacement-character JSON. */
+private fun ByteArray.decodeUtf8Strict(): String? =
+    runCatching {
+        Charsets.UTF_8
+            .newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(this))
+            .toString()
+    }.getOrNull()
 
 /** Reads a bucket only when every value is a string, preserving entry strictness. */
 @Suppress("ReturnCount") // Each short return distinguishes an absent bucket from a malformed one.
@@ -114,39 +137,55 @@ public object RoutingProfileImport {
 
     @Suppress("ReturnCount", "UnreachableCode") // K2 detekt misreads the deliberate typed early returns as unreachable.
     private fun parseInternal(text: String): ImportResult {
-        val trimmed = text.trim()
+        val start = text.indexOfFirst { character -> !character.isWhitespace() }
+        if (start < 0) return ImportResult.Invalid(ImportProblem.NotARoutingLink)
+        val end = text.indexOfLast { character -> !character.isWhitespace() } + 1
         val scheme =
-            SCHEMES.firstOrNull { trimmed.startsWith(it, ignoreCase = true) }
+            SCHEMES.firstOrNull { candidate ->
+                text.regionMatches(start, candidate, 0, candidate.length, ignoreCase = true)
+            }
                 ?: return ImportResult.Invalid(ImportProblem.NotARoutingLink)
-        val rest = trimmed.drop(scheme.length)
-        if (!rest.startsWith(ROUTING_PATH, ignoreCase = true)) {
+        val routingStart = start + scheme.length
+        if (!text.regionMatches(routingStart, ROUTING_PATH, 0, ROUTING_PATH.length, ignoreCase = true)) {
             return ImportResult.Invalid(ImportProblem.NotARoutingLink)
         }
 
-        val afterPath = rest.drop(ROUTING_PATH.length)
-        val verbToken = afterPath.substringBefore('/').lowercase()
-        val payload = afterPath.substringAfter('/', missingDelimiterValue = "").trim()
-        return when (verbToken) {
-            OFF_VERB -> ImportResult.DisableRouting
-            ADD_VERB -> decodeAndBuild(payload, RoutingVerb.Add)
-            ON_ADD_VERB -> decodeAndBuild(payload, RoutingVerb.OnAdd)
+        val verbStart = routingStart + ROUTING_PATH.length
+        val separator = text.indexOf('/', startIndex = verbStart).takeIf { index -> index in verbStart until end }
+        val verbEnd = separator ?: end
+        val payloadStart = separator?.plus(1) ?: end
+        return when {
+            text.matchesToken(verbStart, verbEnd, OFF_VERB) -> ImportResult.DisableRouting
+            text.matchesToken(verbStart, verbEnd, ADD_VERB) ->
+                decodeAndBuild(text, payloadStart, end, RoutingVerb.Add)
+            text.matchesToken(verbStart, verbEnd, ON_ADD_VERB) ->
+                decodeAndBuild(text, payloadStart, end, RoutingVerb.OnAdd)
             else -> ImportResult.Invalid(ImportProblem.UnknownVerb)
         }
     }
 
+    /** Compares a link token in place so attacker-sized substrings are never created. */
+    private fun String.matchesToken(
+        start: Int,
+        end: Int,
+        token: String,
+    ): Boolean = end - start == token.length && regionMatches(start, token, 0, token.length, ignoreCase = true)
+
     @Suppress("ReturnCount", "UnreachableCode") // K2 detekt misreads the deliberate typed early returns as unreachable.
     private fun decodeAndBuild(
-        payload: String,
+        text: String,
+        payloadStart: Int,
+        payloadEnd: Int,
         verb: RoutingVerb,
     ): ImportResult {
-        when (val decoded = decodeBase64(payload)) {
+        when (val decoded = decodeBase64(text, payloadStart, payloadEnd)) {
             DecodedPayload.Malformed -> return ImportResult.Invalid(ImportProblem.MalformedBase64)
             DecodedPayload.TooLarge -> return ImportResult.Invalid(ImportProblem.TooLarge)
             is DecodedPayload.Content -> {
                 val root =
-                    runCatching {
-                        json.parseToJsonElement(String(decoded.bytes, Charsets.UTF_8)) as? JsonObject
-                    }.getOrNull() ?: return ImportResult.Invalid(ImportProblem.MalformedJson)
+                    decoded.bytes.decodeUtf8Strict()?.let { decodedText ->
+                        runCatching { json.parseToJsonElement(decodedText) as? JsonObject }.getOrNull()
+                    } ?: return ImportResult.Invalid(ImportProblem.MalformedJson)
                 return buildProfile(root, verb)
             }
         }
@@ -157,18 +196,35 @@ public object RoutingProfileImport {
         "ReturnCount",
         "UnreachableCode",
     ) // K2 detekt misreads these typed malformed-input returns as unreachable.
-    private fun decodeBase64(payload: String): DecodedPayload {
-        val cleaned = payload.filterNot(Char::isWhitespace)
-        if (cleaned.isEmpty()) return DecodedPayload.Malformed
-        if (cleaned.length > MAX_ENCODED_PROFILE_CHARS) return DecodedPayload.TooLarge
-
-        val normalised = cleaned.replace('-', '+').replace('_', '/')
+    private fun decodeBase64(
+        text: String,
+        start: Int,
+        end: Int,
+    ): DecodedPayload {
+        val normalised = StringBuilder(minOf(end - start, MAX_ENCODED_PROFILE_CHARS))
+        var whitespaceCount = 0
+        for (index in start until end) {
+            val character = text[index]
+            if (character.isWhitespace()) {
+                whitespaceCount += 1
+                if (whitespaceCount > MAX_BASE64_WHITESPACE_CHARS) return DecodedPayload.TooLarge
+            } else {
+                if (normalised.length >= MAX_ENCODED_PROFILE_CHARS) return DecodedPayload.TooLarge
+                normalised.append(
+                    when (character) {
+                        '-' -> '+'
+                        '_' -> '/'
+                        else -> character
+                    },
+                )
+            }
+        }
+        if (normalised.isEmpty()) return DecodedPayload.Malformed
         if (normalised.length % BASE64_GROUP_SIZE == 1) return DecodedPayload.Malformed
         val padded =
-            normalised.padEnd(
-                normalised.length + (BASE64_GROUP_SIZE - normalised.length % BASE64_GROUP_SIZE) % BASE64_GROUP_SIZE,
-                '=',
-            )
+            normalised
+                .append("=".repeat((BASE64_GROUP_SIZE - normalised.length % BASE64_GROUP_SIZE) % BASE64_GROUP_SIZE))
+                .toString()
         val bytes =
             runCatching { Base64.getDecoder().decode(padded) }.getOrNull()
                 ?: return DecodedPayload.Malformed
@@ -206,7 +262,7 @@ public object RoutingProfileImport {
                 buckets = buckets,
                 geoIpUrl = geoIpUrl,
                 geoSiteUrl = geoSiteUrl,
-                lastUpdated = root.stringOf("LastUpdated")?.trim()?.toLongOrNull(),
+                lastUpdated = root.lastUpdatedOf("LastUpdated"),
                 dnsJson = root.dnsBlock(),
                 useChunkFiles = root.looseBooleanOf("UseChunkFiles"),
             )

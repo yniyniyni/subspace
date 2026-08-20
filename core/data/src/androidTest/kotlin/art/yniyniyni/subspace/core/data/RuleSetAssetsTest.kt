@@ -13,8 +13,11 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.io.IOException
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.StandardOpenOption.CREATE
+import java.nio.file.StandardOpenOption.WRITE
 
 class RuleSetAssetsTest {
     @get:Rule
@@ -77,6 +80,165 @@ class RuleSetAssetsTest {
 
         subject.generationDir(7, 1).exists() shouldBe false
         subject.generationDir(7, 2).isDirectory shouldBe true
+    }
+
+    @Test
+    fun sweepingDuringASeparateInstanceLeaseDefersDeletionUntilFinalRelease() = runTest {
+        val root = temp.newFolder("leased-generation")
+        val owner = RuleSetAssets(root)
+        val sweeper = RuleSetAssets(root)
+        File(owner.prepareGeneration(7, 1), "geoip.dat").writeText("startup")
+        File(owner.prepareGeneration(7, 2), "geoip.dat").writeText("new-live")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val startup =
+            launch {
+                owner.withResolvedAssetDir(7, 1, hasOwnSources = true) {
+                    entered.complete(Unit)
+                    release.await()
+                } shouldBe ResolvedAssetUse.Used(Unit)
+            }
+        entered.await()
+
+        sweeper.sweepExcept(setId = 7, keep = 2)
+
+        owner.generationDir(7, 1).isDirectory shouldBe true
+        owner.generationDir(7, 2).isDirectory shouldBe true
+
+        release.complete(Unit)
+        startup.join()
+
+        owner.generationDir(7, 1).exists() shouldBe false
+        owner.generationDir(7, 2).isDirectory shouldBe true
+    }
+
+    @Test
+    fun cancellingAResolvedAssetScopeReleasesItsGenerationLease() = runTest {
+        val root = temp.newFolder("cancelled-lease")
+        val owner = RuleSetAssets(root)
+        val sweeper = RuleSetAssets(root)
+        owner.prepareGeneration(7, 1)
+        owner.prepareGeneration(7, 2)
+        val entered = CompletableDeferred<Unit>()
+        val neverRelease = CompletableDeferred<Unit>()
+        val startup =
+            launch {
+                owner.withResolvedAssetDir(7, 1, hasOwnSources = true) {
+                    entered.complete(Unit)
+                    neverRelease.await()
+                }
+            }
+        entered.await()
+
+        startup.cancelAndJoin()
+        sweeper.sweepExcept(setId = 7, keep = 2)
+
+        owner.generationDir(7, 1).exists() shouldBe false
+    }
+
+    @Test
+    fun aFailedResolvedAssetScopeReleasesItsGenerationLease() = runTest {
+        val root = temp.newFolder("failed-lease")
+        val owner = RuleSetAssets(root)
+        val sweeper = RuleSetAssets(root)
+        owner.prepareGeneration(7, 1)
+        owner.prepareGeneration(7, 2)
+
+        shouldThrow<IllegalStateException> {
+            owner.withResolvedAssetDir(7, 1, hasOwnSources = true) {
+                throw IllegalStateException("expected test failure")
+            }
+        }
+        sweeper.sweepExcept(setId = 7, keep = 2)
+
+        owner.generationDir(7, 1).exists() shouldBe false
+    }
+
+    @Test
+    fun aLaterLeaseAttemptReapsAStaleDeleteMarkerAfterTakingTheOsLock() = runTest {
+        val root = temp.newFolder("stale-marker")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        val retention = File(root, ".routing-generation-retention/7").apply(File::mkdirs)
+        File(retention, "1.delete").writeText("")
+
+        subject.withResolvedAssetDir(7, 1, hasOwnSources = true) { error("must not expose stale generation") } shouldBe
+            ResolvedAssetUse.GenerationUnavailable
+
+        subject.generationDir(7, 1).exists() shouldBe false
+        File(retention, "1.delete").exists() shouldBe false
+    }
+
+    @Test
+    fun aSymlinkedDeleteMarkerIsRemovedWithoutTouchingItsDestination() = runTest {
+        val root = temp.newFolder("symlinked-marker")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        val external = temp.newFile("external-marker-target").apply { writeText("outside") }
+        val retention = File(root, ".routing-generation-retention/7").apply(File::mkdirs)
+        val marker = File(retention, "1.delete")
+        Files.createSymbolicLink(marker.toPath(), external.toPath())
+
+        subject.withResolvedAssetDir(7, 1, hasOwnSources = true) { error("must not expose stale generation") } shouldBe
+            ResolvedAssetUse.GenerationUnavailable
+
+        external.readText() shouldBe "outside"
+        Files.exists(marker.toPath(), NOFOLLOW_LINKS) shouldBe false
+    }
+
+    @Test
+    fun aStaleMarkerReapsABrokenGenerationSymlinkWithoutFollowingIt() = runTest {
+        val root = temp.newFolder("broken-generation-link")
+        val subject = RuleSetAssets(root)
+        val generation = subject.generationDir(7, 1)
+        generation.parentFile?.mkdirs()
+        Files.createSymbolicLink(generation.toPath(), File(temp.root, "missing-target").toPath())
+        val retention = File(root, ".routing-generation-retention/7").apply(File::mkdirs)
+        File(retention, "1.delete").writeText("")
+
+        subject.withResolvedAssetDir(7, 1, hasOwnSources = true) { error("must not expose stale generation") } shouldBe
+            ResolvedAssetUse.GenerationUnavailable
+
+        Files.exists(generation.toPath(), NOFOLLOW_LINKS) shouldBe false
+    }
+
+    @Test
+    fun aSymlinkedRetentionSetDirectoryCannotWriteAMarkerOutsideTheGeoRoot() = runTest {
+        val root = temp.newFolder("symlinked-retention-parent")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        subject.prepareGeneration(7, 2)
+        val external = temp.newFolder("external-retention").apply {
+            File(this, "keep").writeText("outside")
+        }
+        val retentionRoot = File(root, ".routing-generation-retention").apply(File::mkdirs)
+        Files.createSymbolicLink(File(retentionRoot, "7").toPath(), external.toPath())
+
+        subject.sweepExcept(setId = 7, keep = 2)
+
+        File(external, "keep").readText() shouldBe "outside"
+        external.listFiles().orEmpty().map(File::getName) shouldBe listOf("keep")
+        subject.generationDir(7, 1).isDirectory shouldBe true
+    }
+
+    @Test
+    fun anOverlappingExternalLockIsTreatedAsLeasedAndReapedLater() = runTest {
+        val root = temp.newFolder("overlapping-lock")
+        val subject = RuleSetAssets(root)
+        subject.prepareGeneration(7, 1)
+        subject.prepareGeneration(7, 2)
+        val retention = File(root, ".routing-generation-retention/7").apply(File::mkdirs)
+        val lockFile = File(retention, "1.lock")
+        FileChannel.open(lockFile.toPath(), CREATE, WRITE).use { channel ->
+            channel.lock().use {
+                subject.sweepExcept(setId = 7, keep = 2)
+                subject.generationDir(7, 1).isDirectory shouldBe true
+            }
+        }
+
+        subject.sweepExcept(setId = 7, keep = 2)
+
+        subject.generationDir(7, 1).exists() shouldBe false
     }
 
     @Test

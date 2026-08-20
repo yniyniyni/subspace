@@ -225,7 +225,7 @@ class TunnelService : VpnService() {
                 installedGeoFiles = { directory ->
                     directory.listFiles().orEmpty().filter(File::isFile).map(File::getName).toSet()
                 },
-                assetDirFor = ruleSetAssets::resolveAssetDir,
+                assetScope = ruleSetAssets,
             )
         perAppResolver =
             PerAppResolver(
@@ -315,29 +315,8 @@ class TunnelService : VpnService() {
         goForeground(R.string.notification_connecting)
 
         scope.launch {
-            // Routing resolves first because XRAY_LOCATION_ASSET depends on the
-            // active rule set. A profile with its own sources reads its exact
-            // published generation; hand-made sets retain the shared catalogue.
-            val routing =
-                when (val gate = resolveRouting(gen, rowId)) {
-                    RoutingGateResult.Failed -> return@launch
-                    is RoutingGateResult.Proceed -> gate.routing
-                }
-            val assetDir =
-                (routing as? RoutingResolution.Active)?.assetDir
-                    ?: geoAssetRepository.geoDirectory()
-            val xray = XrayController(geoAssetDir = assetDir)
-            synchronized(lock) {
-                if (gen != generation) return@launch
-                controller = xray
-            }
-
-            // Split at the seam that matters for unwinding: once the core is up,
-            // every later failure must stop it again.
-            // Pass the resolution rather than reading Room twice: switching the
-            // active set between reads must not mismatch config and asset path.
-            val ports = startCore(gen, xray, profile, rowId, routing) ?: return@launch
-            attachTun(gen, xray, ports.socksPort, ports.httpPort, rowId)
+            val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
+            attachTun(gen, started.xray, started.ports.socksPort, started.ports.httpPort, rowId)
         }
     }
 
@@ -349,6 +328,57 @@ class TunnelService : VpnService() {
      * for a mistake that decodes to a plausible port either way.
      */
     private data class StartedPorts(val socksPort: Int, val httpPort: Int)
+
+    /** A started core leaves the routing-generation lease but still needs its TUN attached. */
+    private data class StartedCore(val xray: XrayController, val ports: StartedPorts)
+
+    /**
+     * Resolves routing, builds the controller, validates, and starts Xray inside
+     * one retained-generation scope. Every return and throw exits that scope,
+     * so success, named failure, cancellation, and supersession all release the
+     * lease only after `validate`/`start` have finished consuming the assets.
+     */
+    @Suppress("TooGenericExceptionCaught") // Resolver lambdas cross Room and filesystem boundaries.
+    private suspend fun resolveAndStartCore(
+        gen: Int,
+        profile: Profile,
+        rowId: Long,
+    ): StartedCore? =
+        try {
+            routingResolver.withResolution { routing ->
+                if (routing is RoutingResolution.MissingGeoData) {
+                    failStart(
+                        gen,
+                        FailureReason.GeoDataMissing,
+                        IllegalStateException(routing.missing.sorted().joinToString(", ")),
+                        rowId,
+                    )
+                    return@withResolution null
+                }
+                val assetDir =
+                    (routing as? RoutingResolution.Active)?.assetDir
+                        ?: geoAssetRepository.geoDirectory()
+                val xray = XrayController(geoAssetDir = assetDir)
+                val ownsStart =
+                    synchronized(lock) {
+                        if (gen != generation) {
+                            false
+                        } else {
+                            controller = xray
+                            true
+                        }
+                    }
+                if (!ownsStart) return@withResolution null
+
+                val ports = startCore(gen, xray, profile, rowId, routing) ?: return@withResolution null
+                StartedCore(xray, ports)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failStart(gen, FailureReason.CoreStartFailed, e, rowId)
+            null
+        }
 
     // One early return per step is the point, not a smell: §10.4 requires each
     // stage of the start sequence to fail specifically and stop there.
@@ -431,70 +461,7 @@ class TunnelService : VpnService() {
         return StartedPorts(socksPort, httpPort)
     }
 
-    /**
-     * The routing gate's outcome, kept as its own type rather than a nullable
-     * [RoutingResolution] precisely so "routing is off" ([RoutingResolution.Off])
-     * cannot be confused with "the gate failed and
-     * [startCore] must stop" ([Failed]) — a code-review finding on this task's
-     * first pass, when both were folded into one nullable.
-     */
-    private sealed interface RoutingGateResult {
-        data class Proceed(val routing: RoutingResolution) : RoutingGateResult
-
-        /** [failStart] has already run — [startCore] must return without doing anything else. */
-        data object Failed : RoutingGateResult
-    }
-
-    /**
-     * §4.4's activation gate, extracted out of [startCore] so that function stays
-     * under detekt's cyclomatic-complexity threshold — Task 12 adds a second
-     * allocated port to the same function, and a bare `@Suppress` here would only
-     * have bought one more task before the same finding came back.
-     *
-     * [RoutingResolver.resolve] reaches Room (`RoutingRepository`,
-     * `SettingsRepository`) and the resolved generation directory
-     * through the suspend lambdas built in [onCreate]; unlike every `XrayException`
-     * elsewhere in [startCore], nothing here narrows what those calls can throw.
-     * Left unguarded, that failure reaches [errorHandler] instead of [failStart] —
-     * which publishes [FailureReason.CoreStartFailed] same as this catch does, but
-     * skips failStart's cleanup (§5.4: `configFile`/`controller` cleared,
-     * `stopForeground`/`stopSelf` called), leaving the foreground notification
-     * stuck on "Connecting" and `:bg` alive indefinitely.
-     */
-    // The three resolver lambdas' failure shapes are Room's/the filesystem's, not ours to narrow.
-    @Suppress("TooGenericExceptionCaught")
-    private suspend fun resolveRouting(
-        gen: Int,
-        rowId: Long,
-    ): RoutingGateResult {
-        val resolution =
-            try {
-                routingResolver.resolve()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                failStart(gen, FailureReason.CoreStartFailed, e, rowId)
-                return RoutingGateResult.Failed
-            }
-        return when (resolution) {
-            is RoutingResolution.Off -> RoutingGateResult.Proceed(resolution)
-            is RoutingResolution.Active -> RoutingGateResult.Proceed(resolution)
-            is RoutingResolution.MissingGeoData -> {
-                // §10.4: named specifically. The filenames are shape, not
-                // content, so they are safe to surface (§5.6) — Redaction.kt
-                // carries a matching exemption so they survive failure().
-                failStart(
-                    gen,
-                    FailureReason.GeoDataMissing,
-                    IllegalStateException(resolution.missing.sorted().joinToString(", ")),
-                    rowId,
-                )
-                RoutingGateResult.Failed
-            }
-        }
-    }
-
-    /** [RoutingGateResult]'s shape, for [resolvePerApp]. */
+    /** The per-app gate keeps "off" distinct from "resolution failed" for [attachTun]. */
     private sealed interface PerAppGateResult {
         data class Proceed(val plan: BuilderPlan) : PerAppGateResult
 
@@ -503,13 +470,12 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §8's gate, extracted from [attachTun] for the reason [resolveRouting] is
-     * extracted from [startCore]: to keep the caller under detekt's length
-     * threshold, and to keep one failure shape in one place.
+     * §8's gate is extracted from [attachTun] to keep the caller under
+     * detekt's length threshold and one failure shape in one place.
      *
      * [PerAppResolver.resolve] reaches Room through the lambda built in
-     * [onCreate], and nothing narrows what that read can throw — the same gap
-     * [resolveRouting] documents, with a worse consequence here, because by now
+     * [onCreate], and nothing narrows what that read can throw. The consequence
+     * is worse here than during routing resolution because by now
      * [startCore] has left a core running. Unguarded, the failure reaches
      * [errorHandler], which publishes [FailureReason.CoreStartFailed] but skips
      * both `xray.stop()` and failStart's §5.4 cleanup: a live Go runtime, a
@@ -517,7 +483,7 @@ class TunnelService : VpnService() {
      * foreground notification, while `Failed` invites a second connect that would
      * overwrite `controller` and orphan the first core.
      */
-    // Room's failure shape, not ours to narrow — as in resolveRouting.
+    // Room's failure shape, not ours to narrow.
     @Suppress("TooGenericExceptionCaught")
     private suspend fun resolvePerApp(
         gen: Int,
@@ -568,9 +534,8 @@ class TunnelService : VpnService() {
      * [establishTun] plus its two §10.4 failures, kept out of [attachTun] so that
      * function stays under detekt's length threshold.
      *
-     * @return null when [failStart] has already run — unlike [RoutingGateResult]
-     *   there is no third outcome to conflate, so a nullable fd says exactly what
-     *   a sealed type would.
+     * @return null when [failStart] has already run. There is no third outcome
+     *   to conflate, so a nullable fd says exactly what a sealed type would.
      */
     private suspend fun establishOrFail(
         gen: Int,
@@ -735,8 +700,8 @@ class TunnelService : VpnService() {
     /**
      * How [establishTun] ended.
      *
-     * A sealed type rather than a nullable fd for the reason [RoutingGateResult]
-     * is one: an emptied allow list and a refused `establish()` are different
+     * A sealed type rather than a nullable fd because an emptied allow list and
+     * a refused `establish()` are different
      * §10.4 failures, and a single null would have sent a user whose selected
      * apps were uninstalled looking for a broken tunnel instead of a broken
      * selection.

@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.service
 
+import art.yniyniyni.subspace.core.data.ResolvedAssetUse
+import art.yniyniyni.subspace.core.data.RuleSetAssetScope
 import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import java.io.File
+
+private const val MAX_GENERATION_RESOLUTION_ATTEMPTS = 3
+
+/** Continuous generation replacement prevented a stable retained snapshot. */
+internal class RoutingGenerationChurnException : IllegalStateException("routing generation changed during startup")
 
 /** What the start sequence should do about routing. */
 internal sealed interface RoutingResolution {
@@ -42,28 +49,65 @@ internal class RoutingResolver(
     private val activeRuleSetId: suspend () -> Long?,
     private val loadStored: suspend (Long) -> StoredRuleSet?,
     private val installedGeoFiles: suspend (File) -> Set<String>,
-    private val assetDirFor: (setId: Long, generation: Long, hasOwnSources: Boolean) -> File,
+    private val assetScope: RuleSetAssetScope,
 ) {
     /**
-     * §4.4: the gate runs here, before config generation, so a missing database
-     * produces [RoutingResolution.MissingGeoData] rather than the generic
-     * `ConfigRejected` `testXray` would report.
+     * Resolves once at the service boundary and retains an own-source generation
+     * for the complete [block]. A second stored read after lease acquisition
+     * closes the Room-snapshot-to-filesystem race; replacement retries stay
+     * bounded so continuous imports cannot livelock tunnel startup.
      */
-    @Suppress("ReturnCount") // One early return per outcome; see the comments on each.
-    suspend fun resolve(): RoutingResolution {
-        val id = activeRuleSetId() ?: return RoutingResolution.Off
-        // A rule set deleted while it was active leaves a dangling id. Routing
-        // off is the honest reading — the user removed the rules — and it must
-        // not stop the tunnel from starting.
-        val stored = loadStored(id) ?: return RoutingResolution.Off
-        val hasOwnSources = !stored.geoIpUrl.isNullOrBlank() || !stored.geoSiteUrl.isNullOrBlank()
-        val assetDir = assetDirFor(id, stored.assetGeneration, hasOwnSources)
+    @Suppress("ReturnCount") // Off, deleted, and stable retained snapshots terminate independently.
+    suspend fun <T> withResolution(block: suspend (RoutingResolution) -> T): T {
+        repeat(MAX_GENERATION_RESOLUTION_ATTEMPTS) {
+            val id = activeRuleSetId() ?: return block(RoutingResolution.Off)
+            // A rule set deleted while it was active leaves a dangling id. Routing
+            // off is the honest reading — the user removed the rules.
+            val snapshot = loadStored(id) ?: return block(RoutingResolution.Off)
+            val hasOwnSources = snapshot.hasOwnSources()
+            val use =
+                assetScope.withResolvedAssetDir(id, snapshot.assetGeneration, hasOwnSources) { assetDir ->
+                    val retained =
+                        if (hasOwnSources) {
+                            loadStored(id)?.takeIf { current ->
+                                current.assetGeneration == snapshot.assetGeneration && current.hasOwnSources()
+                            }
+                        } else {
+                            snapshot
+                        }
+                    if (retained == null) {
+                        ResolutionAttempt.Retry
+                    } else {
+                        ResolutionAttempt.Complete(block(retained.toResolution(assetDir)))
+                    }
+                }
+            when (use) {
+                ResolvedAssetUse.GenerationUnavailable -> Unit
+                is ResolvedAssetUse.Used ->
+                    when (val attempt = use.value) {
+                        is ResolutionAttempt.Complete -> return attempt.value
+                        ResolutionAttempt.Retry -> Unit
+                    }
+            }
+        }
+        throw RoutingGenerationChurnException()
+    }
 
-        val missing = stored.ruleSet.requiredGeoFiles() - installedGeoFiles(assetDir)
+    /** §4.4's named missing-file gate runs while [assetDir] remains retained. */
+    private suspend fun StoredRuleSet.toResolution(assetDir: File): RoutingResolution {
+        val missing = ruleSet.requiredGeoFiles() - installedGeoFiles(assetDir)
         return if (missing.isEmpty()) {
-            RoutingResolution.Active(stored.ruleSet, assetDir)
+            RoutingResolution.Active(ruleSet, assetDir)
         } else {
             RoutingResolution.MissingGeoData(missing)
         }
+    }
+
+    private fun StoredRuleSet.hasOwnSources(): Boolean = !geoIpUrl.isNullOrBlank() || !geoSiteUrl.isNullOrBlank()
+
+    private sealed interface ResolutionAttempt<out T> {
+        data class Complete<T>(val value: T) : ResolutionAttempt<T>
+
+        data object Retry : ResolutionAttempt<Nothing>
     }
 }

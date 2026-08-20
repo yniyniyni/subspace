@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -76,7 +77,7 @@ public class RuleSetAssets
 internal constructor(
     @GeoAssetRoot private val root: File,
     private val copier: CooperativeRuleSetFileCopier,
-) {
+) : RuleSetAssetScope {
     @Inject
     internal constructor(
         @GeoAssetRoot root: File,
@@ -108,6 +109,37 @@ internal constructor(
         generation: Long,
         hasOwnSources: Boolean,
     ): File = if (hasOwnSources) generationDir(setId, generation) else sharedRoot()
+
+    /**
+     * Runs [block] while the exact own-source generation is retained.
+     *
+     * Acquisition and release perform blocking channel work on IO. The callback
+     * may suspend on any dispatcher: Java file locks belong to their channel,
+     * not to the thread that acquired them. Release runs in `NonCancellable` and
+     * no lock or channel escapes this scope.
+     */
+    @Suppress("ReturnCount") // Shared, unavailable, and retained are the complete ownership outcomes.
+    override suspend fun <T> withResolvedAssetDir(
+        setId: Long,
+        generation: Long,
+        hasOwnSources: Boolean,
+        block: suspend (File) -> T,
+    ): ResolvedAssetUse<T> {
+        if (!hasOwnSources) return ResolvedAssetUse.Used(block(sharedRoot()))
+        val directory = generationDir(setId, generation)
+        val lease =
+            withContext(NonCancellable + Dispatchers.IO) {
+                GenerationRetention.acquire(root, setId, generation, directory) {
+                    deleteGenerationAndEmptySet(directory)
+                }
+            } ?: return ResolvedAssetUse.GenerationUnavailable
+        return try {
+            currentCoroutineContext().ensureActive()
+            ResolvedAssetUse.Used(block(directory))
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) { lease.release() }
+        }
+    }
 
     /**
      * Recreates an empty directory for [generation].
@@ -151,7 +183,7 @@ internal constructor(
         withContext(Dispatchers.IO) {
             try {
                 setDir(setId).listFiles()?.forEach { child ->
-                    if (child.name != keep.toString()) deleteTreeNoFollow(child)
+                    if (child.name != keep.toString()) deleteGenerationOrEntry(setId, child)
                 }
             } catch (_: SecurityException) {
                 // A later sweep can reclaim any files this one could not access.
@@ -167,7 +199,13 @@ internal constructor(
      */
     public suspend fun removeSet(setId: Long) {
         withContext(Dispatchers.IO) {
-            deleteTreeNoFollow(setDir(setId))
+            val directory = setDir(setId)
+            if (Files.isSymbolicLink(directory.toPath()) || !directory.isDirectory) {
+                deleteTreeNoFollow(directory)
+            } else {
+                directory.listFiles()?.forEach { child -> deleteGenerationOrEntry(setId, child) }
+                deleteEmptyDirectoryNoFollow(directory)
+            }
         }
     }
 
@@ -269,6 +307,39 @@ internal constructor(
     private fun requireValidAssetFileName(fileName: String) {
         require(fileName == "geoip.dat" || fileName == "geosite.dat") {
             "Unsupported routing geo file"
+        }
+    }
+
+    /** Numeric children are generation-owned; every other stale entry is ordinary filesystem debris. */
+    private fun deleteGenerationOrEntry(
+        setId: Long,
+        child: File,
+    ) {
+        val generation = child.name.toLongOrNull()?.takeIf { it > 0 }
+        if (generation == null) {
+            deleteTreeNoFollow(child)
+        } else {
+            GenerationRetention.requestDelete(root, setId, generation) {
+                deleteGenerationAndEmptySet(child)
+            }
+        }
+    }
+
+    private fun deleteGenerationAndEmptySet(directory: File): Boolean {
+        val deleted = deleteTreeNoFollow(directory)
+        if (deleted) directory.parentFile?.let(::deleteEmptyDirectoryNoFollow)
+        return deleted
+    }
+
+    /** Removes only an empty real directory; a leased generation keeps its parent non-empty. */
+    @Suppress("SwallowedException") // Best-effort parent cleanup never broadens the deletion target.
+    private fun deleteEmptyDirectoryNoFollow(directory: File) {
+        try {
+            if (!Files.isSymbolicLink(directory.toPath())) Files.deleteIfExists(directory.toPath())
+        } catch (_: IOException) {
+            // Non-empty means another generation is live or retained.
+        } catch (_: SecurityException) {
+            // A later sweep can retry this empty-parent cleanup.
         }
     }
 

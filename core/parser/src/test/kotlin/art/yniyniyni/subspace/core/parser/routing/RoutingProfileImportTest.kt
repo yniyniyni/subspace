@@ -144,6 +144,17 @@ class RoutingProfileImportTest {
     }
 
     @Test
+    fun rejectsOversizedTrailingWhitespaceAfterValidBase64() {
+        val payload = b64("""{"Name":"P","ProxySites":["a.test"]}""")
+        val trailingWhitespace = " ".repeat(MAX_PROFILE_BYTES * 2)
+
+        RoutingProfileImport
+            .parse("happ://routing/add/$payload$trailingWhitespace")
+            .shouldBeInstanceOf<ImportResult.Invalid>()
+            .problem shouldBe ImportProblem.TooLarge
+    }
+
+    @Test
     fun rejectsMalformedUtf8BeforeParsingJson() {
         val bytes =
             "{\"Name\":\"".toByteArray() +

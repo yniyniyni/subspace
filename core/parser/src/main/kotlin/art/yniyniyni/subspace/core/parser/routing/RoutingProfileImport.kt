@@ -137,9 +137,16 @@ public object RoutingProfileImport {
 
     @Suppress("ReturnCount", "UnreachableCode") // K2 detekt misreads the deliberate typed early returns as unreachable.
     private fun parseInternal(text: String): ImportResult {
-        val start = text.indexOfFirst { character -> !character.isWhitespace() }
-        if (start < 0) return ImportResult.Invalid(ImportProblem.NotARoutingLink)
-        val end = text.indexOfLast { character -> !character.isWhitespace() } + 1
+        var start = 0
+        var leadingWhitespaceCount = 0
+        while (start < text.length && text[start].isWhitespace()) {
+            leadingWhitespaceCount += 1
+            if (leadingWhitespaceCount > MAX_BASE64_WHITESPACE_CHARS) {
+                return ImportResult.Invalid(ImportProblem.TooLarge)
+            }
+            start += 1
+        }
+        if (start == text.length) return ImportResult.Invalid(ImportProblem.NotARoutingLink)
         val scheme =
             SCHEMES.firstOrNull { candidate ->
                 text.regionMatches(start, candidate, 0, candidate.length, ignoreCase = true)
@@ -151,15 +158,12 @@ public object RoutingProfileImport {
         }
 
         val verbStart = routingStart + ROUTING_PATH.length
-        val separator = text.indexOf('/', startIndex = verbStart).takeIf { index -> index in verbStart until end }
-        val verbEnd = separator ?: end
-        val payloadStart = separator?.plus(1) ?: end
         return when {
-            text.matchesToken(verbStart, verbEnd, OFF_VERB) -> ImportResult.DisableRouting
-            text.matchesToken(verbStart, verbEnd, ADD_VERB) ->
-                decodeAndBuild(text, payloadStart, end, RoutingVerb.Add)
-            text.matchesToken(verbStart, verbEnd, ON_ADD_VERB) ->
-                decodeAndBuild(text, payloadStart, end, RoutingVerb.OnAdd)
+            text.matchesToken(verbStart, OFF_VERB) -> text.offResult(verbStart + OFF_VERB.length)
+            text.matchesPayloadVerb(verbStart, ADD_VERB) ->
+                decodeAndBuild(text, verbStart + ADD_VERB.length + 1, text.length, RoutingVerb.Add)
+            text.matchesPayloadVerb(verbStart, ON_ADD_VERB) ->
+                decodeAndBuild(text, verbStart + ON_ADD_VERB.length + 1, text.length, RoutingVerb.OnAdd)
             else -> ImportResult.Invalid(ImportProblem.UnknownVerb)
         }
     }
@@ -167,9 +171,28 @@ public object RoutingProfileImport {
     /** Compares a link token in place so attacker-sized substrings are never created. */
     private fun String.matchesToken(
         start: Int,
-        end: Int,
         token: String,
-    ): Boolean = end - start == token.length && regionMatches(start, token, 0, token.length, ignoreCase = true)
+    ): Boolean = start + token.length <= length && regionMatches(start, token, 0, token.length, ignoreCase = true)
+
+    /** Confirms the verb is immediately followed by its payload separator. */
+    private fun String.matchesPayloadVerb(
+        start: Int,
+        token: String,
+    ): Boolean = matchesToken(start, token) && start + token.length < length && this[start + token.length] == '/'
+
+    /** Validates `/off`'s optional surrounding whitespace without unbounded suffix scanning. */
+    @Suppress("ReturnCount") // Distinguishes an unknown `/off` suffix from an oversized whitespace suffix.
+    private fun String.offResult(afterVerb: Int): ImportResult {
+        var whitespaceCount = 0
+        for (index in afterVerb until length) {
+            if (!this[index].isWhitespace()) return ImportResult.Invalid(ImportProblem.UnknownVerb)
+            whitespaceCount += 1
+            if (whitespaceCount > MAX_BASE64_WHITESPACE_CHARS) {
+                return ImportResult.Invalid(ImportProblem.TooLarge)
+            }
+        }
+        return ImportResult.DisableRouting
+    }
 
     @Suppress("ReturnCount", "UnreachableCode") // K2 detekt misreads the deliberate typed early returns as unreachable.
     private fun decodeAndBuild(

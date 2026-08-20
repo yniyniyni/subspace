@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -85,6 +86,14 @@ internal sealed interface RoutingImportOffer {
         val subscriptionId: Long,
     ) : RoutingImportOffer
 }
+
+/** The four inputs [BoundRoutingSource.pendingOffer] combines, named so its `map` can destructure them. */
+private data class PendingInputs(
+    val deeplink: String?,
+    val presented: Set<String>,
+    val routingValues: Map<Long, String>,
+    val enableValues: Map<Long, String>,
+)
 
 internal interface RoutingSource {
     /**
@@ -338,14 +347,21 @@ constructor(
     override val pendingOffer: Flow<RoutingImportOffer?> =
         combine(
             pendingRoutingImport.link,
+            pendingRoutingImport.presentedTexts,
             subscriptionRepository.observeDirectiveValues(ROUTING_DIRECTIVE_KEY),
             subscriptionRepository.observeDirectiveValues(ROUTING_ENABLE_DIRECTIVE_KEY),
-        ) { deeplink, routingValues, enableValues ->
-            Triple(deeplink, routingValues, enableValues)
-        }.map { (deeplink, routingValues, enableValues) ->
-            deeplink?.let { return@map RoutingImportOffer.Deeplink(it) }
-            firstUnappliedProfile(routingValues) ?: firstDisableRequest(enableValues)
-        }
+        ) { deeplink, presented, routingValues, enableValues ->
+            PendingInputs(deeplink, presented, routingValues, enableValues)
+        }.map { inputs ->
+            inputs.deeplink?.let { return@map RoutingImportOffer.Deeplink(it) }
+            val unpresented = inputs.routingValues.filterValues { it !in inputs.presented }
+            val disableRequests =
+                if (DISABLE_ROUTING_LINK in inputs.presented) emptyMap() else inputs.enableValues
+            firstUnappliedProfile(unpresented) ?: firstDisableRequest(disableRequests)
+            // Parsing runs here, not on the collector's thread: a routing
+            // payload is up to MAX_PROFILE_BYTES of base64 and this flow is
+            // collected by the routing screen on Main.
+        }.flowOn(Dispatchers.Default)
 
     /** The first provider `routing` value whose profile is not already stored as sent. */
     private suspend fun firstUnappliedProfile(values: Map<Long, String>): RoutingImportOffer? =
@@ -380,6 +396,10 @@ constructor(
     }
 
     override fun consumePendingOffer(offer: RoutingImportOffer) {
+        // Both kinds are marked presented; only a deeplink also has in-memory
+        // state to clear. A provider directive stays in the database, so
+        // "already shown" is the only thing that stops it re-raising.
+        pendingRoutingImport.markPresented(offer.text)
         if (offer is RoutingImportOffer.Deeplink) pendingRoutingImport.consume(offer.text)
     }
 

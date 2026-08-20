@@ -51,4 +51,27 @@ public constructor() {
     public fun consume(value: String) {
         _link.update { current -> if (current == value) null else current }
     }
+
+    private val presented = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Import texts this process has already raised a sheet for.
+     *
+     * A provider's `routing` directive stays in the database after the sheet
+     * shows it — the provider still sends it, and nothing consumes it. Without
+     * this, dismissing that sheet would only postpone it until the next time
+     * the user opened Routing, and a Dangerous confirmation that reappears on
+     * every visit is one people learn to tap through.
+     *
+     * Process-scoped rather than persisted, deliberately. What the user
+     * dismissed is a decision about this session; a provider that keeps sending
+     * the directive gets one more chance after a restart, and a changed profile
+     * gets one immediately because its fingerprint no longer matches.
+     */
+    public val presentedTexts: StateFlow<Set<String>> = presented.asStateFlow()
+
+    /** Records that [value] has been shown to the user. */
+    public fun markPresented(value: String) {
+        presented.update { it + value }
+    }
 }

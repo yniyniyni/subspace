@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.data
 
+import android.database.sqlite.SQLiteConstraintException
+import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoDataValidator
 import art.yniyniyni.subspace.core.model.GeoValidation
@@ -12,6 +14,7 @@ import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
@@ -27,6 +30,7 @@ import javax.inject.Singleton
 private const val GEO_IP_FILE_NAME = "geoip.dat"
 private const val GEO_SITE_FILE_NAME = "geosite.dat"
 private const val DAT_SUFFIX = ".dat"
+private const val MISSING_SUBSCRIPTION_RULE_SET_ID = 0L
 
 /**
  * Hard cap on all geo downloads needed by one profile generation.
@@ -57,6 +61,7 @@ public sealed interface ImportOutcome {
 
     /** The row remains stored, but no new generation became live. */
     public data class Failed(
+        /** Persisted row id, or zero only when the subscription disappeared before row creation. */
         public val id: Long,
         public val failure: RuleSetAssetFailure,
     ) : ImportOutcome
@@ -99,6 +104,7 @@ public data class ImportPreview(
 public class RoutingProfileImporter
 @Inject
 internal constructor(
+    private val database: SubspaceDatabase,
     private val repository: RoutingRepository,
     private val assets: RuleSetAssets,
     private val geoAssets: GeoAssetRepository,
@@ -111,6 +117,7 @@ internal constructor(
 
     /** Test seam for a real-time deadline short enough for deterministic instrumented tests. */
     internal constructor(
+        database: SubspaceDatabase,
         repository: RoutingRepository,
         assets: RuleSetAssets,
         geoAssets: GeoAssetRepository,
@@ -119,7 +126,7 @@ internal constructor(
         downloader: GeoDownloader,
         deletion: RoutingProfileDeletion,
         materialisationTimeoutMillis: Long,
-    ) : this(repository, assets, geoAssets, settings, validator, downloader, deletion) {
+    ) : this(database, repository, assets, geoAssets, settings, validator, downloader, deletion) {
         require(materialisationTimeoutMillis > 0) { "Materialisation timeout must be positive" }
         this.materialisationTimeoutMillis = materialisationTimeoutMillis
     }
@@ -140,7 +147,7 @@ internal constructor(
         val previews =
             requested.mapNotNull { request ->
                 val url = request.url ?: return@mapNotNull null
-                val candidate = previewCandidate(url, request.kind, recordedAssets)
+                val candidate = previewCandidate(url, request.kind, existingId, stored, recordedAssets)
                 GeoFilePreview(
                     fileName = request.fileName,
                     url = url,
@@ -189,6 +196,9 @@ internal constructor(
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,
     ): ImportOutcome {
+        if (subscriptionId != null && database.subscriptionDao().subscription(subscriptionId) == null) {
+            return ImportOutcome.Failed(MISSING_SUBSCRIPTION_RULE_SET_ID, RuleSetAssetFailure.Rejected)
+        }
         when (repository.decideFor(profile)) {
             RoutingRepository.UpdateDecision.Unchanged -> return ImportOutcome.Unchanged
             RoutingRepository.UpdateDecision.Stale -> return ImportOutcome.Stale
@@ -197,7 +207,18 @@ internal constructor(
             -> Unit
         }
 
-        val id = repository.upsertProfile(profile, sourceKind, subscriptionId)
+        val id =
+            try {
+                repository.upsertProfileWithinLifecycle(profile, sourceKind, subscriptionId)
+            } catch (error: SQLiteConstraintException) {
+                // A cross-process subscription deletion can land after the pre-row check despite
+                // this process's lifecycle lock. Map only that vanished-parent case; uniqueness
+                // and every unrelated constraint failure retain their original exception.
+                if (subscriptionId != null && database.subscriptionDao().subscription(subscriptionId) == null) {
+                    return ImportOutcome.Failed(MISSING_SUBSCRIPTION_RULE_SET_ID, RuleSetAssetFailure.Rejected)
+                }
+                throw error
+            }
         val stored =
             repository.stored(id)
                 ?: return ImportOutcome.Failed(id, RuleSetAssetFailure.InstallFailed)
@@ -225,10 +246,17 @@ internal constructor(
 
         val nextGeneration = stored.assetGeneration + 1
         val materialisation =
-            withContext(Dispatchers.Default) {
-                withTimeoutOrNull(materialisationTimeoutMillis) {
-                    Materialisation(materialise(id, nextGeneration, requested))
+            try {
+                withContext(Dispatchers.Default) {
+                    withTimeoutOrNull(materialisationTimeoutMillis) {
+                        Materialisation(materialise(id, nextGeneration, requested))
+                    }
                 }
+            } catch (error: CancellationException) {
+                withContext(NonCancellable) {
+                    removeUnpublishedGenerations(id, stored.assetGeneration)
+                }
+                throw error
             }
         val failure =
             if (materialisation == null) {
@@ -264,8 +292,8 @@ internal constructor(
         if (staged == null) return RuleSetAssetFailure.InstallFailed
         val storedSets = repository.observeAllStored().first()
         val recordedAssets = geoAssets.observeAll().first()
-        val preparation = prepareLocalFiles(setId, requested, staged, storedSets, recordedAssets)
-        return preparation.failure ?: downloadFiles(preparation.pendingDownloads, staged)
+        val preparation = prepareLocalFiles(setId, generation, requested, staged, storedSets, recordedAssets)
+        return preparation.failure ?: downloadFiles(setId, generation, preparation.pendingDownloads, staged)
     }
 
     /** Turns routing off without deleting any stored profile. */
@@ -284,6 +312,7 @@ internal constructor(
     )
     private suspend fun prepareLocalFiles(
         setId: Long,
+        generation: Long,
         requested: List<RequestedGeoFile>,
         staged: File,
         stored: List<StoredRuleSet>,
@@ -300,7 +329,7 @@ internal constructor(
                 }
 
             if (source != null && assets.copyLocally(source, target)) {
-                when (val copiedFailure = validate(target, request.kind)) {
+                when (val copiedFailure = validateAndRecord(setId, generation, target, request.kind)) {
                     null -> continue
                     RuleSetAssetFailure.Rejected -> {
                         if (request.url == null) return LocalPreparation(failure = copiedFailure)
@@ -320,6 +349,8 @@ internal constructor(
         "TooGenericExceptionCaught", // GeoDownloader implementations may throw arbitrary transport exceptions.
     )
     private suspend fun downloadFiles(
+        setId: Long,
+        generation: Long,
         requested: List<RequestedGeoFile>,
         staged: File,
     ): RuleSetAssetFailure? {
@@ -332,10 +363,23 @@ internal constructor(
                 error.rethrowIfCancellation()
                 return RuleSetAssetFailure.DownloadFailed
             }
-            validate(target, request.kind)?.let { return it }
+            validateAndRecord(setId, generation, target, request.kind)?.let { return it }
         }
         return null
     }
+
+    private suspend fun validateAndRecord(
+        setId: Long,
+        generation: Long,
+        file: File,
+        kind: GeoDataKind,
+    ): RuleSetAssetFailure? =
+        validate(file, kind)
+            ?: if (assets.recordValidatedFile(setId, generation, file.name)) {
+                null
+            } else {
+                RuleSetAssetFailure.InstallFailed
+            }
 
     @Suppress("TooGenericExceptionCaught") // GeoDataValidator is an injected boundary with arbitrary implementations.
     private suspend fun validate(
@@ -448,6 +492,16 @@ internal constructor(
     private suspend fun previewCandidate(
         url: String,
         kind: GeoDataKind,
+        excludedSetId: Long?,
+        stored: List<StoredRuleSet>,
+        recordedAssets: List<InstalledGeoAsset>,
+    ): LocalCandidate? =
+        previewSharedCandidate(url, kind, recordedAssets)
+            ?: previewGenerationCandidate(url, kind, excludedSetId, stored)
+
+    private suspend fun previewSharedCandidate(
+        url: String,
+        kind: GeoDataKind,
         recordedAssets: List<InstalledGeoAsset>,
     ): LocalCandidate? {
         val row =
@@ -457,16 +511,37 @@ internal constructor(
                     asset.installedAt != null &&
                     asset.sha256 != null
             }
-        return if (row == null) {
-            null
-        } else {
+        if (row != null) {
             val file = File(geoAssets.geoDirectory(), row.fileName)
             if (file.isFile && row.sizeBytes == file.length() && file.sha256ReadOnly() == row.sha256) {
-                LocalCandidate(file, row.sizeBytes)
-            } else {
-                null
+                return LocalCandidate(file, row.sizeBytes)
             }
         }
+        return null
+    }
+
+    private suspend fun previewGenerationCandidate(
+        url: String,
+        kind: GeoDataKind,
+        excludedSetId: Long?,
+        stored: List<StoredRuleSet>,
+    ): LocalCandidate? {
+        stored.forEach { candidate ->
+            if (candidate.ruleSet.id == excludedSetId || candidate.assetGeneration <= 0) return@forEach
+            val matches =
+                when (kind) {
+                    GeoDataKind.IP -> candidate.geoIpUrl == url
+                    GeoDataKind.DOMAIN -> candidate.geoSiteUrl == url
+                }
+            if (matches) {
+                assets.verifiedGenerationFile(
+                    candidate.ruleSet.id,
+                    candidate.assetGeneration,
+                    kind.fileName,
+                )?.let { return LocalCandidate(it, it.length()) }
+            }
+        }
+        return null
     }
 
     @Suppress("MagicNumber") // 64 KiB streams large geo databases without retaining them in memory.

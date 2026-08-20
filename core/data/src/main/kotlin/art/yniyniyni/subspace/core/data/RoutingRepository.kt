@@ -113,11 +113,12 @@ internal constructor(
      */
     public suspend fun ruleSetNamed(name: String): RoutingRuleSet? = dao.byName(name)?.toModel()
 
-    /** Inserts or updates, returning the row id. */
-    public suspend fun upsert(set: RoutingRuleSet): Long {
-        set.requireValidEntries()
-        return dao.upsertByIdOrName(set.toEntity())
-    }
+    /** Inserts or updates under the same name lifecycle used by profile imports. */
+    public suspend fun upsert(set: RoutingRuleSet): Long =
+        RoutingProfileProcessCoordinator.withProfiles(listOf(set.name)) {
+            set.requireValidEntries()
+            dao.upsertByIdOrName(set.toEntity())
+        }
 
     /**
      * Decides what an incoming [profile] means without writing anything.
@@ -152,6 +153,16 @@ internal constructor(
      * preserving the row id and creation time without carrying a stale row snapshot.
      */
     public suspend fun upsertProfile(
+        profile: RoutingProfile,
+        sourceKind: RoutingSourceKind,
+        subscriptionId: Long?,
+    ): Long =
+        RoutingProfileProcessCoordinator.withProfiles(listOf(profile.name)) {
+            upsertProfileWithinLifecycle(profile, sourceKind, subscriptionId)
+        }
+
+    /** Import-only entry point for callers already holding [profile]'s process lifecycle lock. */
+    internal suspend fun upsertProfileWithinLifecycle(
         profile: RoutingProfile,
         sourceKind: RoutingSourceKind,
         subscriptionId: Long?,

@@ -2,20 +2,65 @@
 package art.yniyniyni.subspace.core.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val SETS_DIR = "sets"
+private const val VALIDATED_DIGEST_PREFIX = ".subspace-validated-"
+private const val VALIDATED_DIGEST_SUFFIX = ".sha256"
+private const val SHA_256_HEX_LENGTH = 64
+private const val COPY_BUFFER_BYTES = 64 * 1024
+
+/**
+ * Copies regular files in bounded chunks with a cancellation checkpoint between operations.
+ *
+ * Android/JVM cannot forcibly interrupt one filesystem `read` or `write` already executing in
+ * the kernel. App-private regular files make those individual operations bounded in practice;
+ * this avoids one uninterruptible whole-file `Files.copy` and observes cancellation before every
+ * next 64 KiB operation. [afterChunk] exposes the real boundary for deterministic timeout tests.
+ */
+internal class CooperativeRuleSetFileCopier(
+    private val afterChunk: suspend (copiedBytes: Long) -> Unit = {},
+) {
+    @Suppress("NestedBlockDepth") // Input, output, and chunk loop must share deterministic close scopes.
+    suspend fun copy(
+        source: File,
+        target: File,
+    ) {
+        FileInputStream(source).buffered().use { input ->
+            FileOutputStream(target).buffered().use { output ->
+                val buffer = ByteArray(COPY_BUFFER_BYTES)
+                var copied = 0L
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    currentCoroutineContext().ensureActive()
+                    output.write(buffer, 0, count)
+                    copied += count
+                    currentCoroutineContext().ensureActive()
+                    afterChunk(copied)
+                }
+            }
+        }
+    }
+}
 
 /**
  * Where one rule set's own geo databases live, generation by generation.
@@ -28,10 +73,15 @@ private const val SETS_DIR = "sets"
 @Singleton
 @Suppress("TooManyFunctions") // Symlink-safe deletion helpers stay at this filesystem boundary.
 public class RuleSetAssets
-@Inject
 internal constructor(
     @GeoAssetRoot private val root: File,
+    private val copier: CooperativeRuleSetFileCopier,
 ) {
+    @Inject
+    internal constructor(
+        @GeoAssetRoot root: File,
+    ) : this(root, CooperativeRuleSetFileCopier())
+
     /** The flat catalogue directory used by hand-made sets without their own sources. */
     public fun sharedRoot(): File = root
 
@@ -133,21 +183,70 @@ internal constructor(
         target: File,
     ): Boolean =
         withContext(Dispatchers.IO) {
+            var complete = false
             try {
                 if (!source.isFile) {
-                    deleteEntryNoFollow(target)
                     return@withContext false
                 }
                 target.parentFile?.mkdirs()
-                Files.copy(source.toPath(), target.toPath(), REPLACE_EXISTING)
+                deleteEntryNoFollow(target)
+                copier.copy(source, target)
+                complete = true
                 true
             } catch (_: IOException) {
-                deleteEntryNoFollow(target)
                 false
             } catch (_: SecurityException) {
-                deleteEntryNoFollow(target)
                 false
+            } finally {
+                if (!complete) deleteEntryNoFollow(target)
             }
+        }
+
+    /**
+     * Records the digest of one validated generation file before that generation is published.
+     *
+     * Both the `.dat` and this internal metadata file are derived from [generationDir], so Room
+     * cannot expose the proof independently of the generation it describes. A failed digest write
+     * leaves publication to the caller, which must reject the staged generation.
+     */
+    internal suspend fun recordValidatedFile(
+        setId: Long,
+        generation: Long,
+        fileName: String,
+    ): Boolean =
+        withContext(Dispatchers.IO) {
+            requireValidAssetFileName(fileName)
+            val directory = generationDir(setId, generation)
+            val data = File(directory, fileName)
+            val metadata = validatedDigestFile(directory, fileName)
+            val temporary = File(directory, "${metadata.name}.pending")
+            try {
+                if (!data.isFile) return@withContext false
+                val digest = data.sha256()
+                temporary.writeText(digest)
+                Files.move(temporary.toPath(), metadata.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+                metadata.isFile
+            } catch (_: IOException) {
+                false
+            } catch (_: SecurityException) {
+                false
+            } finally {
+                deleteEntryNoFollow(temporary)
+            }
+        }
+
+    /** Returns a live generation file only while its bytes match staged validation metadata. */
+    internal suspend fun verifiedGenerationFile(
+        setId: Long,
+        generation: Long,
+        fileName: String,
+    ): File? =
+        withContext(Dispatchers.IO) {
+            requireValidAssetFileName(fileName)
+            val directory = generationDir(setId, generation)
+            val data = File(directory, fileName)
+            val expected = readValidatedDigest(directory, fileName) ?: return@withContext null
+            data.takeIf { it.isFile && it.sha256() == expected }
         }
 
     /** Validates the set ID before deriving the only tree this class may delete. */
@@ -160,6 +259,48 @@ internal constructor(
     private fun requireValidGeneration(generation: Long) {
         require(generation > 0) { "Rule set generation must be positive" }
     }
+
+    private fun requireValidAssetFileName(fileName: String) {
+        require(fileName == "geoip.dat" || fileName == "geosite.dat") {
+            "Unsupported routing geo file"
+        }
+    }
+
+    private fun validatedDigestFile(
+        generation: File,
+        fileName: String,
+    ): File = File(generation, "$VALIDATED_DIGEST_PREFIX$fileName$VALIDATED_DIGEST_SUFFIX")
+
+    private fun readValidatedDigest(
+        generation: File,
+        fileName: String,
+    ): String? =
+        try {
+            validatedDigestFile(generation, fileName)
+                .readText()
+                .takeIf { it.length == SHA_256_HEX_LENGTH && it.all { char -> char.isLowerHexDigit() } }
+        } catch (_: IOException) {
+            null
+        } catch (_: SecurityException) {
+            null
+        }
+
+    @Suppress("MagicNumber") // 64 KiB bounds cancellation latency between regular-file reads.
+    private suspend fun File.sha256(): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(this).buffered().use { input ->
+            val buffer = ByteArray(COPY_BUFFER_BYTES)
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    private fun Char.isLowerHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f'
 
     /**
      * Deletes [target] without following directory links, returning whether it was removed.

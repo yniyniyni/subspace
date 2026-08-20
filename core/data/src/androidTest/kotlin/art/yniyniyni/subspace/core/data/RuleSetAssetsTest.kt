@@ -3,6 +3,10 @@ package art.yniyniyni.subspace.core.data
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -233,5 +237,51 @@ class RuleSetAssetsTest {
 
         external.readText() shouldBe "outside"
         Files.exists(target.toPath(), NOFOLLOW_LINKS) shouldBe false
+    }
+
+    @Test
+    fun cancellationAtACopyChunkBoundaryRemovesThePartialTarget() {
+        runBlocking {
+            val entered = CompletableDeferred<Unit>()
+            val neverRelease = CompletableDeferred<Unit>()
+            val copier =
+                CooperativeRuleSetFileCopier { copiedBytes ->
+                    if (copiedBytes >= COPY_CHUNK_BYTES) {
+                        entered.complete(Unit)
+                        neverRelease.await()
+                    }
+                }
+            val subject = RuleSetAssets(temp.newFolder("cooperative-copy"), copier)
+            val source = temp.newFile("large-source.dat").apply {
+                writeBytes(ByteArray(COPY_CHUNK_BYTES * 2) { 7 })
+            }
+            val target = File(subject.prepareGeneration(9, 1), "geoip.dat")
+            val copying = launch { subject.copyLocally(source, target) }
+            entered.await()
+
+            copying.cancelAndJoin()
+
+            target.exists() shouldBe false
+        }
+    }
+
+    @Test
+    fun validatedDigestMetadataLivesOnlyBesideItsStagedGenerationFile() = runTest {
+        val subject = assets()
+        val generation = subject.prepareGeneration(9, 1)
+        val data = File(generation, "geoip.dat").apply { writeText("validated bytes") }
+
+        subject.recordValidatedFile(9, 1, "geoip.dat") shouldBe true
+
+        subject.verifiedGenerationFile(9, 1, "geoip.dat") shouldBe data
+        val internalFiles =
+            subject.setsRoot().walkTopDown().filter { it.isFile && it != data }.toList()
+        internalFiles.size shouldBe 1
+        internalFiles.single().parentFile shouldBe generation
+        subject.sharedRoot().listFiles().orEmpty().none { it.name.endsWith(".sha256") } shouldBe true
+    }
+
+    private companion object {
+        const val COPY_CHUNK_BYTES = 64 * 1024
     }
 }

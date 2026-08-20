@@ -558,11 +558,12 @@ internal constructor(
     ) {
         val now = clock()
         val previous = dao.byFileName(request.fileName)
+        val retainedLive = previous?.takeIf { !installed && it.installedAt != null }
         dao.upsert(
             GeoAssetEntity(
                 fileName = request.fileName,
-                sourceUrl = request.sourceUrl,
-                geoType = request.geoType.name,
+                sourceUrl = retainedLive?.sourceUrl ?: request.sourceUrl,
+                geoType = retainedLive?.geoType ?: request.geoType.name,
                 sha256 = digest ?: previous?.sha256,
                 sizeBytes = bytes ?: previous?.sizeBytes,
                 installedAt = if (installed) now else previous?.installedAt,

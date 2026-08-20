@@ -62,6 +62,33 @@ public object DirectiveRegistry {
             accept("profile-web-page-url", DirectiveKind.Url, Danger.Benign, Consumer.Release),
             accept("announce", DirectiveKind.Text(200, base64Allowed = true), Danger.Benign, Consumer.Release),
             accept("routing-enable", DirectiveKind.Bool, Danger.Sensitive, Consumer.RoutingProfiles),
+            // The header transport for a happ://routing/... deeplink (§A.1's own
+            // example response carries one). Parsed by RoutingProfileImport, which
+            // is the only thing that reads it.
+            //
+            // Dangerous, and the FIRST Dangerous key in this registry with a real
+            // consumer. Whoever controls the subscription URL can use it to change
+            // what is proxied, what is blocked, and which host the device
+            // downloads 25-74 MB of geo data from. What makes a consumer
+            // permissible is not that the key became safe — it did not — but that
+            // §A.1's required explicit confirmation now exists: nothing reaches
+            // storage before the user approves it in M6's review sheet (spec §6).
+            // DirectiveRegistryTest pins that reasoning as a named set rather than
+            // leaving this comment to carry it.
+            //
+            // Text rather than Url: the value is a deeplink with a base64 payload,
+            // not an http(s) URL, so DirectiveKind.Url would reject every real
+            // value. The cap is MAX_PROFILE_BYTES-shaped rather than the 4096 the
+            // other long keys use — a real profile's base64 runs to several KB.
+            // base64Allowed = false because the *directive layer* must not decode
+            // it: the payload's own base64 belongs to RoutingProfileImport, and
+            // decoding here would hand the parser something it did not expect.
+            accept(
+                "routing",
+                DirectiveKind.Text(524_288, base64Allowed = false),
+                Danger.Dangerous,
+                Consumer.RoutingProfiles,
+            ),
             reject(
                 "custom-tunnel-config",
                 CUT_DESKTOP,
@@ -213,7 +240,11 @@ public object DirectiveRegistry {
                     setOf("safari-mac", "chrome-win", "safari-ios", "firefox-win", "chrome-android"),
                 ),
                 Danger.Sensitive,
-                Consumer.RoutingProfiles,
+                // Not RoutingProfiles: M6 downloads geo files but does not read this
+                // key, and a registry row claiming a consumer that does not exist is
+                // worse than one claiming none. It is a User-Agent override, and
+                // §A.3.3's UA work is where the rest of that surface lives.
+                Consumer.CensorshipResistance,
             ),
             // ---- Appendix D keys not tied to a specific Provider-ID group above ----
             reject("hide-vpn-icon", CUT_ANDROID),

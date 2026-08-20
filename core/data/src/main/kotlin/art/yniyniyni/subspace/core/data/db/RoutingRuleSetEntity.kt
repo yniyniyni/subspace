@@ -51,7 +51,7 @@ internal data class RoutingRuleSetEntity(
     /** A [art.yniyniyni.subspace.core.model.DomainStrategy] name. */
     val domainStrategy: String,
     val createdAt: Long,
-    /** A `RoutingSourceKind` name, or null when the user made this set here. */
+    /** A `RoutingSourceKind.wireValue`, or null when the user made this set here. */
     val sourceKind: String? = null,
     /** The subscription that delivered it. `ON DELETE CASCADE` is §A.1's rule. */
     val subscriptionId: Long? = null,

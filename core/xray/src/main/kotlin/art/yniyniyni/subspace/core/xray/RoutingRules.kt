@@ -10,6 +10,23 @@ private const val JSON_ESCAPE_RADIX = 16
 private const val JSON_ESCAPE_WIDTH = 4
 
 /**
+ * The catch-all `GlobalProxy: "false"` needs, and why it is a rule rather than
+ * an outbound reorder.
+ *
+ * `XrayConfigGenerator.appendOutbounds` emits `proxy` first, and Xray sends
+ * traffic no rule matched to the first outbound — so this project has always
+ * been implicitly `GlobalProxy: "true"`. Reordering `outbounds` to make `direct`
+ * first would flip that default for every config, including the M1 shape proven
+ * on hardware and every profile that does not set the field. A trailing rule
+ * changes exactly the configs that ask for it and nothing else.
+ *
+ * `"network": "tcp,udp"` rather than an empty matcher: Xray rejects a rule with
+ * no matching field at all, and tcp+udp is the complete set a TUN carries.
+ */
+private const val CATCH_ALL_DIRECT =
+    """{ "type": "field", "network": "tcp,udp", "outboundTag": "direct" }"""
+
+/**
  * The Xray `outboundTag` each outcome routes to.
  *
  * All three outbounds have been emitted by `XrayConfigGenerator.appendOutbounds`
@@ -54,13 +71,16 @@ private fun RouteOutcome.outboundTag(): String =
  * valid stored entries retain their exact order and output.
  */
 internal fun routingRuleLines(set: RoutingRuleSet): List<String> =
-    set.order.flatMap { outcome ->
-        val bucket = set.bucket(outcome)
-        val tag = outcome.outboundTag()
-        buildList {
+    buildList {
+        set.order.forEach { outcome ->
+            val bucket = set.bucket(outcome)
+            val tag = outcome.outboundTag()
             if (bucket.sites.isNotEmpty()) add(ruleLine("domain", bucket.sites, tag))
             if (bucket.ips.isNotEmpty()) add(ruleLine("ip", bucket.ips, tag))
         }
+        // Xray takes the first match, so a catch-all anywhere earlier would
+        // shadow every rule after it.
+        if (set.globalProxy == false) add(CATCH_ALL_DIRECT)
     }
 
 private fun ruleLine(

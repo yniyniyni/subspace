@@ -89,6 +89,37 @@ class XrayControllerTest {
             configFile.delete()
         }
 
+    @Test
+    fun globalProxyFalseCatchAllIsAcceptedByTheRealCore() =
+        runTest {
+            val controller = XrayController()
+            val settings =
+                TunnelSettings(
+                    socksPort = controller.allocatePort(),
+                    dnsServer = "1.1.1.1",
+                    enableSniffing = true,
+                    routing =
+                    RoutingRuleSet(
+                        name = "direct-default",
+                        buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("blocked.example"))),
+                        globalProxy = false,
+                    ),
+                )
+            val profile = Profile(id = "id", name = "n", outbound = outbound)
+            val result = XrayConfigGenerator.generate(profile, settings)
+            check(result is ConfigResult.Ok) { "expected ConfigResult.Ok, got $result" }
+            result.json shouldContain "\"network\": \"tcp,udp\""
+            val configFile = File(cacheDir, "instr-global-proxy-false.json").apply { writeText(result.json) }
+
+            try {
+                controller.validate(configFile)
+            } catch (e: XrayException) {
+                fail("the core rejected a GlobalProxy false config: ${e.javaClass.simpleName}")
+            } finally {
+                configFile.delete()
+            }
+        }
+
     /**
      * The same §10.5 argument as [generatedConfigIsAcceptedByTheRealCore], for the
      * transport blocks — and this is the test that matters most for them.

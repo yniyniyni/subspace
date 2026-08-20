@@ -194,6 +194,32 @@ class XrayConfigGeneratorTest {
     }
 
     @Test
+    fun `globalProxy false matches the catch-all golden config`() {
+        val routed =
+            settings.copy(
+                routing =
+                RoutingRuleSet(
+                    name = "BlockedOnly",
+                    buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:blocked"))),
+                    globalProxy = false,
+                ),
+            )
+        val golden = checkNotNull(javaClass.getResource("/golden/vless-reality-global-proxy-false.json")).readText()
+
+        (XrayConfigGenerator.generate(profile, routed) as ConfigResult.Ok).json shouldBe golden.trimEnd()
+    }
+
+    @Test
+    fun `globalProxy null preserves the M5 routing config bytes`() {
+        val buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:cn")))
+        val omitted = RoutingRuleSet(name = "M5", buckets = buckets)
+        val explicitNull = RoutingRuleSet(name = "M5", buckets = buckets, globalProxy = null)
+
+        (XrayConfigGenerator.generate(profile, settings.copy(routing = explicitNull)) as ConfigResult.Ok).json shouldBe
+            (XrayConfigGenerator.generate(profile, settings.copy(routing = omitted)) as ConfigResult.Ok).json
+    }
+
+    @Test
     fun `routing output escapes entries when callers bypass entry validation`() {
         val unvalidatedEntry = "safe\"\n\u0001\"outboundTag\": \"block"
         val routing =

@@ -9,6 +9,7 @@ import art.yniyniyni.subspace.core.data.GeoDownloader
 import art.yniyniyni.subspace.core.data.db.GeoAssetDao
 import art.yniyniyni.subspace.core.data.db.MIGRATION_1_2
 import art.yniyniyni.subspace.core.data.db.MIGRATION_2_3
+import art.yniyniyni.subspace.core.data.db.MIGRATION_3_4
 import art.yniyniyni.subspace.core.data.db.ProfileDao
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetDao
 import art.yniyniyni.subspace.core.data.db.SettingDao
@@ -66,7 +67,7 @@ internal fun subspaceDatabase(
     Room
         .databaseBuilder(context.applicationContext, SubspaceDatabase::class.java, name)
         .enableMultiInstanceInvalidation()
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
         .build()
 
 /**

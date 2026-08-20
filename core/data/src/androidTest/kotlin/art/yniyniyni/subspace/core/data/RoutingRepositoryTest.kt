@@ -20,8 +20,12 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -328,6 +332,114 @@ class RoutingRepositoryTest {
         stillLive.ruleSet.bucket(RouteOutcome.BLOCK).sites.shouldBeEmpty()
         stillLive.fingerprint shouldBe first.fingerprint()
         stillLive.lastUpdated shouldBe SAMPLE_LAST_UPDATED
+    }
+
+    @Test
+    fun aStaleCollisionSnapshotCannotRestoreAnOlderGeneration() = runTest {
+        val database = inMemoryDatabase()
+        try {
+            val dao = database.routingRuleSetDao()
+            val repository = RoutingRepository(dao)
+            val initial = sampleProfile()
+            val id = repository.upsertProfile(initial, RoutingSourceKind.Header, null)
+            val staleSnapshot =
+                dao.byId(id).shouldNotBeNull().copy(
+                    sourceKind = RoutingSourceKind.Body.wireValue,
+                )
+            val committed =
+                initial.copy(
+                    lastUpdated = SAMPLE_LAST_UPDATED + 60,
+                    buckets =
+                    mapOf(
+                        RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:committed")),
+                    ),
+                    geoIpUrl = "https://committed.example/geoip.dat",
+                    geoSiteUrl = null,
+                    dnsJson = null,
+                    useChunkFiles = false,
+                )
+            repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.TimedOut)
+            repository.commitGeneration(id, committed, generation = 9)
+            val published = dao.byId(id).shouldNotBeNull()
+
+            dao.upsertProfileByName(staleSnapshot)
+
+            dao.byId(id).shouldNotBeNull() shouldBe
+                published.copy(sourceKind = RoutingSourceKind.Body.wireValue)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun aCollisionAfterCommitChangesOnlySourceProvenance() = runTest {
+        val initial = sampleProfile()
+        val id = stack.repository.upsertProfile(initial, RoutingSourceKind.Header, null)
+        val committed =
+            initial.copy(
+                lastUpdated = SAMPLE_LAST_UPDATED + 60,
+                buckets =
+                mapOf(
+                    RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:committed")),
+                ),
+                geoIpUrl = "https://committed.example/geoip.dat",
+                geoSiteUrl = null,
+                dnsJson = null,
+                useChunkFiles = false,
+            )
+        stack.repository.commitGeneration(id, committed, generation = 4)
+        val subscription =
+            stack.subscriptionRepository.add(
+                url = "https://provider.example/subscription",
+                name = "Provider",
+            )
+        val laterCollision =
+            initial.copy(
+                lastUpdated = SAMPLE_LAST_UPDATED + 120,
+                buckets =
+                mapOf(
+                    RouteOutcome.DIRECT to RuleBucket(sites = listOf("domain:must-not-land.test")),
+                ),
+            )
+
+        stack.repository.upsertProfile(laterCollision, RoutingSourceKind.Body, subscription.id) shouldBe id
+
+        val stored = stack.repository.stored(id).shouldNotBeNull()
+        stored.sourceKind shouldBe RoutingSourceKind.Body
+        stored.subscriptionId shouldBe subscription.id
+        stored.ruleSet.id shouldBe id
+        stored.ruleSet.name shouldBe committed.name
+        stored.ruleSet.order shouldBe committed.routeOrder
+        stored.ruleSet.domainStrategy shouldBe committed.domainStrategy
+        stored.ruleSet.globalProxy shouldBe committed.globalProxy
+        stored.ruleSet.bucket(RouteOutcome.DIRECT) shouldBe committed.bucket(RouteOutcome.DIRECT)
+        stored.ruleSet.bucket(RouteOutcome.PROXY) shouldBe committed.bucket(RouteOutcome.PROXY)
+        stored.ruleSet.bucket(RouteOutcome.BLOCK) shouldBe committed.bucket(RouteOutcome.BLOCK)
+        stored.lastUpdated shouldBe committed.lastUpdated
+        stored.fingerprint shouldBe committed.fingerprint()
+        stored.geoIpUrl shouldBe committed.geoIpUrl
+        stored.geoSiteUrl shouldBe committed.geoSiteUrl
+        stored.hasUnappliedDns shouldBe false
+        stored.assetGeneration shouldBe 4L
+        stored.assetState shouldBe RuleSetAssetState.Ready
+        stored.assetFailure shouldBe null
+    }
+
+    @Test
+    fun concurrentSameNameProfileInsertsResolveToOneRow() = runTest {
+        val profile = sampleProfile()
+
+        val ids =
+            withContext(Dispatchers.Default) {
+                List(16) {
+                    async {
+                        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, null)
+                    }
+                }.awaitAll()
+            }
+
+        ids.toSet() shouldHaveSize 1
+        stack.repository.observeAllStored().first() shouldHaveSize 1
     }
 
     @Test

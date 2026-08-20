@@ -143,8 +143,9 @@ internal constructor(
      * A new row receives the profile's rules and provenance. On collision, only
      * source ownership moves now: the existing rules, fingerprint, timestamp,
      * generation, and asset state remain live until [commitGeneration] publishes
-     * the replacement atomically. [RoutingRuleSetDao.upsertByIdOrName] preserves
-     * the row id and creation time on both paths.
+     * the replacement atomically. [RoutingRuleSetDao.upsertProfileByName]
+     * resolves the collision and performs that targeted update in one transaction,
+     * preserving the row id and creation time without carrying a stale row snapshot.
      */
     public suspend fun upsertProfile(
         profile: RoutingProfile,
@@ -152,13 +153,7 @@ internal constructor(
         subscriptionId: Long?,
     ): Long {
         profile.toRuleSet().requireValidEntries()
-        val existing = dao.byName(profile.name)
-        val entity =
-            existing?.copy(
-                sourceKind = sourceKind.wireValue,
-                subscriptionId = subscriptionId,
-            ) ?: profile.toEntity(sourceKind, subscriptionId)
-        return dao.upsertByIdOrName(entity)
+        return dao.upsertProfileByName(profile.toEntity(sourceKind, subscriptionId))
     }
 
     /** Writes [state] and [failure] together so observers never see a torn pair. */

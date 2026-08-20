@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 
 /** Data access for [RoutingRuleSetEntity]. */
 @Dao
+@Suppress("TooManyFunctions") // A DAO's surface is the width of its table's atomic operations.
 internal interface RoutingRuleSetDao {
     @Query("SELECT * FROM routing_rule_sets ORDER BY name COLLATE NOCASE ASC")
     fun observeAll(): Flow<List<RoutingRuleSetEntity>>
@@ -49,6 +50,40 @@ internal interface RoutingRuleSetDao {
             existing.id
         }
     }
+
+    /**
+     * Inserts a new imported profile or updates only safe provenance on collision.
+     *
+     * The lookup and write share one transaction, preserving the unique-name
+     * guarantee under concurrent imports. An existing row is deliberately never
+     * passed through [update]: a generation commit can land at any time, and a
+     * stale full entity would restore old rules, metadata, generation, state, and
+     * failure. Rules and profile metadata move only through [commitGeneration].
+     */
+    @Transaction
+    suspend fun upsertProfileByName(entity: RoutingRuleSetEntity): Long {
+        val existing = byName(entity.name)
+        return if (existing == null) {
+            insert(entity)
+        } else {
+            updateProfileProvenance(existing.id, entity.sourceKind, entity.subscriptionId)
+            existing.id
+        }
+    }
+
+    /** Updates only ownership fields that are safe before generation publication. */
+    @Query(
+        """
+        UPDATE routing_rule_sets
+        SET sourceKind = :sourceKind, subscriptionId = :subscriptionId
+        WHERE id = :id
+        """,
+    )
+    suspend fun updateProfileProvenance(
+        id: Long,
+        sourceKind: String?,
+        subscriptionId: Long?,
+    )
 
     /** Updates the persistent asset state and failure as one inseparable pair. */
     @Query("UPDATE routing_rule_sets SET assetState = :state, assetFailure = :failure WHERE id = :id")

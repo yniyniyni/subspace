@@ -5,7 +5,6 @@ import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
-import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.Test
 
 class DirectiveRegistryTest {
@@ -172,7 +171,7 @@ class DirectiveRegistryTest {
         spec.disposition shouldBe Disposition.Accept
         spec.danger shouldBe Danger.Dangerous
         spec.consumer shouldBe Consumer.RoutingProfiles
-        spec.kind.shouldBeInstanceOf<DirectiveKind.Text>().base64Allowed shouldBe false
+        spec.kind shouldBe DirectiveKind.Text(maxLength = 524_288, base64Allowed = false)
     }
 
     @Test

@@ -11,6 +11,8 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:data"))
+    // Shared camera surfaces, including M6's generic QR scanner, live here;
+    // routing never reaches across to :feature:profiles (§4).
     implementation(project(":core:ui"))
     // PerAppSource.reapply(): VpnService.Builder's allow/deny calls apply at
     // establish() time only, so a changed selection needs the tunnel rebuilt

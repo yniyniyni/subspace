@@ -79,7 +79,7 @@
     <string name="import_paste_label">Share link, subscription, Clash YAML, or Xray JSON</string>
     <string name="import_button">Import</string>
     <string name="import_from_file_button">Import from file</string>
-    <!-- Task 20 fix round 1: opens QrScanScreen. A scanned payload feeds the
+    <!-- Task 20 fix round 1: opens the shared QrScanner. A scanned payload feeds the
          same import(raw) path this whole sheet already uses. -->
     <string name="import_scan_qr_button">Scan QR code</string>
     <!-- Fix round 1, finding 2: shown when the picked file could not be read
@@ -164,23 +164,6 @@
     <string name="subscription_error_client">The server rejected the request.</string>
     <string name="subscription_error_server">The server reported an error.</string>
     <string name="subscription_error_no_servers">No servers in this subscription.</string>
-
-    <!-- Task 20: QrScanScreen. §5.6 applies here too — nothing below may
-         interpolate a decoded payload; only the fixed camera/permission
-         vocabulary appears. -->
-    <string name="qr_scan_cancel_description">Cancel scanning</string>
-    <string name="qr_scan_preview_description">Camera preview. Point the camera at a QR code to scan it.</string>
-    <!-- Shown after the user denies the camera permission once — §10.4:
-         names what is actually blocked rather than a generic failure. -->
-    <string name="qr_scan_permission_denied_message">Camera access is needed to scan a QR code.</string>
-    <string name="qr_scan_grant_permission_button">Grant camera access</string>
-    <!-- Shown when the system will no longer show the permission prompt
-         (denied with "don\'t ask again", or denied twice on some OEM
-         builds) — the only way back in is the system Settings screen. -->
-    <string name="qr_scan_permission_permanently_denied_message">
-        Camera access was denied. To scan a QR code, allow Camera for Subspace in system settings.
-    </string>
-    <string name="qr_scan_open_settings_button">Open settings</string>
 
     <!-- Task 21: the profile editor. §5.6 applies here too — every string below
          is a field LABEL or fixed vocabulary; the field VALUES (address, uuid,

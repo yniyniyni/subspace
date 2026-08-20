@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // detekt's MagicNumber rule fires on the content paddings below — all are
 // tokens/spacing.css's --space-* scale, already named by the val each
-// initializes. See core/ui's ConnectControl.kt / feature/profiles' own
-// AddServerSheet.kt for the same pattern.
+// initializes.
 @file:Suppress("MagicNumber")
 
-package art.yniyniyni.subspace.feature.profiles.qr
+package art.yniyniyni.subspace.core.ui.component
 
 import android.Manifest
 import android.content.Context
@@ -58,7 +57,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import art.yniyniyni.subspace.feature.profiles.R
+import art.yniyniyni.subspace.core.ui.R
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.ChecksumException
+import com.google.zxing.FormatException
+import com.google.zxing.NotFoundException
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -67,34 +73,15 @@ private val CONTENT_PADDING = 16.dp
 private val CONTENT_GAP = 12.dp
 
 /**
- * The camera QR-scan flow, pushed from [art.yniyniyni.subspace.navigation.QrScan].
+ * A generic camera surface that decodes one QR code and emits its text.
  *
- * `CAMERA` is requested here, at the point of use, not at app startup — this
- * is the only place in the app that needs it. Denial is handled explicitly
- * rather than left to crash or hang the screen (ARCHITECTURE.md §10.4): a
- * plain denial offers a retry, a permanent denial (the system will not show
- * the prompt again) points at system Settings, and every branch keeps a way
- * back out via [onCancel] rather than stranding the user.
- *
- * [onResult] fires at most once per composition with whatever text
- * [QrAnalyzer] decoded from a camera frame. A scanned `vless://` link *is*
- * config content — a UUID and REALITY key — exactly like a pasted or
- * file-imported one (§5.6), so the caller is expected to feed it into the
- * same `ImportViewModel.import(raw)` path
- * [art.yniyniyni.subspace.feature.profiles.add.AddServerSheet] already uses,
- * not a second import pipeline. This screen never inspects, logs, or stores
- * that string itself — it only forwards what [QrAnalyzer] decoded, and
- * neither ZXing nor CameraX is given it to log on their own account.
- *
- * The camera is released in `onDispose` ([QrCameraPreview]'s own
- * `DisposableEffect`): CameraX does not unbind a use case just because this
- * composable leaves the tree while the host `Activity` stays resumed (e.g. a
- * back navigation that pops this destination without stopping the Activity),
- * so skipping this would leave the camera indicator lit after the user
- * thinks they left.
+ * This component knows nothing about the meaning of the decoded payload. The
+ * caller owns import, navigation, and any profile or routing interpretation.
+ * Camera permission is requested only when the surface is first used, and the
+ * camera is unbound when the surface leaves composition.
  */
 @Composable
-fun QrScanScreen(
+fun QrScanner(
     onResult: (String) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
@@ -108,15 +95,6 @@ fun QrScanScreen(
             permission =
                 when {
                     granted -> CameraPermission.GRANTED
-                    // Only true once the user has already refused once
-                    // without "don't ask again" / an OEM permanent-denial
-                    // path — the system's own signal for "still worth
-                    // asking again", not one this code has to track itself.
-                    // No `activity` (host isn't an Activity at all) is
-                    // treated the same as "will not ask again": there is no
-                    // in-app retry path either way, so PERMANENTLY_DENIED's
-                    // "open Settings" affordance is the more honest of the
-                    // two dead ends.
                     activity?.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) == true ->
                         CameraPermission.DENIED
                     else -> CameraPermission.PERMANENTLY_DENIED
@@ -150,8 +128,6 @@ fun QrScanScreen(
                     onCancel = onCancel,
                 )
 
-            // Waiting on the system permission dialog the LaunchedEffect
-            // above just launched; nothing to render yet.
             CameraPermission.NOT_REQUESTED -> Unit
         }
     }
@@ -182,15 +158,6 @@ private fun QrCameraContent(
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         QrCameraPreview(onResult = onResult, modifier = Modifier.fillMaxSize())
-        // Cancel sits at the top-start corner, inset by systemBars before
-        // CONTENT_PADDING — verified on a Pixel 8 (§11): CONTENT_PADDING
-        // alone left this inside the system's own gesture-priority region
-        // for the status bar / back-gesture edge, which silently swallowed
-        // taps meant for this button before they ever reached Compose.
-        // `enableEdgeToEdge()` draws content under the system bars, so
-        // without the systemBars inset the button was USABLE-LOOKING but
-        // not reliably tappable. Same two-step inset FloatingNavigationBar
-        // applies at the opposite (navigationBars) edge.
         IconButton(
             onClick = onCancel,
             modifier =
@@ -207,14 +174,6 @@ private fun QrCameraContent(
     }
 }
 
-/**
- * Binds a [Preview] and an [ImageAnalysis] use case to the current
- * lifecycle. This is the "thin CameraX shell" [QrAnalyzer]'s own KDoc refers
- * to: everything Android/CameraX-specific about turning a live camera feed
- * into a decoded string lives here, in as little code as binding requires,
- * and the actual decode is [QrAnalyzer.decode]/[QrAnalyzer.decodeLuminance] —
- * pure, and covered by `QrAnalyzerTest` off-device.
- */
 @Composable
 private fun QrCameraPreview(
     onResult: (String) -> Unit,
@@ -225,14 +184,6 @@ private fun QrCameraPreview(
     val previewView =
         remember {
             PreviewView(context).apply {
-                // COMPATIBLE (TextureView-backed), not the PERFORMANCE
-                // default (SurfaceView-backed): a SurfaceView punches a hole
-                // through the window for hardware compositing and, verified
-                // on a Pixel 8 (§11), silently swallows touches meant for
-                // Compose siblings drawn on top of it in the same Box — the
-                // Cancel button underneath never received a tap while this
-                // was left on the default. TextureView is a normal View and
-                // participates correctly in Compose's own hit-testing.
                 implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             }
         }
@@ -242,19 +193,10 @@ private fun QrCameraPreview(
     DisposableEffect(lifecycleOwner) {
         val cameraExecutor = Executors.newSingleThreadExecutor()
         val mainExecutor = ContextCompat.getMainExecutor(context)
-        // Guards against onResult firing more than once for one screen
-        // instance (a live feed keeps producing frames after the first hit
-        // until the caller navigates away) and against binding a camera
-        // that already lost its window by the time the async provider
-        // future resolves.
         val delivered = AtomicBoolean(false)
         val disposed = AtomicBoolean(false)
         val providerFuture = ProcessCameraProvider.getInstance(context)
 
-        // Built here, not inside bindQrCamera, so that function only takes
-        // what it needs to bind use cases — this closure is where the
-        // decode-once guard and the hop back to mainExecutor for [onResult]
-        // actually live.
         val analyzeFrame: (ImageProxy) -> Unit = { image ->
             try {
                 if (!delivered.get()) {
@@ -292,24 +234,11 @@ private fun QrCameraPreview(
         }
     }
 
-    // The contentDescription is set on this wrapping Box, not on the
-    // AndroidView modifier directly — verified on a Pixel 8 (§11) that a
-    // description attached straight to an AndroidView hosting a camera
-    // preview surface does not reach the accessibility tree (TextureView's
-    // hardware-composited surface appears to bypass it), while the same
-    // description on a plain Compose node wrapping it does.
     Box(modifier = modifier.clearAndSetSemantics { contentDescription = previewDescription }) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
     }
 }
 
-/**
- * The actual CameraX binding, pulled out of [QrCameraPreview] so that
- * composable stays readable: builds [Preview] and [ImageAnalysis] use cases
- * and binds both to [lifecycleOwner]. [analyzeFrame] is built by the caller
- * — it owns the decode-once latch and the hop back to the main thread for
- * `onResult`, so this function only wires CameraX plumbing together.
- */
 private fun bindQrCamera(
     cameraProvider: ProcessCameraProvider,
     lifecycleOwner: LifecycleOwner,
@@ -344,6 +273,56 @@ private fun QrPermissionMessage(
     ) {
         Text(text = message, style = MaterialTheme.typography.bodyLarge)
         Button(onClick = onAction) { Text(actionLabel) }
-        TextButton(onClick = onCancel) { Text(stringResource(R.string.servers_dialog_cancel)) }
+        TextButton(onClick = onCancel) { Text(stringResource(R.string.qr_scan_cancel_button)) }
+    }
+}
+
+/** One camera frame's luminance plane in the layout expected by ZXing. */
+internal class LuminanceFrame(
+    val data: ByteArray,
+    val width: Int,
+    val height: Int,
+    val rowStride: Int = width,
+)
+
+/** Decodes QR text from CameraX luminance frames. */
+internal object QrAnalyzer {
+    fun decodeLuminance(frame: LuminanceFrame): String? {
+        val source =
+            PlanarYUVLuminanceSource(
+                frame.data,
+                frame.rowStride,
+                frame.height,
+                0,
+                0,
+                frame.width,
+                frame.height,
+                false,
+            )
+        val bitmap = BinaryBitmap(HybridBinarizer(source))
+        return try {
+            QRCodeReader().decode(bitmap).text
+        } catch (ignored: NotFoundException) {
+            null
+        } catch (ignored: FormatException) {
+            null
+        } catch (ignored: ChecksumException) {
+            null
+        }
+    }
+
+    fun decode(image: ImageProxy): String? {
+        val plane = image.planes[0]
+        val buffer = plane.buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        return decodeLuminance(
+            LuminanceFrame(
+                data = bytes,
+                width = image.width,
+                height = image.height,
+                rowStride = plane.rowStride,
+            ),
+        )
     }
 }

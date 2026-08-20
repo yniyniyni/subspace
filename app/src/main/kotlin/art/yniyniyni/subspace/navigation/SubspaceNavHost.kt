@@ -31,6 +31,7 @@ import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
 import art.yniyniyni.subspace.feature.profiles.subscription.SubscriptionDetailScreen
 import art.yniyniyni.subspace.feature.routing.PerAppScreen
 import art.yniyniyni.subspace.feature.routing.RoutingListScreen
+import art.yniyniyni.subspace.feature.routing.RoutingQrScanRoute
 import art.yniyniyni.subspace.feature.routing.RuleSetEditorScreen
 import art.yniyniyni.subspace.feature.settings.SettingsScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
@@ -310,7 +311,22 @@ private fun NavGraphBuilder.routingDestinations(navController: NavHostController
         RoutingListScreen(
             onCreateRuleSet = { navController.navigate(RuleSetEditor(ruleSetId = NEW_RULE_SET)) },
             onEditRuleSet = { id -> navController.navigate(RuleSetEditor(ruleSetId = id)) },
+            onScanQr = { navController.navigate(RoutingQrScan) },
             onBack = { navController.popBackStack() },
+        )
+    }
+    composable<RoutingQrScan> { entry ->
+        // M6 Task 13. Scoped to RoutingList's entry, not this one, so the
+        // scanned payload raises the sheet the list is already showing —
+        // RoutingQrScanRoute's own KDoc has the full reasoning, and it is the
+        // same shape QrScan uses for Servers above.
+        //
+        // remember keyed on this destination's OWN entry for the reason
+        // lint's UnrememberedGetBackStackEntry rule documents there.
+        val routingEntry = remember(entry) { navController.getBackStackEntry(RoutingList) }
+        RoutingQrScanRoute(
+            routingBackStackEntry = routingEntry,
+            onDone = { navController.popBackStack() },
         )
     }
     composable<RuleSetEditor> { entry ->

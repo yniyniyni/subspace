@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.routing
 
+import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.RouteOutcome
@@ -12,6 +13,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -61,7 +63,10 @@ class RuleSetEditorViewModelTest {
         // RuleSetEditorState.saving mid-flight (fix round 1, Minor: save's re-entrancy guard).
         private val upsertGate: CompletableDeferred<Unit>? = null,
     ) : RoutingSource {
-        override val ruleSets = sets
+        // RuleSetEditorViewModel loads one set through ruleSet(), never the
+        // list — so the list this fake exposes stays empty rather than
+        // fabricating provenance for rows nothing reads.
+        override val ruleSets = flowOf(emptyList<StoredRuleSet>())
         override val activeRuleSetId = MutableStateFlow<Long?>(null)
         override val installedGeoFiles = MutableStateFlow(emptySet<String>())
         var upserted: RoutingRuleSet? = null

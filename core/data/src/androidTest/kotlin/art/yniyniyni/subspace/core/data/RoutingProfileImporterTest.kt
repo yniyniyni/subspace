@@ -16,6 +16,7 @@ import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
 import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -57,6 +58,9 @@ class RoutingProfileImporterTest {
     private var downloadFails = false
     private var downloadDelayMillis = 0L
     private var beforeDownload: suspend (String, File) -> Unit = { _, _ -> }
+
+    /** What the fake downloader emits to its progress callback before finishing. */
+    private var reportProgress: (onProgress: (Long, Long?) -> Unit) -> Unit = { }
     private var validationDelayMillis = 0L
     private var validationCalls = 0
 
@@ -81,11 +85,14 @@ class RoutingProfileImporterTest {
             }
         }
 
+    private val progress = GeoDownloadProgressRegistry()
+
     private val downloader =
-        GeoDownloader { url, target ->
+        GeoDownloader { url, target, onProgress ->
             downloads += url
             downloadTargets += target
             beforeDownload(url, target)
+            reportProgress(onProgress)
             delay(downloadDelayMillis)
             if (downloadFails) throw IOException("injected download failure")
             target.writeText("valid:$url")
@@ -109,7 +116,7 @@ class RoutingProfileImporterTest {
                 dao = database.geoAssetDao(),
                 validator = validator,
                 root = root,
-                download = downloader::download,
+                download = { url, target -> downloader.download(url, target) { _, _ -> } },
                 clock = { TEST_NOW_MILLIS },
             )
         deletion =
@@ -130,6 +137,7 @@ class RoutingProfileImporterTest {
                 validator = validator,
                 downloader = downloader,
                 deletion = deletion,
+                progress = progress,
             )
     }
 
@@ -357,6 +365,7 @@ class RoutingProfileImporterTest {
                     validator,
                     downloader,
                     deletion,
+                    progress,
                     GEO_DOWNLOAD_TIMEOUT_MILLIS,
                 ) { committedId: Long, generation: Long ->
                     committedId shouldBe id
@@ -426,6 +435,7 @@ class RoutingProfileImporterTest {
                     validator,
                     downloader,
                     deletion,
+                    progress,
                     GEO_DOWNLOAD_TIMEOUT_MILLIS,
                 ) { committedId: Long, generation: Long ->
                     repository.commitGeneration(committedId, update, generation)
@@ -742,6 +752,7 @@ class RoutingProfileImporterTest {
                     blockingValidator,
                     downloader,
                     deletion,
+                    progress,
                     TEST_MATERIALISATION_TIMEOUT_MILLIS,
                 )
             lateinit var outcome: ImportOutcome
@@ -820,7 +831,7 @@ class RoutingProfileImporterTest {
     @Test
     fun aRejectedDownloadNeverBecomesLive() = runTest {
         val rejectingDownloader =
-            GeoDownloader { url, target ->
+            GeoDownloader { url, target, _ ->
                 downloads += url
                 target.writeText("corrupt-download")
                 target.length() to "test-digest"
@@ -1115,6 +1126,61 @@ class RoutingProfileImporterTest {
             lastUpdated = 1_800_000_000L,
         )
 
+    // Spec §9: the row renders "Downloading 12 MB / 23 MB". The counts have to
+    // reach a reader outside the importer while the download is still running,
+    // not after it finishes.
+    @Test
+    fun aRunningDownloadPublishesItsByteCountUnderTheRuleSetId() {
+        runBlocking {
+            val seen = CopyOnWriteArrayList<Map<Long, GeoDownloadProgress>>()
+            reportProgress = { onProgress -> onProgress(12L, 23L) }
+            beforeDownload = { _, _ -> }
+            val watcher = launch(Dispatchers.Default) { progress.progress.collect { seen += it } }
+
+            val outcome = importer.apply(geoIpOnlyProfile(), RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            watcher.cancelAndJoin()
+
+            outcome.shouldBeInstanceOf<ImportOutcome.Activated>()
+            val id = outcome.id
+            seen.mapNotNull { it[id] } shouldContain GeoDownloadProgress("geoip.dat", 12L, 23L)
+            // The bar is gone once the generation lands: a stale bar on a
+            // finished set would never advance.
+            progress.progress.first()[id] shouldBe null
+        }
+    }
+
+    @Test
+    fun cancellingAnInFlightGenerationLeavesThePreviousOneLive() {
+        runBlocking {
+            val original = geoIpOnlyProfile()
+            val first = importer.apply(original, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            first.shouldBeInstanceOf<ImportOutcome.Activated>()
+            val id = first.id
+            val liveGeneration = repository.stored(id).shouldNotBeNull().assetGeneration
+            val downloadEntered = CompletableDeferred<Unit>()
+            beforeDownload = { _, _ ->
+                downloadEntered.complete(Unit)
+                CompletableDeferred<Unit>().await() // held open until the cancel lands
+            }
+            val update =
+                original.copy(
+                    lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("geoip:cn"))),
+                )
+            val running =
+                launch(Dispatchers.Default) {
+                    importer.apply(update, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+                }
+            downloadEntered.await()
+
+            progress.cancel(id)
+            running.join()
+
+            repository.stored(id).shouldNotBeNull().assetGeneration shouldBe liveGeneration
+            progress.progress.first()[id] shouldBe null
+        }
+    }
+
     private fun geoIpOnlyProfile(): RoutingProfile =
         sampleProfile().copy(
             geoSiteUrl = null,
@@ -1133,6 +1199,7 @@ class RoutingProfileImporterTest {
             validator,
             downloader,
             deletion,
+            progress,
             TEST_MATERIALISATION_TIMEOUT_MILLIS,
         )
 
@@ -1146,6 +1213,7 @@ class RoutingProfileImporterTest {
             validator,
             geoDownloader,
             deletion,
+            progress,
         )
 
     private fun fileTreeSnapshot(directory: File): List<String> =

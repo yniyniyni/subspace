@@ -25,6 +25,44 @@
     <!-- Informational only — never blocks activation. -->
     <string name="routing_update_failed">Last update failed</string>
 
+    <!-- Provenance (spec §9). The badge is the only place the user ever learns
+         that a provider, and not they, installed a rule set. -->
+    <string name="routing_source_made_here">Made here</string>
+    <string name="routing_source_deeplink">From a link</string>
+    <string name="routing_source_qr">From a QR code</string>
+    <string name="routing_source_clipboard">From the clipboard</string>
+    <string name="routing_source_subscription">From \"%1$s\"</string>
+    <!-- A provider-delivered profile whose subscription group has no name yet.
+         Naming the subscription id instead would be worse than saying nothing. -->
+    <string name="routing_source_provider">From your provider</string>
+
+    <string name="routing_asset_ready">Geo files ready</string>
+    <string name="routing_asset_pending">Preparing geo files…</string>
+    <string name="routing_downloading">Downloading %1$s / %2$s</string>
+    <!-- No total: the server declared no Content-Length. "%1$s / 0 B" would read
+         as a finished download of nothing. -->
+    <string name="routing_downloading_unknown_total">Downloading %1$s</string>
+    <string name="routing_download_cancel_description">Cancel download for %1$s</string>
+
+    <!-- §A.3.1's persistent failure marker, one line per closed-vocabulary
+         reason. None names a URL (§5.6). -->
+    <string name="routing_asset_failed_download">Update failed — could not download</string>
+    <string name="routing_asset_failed_timeout">Update failed — timed out</string>
+    <string name="routing_asset_failed_rejected">Update failed — the file was not a geo database</string>
+    <string name="routing_asset_failed_install">Update failed — could not be saved</string>
+    <string name="routing_asset_failed_cancelled">Update cancelled</string>
+
+    <!-- The visible cost of the M6/M6.5 split. Removed when DNS is applied. -->
+    <string name="routing_dns_not_applied">DNS settings in this profile are stored but not applied</string>
+
+    <!-- Imported profiles are read-only; editing means editing a copy (spec §4.2). -->
+    <string name="routing_duplicate_label">Duplicate</string>
+    <string name="routing_duplicate_description">Duplicate and edit %1$s</string>
+
+    <string name="routing_import_menu_description">Import a routing profile</string>
+    <string name="routing_import_clipboard">Import from clipboard</string>
+    <string name="routing_import_qr">Scan QR code</string>
+
     <string name="routing_empty_title">No rule sets yet</string>
     <string name="routing_empty_message">Create a rule set to block, proxy or route traffic directly by domain or address.</string>
 

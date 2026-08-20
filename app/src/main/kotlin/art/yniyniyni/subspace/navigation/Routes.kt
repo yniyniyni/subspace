@@ -77,6 +77,17 @@ data object RoutingList
 data class RuleSetEditor(val ruleSetId: Long)
 
 /**
+ * The routing list's QR scanner (M6).
+ *
+ * Its own destination rather than a reuse of [QrScan]: that one hands its
+ * payload to `:feature:profiles`' `ImportViewModel`, which imports servers.
+ * A routing profile scanned into it would be parsed as a server list and
+ * rejected as garbage.
+ */
+@Serializable
+data object RoutingQrScan
+
+/**
  * The per-app proxy picker, pushed on top of the top-level destinations —
  * reached from Settings rather than the navigation bar, which stays at three
  * entries (Home, Servers, Settings). The pill hides while this is on screen,

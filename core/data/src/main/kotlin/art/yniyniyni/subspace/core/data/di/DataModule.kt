@@ -122,7 +122,9 @@ internal object DataModule {
             dao = dao,
             validator = validator,
             root = root,
-            download = downloader::download,
+            // The scheduled geo refresh has no progress bar to drive: it runs in
+            // a WorkManager job with no row watching it.
+            download = { url, target -> downloader.download(url, target) { _, _ -> } },
             clock = System::currentTimeMillis,
         )
 
@@ -145,9 +147,15 @@ internal object DataModule {
         fetcher: GeoFileFetcher,
         proxyLocator: TunnelProxyLocator,
     ): GeoDownloader =
-        GeoDownloader { url, target ->
+        GeoDownloader { url, target, onProgress ->
             val outcome =
-                fetcher.download(url, target, MAX_GEO_FILE_BYTES, proxyPort = proxyLocator.httpProxyPortOrNull()) {}
+                fetcher.download(
+                    url,
+                    target,
+                    MAX_GEO_FILE_BYTES,
+                    proxyPort = proxyLocator.httpProxyPortOrNull(),
+                    onProgress = onProgress,
+                )
             when (outcome) {
                 is GeoDownloadOutcome.Success -> outcome.bytes to outcome.sha256
                 // GeoAssetRepository.install's download step catches this and

@@ -113,6 +113,7 @@ internal constructor(
     private val validator: GeoDataValidator,
     private val downloader: GeoDownloader,
     private val deletion: RoutingProfileDeletion,
+    private val progress: GeoDownloadProgressRegistry,
 ) {
     private var materialisationTimeoutMillis: Long = GEO_DOWNLOAD_TIMEOUT_MILLIS
     private var beforeGenerationCommit: suspend (setId: Long, generation: Long) -> Unit = { _, _ -> }
@@ -127,9 +128,10 @@ internal constructor(
         validator: GeoDataValidator,
         downloader: GeoDownloader,
         deletion: RoutingProfileDeletion,
+        progress: GeoDownloadProgressRegistry,
         materialisationTimeoutMillis: Long,
         beforeGenerationCommit: suspend (setId: Long, generation: Long) -> Unit = { _, _ -> },
-    ) : this(database, repository, assets, geoAssets, settings, validator, downloader, deletion) {
+    ) : this(database, repository, assets, geoAssets, settings, validator, downloader, deletion, progress) {
         require(materialisationTimeoutMillis > 0) { "Materialisation timeout must be positive" }
         this.materialisationTimeoutMillis = materialisationTimeoutMillis
         this.beforeGenerationCommit = beforeGenerationCommit
@@ -254,8 +256,13 @@ internal constructor(
         try {
             val materialisation =
                 withContext(Dispatchers.Default) {
-                    withTimeoutOrNull(materialisationTimeoutMillis) {
-                        Materialisation(materialise(id, nextGeneration, requested))
+                    // track() registers *this* coroutine, so the row's cancel
+                    // stops the real download rather than a proxy for it, and
+                    // the running bar disappears however the block ends.
+                    progress.track(id) {
+                        withTimeoutOrNull(materialisationTimeoutMillis) {
+                            Materialisation(materialise(id, nextGeneration, requested))
+                        }
                     }
                 }
             val failure =
@@ -284,6 +291,7 @@ internal constructor(
             }
             throw error
         }
+
         assets.sweepExcept(id, keep = nextGeneration)
         return activateIfAppropriate(id, verb)
     }
@@ -371,7 +379,9 @@ internal constructor(
             val target = generationTarget(staged, request.fileName)
             val url = request.url ?: return RuleSetAssetFailure.Rejected
             try {
-                downloader.download(url, target)
+                downloader.download(url, target) { downloadedBytes, totalBytes ->
+                    progress.report(setId, request.fileName, downloadedBytes, totalBytes)
+                }
             } catch (error: Exception) {
                 error.rethrowIfCancellation()
                 return RuleSetAssetFailure.DownloadFailed

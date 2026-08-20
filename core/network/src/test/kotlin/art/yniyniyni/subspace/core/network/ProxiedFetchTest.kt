@@ -43,7 +43,7 @@ class ProxiedFetchTest {
             target = target,
             maxBytes = 1024,
             proxyPort = null,
-            onProgress = {},
+            onProgress = { _, _ -> },
         )
 
         // Direct: the request line is origin-form.
@@ -61,7 +61,7 @@ class ProxiedFetchTest {
             target = target,
             maxBytes = 1024,
             proxyPort = proxy.port,
-            onProgress = {},
+            onProgress = { _, _ -> },
         )
 
         // Proxied: absolute-form, so the proxy resolves geo.invalid, not us.
@@ -77,7 +77,7 @@ class ProxiedFetchTest {
             target = File(temporaryFolder.root, "geoip.dat"),
             maxBytes = 1024,
             proxyPort = proxy.port,
-            onProgress = {},
+            onProgress = { _, _ -> },
         )
 
         // MockWebServer binds loopback; asserting the recorded host keeps the

@@ -63,9 +63,19 @@ public annotation class GeoAssetRoot
  * new pattern.
  */
 public fun interface GeoDownloader {
+    /**
+     * Streams [url] into [target], reporting the running byte count to
+     * [onProgress] as it goes.
+     *
+     * [onProgress]'s second argument is the declared total, or null when the
+     * response carried no `Content-Length`. It exists so a caller can drive a
+     * determinate progress bar; [GeoAssetRepository]'s own scheduled refresh
+     * has no bar and passes a no-op.
+     */
     public suspend fun download(
         url: String,
         target: File,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
     ): Pair<Long, String>
 }
 

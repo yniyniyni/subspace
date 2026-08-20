@@ -2,13 +2,20 @@
 package art.yniyniyni.subspace.feature.routing
 
 import art.yniyniyni.subspace.core.data.GeoAssetRepository
+import art.yniyniyni.subspace.core.data.GeoDownloadProgress
+import art.yniyniyni.subspace.core.data.GeoDownloadProgressRegistry
+import art.yniyniyni.subspace.core.data.ProfileRepository
+import art.yniyniyni.subspace.core.data.RoutingProfileImporter
 import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
+import art.yniyniyni.subspace.core.data.StoredRuleSet
+import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -43,8 +50,17 @@ internal fun categorySidecarFileName(field: BucketField): String {
  * [RoutingViewModelTest] can exercise it against a plain JVM fake.
  */
 internal interface RoutingSource {
-    /** Every stored rule set. See [RoutingRepository.observeAll]. */
-    val ruleSets: Flow<List<RoutingRuleSet>>
+    /**
+     * Every stored rule set, with its import provenance and asset state. See
+     * [RoutingRepository.observeAllStored].
+     *
+     * Deliberately the `Stored` shape rather than plain [RoutingRuleSet]: an
+     * imported profile and a hand-made set share this list (spec §9), and
+     * provenance is what tells them apart. A second flow carrying only the
+     * provenance would let the two arrive in different frames, rendering a row
+     * as editable for one composition after it became read-only.
+     */
+    val ruleSets: Flow<List<StoredRuleSet>>
 
     /**
      * The currently active rule set, or `null` when routing is off. See
@@ -72,8 +88,42 @@ internal interface RoutingSource {
      */
     val failedGeoFiles: Flow<Set<String>> get() = flowOf(emptySet())
 
+    /**
+     * Subscription id to the name of the group it owns — the `From "NameVPN"`
+     * badge on a provider-delivered profile.
+     *
+     * The join lives here rather than in [RoutingRepository] on purpose: a
+     * routing-shaped query joining subscriptions and groups would grow
+     * `:core:data` a table relationship that exists for one label on one screen.
+     * A subscription whose group has no name is simply absent from the map, and
+     * the row renders no name rather than `From "null"`.
+     *
+     * Defaults to empty for the same keep-fakes-compiling reason [ruleSet]
+     * documents.
+     */
+    val subscriptionNames: Flow<Map<Long, String>> get() = flowOf(emptyMap())
+
+    /**
+     * Rule set id to the byte counts of the generation it is downloading right
+     * now. See [GeoDownloadProgressRegistry].
+     *
+     * Absent means nothing is in flight. This is process state, not stored
+     * state: what survives a restart is the row's own asset state in Room.
+     */
+    val downloadProgress: Flow<Map<Long, GeoDownloadProgress>> get() = flowOf(emptyMap())
+
     /** Sets the active rule set, or turns routing off when [id] is `null`. */
     suspend fun setActive(id: Long?)
+
+    /**
+     * Stops the generation [id] is materialising. A no-op when nothing is.
+     *
+     * Not `suspend`: it cancels a job rather than awaiting one, and making it
+     * suspend would suggest the caller can wait for the cancellation to settle.
+     * The row's bar disappears when the importer unwinds, which the flow
+     * reports on its own.
+     */
+    fun cancelDownload(id: Long) = Unit
 
     /** Deletes a rule set. A no-op if it no longer exists. */
     suspend fun delete(id: Long)
@@ -140,14 +190,35 @@ internal interface RoutingSource {
 }
 
 @Singleton
+// LongParameterList: each repository is a distinct boundary this source translates.
+// Bundling them into a holder would hide which of them any given member actually
+// reads — the same reasoning RoutingProfileImporter's own suppression records.
+@Suppress("LongParameterList")
 internal class BoundRoutingSource
 @Inject
 constructor(
     private val routingRepository: RoutingRepository,
     private val settingsRepository: SettingsRepository,
     private val geoAssetRepository: GeoAssetRepository,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val profileRepository: ProfileRepository,
+    private val progressRegistry: GeoDownloadProgressRegistry,
+    private val importer: RoutingProfileImporter,
 ) : RoutingSource {
-    override val ruleSets: Flow<List<RoutingRuleSet>> = routingRepository.observeAll()
+    override val ruleSets: Flow<List<StoredRuleSet>> = routingRepository.observeAllStored()
+
+    override val subscriptionNames: Flow<Map<Long, String>> =
+        combine(
+            subscriptionRepository.observeSubscriptions(),
+            profileRepository.observeGroups(),
+        ) { subscriptions, groups ->
+            val namesByGroup = groups.associate { it.id to it.name }
+            subscriptions.mapNotNull { subscription ->
+                namesByGroup[subscription.groupId]?.let { subscription.id to it }
+            }.toMap()
+        }
+
+    override val downloadProgress: Flow<Map<Long, GeoDownloadProgress>> = progressRegistry.progress
 
     override val activeRuleSetId: Flow<Long?> = settingsRepository.activeRoutingRuleSetId
 
@@ -180,7 +251,16 @@ constructor(
 
     override suspend fun setActive(id: Long?) = settingsRepository.setActiveRoutingRuleSetId(id)
 
-    override suspend fun delete(id: Long) = routingRepository.delete(id)
+    override fun cancelDownload(id: Long) = progressRegistry.cancel(id)
+
+    /**
+     * Deletes through [RoutingProfileImporter], not [RoutingRepository].
+     *
+     * An imported profile owns a generation tree on disk; deleting only its row
+     * would orphan every file under it, and nothing else ever sweeps a set that
+     * no longer exists.
+     */
+    override suspend fun delete(id: Long) = importer.delete(id)
 
     override suspend fun ruleSet(id: Long): RoutingRuleSet? = routingRepository.ruleSet(id)
 

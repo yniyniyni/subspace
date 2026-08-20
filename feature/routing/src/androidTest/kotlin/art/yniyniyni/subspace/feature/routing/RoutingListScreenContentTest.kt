@@ -7,6 +7,10 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import art.yniyniyni.subspace.core.model.RoutingSourceKind
+import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
+import art.yniyniyni.subspace.core.model.RuleSetAssetState
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import org.junit.Rule
 import org.junit.Test
@@ -46,6 +50,41 @@ class RoutingListScreenContentTest {
             isActive = true,
             missingGeoFiles = emptySet(),
             hasFailedGeoUpdate = true,
+        )
+
+    private val providerRow =
+        RuleSetRow(
+            id = 3,
+            name = "vpn",
+            entryCount = 12,
+            isActive = false,
+            missingGeoFiles = emptySet(),
+            sourceKind = RoutingSourceKind.Header,
+            subscriptionName = "NameVPN",
+            assetState = RuleSetAssetState.Ready,
+            hasUnappliedDns = true,
+        )
+    private val downloadingRow =
+        RuleSetRow(
+            id = 4,
+            name = "geo",
+            entryCount = 2,
+            isActive = false,
+            missingGeoFiles = emptySet(),
+            sourceKind = RoutingSourceKind.Deeplink,
+            assetState = RuleSetAssetState.Pending,
+            downloadProgress = GeoProgress(downloadedBytes = 12_000_000, totalBytes = 23_000_000),
+        )
+    private val timedOutRow =
+        RuleSetRow(
+            id = 5,
+            name = "slow",
+            entryCount = 1,
+            isActive = false,
+            missingGeoFiles = emptySet(),
+            sourceKind = RoutingSourceKind.Deeplink,
+            assetState = RuleSetAssetState.Failed,
+            assetFailure = RuleSetAssetFailure.TimedOut,
         )
 
     private fun setContent(state: RoutingState) {
@@ -95,6 +134,59 @@ class RoutingListScreenContentTest {
         setContent(RoutingState(ruleSets = emptyList()))
 
         composeRule.onNodeWithText("No rule sets yet").assertIsDisplayed()
+    }
+
+    // M6 Task 13 / spec §9. Each of these is something the user cannot learn
+    // anywhere else on this screen.
+    @Test
+    fun anImportedProfileNamesItsProviderAndOffersDuplicateInPlaceOfEdit() {
+        setContent(RoutingState(ruleSets = listOf(providerRow)))
+
+        composeRule.onNodeWithText("From \"NameVPN\"").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Duplicate and edit vpn").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Edit vpn").assertDoesNotExist()
+    }
+
+    @Test
+    fun aHandMadeSetSaysSoAndKeepsItsEditAffordance() {
+        setContent(RoutingState(ruleSets = listOf(failedButActivatableRow)))
+
+        composeRule.onNodeWithText("Made here").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Edit lan").assertIsDisplayed()
+    }
+
+    @Test
+    fun aProfileCarryingDnsSaysItIsNotApplied() {
+        setContent(RoutingState(ruleSets = listOf(providerRow)))
+
+        composeRule.onNodeWithText("DNS settings in this profile are stored but not applied").assertIsDisplayed()
+    }
+
+    // Three independent axes. A downloading row is not a failed one, and a
+    // failed one is not a blocked one.
+    @Test
+    fun aRunningDownloadShowsBothCountsAndACancel() {
+        setContent(RoutingState(ruleSets = listOf(downloadingRow)))
+
+        composeRule.onNodeWithText("Downloading", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Cancel download for geo").assertIsDisplayed()
+    }
+
+    @Test
+    fun aFailedGenerationNamesItsReason() {
+        setContent(RoutingState(ruleSets = listOf(timedOutRow)))
+
+        composeRule.onNodeWithText("Update failed — timed out").assertIsDisplayed()
+    }
+
+    @Test
+    fun theImportEntryPointsAreReachable() {
+        setContent(RoutingState(ruleSets = emptyList()))
+
+        composeRule.onNodeWithContentDescription("Import a routing profile").performClick()
+
+        composeRule.onNodeWithText("Import from clipboard").assertIsDisplayed()
+        composeRule.onNodeWithText("Scan QR code").assertIsDisplayed()
     }
 
     @Test

@@ -24,6 +24,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+    // RoutingQrScanRoute takes the routing list's own NavBackStackEntry, so a
+    // scanned payload reaches the sheet the list already shows rather than a
+    // second one. :feature:profiles' QrScanRoute takes the same dependency for
+    // the same reason.
+    implementation(libs.androidx.navigation.compose)
     // The active-selector radio's check/delete/create/warning glyphs and the
     // "Routing" settings row's own icon — same -core-only choice as every
     // other module. See THIRD_PARTY.md.

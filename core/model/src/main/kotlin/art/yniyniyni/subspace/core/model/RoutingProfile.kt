@@ -146,8 +146,8 @@ public data class RoutingProfile(
  * non-permutation, and a profile must never be able to crash the routing screen.
  */
 public fun parseRouteOrder(raw: String): List<RouteOutcome>? {
-    val tokens = raw.trim().split(ROUTE_ORDER_SEPARATOR).filter { it.isNotBlank() }
-    if (tokens.size != RouteOutcome.entries.size) return null
+    val tokens = raw.trim().split(ROUTE_ORDER_SEPARATOR)
+    if (tokens.any { it.isBlank() } || tokens.size != RouteOutcome.entries.size) return null
     val parsed =
         tokens.mapNotNull { token ->
             RouteOutcome.entries.firstOrNull { it.name.equals(token, ignoreCase = true) }

@@ -23,6 +23,9 @@ class RoutingProfileTest {
         parseRouteOrder("block-proxy-direct-direct") shouldBe null
         parseRouteOrder("block-proxy-bypass") shouldBe null
         parseRouteOrder("") shouldBe null
+        parseRouteOrder("block--proxy-direct") shouldBe null
+        parseRouteOrder("-block-proxy-direct") shouldBe null
+        parseRouteOrder("block-proxy-direct-") shouldBe null
     }
 
     @Test

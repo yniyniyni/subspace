@@ -49,6 +49,7 @@
     <string name="routing_asset_failed_download">Update failed — could not download</string>
     <string name="routing_asset_failed_timeout">Update failed — timed out</string>
     <string name="routing_asset_failed_rejected">Update failed — the file was not a geo database</string>
+    <string name="routing_asset_failed_unsupplied">Update failed — this profile names no source for that file</string>
     <string name="routing_asset_failed_install">Update failed — could not be saved</string>
     <string name="routing_asset_failed_cancelled">Update cancelled</string>
 
@@ -160,6 +161,7 @@
     <string name="import_review_dns_unapplied">DNS settings in this profile are stored but not applied</string>
     <string name="import_review_will_activate">This profile will become the active routing rules.</string>
     <string name="import_review_will_not_activate">This profile will be stored and will not replace the active rules.</string>
+    <string name="import_review_replaces_active">These rules are the ones currently in use, so they take effect right away.</string>
     <string name="import_review_disable_title">Turn routing off</string>
     <string name="import_review_disable_body">This turns routing off. Stored profiles are kept; traffic uses the default path until you activate a profile again.</string>
     <string name="import_review_disable_confirm">Turn off</string>
@@ -177,6 +179,7 @@
     <string name="import_review_failed_download">Could not download this profile\'s geo files.</string>
     <string name="import_review_failed_timeout">The download took too long and was stopped.</string>
     <string name="import_review_failed_rejected">The downloaded file was not a geo database.</string>
+    <string name="import_review_failed_unsupplied">This profile names no source for a geo file its rules need.</string>
     <string name="import_review_failed_install">The geo files could not be saved.</string>
     <string name="import_review_failed_cancelled">The download was cancelled.</string>
     <string name="import_review_retry">Try again</string>

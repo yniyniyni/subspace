@@ -34,4 +34,4 @@ public enum class RoutingSourceKind(
 public enum class RuleSetAssetState { None, Pending, Ready, Failed }
 
 /** Why a generation did not land. A closed vocabulary; no member carries a URL (§5.6). */
-public enum class RuleSetAssetFailure { DownloadFailed, TimedOut, Rejected, InstallFailed, Cancelled }
+public enum class RuleSetAssetFailure { DownloadFailed, TimedOut, Rejected, Unsupplied, InstallFailed, Cancelled }

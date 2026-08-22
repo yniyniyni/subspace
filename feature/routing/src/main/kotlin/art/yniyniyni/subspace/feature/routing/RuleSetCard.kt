@@ -281,6 +281,7 @@ private fun RuleSetAssetFailure?.messageRes(): Int =
         RuleSetAssetFailure.DownloadFailed, null -> R.string.routing_asset_failed_download
         RuleSetAssetFailure.TimedOut -> R.string.routing_asset_failed_timeout
         RuleSetAssetFailure.Rejected -> R.string.routing_asset_failed_rejected
+        RuleSetAssetFailure.Unsupplied -> R.string.routing_asset_failed_unsupplied
         RuleSetAssetFailure.InstallFailed -> R.string.routing_asset_failed_install
         RuleSetAssetFailure.Cancelled -> R.string.routing_asset_failed_cancelled
     }

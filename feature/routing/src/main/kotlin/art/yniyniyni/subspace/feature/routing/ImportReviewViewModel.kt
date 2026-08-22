@@ -277,6 +277,7 @@ constructor(
                 stage = Stage.Reviewing,
                 name = result.profile.name,
                 replacesExisting = preview.replacesExisting,
+                replacesActive = preview.replacesActive,
                 bucketCounts = bucketCounts(result.profile),
                 defaultRouteIsDirect = result.profile.globalProxy == false,
                 geoDownloads = preview.geoFiles.map { it.toDownloadPreview() },

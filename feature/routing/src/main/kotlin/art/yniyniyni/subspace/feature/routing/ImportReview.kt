@@ -88,6 +88,8 @@ internal data class ImportReviewState(
     val isDisableRouting: Boolean = false,
     val name: String = "",
     val replacesExisting: Boolean = false,
+    /** True when the profile being replaced is the one currently routing traffic. */
+    val replacesActive: Boolean = false,
     val bucketCounts: Map<RouteOutcome, Int> = emptyMap(),
     val defaultRouteIsDirect: Boolean = false,
     val geoDownloads: List<GeoDownloadPreview> = emptyList(),
@@ -214,12 +216,15 @@ private fun ProfileBody(state: ImportReviewState) {
         )
     }
     Text(
+        // Replacing the active profile changes the rules in force, so the
+        // stored-only wording would be a false reassurance (device run,
+        // item 6): the row keeps its selection and its content is overwritten.
         text =
         stringResource(
-            if (state.willActivate) {
-                R.string.import_review_will_activate
-            } else {
-                R.string.import_review_will_not_activate
+            when {
+                state.willActivate -> R.string.import_review_will_activate
+                state.replacesActive -> R.string.import_review_replaces_active
+                else -> R.string.import_review_will_not_activate
             },
         ),
         style = MaterialTheme.typography.bodyMedium,
@@ -286,6 +291,7 @@ private fun RuleSetAssetFailure?.sheetMessageRes(): Int =
         RuleSetAssetFailure.DownloadFailed, null -> R.string.import_review_failed_download
         RuleSetAssetFailure.TimedOut -> R.string.import_review_failed_timeout
         RuleSetAssetFailure.Rejected -> R.string.import_review_failed_rejected
+        RuleSetAssetFailure.Unsupplied -> R.string.import_review_failed_unsupplied
         RuleSetAssetFailure.InstallFailed -> R.string.import_review_failed_install
         RuleSetAssetFailure.Cancelled -> R.string.import_review_failed_cancelled
     }

@@ -438,11 +438,13 @@ private class FakeImportReviewSource(
         val decision = repository.decideFor(profile)
         val existingId =
             repository.observeAllStored().first().firstOrNull { it.ruleSet.name == profile.name }?.ruleSet?.id
+        val activeId = settings.activeRoutingRuleSetId.first()
         return ImportPreview(
             decision = decision,
             profile = profile,
             replacesExisting = existingId != null,
-            willActivate = settings.activeRoutingRuleSetId.first() == null,
+            replacesActive = existingId != null && existingId == activeId,
+            willActivate = activeId == null,
             geoFiles = geoPreviews(profile),
         )
     }

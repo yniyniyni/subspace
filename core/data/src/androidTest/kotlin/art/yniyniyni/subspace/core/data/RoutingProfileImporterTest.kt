@@ -226,6 +226,10 @@ class RoutingProfileImporterTest {
             val newer =
                 older.copy(
                     lastUpdated = older.lastUpdated.shouldNotBeNull() + 60,
+                    // A new source, so the update genuinely fetches. Reusing the
+                    // first profile's URL would now be served from its own live
+                    // generation (§7.4.1), and this test needs a download to block in.
+                    geoIpUrl = "https://assets.example/newer-geoip.dat",
                     buckets = mapOf(
                         RouteOutcome.DIRECT to
                             RuleBucket(
@@ -301,6 +305,10 @@ class RoutingProfileImporterTest {
             val failedUpdate =
                 original.copy(
                     lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    // A new source: an update that reuses its own URL is copied
+                    // from the live generation (§7.4.1) and never reaches the
+                    // downloader this test is failing on purpose.
+                    geoIpUrl = "https://assets.example/updated-geoip.dat",
                     buckets = mapOf(
                         RouteOutcome.DIRECT to
                             RuleBucket(
@@ -668,6 +676,43 @@ class RoutingProfileImporterTest {
         repository.observeAllStored().first().single().assetGeneration shouldBe 0L
     }
 
+    // Regression, device run 2026-08-22 item 9: §7.4.1's dedupe excluded the
+    // row being updated, so a profile re-fetched its own unchanged geo files on
+    // every update. On a 73 MB geosite that is not merely wasteful — the
+    // re-download cannot finish inside §7.5's three-minute cap, so a geo-backed
+    // profile became permanently un-updatable on a slow link.
+    @Test
+    fun anUpdateReusesTheSetsOwnLiveGenerationInsteadOfRefetchingIt() = runTest {
+        val id =
+            importer
+                .apply(sampleProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        val liveBytes = File(assets.generationDir(id, 1), "geosite.dat").readBytes()
+        downloads.clear()
+
+        // Same geo sources, newer content: only the rules changed, so nothing
+        // the device already holds needs to cross the network again.
+        val updated =
+            sampleProfile().copy(
+                lastUpdated = sampleProfile().lastUpdated.shouldNotBeNull() + 60,
+                buckets =
+                mapOf(
+                    RouteOutcome.DIRECT to
+                        RuleBucket(sites = listOf("geosite:private"), ips = listOf("geoip:private")),
+                    RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:ads")),
+                ),
+            )
+
+        importer.apply(updated, RoutingVerb.Add, RoutingSourceKind.Header, null)
+
+        downloads.shouldBeEmpty()
+        val stored = repository.stored(id).shouldNotBeNull()
+        stored.assetGeneration shouldBe 2L
+        stored.assetState shouldBe RuleSetAssetState.Ready
+        File(assets.generationDir(id, 2), "geosite.dat").readBytes() shouldBe liveBytes
+    }
+
     @Test
     fun aFailedDownloadLeavesTheOldGenerationLiveAndMarksTheSet() = runTest {
         val id =
@@ -681,6 +726,11 @@ class RoutingProfileImporterTest {
         val next =
             sampleProfile().copy(
                 lastUpdated = sampleProfile().lastUpdated.shouldNotBeNull() + 60,
+                // New sources, so the update actually fetches: §7.4.1 now serves
+                // an unchanged URL from this set's own live generation, which
+                // would make the injected download failure unreachable.
+                geoIpUrl = "https://assets.example/next-geoip.dat",
+                geoSiteUrl = "https://assets.example/next-geosite.dat",
                 buckets = mapOf(RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:ads"))),
             )
 
@@ -891,7 +941,11 @@ class RoutingProfileImporterTest {
 
         val outcome = importer.apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
 
-        outcome.shouldBeInstanceOf<ImportOutcome.Failed>().failure shouldBe RuleSetAssetFailure.Rejected
+        // Not Rejected: nothing was fetched, so "the downloaded file was not a
+        // geo database" would describe a download that never happened. The
+        // device run showed exactly that sentence under an ext: profile
+        // carrying no URLs at all.
+        outcome.shouldBeInstanceOf<ImportOutcome.Failed>().failure shouldBe RuleSetAssetFailure.Unsupplied
         downloads.shouldBeEmpty()
         settings.activeRoutingRuleSetId.first() shouldBe null
     }
@@ -1271,6 +1325,10 @@ class RoutingProfileImporterTest {
             val update =
                 original.copy(
                     lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    // A new source, so there is an in-flight download to cancel.
+                    // Reusing the original URL is now a local copy from this
+                    // set's own live generation (§7.4.1) and never blocks.
+                    geoIpUrl = "https://assets.example/cancelled-geoip.dat",
                     buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("geoip:cn"))),
                 )
             val running =

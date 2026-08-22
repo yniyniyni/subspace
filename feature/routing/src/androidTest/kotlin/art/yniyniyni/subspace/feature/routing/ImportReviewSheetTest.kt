@@ -70,6 +70,33 @@ class ImportReviewSheetTest {
         composeRule.onNodeWithText("Try again").assertIsDisplayed()
     }
 
+    // Device run 2026-08-22 item 6: replacing the profile that is currently
+    // routing traffic overwrites the rules in force, so the stored-only wording
+    // was a false reassurance on exactly the import that changes most.
+    @Test
+    fun replacingTheActiveProfileSaysTheRulesTakeEffectNow() {
+        setContent(
+            reviewingState.copy(
+                willActivate = false,
+                replacesExisting = true,
+                replacesActive = true,
+            ),
+        )
+
+        composeRule
+            .onNodeWithText("These rules are the ones currently in use, so they take effect right away.")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun replacingANonActiveProfileStillSaysTheActiveRulesAreUntouched() {
+        setContent(reviewingState.copy(willActivate = false, replacesExisting = true, replacesActive = false))
+
+        composeRule
+            .onNodeWithText("This profile will be stored and will not replace the active rules.")
+            .assertIsDisplayed()
+    }
+
     // F9: while Applying this sheet blocks swipe, scrim and back, and the row's
     // own cancel sits behind it — so this must be the reachable one.
     @Test

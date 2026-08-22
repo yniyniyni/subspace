@@ -92,6 +92,7 @@ public data class ImportPreview(
     public val decision: RoutingRepository.UpdateDecision,
     public val profile: RoutingProfile,
     public val replacesExisting: Boolean,
+    public val replacesActive: Boolean,
     public val willActivate: Boolean,
     public val geoFiles: List<GeoFilePreview>,
 )
@@ -154,12 +155,13 @@ internal constructor(
         val decision = repository.decideFor(profile)
         val stored = repository.observeAllStored().first()
         val existingId = stored.firstOrNull { it.ruleSet.name == profile.name }?.ruleSet?.id
+        val activeId = settings.activeRoutingRuleSetId.first()
         val recordedAssets = geoAssets.observeAll().first()
         val requested = profile.requestedGeoFiles()
         val previews =
             requested.mapNotNull { request ->
                 val url = request.url ?: return@mapNotNull null
-                val candidate = previewCandidate(url, request.kind, existingId, stored, recordedAssets)
+                val candidate = previewCandidate(url, request.kind, stored, recordedAssets)
                 GeoFilePreview(
                     fileName = request.fileName,
                     url = url,
@@ -171,7 +173,8 @@ internal constructor(
             decision = decision,
             profile = profile,
             replacesExisting = existingId != null,
-            willActivate = settings.activeRoutingRuleSetId.first() == null,
+            replacesActive = existingId != null && existingId == activeId,
+            willActivate = activeId == null,
             geoFiles = previews,
         )
     }
@@ -242,15 +245,15 @@ internal constructor(
         }
 
         if (requested.any { it.fileName !in suppliedFileNames }) {
-            repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.Rejected)
-            return ImportOutcome.Failed(id, RuleSetAssetFailure.Rejected)
+            repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.Unsupplied)
+            return ImportOutcome.Failed(id, RuleSetAssetFailure.Unsupplied)
         }
 
         if (!profile.hasOwnGeoSources()) {
             val installed = geoAssets.installedFileNames()
             if (requested.any { it.fileName !in installed }) {
-                repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.Rejected)
-                return ImportOutcome.Failed(id, RuleSetAssetFailure.Rejected)
+                repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.Unsupplied)
+                return ImportOutcome.Failed(id, RuleSetAssetFailure.Unsupplied)
             }
             return publishWithoutOwnGeneration(id, profile, stored, verb)
         }
@@ -422,7 +425,7 @@ internal constructor(
                 if (request.url == null) {
                     sharedFile(request.fileName, request.kind, recordedAssets)
                 } else {
-                    localCandidate(request.url, request.kind, setId, stored, recordedAssets)?.file
+                    localCandidate(request.url, request.kind, setId, generation, stored, recordedAssets)?.file
                 }
 
             if (source != null && assets.copyLocally(source, target)) {
@@ -434,7 +437,7 @@ internal constructor(
                     else -> return LocalPreparation(failure = copiedFailure)
                 }
             } else if (request.url == null) {
-                return LocalPreparation(failure = RuleSetAssetFailure.Rejected)
+                return LocalPreparation(failure = RuleSetAssetFailure.Unsupplied)
             }
             pendingDownloads += request
         }
@@ -453,7 +456,7 @@ internal constructor(
     ): RuleSetAssetFailure? {
         for (request in requested) {
             val target = generationTarget(staged, request.fileName)
-            val url = request.url ?: return RuleSetAssetFailure.Rejected
+            val url = request.url ?: return RuleSetAssetFailure.Unsupplied
             try {
                 downloader.download(url, target) { downloadedBytes, totalBytes ->
                     progress.report(setId, request.fileName, downloadedBytes, totalBytes)
@@ -572,11 +575,22 @@ internal constructor(
         return target.toFile()
     }
 
+    /**
+     * Finds bytes for [url] the device already holds, per spec §7.4.1.
+     *
+     * The row being updated is a legitimate source. §7.4 keeps its live
+     * generation intact and leased until the swap, and its bytes are exactly
+     * the ones §7.4.1 exists to stop re-fetching: excluding it made every
+     * update of a geo-backed profile re-download its own unchanged files,
+     * which a large geosite cannot finish inside §7.5's three-minute cap.
+     * Only the directory being staged right now is off limits.
+     */
     @Suppress("ReturnCount") // Shared, per-set, and absent are the three ordered candidate outcomes.
     private fun localCandidate(
         url: String,
         kind: GeoDataKind,
-        excludedSetId: Long?,
+        stagedSetId: Long,
+        stagedGeneration: Long,
         stored: List<StoredRuleSet>,
         recordedAssets: List<InstalledGeoAsset>,
     ): LocalCandidate? {
@@ -589,7 +603,8 @@ internal constructor(
             }
 
         stored.forEach { row ->
-            if (row.ruleSet.id == excludedSetId || row.assetGeneration <= 0) return@forEach
+            if (row.assetGeneration <= 0) return@forEach
+            if (row.ruleSet.id == stagedSetId && row.assetGeneration == stagedGeneration) return@forEach
             val matches =
                 when (kind) {
                     GeoDataKind.IP -> row.geoIpUrl == url
@@ -617,12 +632,11 @@ internal constructor(
     private suspend fun previewCandidate(
         url: String,
         kind: GeoDataKind,
-        excludedSetId: Long?,
         stored: List<StoredRuleSet>,
         recordedAssets: List<InstalledGeoAsset>,
     ): LocalCandidate? =
         previewSharedCandidate(url, kind, recordedAssets)
-            ?: previewGenerationCandidate(url, kind, excludedSetId, stored)
+            ?: previewGenerationCandidate(url, kind, stored)
 
     private suspend fun previewSharedCandidate(
         url: String,
@@ -648,11 +662,10 @@ internal constructor(
     private suspend fun previewGenerationCandidate(
         url: String,
         kind: GeoDataKind,
-        excludedSetId: Long?,
         stored: List<StoredRuleSet>,
     ): LocalCandidate? {
         stored.forEach { candidate ->
-            if (candidate.ruleSet.id == excludedSetId || candidate.assetGeneration <= 0) return@forEach
+            if (candidate.assetGeneration <= 0) return@forEach
             val matches =
                 when (kind) {
                     GeoDataKind.IP -> candidate.geoIpUrl == url

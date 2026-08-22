@@ -116,6 +116,28 @@ class SubspaceBottomSheetTest {
     }
 
     @Test
+    fun aNonDismissibleSheetDoesNotCloseOnSystemBackPress() {
+        var dismissed = false
+        composeRule.setContent {
+            SubspaceTheme {
+                SubspaceBottomSheet(
+                    open = true,
+                    titleRes = R.string.bottom_sheet_test_title,
+                    onDismiss = { dismissed = true },
+                    dismissible = false,
+                ) {
+                    Box(modifier = Modifier.testTag(contentTag))
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        Espresso.pressBack()
+        composeRule.waitForIdle()
+        dismissed shouldBe false
+        composeRule.onNodeWithTag(contentTag).assertExists()
+    }
+
+    @Test
     fun titleIsExposedAsAnAccessibilityHeading() {
         composeRule.setContent {
             SubspaceTheme {

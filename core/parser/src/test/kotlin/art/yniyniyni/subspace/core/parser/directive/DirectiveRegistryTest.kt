@@ -4,9 +4,37 @@ package art.yniyniyni.subspace.core.parser.directive
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.Test
 
 class DirectiveRegistryTest {
+    @Test
+    fun consumerVocabularyIsClosed() {
+        Consumer.entries.map { it.name }.toSet() shouldBe
+            setOf(
+                "Subscriptions",
+                "LatencySorting",
+                "Routing",
+                "RoutingProfiles",
+                "ProfileDns",
+                "Passthrough",
+                "PlatformHardening",
+                "CensorshipResistance",
+                "Release",
+                "None",
+            )
+    }
+
+    @Test
+    fun sniffingIsConsumedByPlatformHardening() {
+        DirectiveRegistry.spec("sniffing-enable")?.consumer shouldBe Consumer.PlatformHardening
+    }
+
+    @Test
+    fun announceIsConsumedByRelease() {
+        DirectiveRegistry.spec("announce")?.consumer shouldBe Consumer.Release
+    }
+
     @Test
     fun `profile-update-interval is whole hours, minimum one`() {
         // Research file: "must be a multiple of one hour". A web search for this
@@ -15,7 +43,7 @@ class DirectiveRegistryTest {
         val spec = DirectiveRegistry.spec("profile-update-interval").shouldNotBeNull()
         spec.kind shouldBe DirectiveKind.Integer(min = 1, max = 8760)
         spec.disposition shouldBe Disposition.Accept
-        spec.consumer shouldBe Consumer.M4
+        spec.consumer shouldBe Consumer.Subscriptions
     }
 
     @Test
@@ -101,14 +129,75 @@ class DirectiveRegistryTest {
         }
     }
 
+    /**
+     * Keys that are `Danger.Dangerous` and nonetheless have a consumer, because
+     * §A.1's required explicit confirmation actually exists for them.
+     *
+     * This set is the whole reason the blanket assertion below was narrowed rather
+     * than deleted. Adding a member here is a claim that the key cannot take effect
+     * without the user approving it, in a UI that shows them what they are
+     * approving. `routing` earns it through M6's import review sheet (spec §6).
+     */
+    @Suppress("VariableNaming")
+    private val CONFIRMED_DANGEROUS_KEYS = setOf("routing")
+
     @Test
-    fun `no Dangerous key is consumed in M4`() {
-        // Spec §5: M4 builds the channel, not the consumers. A Dangerous key
-        // acquiring an M4 consumer means the confirmation UX §A.1 requires was
-        // skipped — this test is the tripwire for that.
+    fun dangerousKeysAreUnconsumedUnlessTheyPassThroughConfirmation() {
         DirectiveRegistry.specs.values
             .filter { it.danger == Danger.Dangerous }
-            .forEach { it.consumer shouldBe Consumer.None }
+            .forEach { spec ->
+                if (spec.key in CONFIRMED_DANGEROUS_KEYS) {
+                    spec.consumer shouldNotBe Consumer.None
+                } else {
+                    spec.consumer shouldBe Consumer.None
+                }
+            }
+    }
+
+    @Test
+    fun theConfirmedDangerousSetIsExactlyWhatWeThinkItIs() {
+        // Pinned so that a future milestone wiring up a second Dangerous key has to
+        // change this line, and explain itself in the diff.
+        CONFIRMED_DANGEROUS_KEYS shouldBe setOf("routing")
+        DirectiveRegistry.specs.values
+            .filter { it.danger == Danger.Dangerous && it.consumer != Consumer.None }
+            .map { it.key }
+            .toSet() shouldBe CONFIRMED_DANGEROUS_KEYS
+    }
+
+    @Test
+    fun routingIsStoredAsDangerousAndConsumedByRoutingProfiles() {
+        val spec = DirectiveRegistry.spec("routing").shouldNotBeNull()
+        spec.disposition shouldBe Disposition.Accept
+        spec.danger shouldBe Danger.Dangerous
+        spec.consumer shouldBe Consumer.RoutingProfiles
+        spec.kind shouldBe DirectiveKind.Text(maxLength = 524_288, base64Allowed = false)
+    }
+
+    @Test
+    fun routingEnableIsSensitiveNotDangerous() {
+        val spec = DirectiveRegistry.spec("routing-enable").shouldNotBeNull()
+        spec.danger shouldBe Danger.Sensitive
+        spec.consumer shouldBe Consumer.RoutingProfiles
+    }
+
+    @Test
+    fun userAgentGeoFilesBelongsToCensorshipResistance() {
+        DirectiveRegistry.spec("user-agent-geo-files")?.consumer shouldBe Consumer.CensorshipResistance
+    }
+
+    @Test
+    fun perAppProxyKeysStayUnconsumedForever() {
+        // M5.5 Part 2 was abandoned on 2026-08-20: no panel in the target set emits
+        // these. This is the intended end state, not a deferral. See the roadmap.
+        listOf(
+            "per-app-proxy-mode",
+            "per-app-proxy-list",
+            "per-app-proxy-list-invert",
+            "per-app-proxy-list-set",
+        ).forEach { key ->
+            DirectiveRegistry.spec(key)?.consumer shouldBe Consumer.None
+        }
     }
 
     @Test
@@ -124,7 +213,7 @@ class DirectiveRegistryTest {
         // Pins spec §1.1's scope. Adding a consumer without amending the spec
         // fails here, deliberately.
         DirectiveRegistry.specs.values
-            .filter { it.consumer == Consumer.M4 }
+            .filter { it.consumer == Consumer.Subscriptions }
             .map { it.key }
             .toSet() shouldBe
             setOf(

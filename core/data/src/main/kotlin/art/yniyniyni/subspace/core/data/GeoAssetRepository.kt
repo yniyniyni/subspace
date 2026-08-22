@@ -63,9 +63,19 @@ public annotation class GeoAssetRoot
  * new pattern.
  */
 public fun interface GeoDownloader {
+    /**
+     * Streams [url] into [target], reporting the running byte count to
+     * [onProgress] as it goes.
+     *
+     * [onProgress]'s second argument is the declared total, or null when the
+     * response carried no `Content-Length`. It exists so a caller can drive a
+     * determinate progress bar; [GeoAssetRepository]'s own scheduled refresh
+     * has no bar and passes a no-op.
+     */
     public suspend fun download(
         url: String,
         target: File,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
     ): Pair<Long, String>
 }
 
@@ -127,6 +137,8 @@ public data class InstalledGeoAsset(
     val lastAttemptedAt: Long?,
     /** A closed-vocabulary failure name, or null. §A.3.1's persistent error marker. */
     val lastFailure: String?,
+    /** Digest recorded only after these bytes validated and published successfully. */
+    val sha256: String? = null,
 )
 
 /**
@@ -556,11 +568,12 @@ internal constructor(
     ) {
         val now = clock()
         val previous = dao.byFileName(request.fileName)
+        val retainedLive = previous?.takeIf { !installed && it.installedAt != null }
         dao.upsert(
             GeoAssetEntity(
                 fileName = request.fileName,
-                sourceUrl = request.sourceUrl,
-                geoType = request.geoType.name,
+                sourceUrl = retainedLive?.sourceUrl ?: request.sourceUrl,
+                geoType = retainedLive?.geoType ?: request.geoType.name,
                 sha256 = digest ?: previous?.sha256,
                 sizeBytes = bytes ?: previous?.sizeBytes,
                 installedAt = if (installed) now else previous?.installedAt,
@@ -613,6 +626,7 @@ internal constructor(
             installedAt = installedAt,
             lastAttemptedAt = lastAttemptedAt,
             lastFailure = lastFailure,
+            sha256 = sha256,
         )
 
     /** A live file and, if it existed, its forced rollback copy in staging. */

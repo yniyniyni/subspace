@@ -9,6 +9,7 @@ import art.yniyniyni.subspace.core.data.GeoDownloader
 import art.yniyniyni.subspace.core.data.db.GeoAssetDao
 import art.yniyniyni.subspace.core.data.db.MIGRATION_1_2
 import art.yniyniyni.subspace.core.data.db.MIGRATION_2_3
+import art.yniyniyni.subspace.core.data.db.MIGRATION_3_4
 import art.yniyniyni.subspace.core.data.db.ProfileDao
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetDao
 import art.yniyniyni.subspace.core.data.db.SettingDao
@@ -66,7 +67,7 @@ internal fun subspaceDatabase(
     Room
         .databaseBuilder(context.applicationContext, SubspaceDatabase::class.java, name)
         .enableMultiInstanceInvalidation()
-        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
         .build()
 
 /**
@@ -121,7 +122,9 @@ internal object DataModule {
             dao = dao,
             validator = validator,
             root = root,
-            download = downloader::download,
+            // The scheduled geo refresh has no progress bar to drive: it runs in
+            // a WorkManager job with no row watching it.
+            download = { url, target -> downloader.download(url, target) { _, _ -> } },
             clock = System::currentTimeMillis,
         )
 
@@ -144,9 +147,15 @@ internal object DataModule {
         fetcher: GeoFileFetcher,
         proxyLocator: TunnelProxyLocator,
     ): GeoDownloader =
-        GeoDownloader { url, target ->
+        GeoDownloader { url, target, onProgress ->
             val outcome =
-                fetcher.download(url, target, MAX_GEO_FILE_BYTES, proxyPort = proxyLocator.httpProxyPortOrNull()) {}
+                fetcher.download(
+                    url,
+                    target,
+                    MAX_GEO_FILE_BYTES,
+                    proxyPort = proxyLocator.httpProxyPortOrNull(),
+                    onProgress = onProgress,
+                )
             when (outcome) {
                 is GeoDownloadOutcome.Success -> outcome.bytes to outcome.sha256
                 // GeoAssetRepository.install's download step catches this and

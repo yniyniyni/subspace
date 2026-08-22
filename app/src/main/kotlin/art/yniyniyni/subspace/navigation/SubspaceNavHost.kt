@@ -8,10 +8,12 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -22,6 +24,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import art.yniyniyni.subspace.core.data.PendingRoutingImport
 import art.yniyniyni.subspace.core.ui.component.FloatingNavigationBar
 import art.yniyniyni.subspace.core.ui.component.NavItem
 import art.yniyniyni.subspace.feature.home.HomeScreen
@@ -31,6 +34,7 @@ import art.yniyniyni.subspace.feature.profiles.qr.QrScanRoute
 import art.yniyniyni.subspace.feature.profiles.subscription.SubscriptionDetailScreen
 import art.yniyniyni.subspace.feature.routing.PerAppScreen
 import art.yniyniyni.subspace.feature.routing.RoutingListScreen
+import art.yniyniyni.subspace.feature.routing.RoutingQrScanRoute
 import art.yniyniyni.subspace.feature.routing.RuleSetEditorScreen
 import art.yniyniyni.subspace.feature.settings.SettingsScreen
 import art.yniyniyni.subspace.core.ui.R as CoreUiR
@@ -107,6 +111,7 @@ private const val SETTINGS_VALUE = "settings"
 @Composable
 fun SubspaceNavHost(
     onRequestConsent: (onGranted: () -> Unit) -> Unit,
+    pendingRoutingImport: PendingRoutingImport,
     navController: NavHostController = rememberNavController(),
     startDestination: Any = Home,
     modifier: Modifier = Modifier,
@@ -114,15 +119,15 @@ fun SubspaceNavHost(
     val currentBackStackEntry by navController.currentBackStackEntryAsState()
     val selected = currentBackStackEntry?.destination.selectedTopLevelValue()
 
+    NavigateToRoutingOnDeeplink(
+        pendingRoutingImport = pendingRoutingImport,
+        currentRoute = currentBackStackEntry?.destination?.route,
+        navController = navController,
+    )
+
     Box(modifier = modifier.fillMaxSize()) {
         NavHost(navController = navController, startDestination = startDestination) {
-            composable<Home> {
-                HomeScreen(
-                    onRequestConsent = onRequestConsent,
-                    onNavigateToServers = { navController.navigateToTopLevel(SERVERS_VALUE) },
-                    onAddServer = { navController.navigateToAddFirstServer() },
-                )
-            }
+            topLevelDestinations(navController, onRequestConsent)
             composable<Servers> {
                 // Task 19: ServersScreen now owns its own add-server flow
                 // (AddServerSheet) rather than forwarding to the Editor
@@ -304,13 +309,83 @@ internal fun NavHostController.navigateToTopLevel(value: String) {
  * Settings the same way [RoutingList] is, so it belongs in this same grouping rather than back in
  * [SubspaceNavHost]'s own body.
  */
+/**
+ * [Home] — extracted for the same reason [routingDestinations] was: adding the
+ * deeplink effect pushed [SubspaceNavHost] past detekt's `LongMethod` budget.
+ * Purely an extraction; the body below is unmodified.
+ */
+private fun NavGraphBuilder.topLevelDestinations(
+    navController: NavHostController,
+    onRequestConsent: (onGranted: () -> Unit) -> Unit,
+) {
+    composable<Home> {
+        HomeScreen(
+            onRequestConsent = onRequestConsent,
+            onNavigateToServers = { navController.navigateToTopLevel(SERVERS_VALUE) },
+            onAddServer = { navController.navigateToAddFirstServer() },
+        )
+    }
+}
+
+/**
+ * Sends a delivered routing deeplink to [RoutingList].
+ *
+ * A routing deeplink is not a destination of its own: the profile must be
+ * reviewed against the list it is about to join, and the M6 spec pins that
+ * imported profiles show up in the routing settings UI rather than in a
+ * parallel screen. So the link's arrival navigates here, and
+ * `RoutingListScreen` raises its sheet over the list.
+ *
+ * Navigates only when not already there — a second link delivered by
+ * `onNewIntent` while the list is open must raise the sheet again, not push a
+ * duplicate [RoutingList] onto the back stack.
+ */
+@Composable
+private fun NavigateToRoutingOnDeeplink(
+    pendingRoutingImport: PendingRoutingImport,
+    currentRoute: String?,
+    navController: NavHostController,
+) {
+    val pendingLink by pendingRoutingImport.link.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingLink, currentRoute) {
+        if (pendingLink != null && currentRoute != RoutingList.routeName()) {
+            navController.navigate(RoutingList)
+        }
+    }
+}
+
+/**
+ * [RoutingList]'s route string, as `NavDestination.route` renders it.
+ *
+ * `@Serializable` object routes are keyed by their fully-qualified class name,
+ * so this is the same value the navigation library stores — derived rather than
+ * written out, so a package move cannot leave a stale literal behind that
+ * silently stops matching.
+ */
+private fun RoutingList.routeName(): String = this::class.qualifiedName.orEmpty()
+
 private fun NavGraphBuilder.routingDestinations(navController: NavHostController) {
     composable<RoutingList> {
         // Task 15 (M5): the rule set list — the activation gate screen.
         RoutingListScreen(
             onCreateRuleSet = { navController.navigate(RuleSetEditor(ruleSetId = NEW_RULE_SET)) },
             onEditRuleSet = { id -> navController.navigate(RuleSetEditor(ruleSetId = id)) },
+            onScanQr = { navController.navigate(RoutingQrScan) },
             onBack = { navController.popBackStack() },
+        )
+    }
+    composable<RoutingQrScan> { entry ->
+        // M6 Task 13. Scoped to RoutingList's entry, not this one, so the
+        // scanned payload raises the sheet the list is already showing —
+        // RoutingQrScanRoute's own KDoc has the full reasoning, and it is the
+        // same shape QrScan uses for Servers above.
+        //
+        // remember keyed on this destination's OWN entry for the reason
+        // lint's UnrememberedGetBackStackEntry rule documents there.
+        val routingEntry = remember(entry) { navController.getBackStackEntry(RoutingList) }
+        RoutingQrScanRoute(
+            routingBackStackEntry = routingEntry,
+            onDone = { navController.popBackStack() },
         )
     }
     composable<RuleSetEditor> { entry ->

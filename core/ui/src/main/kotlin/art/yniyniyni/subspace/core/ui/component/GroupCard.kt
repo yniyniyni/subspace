@@ -73,7 +73,7 @@ private const val CARET_ROTATION_EXPANDED = 180f
  *
  * A provider notice is still unrendered: `DirectiveRegistry` gates
  * `announce`/`sub-info-text` (the only real content source for one) to a
- * later milestone (`Consumer.M9`), so M4 has nothing to put in one without
+ * later milestone (`Consumer.Release`), so M4 has nothing to put in one without
  * inventing content — left for the task that consumes those directives. This
  * is the container only; [content] supplies the node rows.
  *

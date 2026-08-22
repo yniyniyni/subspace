@@ -55,6 +55,10 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     ksp(libs.room.compiler)
 
+    // The progress registry is plain coroutines and no Room, so its test is a
+    // JVM unit test — which needs runTest, absent from the shared library plugin.
+    testImplementation(libs.kotlinx.coroutines.test)
+
     androidTestImplementation(libs.room.testing)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)

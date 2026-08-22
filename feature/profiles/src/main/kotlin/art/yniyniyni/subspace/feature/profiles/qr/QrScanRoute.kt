@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.qr
 import androidx.compose.runtime.Composable
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.navigation.NavBackStackEntry
+import art.yniyniyni.subspace.core.ui.component.QrScanner
 import art.yniyniyni.subspace.feature.profiles.add.ImportViewModel
 
 /**
@@ -43,7 +44,7 @@ fun QrScanRoute(
 ) {
     val viewModel: ImportViewModel = hiltViewModel(viewModelStoreOwner = serversBackStackEntry)
 
-    QrScanScreen(
+    QrScanner(
         onResult = { raw ->
             viewModel.import(raw)
             onDone()

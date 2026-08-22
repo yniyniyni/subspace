@@ -30,6 +30,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.WRITE
@@ -214,6 +215,38 @@ class GeoAssetRepositoryTest {
 
         stack.repository.observeAll().first().single().lastFailure shouldBe "DownloadFailed"
         stagingFiles() shouldBe emptyList()
+    }
+
+    @Test
+    fun failedReplacementKeepsTheLiveBytesSuccessfulSourceProvenance() = runTest {
+        val sourceA = "https://assets.example/a/geosite.dat"
+        val sourceB = "https://assets.example/b/geosite.dat"
+        stack.close()
+        stack =
+            InMemoryGeoStack(
+                context = InstrumentationRegistry.getInstrumentation().targetContext,
+                validator = validator,
+                download = { url, target ->
+                    if (url == sourceB) throw IOException("injected B failure")
+                    target.writeText("bytes-from-a")
+                    target.length() to "digest-a"
+                },
+            )
+        val requestA = request().copy(sourceUrl = sourceA)
+        val requestB = request().copy(sourceUrl = sourceB)
+        stack.repository.install(requestA) shouldBe GeoInstallResult.Installed
+        val successful = stack.repository.observeAll().first().single()
+
+        stack.repository.install(requestB) shouldBe GeoInstallResult.DownloadFailed
+
+        val failed = stack.repository.observeAll().first().single()
+        failed.sourceUrl shouldBe sourceA
+        failed.sha256 shouldBe successful.sha256
+        failed.sizeBytes shouldBe successful.sizeBytes
+        failed.installedAt shouldBe successful.installedAt
+        failed.lastAttemptedAt shouldBe stack.now
+        failed.lastFailure shouldBe "DownloadFailed"
+        File(stack.repository.geoDirectory(), "geosite.dat").readText() shouldBe "bytes-from-a"
     }
 
     @Test

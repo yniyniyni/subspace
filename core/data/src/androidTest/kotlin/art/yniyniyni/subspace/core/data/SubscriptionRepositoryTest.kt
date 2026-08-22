@@ -27,17 +27,34 @@ private const val REEMIT_TIMEOUT_MS = 5_000L
 class SubscriptionRepositoryTest {
     private lateinit var db: SubspaceDatabase
     private lateinit var repository: SubscriptionRepository
+    private lateinit var root: java.io.File
 
     @Before
     fun setUp() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
         db = Room.inMemoryDatabaseBuilder(
-            InstrumentationRegistry.getInstrumentation().targetContext,
+            context,
             SubspaceDatabase::class.java,
         ).build()
-        repository = SubscriptionRepository(db.subscriptionDao(), ProfileRepository(db.profileDao()), db)
+        val profiles = ProfileRepository(db.profileDao())
+        val settings = SettingsRepository(db.settingDao()) { "test-hwid" }
+        root = java.io.File(context.cacheDir, "subscription-repository-${System.nanoTime()}").apply { mkdirs() }
+        val deletion =
+            RoutingProfileDeletion(
+                db,
+                RoutingRepository(db.routingRuleSetDao()),
+                RuleSetAssets(root),
+                settings,
+                profiles,
+            )
+        repository = SubscriptionRepository(db.subscriptionDao(), profiles, db, deletion)
     }
 
-    @After fun tearDown() = db.close()
+    @After
+    fun tearDown() {
+        db.close()
+        root.deleteRecursively()
+    }
 
     /**
      * `add` used to commit the group and the subscription as two independent writes, so a failure

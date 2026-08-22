@@ -71,6 +71,18 @@ public data class RoutingRuleSet(
     val buckets: Map<RouteOutcome, RuleBucket> = emptyMap(),
     val order: List<RouteOutcome> = DEFAULT_ORDER,
     val domainStrategy: DomainStrategy = DomainStrategy.IP_IF_NON_MATCH,
+    /**
+     * Happ's `GlobalProxy`: the default outbound for traffic no rule matched.
+     *
+     * Null means "unspecified", which preserves the behaviour every config this
+     * project has ever generated — `proxy` is emitted first in `outbounds`, so
+     * unmatched traffic falls through to it. **False is not the same as null**:
+     * it emits a trailing catch-all rule to `direct`. Getting this backwards
+     * routes a profile's traffic the opposite way from its author's intent,
+     * which is why it is honoured in M6 rather than deferred with the DNS
+     * fields it was first grouped with (spec §1.1).
+     */
+    public val globalProxy: Boolean? = null,
 ) {
     init {
         require(order.size == RouteOutcome.entries.size && order.toSet() == RouteOutcome.entries.toSet()) {
@@ -95,6 +107,7 @@ public data class RoutingRuleSet(
      */
     override fun toString(): String =
         "RoutingRuleSet(id=$id, name=$name, order=$order, domainStrategy=$domainStrategy, " +
+            "globalProxy=$globalProxy, " +
             "entries=<redacted, $entryCount entries>)"
 
     public companion object {

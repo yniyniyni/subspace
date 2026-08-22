@@ -8,9 +8,9 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 /**
- * Binds [RoutingSource] to [BoundRoutingSource] — the same
- * `@Module`/`@Provides` shape `:feature:settings`' own `SettingsModule` uses
- * for `SettingsSource`.
+ * Binds this feature's source interfaces to their Hilt-provided
+ * implementations — the same `@Module`/`@Provides` shape
+ * `:feature:settings`' own `SettingsModule` uses for `SettingsSource`.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -22,4 +22,8 @@ internal object RoutingModule {
     @Provides
     @Singleton
     fun perAppSource(impl: BoundPerAppSource): PerAppSource = impl
+
+    @Provides
+    @Singleton
+    fun importReviewSource(impl: BoundImportReviewSource): ImportReviewSource = impl
 }

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace
 
 import android.app.Activity
+import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
 import android.view.View
@@ -21,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import art.yniyniyni.subspace.core.data.PendingRoutingImport
 import art.yniyniyni.subspace.core.data.ThemePreference
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import art.yniyniyni.subspace.navigation.SubspaceNavHost
@@ -37,6 +39,16 @@ class MainActivity : ComponentActivity() {
     @Inject
     internal lateinit var themeSource: ThemeSource
 
+    /**
+     * Where an `ACTION_VIEW` routing link waits for the routing screen.
+     *
+     * In-memory rather than a navigation argument — see
+     * [PendingRoutingImport]'s own KDoc for why a base64 profile must not
+     * travel through the back stack.
+     */
+    @Inject
+    lateinit var pendingRoutingImport: PendingRoutingImport
+
     // Flips true once themeSource.theme has emitted for the first time. Read
     // by the OnPreDrawListener below — this, not the value itself, is what
     // actually holds the first frame back. See onCreate's comment.
@@ -45,6 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        recordRoutingLink(intent)
 
         // Task 22 persisted the Appearance choice correctly, but nothing
         // ever read it back: SubspaceTheme was called with no darkTheme
@@ -113,6 +126,7 @@ class MainActivity : ComponentActivity() {
 
                 Surface(modifier = Modifier.fillMaxSize()) {
                     SubspaceNavHost(
+                        pendingRoutingImport = pendingRoutingImport,
                         onRequestConsent = { onGranted ->
                             // A null intent means consent was already granted.
                             // Without consent establish() returns null and the
@@ -132,6 +146,33 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * A second deeplink arriving while this activity is already on top.
+     *
+     * `launchMode="singleTop"` means Android reuses this instance rather than
+     * creating another, so [onCreate] does not run again — without this
+     * override the link is delivered and then dropped, and `getIntent()` still
+     * returns the first one. [setIntent] keeps that contract honest for
+     * anything that reads the intent later.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        recordRoutingLink(intent)
+    }
+
+    /**
+     * Hands an `ACTION_VIEW` link to [pendingRoutingImport], unparsed.
+     *
+     * No validation here: a link that is not a routing profile produces the
+     * review sheet's `Rejected` stage naming the problem, which tells the user
+     * more than an activity that opens to the home screen and says nothing.
+     */
+    private fun recordRoutingLink(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        intent.data?.toString()?.let(pendingRoutingImport::offer)
     }
 
     /**

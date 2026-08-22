@@ -115,6 +115,14 @@ internal constructor(
         dao.put(SettingEntity(key = KEY_ACTIVE_ROUTING_RULE_SET, value = id?.toString() ?: ""))
     }
 
+    /** Atomically activates [id] only when routing currently reads as off. */
+    public suspend fun activateRoutingRuleSetIfNone(id: Long): Boolean =
+        dao.putIfNoNumericValue(KEY_ACTIVE_ROUTING_RULE_SET, id)
+
+    /** Clears routing only if [id] is still active; a newer selection is untouched. */
+    public suspend fun clearActiveRoutingRuleSetIf(id: Long): Boolean =
+        dao.clearIfValue(KEY_ACTIVE_ROUTING_RULE_SET, id.toString()) == 1
+
     /** Whether the global Device ID header gate is enabled; defaults to on for provider compatibility. */
     public val hwidEnabled: Flow<Boolean> =
         dao.observe(KEY_HWID_ENABLED).map { stored ->

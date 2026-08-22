@@ -8,6 +8,9 @@ import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -139,6 +142,55 @@ class SettingsRepositoryTest {
         }
 
     @Test
+    fun concurrentConditionalActivationsChooseExactlyOneRuleSet() =
+        runTest {
+            val attempts =
+                (1L..8L).map { id ->
+                    async { id to repository.activateRoutingRuleSetIfNone(id) }
+                }.awaitAll()
+
+            attempts.count { it.second } shouldBe 1
+            repository.activeRoutingRuleSetId.first() shouldBe attempts.single { it.second }.first
+        }
+
+    @Test
+    fun conditionalClearNeverClearsANewerSelection() =
+        runTest {
+            repository.setActiveRoutingRuleSetId(7L)
+            repository.setActiveRoutingRuleSetId(8L)
+
+            repository.clearActiveRoutingRuleSetIf(7L) shouldBe false
+            repository.activeRoutingRuleSetId.first() shouldBe 8L
+            repository.clearActiveRoutingRuleSetIf(8L) shouldBe true
+            repository.activeRoutingRuleSetId.first() shouldBe null
+        }
+
+    @Test
+    fun concurrentClearAndNewSelectionAlwaysKeepTheNewSelection() =
+        runTest {
+            repeat(CONDITIONAL_SETTING_RACE_REPETITIONS) { iteration ->
+                val oldId = iteration.toLong() * 2 + 1
+                val newId = oldId + 1
+                repository.setActiveRoutingRuleSetId(oldId)
+                val start = CompletableDeferred<Unit>()
+
+                val staleClear = async {
+                    start.await()
+                    repository.clearActiveRoutingRuleSetIf(oldId)
+                }
+                val newSelection = async {
+                    start.await()
+                    repository.setActiveRoutingRuleSetId(newId)
+                }
+
+                start.complete(Unit)
+                awaitAll(staleClear, newSelection)
+
+                repository.activeRoutingRuleSetId.first() shouldBe newId
+            }
+        }
+
+    @Test
     fun launchPingTogglesRoundTrip() =
         runTest {
             repository.setPingOnLaunch(false)
@@ -215,4 +267,8 @@ class SettingsRepositoryTest {
 
             repository.perAppUserPackages.first() shouldBe emptySet()
         }
+
+    private companion object {
+        const val CONDITIONAL_SETTING_RACE_REPETITIONS = 32
+    }
 }

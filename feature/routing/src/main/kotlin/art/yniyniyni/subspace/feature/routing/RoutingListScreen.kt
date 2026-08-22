@@ -9,22 +9,22 @@ package art.yniyniyni.subspace.feature.routing
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -32,11 +32,16 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -44,13 +49,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import art.yniyniyni.subspace.core.model.RoutingSourceKind
+import kotlinx.coroutines.launch
 
 private val CONTENT_HORIZONTAL_PADDING = 24.dp
 private val CARD_PADDING = 16.dp
 private val CARD_GAP = 12.dp
 private val ROW_ICON_GAP = 8.dp
-private val MARKER_TOP_PADDING = 8.dp
-private val MARKER_ICON_SIZE = 16.dp
 private val EMPTY_STATE_TOP_PADDING = 48.dp
 
 /**
@@ -78,11 +83,19 @@ private val EMPTY_STATE_TOP_PADDING = 48.dp
 fun RoutingListScreen(
     onCreateRuleSet: () -> Unit,
     onEditRuleSet: (Long) -> Unit,
+    onScanQr: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: RoutingViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Resolved on this destination's own entry, which is the same entry
+    // RoutingQrScanRoute is handed — so a scanned payload raises *this* sheet.
+    val importViewModel: ImportReviewViewModel = hiltViewModel()
+    val importState by importViewModel.state.collectAsStateWithLifecycle()
+    val clipboard = LocalClipboard.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     RoutingListScreenContent(
         state = state,
@@ -93,8 +106,60 @@ fun RoutingListScreen(
             onCreateRuleSet = onCreateRuleSet,
             onEditRuleSet = onEditRuleSet,
             onBack = onBack,
+            onDuplicate = viewModel::duplicate,
+            onCancelDownload = viewModel::cancelDownload,
+            onImportFromClipboard = {
+                scope.launch {
+                    // Deliberately unvalidated: a clipboard holding something
+                    // that is not a routing link produces the sheet's Rejected
+                    // stage naming the problem, which tells the user more than
+                    // a menu item that silently does nothing.
+                    val text = clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                    importViewModel.offerWithoutAcknowledgement(text, RoutingSourceKind.Clipboard)
+                }
+            },
+            onScanQr = onScanQr,
         ),
         modifier = modifier,
+    )
+
+    // A deeplink navigated here, or a sync left a provider directive waiting.
+    // Either way the sheet is what the user actually confirms — rule 1 has no
+    // per-channel exemption, and the provider channels are the ones §A.1's
+    // threat model is written about. Consumed by value so an offer that
+    // arrived while this one was being handed over is not discarded unread.
+    val pendingOffer by viewModel.pendingOffer.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingOffer) {
+        pendingOffer?.let { offer ->
+            val accepted =
+                when (offer) {
+                    is RoutingImportOffer.Deeplink ->
+                        importViewModel.offer(offer.text, RoutingSourceKind.Deeplink)
+                    // Header, not Body: the transport a provider actually uses
+                    // is the response header, and M4 established Remnawave
+                    // emits no body directives at all. A body line reaching
+                    // here is defensive, and calling it Header would only
+                    // mislabel a channel nothing exercises.
+                    is RoutingImportOffer.Provider ->
+                        importViewModel.offer(offer.text, RoutingSourceKind.Header, offer.subscriptionId)
+                }
+            // Only once the sheet actually owns it. Acknowledging an offer the
+            // sheet never took would strand a persisted provider directive: it
+            // stays in the database and would be filtered out forever.
+            if (accepted) viewModel.consumePendingOffer(offer)
+        }
+    }
+
+    ImportReviewSheet(
+        state = importState,
+        actions =
+        ImportReviewActions(
+            onConfirm = importViewModel::confirm,
+            onDismiss = importViewModel::dismiss,
+            onCancelApply = importViewModel::cancelApply,
+            onRetry = importViewModel::retry,
+        ),
     )
 }
 
@@ -105,6 +170,14 @@ internal data class RoutingListActions(
     val onCreateRuleSet: () -> Unit,
     val onEditRuleSet: (Long) -> Unit,
     val onBack: () -> Unit,
+    /** Copies a read-only profile into an editable set, then opens it (spec §4.2). */
+    val onDuplicate: (Long) -> Unit = {},
+    /** Stops an in-flight generation, leaving the previous one live. */
+    val onCancelDownload: (Long) -> Unit = {},
+    /** Reads the primary clip and hands it to the review sheet, unvalidated. */
+    val onImportFromClipboard: () -> Unit = {},
+    /** Opens the shared scanner; its result goes to the same sheet. */
+    val onScanQr: () -> Unit = {},
 )
 
 /**
@@ -131,33 +204,15 @@ internal fun RoutingListScreenContent(
             // card.
             .padding(vertical = CONTENT_HORIZONTAL_PADDING),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = actions.onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.routing_back_description),
-                    )
-                }
-                Text(text = stringResource(R.string.routing_title), style = MaterialTheme.typography.headlineMedium)
-            }
-            IconButton(onClick = actions.onCreateRuleSet) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = stringResource(R.string.routing_create_description),
-                )
-            }
-        }
+        ScreenHeader(actions = actions)
 
-        OffRow(
-            isOff = state.activeRuleSetId == null,
-            onSelect = { actions.onActivate(null) },
-            modifier = Modifier.padding(top = CARD_GAP),
-        )
+        if (state.canTurnRoutingOff) {
+            OffRow(
+                isOff = state.activeRuleSetId == null,
+                onSelect = { actions.onActivate(null) },
+                modifier = Modifier.padding(top = CARD_GAP),
+            )
+        }
 
         if (state.ruleSets.isEmpty()) {
             EmptyState(modifier = Modifier.padding(top = EMPTY_STATE_TOP_PADDING))
@@ -165,10 +220,87 @@ internal fun RoutingListScreenContent(
             state.ruleSets.forEach { row ->
                 RuleSetCard(
                     row = row,
-                    onSelect = { actions.onActivate(row.id) },
-                    onEdit = { actions.onEditRuleSet(row.id) },
-                    onDelete = { actions.onDelete(row.id) },
+                    actions =
+                    RuleSetCardActions(
+                        onSelect = { actions.onActivate(row.id) },
+                        onEdit = { actions.onEditRuleSet(row.id) },
+                        onDuplicate = { actions.onDuplicate(row.id) },
+                        onDelete = { actions.onDelete(row.id) },
+                        onCancelDownload = { actions.onCancelDownload(row.id) },
+                    ),
                     modifier = Modifier.padding(top = CARD_GAP),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The two user-initiated import channels (spec §5.2).
+ *
+ * Neither pre-validates what it reads. A clipboard holding something that is not
+ * a routing link produces the review sheet's `Rejected` stage naming the
+ * problem, which tells the user more than a disabled menu item that never says
+ * why.
+ */
+@Composable
+private fun ImportMenu(
+    onImportFromClipboard: () -> Unit,
+    onScanQr: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = stringResource(R.string.routing_import_menu_description),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.routing_import_clipboard)) },
+                onClick = {
+                    expanded = false
+                    onImportFromClipboard()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.routing_import_qr)) },
+                onClick = {
+                    expanded = false
+                    onScanQr()
+                },
+            )
+        }
+    }
+}
+
+/** Back, title, and the two ways a rule set enters this screen. */
+@Composable
+private fun ScreenHeader(actions: RoutingListActions) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = actions.onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.routing_back_description),
+                )
+            }
+            Text(text = stringResource(R.string.routing_title), style = MaterialTheme.typography.headlineMedium)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ImportMenu(
+                onImportFromClipboard = actions.onImportFromClipboard,
+                onScanQr = actions.onScanQr,
+            )
+            IconButton(onClick = actions.onCreateRuleSet) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = stringResource(R.string.routing_create_description),
                 )
             }
         }
@@ -200,98 +332,6 @@ private fun OffRow(
             Spacer(Modifier.width(ROW_ICON_GAP))
             Text(text = stringResource(R.string.routing_off_label), style = MaterialTheme.typography.titleMedium)
         }
-    }
-}
-
-@Composable
-private fun RuleSetCard(
-    row: RuleSetRow,
-    onSelect: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(CARD_PADDING)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                val activateDescription = stringResource(R.string.routing_activate_description, row.name)
-                RadioButton(
-                    selected = row.isActive,
-                    // A disabled control is a hint, not the gate — RoutingViewModel.activate
-                    // re-checks canActivate itself, so this only saves the user a tap that
-                    // would be silently refused.
-                    enabled = row.canActivate,
-                    onClick = onSelect,
-                    modifier = Modifier.semantics { contentDescription = activateDescription },
-                )
-                Spacer(Modifier.width(ROW_ICON_GAP))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = row.name, style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = pluralStringResource(R.plurals.routing_entry_count, row.entryCount, row.entryCount),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onEdit) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = stringResource(R.string.routing_edit_description, row.name),
-                    )
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = stringResource(R.string.routing_delete_description, row.name),
-                    )
-                }
-            }
-
-            if (row.missingGeoFiles.isNotEmpty()) {
-                val missing = row.missingGeoFiles.sorted().joinToString()
-                MarkerRow(
-                    text = stringResource(R.string.routing_missing_geo_files, missing),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            if (row.hasFailedGeoUpdate) {
-                MarkerRow(
-                    text = stringResource(R.string.routing_update_failed),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-/**
- * One activation-gate marker line. [text] alone is what a screen reader
- * announces — [Icons.Default.Warning] here is decorative
- * (`contentDescription = null`), the same reasoning [SettingRow][art.yniyniyni.subspace.core.ui.component.SettingRow]'s
- * own icon documents.
- */
-@Composable
-private fun MarkerRow(
-    text: String,
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier.fillMaxWidth().padding(top = MARKER_TOP_PADDING),
-    ) {
-        Icon(
-            imageVector = Icons.Default.Warning,
-            contentDescription = null,
-            tint = color,
-            modifier = Modifier.size(MARKER_ICON_SIZE),
-        )
-        Spacer(Modifier.width(ROW_ICON_GAP / 2))
-        Text(text = text, style = MaterialTheme.typography.bodySmall, color = color)
     }
 }
 

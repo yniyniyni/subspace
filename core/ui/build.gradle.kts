@@ -10,6 +10,16 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    // QrScanner's permission launcher and lifecycle owner are part of the
+    // shared camera surface; the public API exposes only Compose primitives,
+    // so these remain implementation dependencies.
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.zxing.core)
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
     // GroupCard's (Task 18) expand caret, overflow and search glyphs. Same
     // -core-only artifact :feature:home and :app already carry — see
     // THIRD_PARTY.md.

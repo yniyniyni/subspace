@@ -15,7 +15,7 @@ import androidx.room.RoomDatabase
         RoutingRuleSetEntity::class,
         GeoAssetEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 internal abstract class SubspaceDatabase : RoomDatabase() {

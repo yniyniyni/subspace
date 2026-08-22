@@ -12,7 +12,14 @@ class RoutingRulesTest {
     private fun set(
         buckets: Map<RouteOutcome, RuleBucket>,
         order: List<RouteOutcome> = RoutingRuleSet.DEFAULT_ORDER,
-    ): RoutingRuleSet = RoutingRuleSet(name = "test", buckets = buckets, order = order)
+        globalProxy: Boolean? = null,
+    ): RoutingRuleSet =
+        RoutingRuleSet(
+            name = "test",
+            buckets = buckets,
+            order = order,
+            globalProxy = globalProxy,
+        )
 
     @Test
     fun `an empty rule set emits no rules`() {
@@ -96,5 +103,55 @@ class RoutingRulesTest {
 
         all.map { it.substringAfter("\"outboundTag\": \"").substringBefore('"') } shouldContainExactly
             listOf("block", "proxy", "direct")
+    }
+
+    @Test
+    fun globalProxyFalseAppendsACatchAllToDirect() {
+        val set =
+            RoutingRuleSet(
+                name = "BlockedOnly",
+                buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:blocked"))),
+                globalProxy = false,
+            )
+
+        val lines = routingRuleLines(set)
+
+        lines.size shouldBe 2
+        lines.last() shouldBe
+            """{ "type": "field", "network": "tcp,udp", "outboundTag": "direct" }"""
+    }
+
+    @Test
+    fun globalProxyNullEmitsExactlyWhatM5Emitted() {
+        val buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:cn")))
+
+        routingRuleLines(RoutingRuleSet(name = "A", buckets = buckets, globalProxy = null)) shouldBe
+            routingRuleLines(RoutingRuleSet(name = "A", buckets = buckets))
+    }
+
+    @Test
+    fun globalProxyTrueEmitsNoCatchAllBecauseProxyIsAlreadyTheDefault() {
+        val buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:cn")))
+
+        routingRuleLines(RoutingRuleSet(name = "A", buckets = buckets, globalProxy = true)) shouldBe
+            routingRuleLines(RoutingRuleSet(name = "A", buckets = buckets))
+    }
+
+    @Test
+    fun theCatchAllComesLastRegardlessOfRouteOrder() {
+        val set =
+            RoutingRuleSet(
+                name = "A",
+                buckets =
+                mapOf(
+                    RouteOutcome.BLOCK to RuleBucket(sites = listOf("geosite:ads")),
+                    RouteOutcome.PROXY to RuleBucket(sites = listOf("geosite:cn")),
+                ),
+                order = listOf(RouteOutcome.PROXY, RouteOutcome.DIRECT, RouteOutcome.BLOCK),
+                globalProxy = false,
+            )
+
+        routingRuleLines(set).last().contains("\"outboundTag\": \"direct\"") shouldBe true
+        routingRuleLines(set).first().contains("geosite:cn") shouldBe true
     }
 }

@@ -170,7 +170,7 @@ public class GeoFileFetcher private constructor(
         target: File,
         maxBytes: Long,
         proxyPort: Int? = null,
-        onProgress: (Long) -> Unit,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
     ): GeoDownloadOutcome =
         withContext(Dispatchers.IO) {
             val request =
@@ -212,7 +212,8 @@ public class GeoFileFetcher private constructor(
         source: java.io.InputStream,
         target: File,
         maxBytes: Long,
-        onProgress: (Long) -> Unit,
+        declaredBytes: Long?,
+        onProgress: (Long, Long?) -> Unit,
     ): GeoDownloadOutcome {
         val digest = MessageDigest.getInstance("SHA-256")
         var total = 0L
@@ -242,7 +243,7 @@ public class GeoFileFetcher private constructor(
 
                     sink.write(buffer, 0, read)
                     digest.update(buffer, 0, read)
-                    reportProgress(onProgress, total)
+                    reportProgress(onProgress, total, declaredBytes)
                 }
                 sink.flush()
             }
@@ -255,11 +256,12 @@ public class GeoFileFetcher private constructor(
 
     @Suppress("TooGenericExceptionCaught") // Callers may throw any Throwable from their callback.
     private fun reportProgress(
-        onProgress: (Long) -> Unit,
+        onProgress: (Long, Long?) -> Unit,
         total: Long,
+        declaredBytes: Long?,
     ) {
         try {
-            onProgress(total)
+            onProgress(total, declaredBytes)
         } catch (error: Throwable) {
             throw ProgressCallbackException(error)
         }
@@ -269,7 +271,7 @@ public class GeoFileFetcher private constructor(
         call: Call,
         target: File,
         maxBytes: Long,
-        onProgress: (Long) -> Unit,
+        onProgress: (Long, Long?) -> Unit,
     ): GeoDownloadOutcome =
         suspendCancellableCoroutine { continuation ->
             val responseJob = AtomicReference<Job?>(null)
@@ -308,6 +310,11 @@ public class GeoFileFetcher private constructor(
                                                 successfulResponse.body.byteStream(),
                                                 target,
                                                 maxBytes,
+                                                // -1 is OkHttp's "not declared" — a chunked or
+                                                // identity-encoded body. Passing it through as a
+                                                // total would render as "12 MB / -1 B"; null is
+                                                // what the caller renders as an indeterminate bar.
+                                                successfulResponse.body.contentLength().takeIf { it >= 0 },
                                                 onProgress,
                                             )
                                         }

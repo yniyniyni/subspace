@@ -13,6 +13,7 @@ import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -65,26 +66,39 @@ private val SHEET_TITLE_BOTTOM_PADDING = 16.dp
  *   }` so a screen-reader user can navigate directly to it rather than
  *   swiping through the sheet's contents to find it.
  * @param onDismiss invoked when the sheet is dismissed — scrim tap, swipe
- *   down, or the drag handle's own dismiss action.
+ *   down, or the drag handle's own dismiss action. Not called while
+ *   [dismissible] is false.
+ * @param dismissible whether swipe, scrim, and system back can close the
+ *   sheet. Defaults true so existing callers stay dismissible. False is the
+ *   import-review Applying lock: materialisation must not be hidden while it
+ *   is still running.
  * @param content the sheet's body, below the title.
  */
 @OptIn(ExperimentalMaterial3Api::class)
+@Suppress("LongParameterList") // dismissible is the Applying lock; default true keeps existing callers unchanged.
 @Composable
 fun SubspaceBottomSheet(
     open: Boolean,
     @StringRes titleRes: Int,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    dismissible: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     if (!open) return
 
     val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (dismissible) onDismiss() },
         modifier = modifier,
         sheetState = sheetState,
+        sheetGesturesEnabled = dismissible,
         dragHandle = { BottomSheetDefaults.DragHandle() },
+        properties =
+        ModalBottomSheetProperties(
+            shouldDismissOnBackPress = dismissible,
+            shouldDismissOnClickOutside = dismissible,
+        ),
     ) {
         Text(
             text = stringResource(titleRes),

@@ -41,8 +41,46 @@ public sealed interface Disposition {
     ) : Disposition
 }
 
-/** The milestone that reads a key. [None] means stored, not yet acted on (spec D2). */
-public enum class Consumer { M4, M4_5, M5, M6, M7, M8, M9, None }
+/**
+ * Which piece of work reads a key. [None] means stored, not yet acted on (spec D2).
+ *
+ * **Named, not numbered, and that is the point.** These were `M4`…`M9` until the
+ * 2026-08-20 roadmap renumber inserted raw-JSON passthrough as M7 and pushed three
+ * milestones up one. Forty references in `DirectiveRegistry` silently began naming
+ * the wrong milestone — silently, because the members still existed. Semantic names
+ * cannot rot that way: a milestone can be renumbered without touching this file.
+ */
+public enum class Consumer {
+    /** Subscriptions as a directive channel (was M4). */
+    Subscriptions,
+
+    /** Latency testing and sorting (was M4.5). */
+    LatencySorting,
+
+    /** Rule-based routing and geo assets (was M5). No rows today; the vocabulary is complete on purpose. */
+    Routing,
+
+    /** Routing profiles as deeplinks (was M6). */
+    RoutingProfiles,
+
+    /** The DNS half of a routing profile (M6.5). */
+    ProfileDns,
+
+    /** Raw Xray JSON passthrough execution (M7). */
+    Passthrough,
+
+    /** Always-on, boot, counters, log viewer (was M7). */
+    PlatformHardening,
+
+    /** Fragmentation, noises, fronting, migration (was M8). */
+    CensorshipResistance,
+
+    /** Localisation, metadata surface, distribution (was M9). */
+    Release,
+
+    /** Stored and validated, acted on by nobody. */
+    None,
+}
 
 /** One registry row. */
 public data class DirectiveSpec(

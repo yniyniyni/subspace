@@ -25,6 +25,45 @@
     <!-- Informational only — never blocks activation. -->
     <string name="routing_update_failed">Last update failed</string>
 
+    <!-- Provenance (spec §9). The badge is the only place the user ever learns
+         that a provider, and not they, installed a rule set. -->
+    <string name="routing_source_made_here">Made here</string>
+    <string name="routing_source_deeplink">From a link</string>
+    <string name="routing_source_qr">From a QR code</string>
+    <string name="routing_source_clipboard">From the clipboard</string>
+    <string name="routing_source_subscription">From \"%1$s\"</string>
+    <!-- A provider-delivered profile whose subscription group has no name yet.
+         Naming the subscription id instead would be worse than saying nothing. -->
+    <string name="routing_source_provider">From your provider</string>
+
+    <string name="routing_asset_ready">Geo files ready</string>
+    <string name="routing_asset_pending">Preparing geo files…</string>
+    <string name="routing_downloading">Downloading %1$s / %2$s</string>
+    <!-- No total: the server declared no Content-Length. "%1$s / 0 B" would read
+         as a finished download of nothing. -->
+    <string name="routing_downloading_unknown_total">Downloading %1$s</string>
+    <string name="routing_download_cancel_description">Cancel download for %1$s</string>
+
+    <!-- §A.3.1's persistent failure marker, one line per closed-vocabulary
+         reason. None names a URL (§5.6). -->
+    <string name="routing_asset_failed_download">Update failed — could not download</string>
+    <string name="routing_asset_failed_timeout">Update failed — timed out</string>
+    <string name="routing_asset_failed_rejected">Update failed — the file was not a geo database</string>
+    <string name="routing_asset_failed_unsupplied">Update failed — this profile names no source for that file</string>
+    <string name="routing_asset_failed_install">Update failed — could not be saved</string>
+    <string name="routing_asset_failed_cancelled">Update cancelled</string>
+
+    <!-- The visible cost of the M6/M6.5 split. Removed when DNS is applied. -->
+    <string name="routing_dns_not_applied">DNS settings in this profile are stored but not applied</string>
+
+    <!-- Imported profiles are read-only; editing means editing a copy (spec §4.2). -->
+    <string name="routing_duplicate_label">Duplicate</string>
+    <string name="routing_duplicate_description">Duplicate and edit %1$s</string>
+
+    <string name="routing_import_menu_description">Import a routing profile</string>
+    <string name="routing_import_clipboard">Import from clipboard</string>
+    <string name="routing_import_qr">Scan QR code</string>
+
     <string name="routing_empty_title">No rule sets yet</string>
     <string name="routing_empty_message">Create a rule set to block, proxy or route traffic directly by domain or address.</string>
 
@@ -100,5 +139,53 @@
         <item quantity="one">%d app selected</item>
         <item quantity="other">%d apps selected</item>
     </plurals>
+
+    <!-- Import review sheet (Task 12). Spec §6: every channel confirms here.
+         Geo rows interpolate host and filename only — never a URL (§5.6).
+         Profile name is the provider-supplied label, same exemption as
+         routing_edit_description. -->
+    <string name="import_review_title">Review routing profile</string>
+    <string name="import_review_rejected_title">Could not import</string>
+    <string name="import_review_confirm">Import</string>
+    <string name="import_review_dismiss">Cancel</string>
+    <string name="import_review_replaces_existing">This replaces an existing profile with the same name.</string>
+    <!-- %1$s is an outcome label (Block/Proxy/Direct); %2$d is the entry count. -->
+    <string name="import_review_bucket_count">%1$s · %2$d</string>
+    <string name="import_review_default_direct">Everything else goes direct</string>
+    <string name="import_review_default_proxy">Everything else is proxied</string>
+    <!-- %1$s host, %2$s filename -->
+    <string name="import_review_geo_row">%1$s · %2$s</string>
+    <!-- %1$s host, %2$s filename, %3$s short file size -->
+    <string name="import_review_geo_row_with_size">%1$s · %2$s · %3$s</string>
+    <string name="import_review_geo_already_on_device">Already on this device</string>
+    <string name="import_review_dns_unapplied">DNS settings in this profile are stored but not applied</string>
+    <string name="import_review_will_activate">This profile will become the active routing rules.</string>
+    <string name="import_review_will_not_activate">This profile will be stored and will not replace the active rules.</string>
+    <string name="import_review_replaces_active">These rules are the ones currently in use, so they take effect right away.</string>
+    <string name="import_review_disable_title">Turn routing off</string>
+    <string name="import_review_disable_body">This turns routing off. Stored profiles are kept; traffic uses the default path until you activate a profile again.</string>
+    <string name="import_review_disable_confirm">Turn off</string>
+    <string name="import_review_problem_not_a_routing_link">This is not a routing profile link.</string>
+    <string name="import_review_problem_unknown_verb">This routing link uses an action this app does not support.</string>
+    <string name="import_review_problem_malformed_base64">This link is not valid routing-profile data.</string>
+    <string name="import_review_problem_malformed_json">This routing profile could not be read.</string>
+    <string name="import_review_problem_missing_name">This routing profile has no name.</string>
+    <string name="import_review_problem_name_too_long">This routing profile\'s name is too long.</string>
+    <string name="import_review_problem_invalid_route_order">This routing profile\'s rule order is not valid.</string>
+    <string name="import_review_problem_invalid_entry">This routing profile contains an entry that cannot be used.</string>
+    <string name="import_review_problem_malformed_geo_url">This routing profile names a geo file with an unusable address.</string>
+    <string name="import_review_problem_insecure_geo_url">This routing profile would fetch a geo file over unencrypted HTTP.</string>
+    <!-- A confirmed import that did not land. Closed vocabulary, no URLs (§5.6). -->
+    <string name="import_review_failed_download">Could not download this profile\'s geo files.</string>
+    <string name="import_review_failed_timeout">The download took too long and was stopped.</string>
+    <string name="import_review_failed_rejected">The downloaded file was not a geo database.</string>
+    <string name="import_review_failed_unsupplied">This profile names no source for a geo file its rules need.</string>
+    <string name="import_review_failed_install">The geo files could not be saved.</string>
+    <string name="import_review_failed_cancelled">The download was cancelled.</string>
+    <string name="import_review_retry">Try again</string>
+    <string name="import_review_cancel_download">Stop download</string>
+
+    <string name="import_review_problem_unknown">This link could not be read.</string>
+    <string name="import_review_problem_too_large">This routing profile is too large to import.</string>
 </resources>
 

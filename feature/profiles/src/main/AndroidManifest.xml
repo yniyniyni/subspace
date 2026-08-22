@@ -1,12 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Task 20 (QrScanScreen): CAMERA is requested at the point of use, not at
-     install/first-launch — see QrScanScreen.kt. android:required="false" on
-     the feature declaration keeps this app installable on a device with no
-     camera; QrScanScreen's own permission-denied state is what a camera-less
-     device actually sees. -->
+<!-- Camera belongs to :core:ui's generic QrScanner. This feature manifest
+     retains only the network permission used by its profile screens. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.CAMERA" />
     <!--
       M4.5: LatencyTester reads ConnectivityManager.isActiveNetworkMetered to
       decide whether ping-on-launch may run. Declared in the module that makes
@@ -16,8 +12,4 @@
       build on exactly that.
     -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-feature
-        android:name="android.hardware.camera"
-        android:required="false" />
-
 </manifest>

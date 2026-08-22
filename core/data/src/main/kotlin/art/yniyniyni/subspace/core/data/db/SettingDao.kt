@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.data.db
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -19,7 +20,29 @@ internal interface SettingDao {
     @Query("SELECT value FROM settings WHERE `key` = :key")
     fun observe(key: String): Flow<String?>
 
+    /** One-shot counterpart used by transactional compare-and-set operations. */
+    @Query("SELECT value FROM settings WHERE `key` = :key")
+    suspend fun value(key: String): String?
+
     /** Inserts or overwrites a setting. */
     @Upsert
     suspend fun put(setting: SettingEntity)
+
+    /** Atomically claims an unset/null-reading numeric setting for [value]. */
+    @Transaction
+    suspend fun putIfNoNumericValue(
+        key: String,
+        value: Long,
+    ): Boolean {
+        if (this.value(key)?.toLongOrNull() != null) return false
+        put(SettingEntity(key, value.toString()))
+        return true
+    }
+
+    /** Clears [key] only while it still contains [expected], returning the changed-row count. */
+    @Query("UPDATE settings SET value = '' WHERE `key` = :key AND value = :expected")
+    suspend fun clearIfValue(
+        key: String,
+        expected: String,
+    ): Int
 }

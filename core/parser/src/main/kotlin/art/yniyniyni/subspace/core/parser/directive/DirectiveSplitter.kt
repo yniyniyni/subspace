@@ -60,14 +60,50 @@ public object DirectiveSplitter {
 }
 
 /**
+ * The schemes a routing deeplink can arrive under, and the only path under them
+ * this consumes. Mirrors `RoutingProfileImport`'s own accepted forms — kept as
+ * literals here rather than imported so `:core:parser`'s directive layer does
+ * not depend on its routing layer for a prefix test.
+ */
+private val ROUTING_LINK_PREFIXES = listOf("happ://routing/", "subspace://routing/")
+
+/**
+ * A bare `happ://routing/…` line, as the `routing` directive, or null.
+ *
+ * The routing directive is the one key a provider can deliver in a body without
+ * a `#key:` prefix, because the deeplink *is* the value. Recognising it here is
+ * what stops it reaching `SubscriptionParser`, which would try to read it as a
+ * server (§A.1) — and consuming it is the point: leaving a recognised directive
+ * line in the body is the exact defect that rule exists for.
+ *
+ * [trimmed] must already be `trimStart()`ed, so this matches line-leading only:
+ * a `happ://routing/` appearing mid-line is inside a share link's fragment
+ * (`vless://…#happ://routing/x`), where consuming it would destroy the server's
+ * name — the same trap [asBodyDirective] documents for `#`.
+ *
+ * The value is passed through verbatim and never decoded here. §5.6: the
+ * payload is the user's routing rules, and the directive layer neither reads
+ * nor logs it.
+ */
+private fun asRoutingLinkDirective(trimmed: String): RawDirective? {
+    val matches = ROUTING_LINK_PREFIXES.any { prefix -> trimmed.startsWith(prefix, ignoreCase = true) }
+    return if (matches) RawDirective("routing", trimmed.trimEnd(), DirectiveSource.BodyLine) else null
+}
+
+/**
  * `#key: value` at the start of a line, or null.
  *
  * Line-leading only. A `#` mid-line is a share link's fragment
  * (`vless://…#My%20Server`) and consuming it would destroy the server's name.
  * A `#` with no colon after it is an ordinary comment and stays in the body.
  */
+// ReturnCount: the routing-link form and the `#key:` form are two distinct
+// recognitions of the same line, each with its own early exit. Nesting them
+// would hide that a line matching neither stays in the body.
+@Suppress("ReturnCount")
 private fun String.asBodyDirective(): RawDirective? {
     val trimmed = trimStart()
+    asRoutingLinkDirective(trimmed)?.let { return it }
     if (!trimmed.startsWith("#")) return null
 
     val separator = trimmed.indexOf(':')

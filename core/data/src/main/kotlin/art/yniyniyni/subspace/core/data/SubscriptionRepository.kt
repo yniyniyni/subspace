@@ -129,12 +129,17 @@ public fun isDirectiveEnabled(value: String?): Boolean {
  * `ProfileGroupEntity` was built with.
  */
 @Singleton
+// TooManyFunctions: the subscription contract's read/write surface plus its
+// directive-resolution members. Splitting it would put "what did the provider
+// send" and "what is stored" in different classes for the same table.
+@Suppress("TooManyFunctions")
 public class SubscriptionRepository
 @Inject
 internal constructor(
     private val dao: SubscriptionDao,
     private val profiles: ProfileRepository,
     private val database: SubspaceDatabase,
+    private val routingDeletion: RoutingProfileDeletion,
 ) {
     // add() is a read (does this url exist?) followed by a conditional write,
     // the same shape ProfileRepository.defaultGroupId() guards — and the same
@@ -230,16 +235,34 @@ internal constructor(
         }
 
     /**
-     * Deletes a subscription, its group, its servers, its directives and its
-     * overrides.
+     * Deletes a subscription and everything it owns, including routing profiles and generations.
      *
-     * Implemented by deleting the **group**: §A.1 requires deletion to cascade,
-     * and the foreign keys make that one statement rather than five remembered
-     * ones.
+     * [RoutingProfileDeletion] serialises this lifecycle against imports and activation changes,
+     * clears the active routing id conditionally in the same Room transaction as the group
+     * cascade, then removes the now-unreferenced generation trees.
      */
     public suspend fun delete(id: Long) {
         val subscription = dao.subscription(id) ?: return
-        profiles.deleteGroup(subscription.groupId)
+        routingDeletion.deleteSubscription(id, subscription.groupId)
+    }
+
+    /**
+     * Deletes [groupId] through whichever lifecycle owns it.
+     *
+     * A subscription-backed group must not go through the plain group cascade:
+     * foreign keys would remove the subscription and its routing rows, but
+     * nothing would clear `activeRoutingRuleSetId` when one of those rows was
+     * active, and nothing would remove the `geo/sets/<id>` trees they owned.
+     * Routing every group deletion through here is what stops a caller
+     * reintroducing that bypass by reaching for `ProfileRepository.deleteGroup`.
+     */
+    public suspend fun deleteGroup(groupId: Long) {
+        val subscription = dao.subscriptionByGroup(groupId)
+        if (subscription == null) {
+            profiles.deleteGroup(groupId)
+        } else {
+            routingDeletion.deleteSubscription(subscription.id, subscription.groupId)
+        }
     }
 
     /** Toggles the HWID header (§A.4.1) for [id]. A no-op if the subscription no longer exists. */
@@ -286,6 +309,21 @@ internal constructor(
         val pinned = dao.overrides(id).firstOrNull { it.key == key }?.value
         return resolveEffective(key, providerValue, pinned, default)
     }
+
+    /**
+     * Every subscription's provider-sent value for [key], keyed by subscription
+     * id, recomposing on any directive change.
+     *
+     * Provider values only — a pinned override is deliberately not applied
+     * here. The one caller is the routing screen's provider-import channel,
+     * which is about what the provider *sent*; an override is the user's answer
+     * to that, and conflating them would make a pinned value look like a fresh
+     * delivery.
+     */
+    public fun observeDirectiveValues(key: String): Flow<Map<Long, String>> =
+        dao.observeDirectivesWithKey(key).map { rows ->
+            rows.associate { it.subscriptionId to it.value }
+        }
 
     /**
      * Resolves [key] the same way [effective] does, recomposing on every

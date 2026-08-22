@@ -15,7 +15,7 @@ import javax.inject.Singleton
  *
  * **Deliberately not Room.** §3 routes state through Room when the *other*
  * process must read it, and nothing in `:bg` consumes a latency —
- * `subscription-autoconnect-type: lowestdelay` is `Consumer.M9`. Keeping these
+ * `subscription-autoconnect-type: lowestdelay` is `Consumer.Release`. Keeping these
  * in memory makes session scoping a property of where the data lives rather than
  * a cleanup step someone can forget, and avoids a migration for values that stop
  * being true the moment the network changes.

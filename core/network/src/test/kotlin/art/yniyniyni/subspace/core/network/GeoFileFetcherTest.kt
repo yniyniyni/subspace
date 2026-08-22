@@ -46,7 +46,7 @@ class GeoFileFetcherTest {
         server.enqueue(MockResponse(code = 200, body = "hello"))
         val file = target()
 
-        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) {}
+        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) { _, _ -> }
 
         outcome.shouldBeInstanceOf<GeoDownloadOutcome.Success>()
         outcome.bytes shouldBe 5L
@@ -60,10 +60,41 @@ class GeoFileFetcherTest {
         server.enqueue(MockResponse.Builder().body(Buffer().write(ByteArray(4096))).build())
         val seen = mutableListOf<Long>()
 
-        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) { seen += it }
+        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) { bytes, _ -> seen += bytes }
 
         seen.isNotEmpty() shouldBe true
         seen.last() shouldBe 4096L
+    }
+
+    // The row renders "12 MB / 23 MB", so the total has to come from the same
+    // callback as the count. Without it the UI can only show a spinner.
+    @Test
+    fun reportsTheDeclaredTotalAlongsideTheRunningCount() = runTest {
+        server.enqueue(MockResponse.Builder().body(Buffer().write(ByteArray(4096))).build())
+        val seen = mutableListOf<Pair<Long, Long?>>()
+
+        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) { bytes, total ->
+            seen += bytes to total
+        }
+
+        seen.last() shouldBe (4096L to 4096L)
+    }
+
+    // A chunked response declares no length. Reporting a made-up total would
+    // render as "12 MB / 0 MB"; null is what lets the row show an
+    // indeterminate bar instead.
+    @Test
+    fun aResponseWithoutAContentLengthReportsANullTotal() = runTest {
+        server.enqueue(
+            MockResponse.Builder().chunkedBody(Buffer().write(ByteArray(4096)), 1024).build(),
+        )
+        val seen = mutableListOf<Pair<Long, Long?>>()
+
+        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) { bytes, total ->
+            seen += bytes to total
+        }
+
+        seen.last().second shouldBe null
     }
 
     @Test
@@ -75,7 +106,7 @@ class GeoFileFetcherTest {
             withContext(Dispatchers.Default.limitedParallelism(1)) {
                 try {
                     withTimeout(5.seconds) {
-                        fetcher.download(server.url("/geoip.dat").toString(), file, MAX) {
+                        fetcher.download(server.url("/geoip.dat").toString(), file, MAX) { _, _ ->
                             throw IllegalStateException("progress failed")
                         }
                     }
@@ -97,7 +128,7 @@ class GeoFileFetcherTest {
         server.enqueue(MockResponse.Builder().body(Buffer().write(ByteArray(4096))).build())
         val file = target()
 
-        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, 1024L) {}
+        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, 1024L) { _, _ -> }
 
         outcome shouldBe GeoDownloadOutcome.Failed(GeoFetchFailure.TooLarge)
         file.exists() shouldBe false
@@ -107,7 +138,7 @@ class GeoFileFetcherTest {
     fun mapsA404ToNotFound() = runTest {
         server.enqueue(MockResponse(code = 404))
 
-        fetcher.download(server.url("/nope.dat").toString(), target(), MAX) {} shouldBe
+        fetcher.download(server.url("/nope.dat").toString(), target(), MAX) { _, _ -> } shouldBe
             GeoDownloadOutcome.Failed(GeoFetchFailure.NotFound)
     }
 
@@ -115,7 +146,7 @@ class GeoFileFetcherTest {
     fun mapsA500ToServerError() = runTest {
         server.enqueue(MockResponse(code = 500))
 
-        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) {} shouldBe
+        fetcher.download(server.url("/geoip.dat").toString(), target(), MAX) { _, _ -> } shouldBe
             GeoDownloadOutcome.Failed(GeoFetchFailure.ServerError)
     }
 
@@ -134,7 +165,7 @@ class GeoFileFetcherTest {
         server.enqueue(MockResponse(code = 200, body = "hello"))
         val file = target()
 
-        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) {}
+        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) { _, _ -> }
 
         outcome.shouldBeInstanceOf<GeoDownloadOutcome.Success>()
         outcome.bytes shouldBe 5L
@@ -148,7 +179,7 @@ class GeoFileFetcherTest {
         server.close()
         val file = target()
 
-        val outcome = fetcher.download(url, file, MAX) {}
+        val outcome = fetcher.download(url, file, MAX) { _, _ -> }
 
         outcome.shouldBeInstanceOf<GeoDownloadOutcome.Failed>()
         outcome.reason shouldBe GeoFetchFailure.Unreachable
@@ -166,7 +197,7 @@ class GeoFileFetcherTest {
         )
         val file = target()
 
-        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) {}
+        val outcome = fetcher.download(server.url("/geoip.dat").toString(), file, MAX) { _, _ -> }
 
         outcome.shouldBeInstanceOf<GeoDownloadOutcome.Failed>()
         outcome.reason shouldBe GeoFetchFailure.Unreachable
@@ -188,7 +219,7 @@ class GeoFileFetcherTest {
                 OkHttpClient.Builder().readTimeout(100, TimeUnit.MILLISECONDS).build(),
             )
 
-        val outcome = shortReadTimeoutFetcher.download(server.url("/geoip.dat").toString(), file, MAX) {}
+        val outcome = shortReadTimeoutFetcher.download(server.url("/geoip.dat").toString(), file, MAX) { _, _ -> }
 
         outcome.shouldBeInstanceOf<GeoDownloadOutcome.Failed>()
         outcome.reason shouldBe GeoFetchFailure.TimedOut
@@ -208,7 +239,7 @@ class GeoFileFetcherTest {
         file.writeText("partial")
         val download =
             async(Dispatchers.IO) {
-                fetcher.download(server.url("/geoip.dat").toString(), file, MAX) {}
+                fetcher.download(server.url("/geoip.dat").toString(), file, MAX) { _, _ -> }
             }
 
         server.takeRequest(5, TimeUnit.SECONDS).shouldNotBeNull()
@@ -221,7 +252,7 @@ class GeoFileFetcherTest {
 
     @Test
     fun rejectsAUrlThatIsNotHttp() = runTest {
-        fetcher.download("file:///etc/passwd", target(), MAX) {} shouldBe
+        fetcher.download("file:///etc/passwd", target(), MAX) { _, _ -> } shouldBe
             GeoDownloadOutcome.Failed(GeoFetchFailure.InvalidUrl)
     }
 

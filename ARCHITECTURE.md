@@ -1083,13 +1083,14 @@ Mandatory rules:
 
 ### A.3.1 Routing profiles distributed as deeplinks
 
-**Status: implemented for rules in M6, pending device verification.** §10.1
-applies in full — a green build is not a working import, and nothing here
-is finished until the fourteen-item checklist in
-`docs/agent/specs/2026-08-20-m6-routing-profile-deeplinks-design.md` §11
-passes on physical hardware and is recorded in
-`docs/agent/research/2026-08-20-m6-device-verification.md`. The DNS half is
-M6.5; raw Xray JSON passthrough is M7.
+**Status: done for rules in M6, verified on hardware 2026-08-22** (Pixel 8 /
+Android 17). The fourteen-item checklist in
+`docs/agent/specs/2026-08-20-m6-routing-profile-deeplinks-design.md` §11 is
+recorded in `docs/agent/research/2026-08-20-m6-device-verification.md`,
+including both mandatory exit criteria. Item 14's QR half and three optional
+regression rows were unreachable and are explicitly recorded as not run.
+The run cost three product defects, none of them visible to a green build —
+§10.1 again. The DNS half is M6.5; raw Xray JSON passthrough is M7.
 
 This is what the user asked about specifically and it is the strongest idea
 in Happ. Routing configuration is a **shareable artifact**, not something

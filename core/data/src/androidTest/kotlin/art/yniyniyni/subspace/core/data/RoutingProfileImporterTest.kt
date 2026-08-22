@@ -163,30 +163,42 @@ class RoutingProfileImporterTest {
         repository.observeAllStored().first().single().assetGeneration shouldBe 1L
     }
 
+    // Was `anUnchangedFailedProfileIsStillAnUnconditionalNoOp`, which asserted
+    // that re-importing an identical link after a failed install did nothing.
+    // Spec §7.5 says the opposite: Failed "clears on a successful retry", and
+    // the refresh cap "exists to stop a chatty profile hammering a CDN, not to
+    // tell the device's owner no". The old assertion made a transient network
+    // failure permanent — the row could only be cleared by deleting it.
+    //
+    // What is still worth pinning is that the failed attempt left nothing torn
+    // behind for the retry to trip over.
     @Test
-    fun anUnchangedFailedProfileIsStillAnUnconditionalNoOp() = runTest {
+    fun aFailedImportLeavesACleanRowThatAnIdenticalRetryCanPublish() = runTest {
         val profile = geoIpOnlyProfile()
         downloadFails = true
         val failed =
             importer
                 .apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
                 .shouldBeInstanceOf<ImportOutcome.Failed>()
-        val before = repository.stored(failed.id).shouldNotBeNull()
-        val treeBefore = assets.setsRoot().walkTopDown().map { it.relativeTo(root).path }.toList()
+        repository.stored(failed.id).shouldNotBeNull().assetState shouldBe RuleSetAssetState.Failed
+        // Nothing was published, so nothing was activated.
+        settings.activeRoutingRuleSetId.first() shouldBe null
         downloads.clear()
         downloadTargets.clear()
         validationCalls = 0
         downloadFails = false
 
-        importer.apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Header, null) shouldBe
-            ImportOutcome.Unchanged
+        val retried =
+            importer
+                .apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
 
-        repository.stored(failed.id) shouldBe before
-        assets.setsRoot().walkTopDown().map { it.relativeTo(root).path }.toList() shouldBe treeBefore
-        downloads.shouldBeEmpty()
-        downloadTargets.shouldBeEmpty()
-        validationCalls shouldBe 0
-        settings.activeRoutingRuleSetId.first() shouldBe null
+        retried.id shouldBe failed.id
+        val after = repository.stored(failed.id).shouldNotBeNull()
+        after.assetState shouldBe RuleSetAssetState.Ready
+        after.assetFailure shouldBe null
+        after.assetGeneration shouldBe 1L
+        settings.activeRoutingRuleSetId.first() shouldBe failed.id
     }
 
     @Test
@@ -754,7 +766,7 @@ class RoutingProfileImporterTest {
                     downloader,
                     deletion,
                     progress,
-                    TEST_MATERIALISATION_TIMEOUT_MILLIS,
+                    SYNCHRONOUS_VALIDATION_TIMEOUT_MILLIS,
                 )
             lateinit var outcome: ImportOutcome
 
@@ -1329,6 +1341,25 @@ class RoutingProfileImporterTest {
         const val CONCURRENCY_PROBE_MILLIS = 1_000L
         const val WAITER_REGISTRATION_MILLIS = 100L
         const val TEST_MATERIALISATION_TIMEOUT_MILLIS = 100L
-        const val SLOW_VALIDATION_MILLIS = 1_000L
+        const val SLOW_VALIDATION_MILLIS = 2_000L
+
+        /**
+         * The deadline for the synchronous-validation test, deliberately far
+         * longer than [TEST_MATERIALISATION_TIMEOUT_MILLIS].
+         *
+         * That test asserts that an uninterruptible validator makes `apply`
+         * outlive its deadline — which only means anything if validation is
+         * actually **reached**. With the 100 ms shared deadline it was not: on a
+         * Pixel 8 the row insert, the two Room flow reads and `prepareGeneration`
+         * together exceed 100 ms on a cold database, so the timeout fired during
+         * setup and the test measured the deadline rather than the validator.
+         * It failed for that reason on hardware while passing nowhere but CI,
+         * which never ran it.
+         *
+         * Must stay comfortably below [SLOW_VALIDATION_MILLIS]: the margin
+         * between them is what the assertion actually tests. Do not shrink this
+         * to make the suite faster.
+         */
+        const val SYNCHRONOUS_VALIDATION_TIMEOUT_MILLIS = 750L
     }
 }

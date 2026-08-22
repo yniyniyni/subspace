@@ -184,6 +184,20 @@ internal constructor(
     @Suppress("ReturnCount") // Each early exit names one ordered security/freshness gate.
     public suspend fun decideFor(profile: RoutingProfile): UpdateDecision {
         val existing = dao.byName(profile.name) ?: return UpdateDecision.New
+        // A row that never published successfully is always retryable.
+        //
+        // §7.3's silent no-op is about a subscription re-delivering content that
+        // already landed — its stated purpose is to stop the review sheet
+        // becoming an hourly interruption. It was never meant to cover an
+        // attempt that failed, and applying it there made a transient download
+        // failure permanent: the row kept the incoming fingerprint, so
+        // re-importing the byte-identical link answered Unchanged and did no
+        // I/O. The only escape was deleting the row.
+        //
+        // §7.5 is explicit that Failed "clears on a successful retry", and that
+        // the refresh cap "exists to stop a chatty profile hammering a CDN, not
+        // to tell the device's owner no". This gate is what makes that true.
+        if (existing.assetState != RuleSetAssetState.Ready.name) return UpdateDecision.Changed
         if (existing.fingerprint == profile.fingerprint()) return UpdateDecision.Unchanged
         val incoming = profile.lastUpdated ?: return UpdateDecision.Changed
         val stored = existing.lastUpdated ?: return UpdateDecision.Changed
@@ -409,19 +423,11 @@ private fun RoutingProfile.toEntity(
     toRuleSet().toEntity().copy(
         sourceKind = sourceKind.wireValue,
         subscriptionId = subscriptionId,
-        // fingerprint and lastUpdated are deliberately NOT written here.
-        //
-        // They are the two gates decideFor reads, and writing them at row
-        // creation made a failed first install permanently unretryable: the row
-        // kept the incoming fingerprint at generation 0, so re-importing the
-        // byte-identical link answered Unchanged and performed no I/O. A
-        // transient download failure could then only be cleared by deleting the
-        // row.
-        //
-        // commitGeneration writes both, so they record *successfully published*
-        // content and nothing else. That is what spec §7.3's silent-no-op is
-        // actually about — an unchanged re-sync of something that already
-        // landed, not an unfinished attempt.
+        lastUpdated = lastUpdated,
+        fingerprint = fingerprint(),
+        // Spec §7.4 step 1: "Approved import writes the row with assetState =
+        // Pending." What makes the row retryable is this state, not the absence
+        // of a fingerprint — see decideFor.
         assetState = RuleSetAssetState.Pending.name,
         assetFailure = null,
         geoIpUrl = geoIpUrl,

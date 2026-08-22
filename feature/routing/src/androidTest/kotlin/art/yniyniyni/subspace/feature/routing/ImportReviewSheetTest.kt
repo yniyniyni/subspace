@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.feature.routing
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -112,12 +113,19 @@ class ImportReviewSheetTest {
         composeRule.onNodeWithText(string(R.string.import_review_confirm)).assertIsNotFocused()
     }
 
+    // Was `applyingDisablesCancelAndConfirm`, which asserted that Applying left
+    // both buttons disabled. That was the defect: this sheet also blocks swipe,
+    // scrim and system-back while Applying, and the only cancel-download control
+    // lived on the routing row behind it — so a confirmed import could not be
+    // stopped at all. Confirm is still not offered (it is already running); what
+    // replaces the pair is a reachable stop.
     @Test
-    fun applyingDisablesCancelAndConfirm() {
+    fun applyingOffersAStopAndNotAConfirm() {
         setContent(reviewingState.copy(stage = Stage.Applying))
 
-        composeRule.onNodeWithText(string(R.string.import_review_dismiss)).assertIsNotEnabled()
-        composeRule.onNodeWithText(string(R.string.import_review_confirm)).assertIsNotEnabled()
+        composeRule.onNodeWithText(string(R.string.import_review_cancel_download)).assertIsEnabled()
+        composeRule.onNodeWithText(string(R.string.import_review_confirm)).assertDoesNotExist()
+        composeRule.onNodeWithText(string(R.string.import_review_dismiss)).assertDoesNotExist()
     }
 
     private fun string(

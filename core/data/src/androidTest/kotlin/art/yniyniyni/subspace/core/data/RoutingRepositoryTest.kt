@@ -190,12 +190,27 @@ class RoutingRepositoryTest {
         stack.repository.observeAll().first().map { it.name } shouldBe listOf("alpha", "zulu")
     }
 
+    /**
+     * Stores [profile] the way a completed import leaves it.
+     *
+     * `upsertProfile` alone is only step 1 of spec §7.4 — it writes the row as
+     * `Pending` and publishes nothing. The `decideFor` gates below describe what
+     * happens when a provider re-delivers content that already **landed**, so
+     * their fixture has to reach the state `commitGeneration` produces. Setting
+     * up with the bare upsert made these tests assert gate behaviour against a
+     * half-finished import, which is the state §7.5 requires to stay retryable.
+     */
+    private suspend fun publish(profile: RoutingProfile) {
+        val id = stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        stack.repository.commitGeneration(id, profile, generation = 0L)
+    }
+
     @Test
     fun anUnchangedProfileIsRecognisedAsUnchanged() = runTest {
         val profile = sampleProfile()
 
         stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.New
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
 
         stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.Unchanged
     }
@@ -203,7 +218,7 @@ class RoutingRepositoryTest {
     @Test
     fun bumpingOnlyLastUpdatedIsStillUnchanged() = runTest {
         val profile = sampleProfile()
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
 
         stack.repository.decideFor(profile.copy(lastUpdated = SAMPLE_LAST_UPDATED + 60)) shouldBe
             RoutingRepository.UpdateDecision.Unchanged
@@ -212,7 +227,7 @@ class RoutingRepositoryTest {
     @Test
     fun anIdenticalProfileWithAnOlderTimestampIsStillUnchanged() = runTest {
         val profile = sampleProfile()
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
 
         stack.repository.decideFor(profile.copy(lastUpdated = SAMPLE_LAST_UPDATED - 60)) shouldBe
             RoutingRepository.UpdateDecision.Unchanged
@@ -221,7 +236,7 @@ class RoutingRepositoryTest {
     @Test
     fun changedRulesWithANewerTimestampAreChanged() = runTest {
         val profile = sampleProfile()
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
         val changed =
             profile.copy(
                 lastUpdated = SAMPLE_LAST_UPDATED + 60,
@@ -236,7 +251,7 @@ class RoutingRepositoryTest {
     @Test
     fun changedRulesWithAnOlderTimestampAreStale() = runTest {
         val profile = sampleProfile()
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
         val replayed =
             profile.copy(
                 lastUpdated = SAMPLE_LAST_UPDATED - 60,
@@ -251,7 +266,7 @@ class RoutingRepositoryTest {
     @Test
     fun changedRulesWithTheSameTimestampAreStale() = runTest {
         val profile = sampleProfile()
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
         val replayed =
             profile.copy(
                 buckets =
@@ -265,7 +280,7 @@ class RoutingRepositoryTest {
     @Test
     fun aStoredProfileWithoutLastUpdatedHasNoStaleGate() = runTest {
         val profile = sampleProfile(lastUpdated = null)
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
         val changed =
             profile.copy(
                 buckets =
@@ -279,7 +294,7 @@ class RoutingRepositoryTest {
     @Test
     fun anIncomingProfileWithoutLastUpdatedHasNoStaleGate() = runTest {
         val profile = sampleProfile()
-        stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
+        publish(profile)
         val changed =
             profile.copy(
                 lastUpdated = null,
@@ -512,7 +527,8 @@ class RoutingRepositoryTest {
         stored.geoSiteUrl shouldBe profile.geoSiteUrl
         stored.hasUnappliedDns shouldBe true
         stored.assetGeneration shouldBe 0L
-        stored.assetState shouldBe RuleSetAssetState.None
+        // §7.4 step 1: "Approved import writes the row with assetState = Pending."
+        stored.assetState shouldBe RuleSetAssetState.Pending
         stored.assetFailure shouldBe null
         stored.toString() shouldNotContain "geosite:cn"
         stored.toString() shouldNotContain "assets.example"

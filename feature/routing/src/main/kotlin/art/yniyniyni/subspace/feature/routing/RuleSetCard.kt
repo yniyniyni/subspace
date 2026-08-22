@@ -242,24 +242,32 @@ private fun AssetStateRow(
         }
         return
     }
+    // A literal-only set has no geo files, so none of these lines apply to it.
+    // It reported "Geo files ready" about files it does not have.
+    if (!row.requiresGeoFiles && row.assetState != RuleSetAssetState.Failed) return
     when (row.assetState) {
         RuleSetAssetState.None -> Unit
-        RuleSetAssetState.Ready ->
-            MarkerRow(
-                text = stringResource(R.string.routing_asset_ready),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        RuleSetAssetState.Pending ->
-            MarkerRow(
-                text = stringResource(R.string.routing_asset_pending),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        // Plain text, no warning glyph: these are ordinary states, and
+        // MarkerRow's icon made a working profile look like it had a problem.
+        RuleSetAssetState.Ready -> AssetStateNote(R.string.routing_asset_ready)
+        RuleSetAssetState.Pending -> AssetStateNote(R.string.routing_asset_pending)
         RuleSetAssetState.Failed ->
             MarkerRow(
                 text = stringResource(row.assetFailure.messageRes()),
                 color = MaterialTheme.colorScheme.error,
             )
     }
+}
+
+/** One non-alarming asset-state line. [MarkerRow] is for the states that warrant a warning. */
+@Composable
+private fun AssetStateNote(textRes: Int) {
+    Text(
+        text = stringResource(textRes),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(top = MARKER_TOP_PADDING),
+    )
 }
 
 /**

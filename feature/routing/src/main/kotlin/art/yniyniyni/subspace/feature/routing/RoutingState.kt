@@ -81,6 +81,13 @@ internal data class RuleSetRow(
     val assetFailure: RuleSetAssetFailure? = null,
     val hasUnappliedDns: Boolean = false,
     val downloadProgress: GeoProgress? = null,
+    /**
+     * Whether the published rules reference any geo database at all.
+     *
+     * A literal-only set has no geo files, so every asset-state line is noise on
+     * it — it reported "Geo files ready" about files it does not have.
+     */
+    val requiresGeoFiles: Boolean = false,
 ) {
     val canActivate: Boolean get() = missingGeoFiles.isEmpty()
 

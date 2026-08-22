@@ -189,6 +189,37 @@ class RoutingListScreenContentTest {
         composeRule.onNodeWithText("Scan QR code").assertIsDisplayed()
     }
 
+    // Found on hardware: a literal-only profile rendered "Geo files ready" —
+    // about files it does not have, under a warning triangle. The asset-state
+    // line belongs only to sets that actually reference a geo database.
+    @Test
+    fun aLiteralOnlyProfileSaysNothingAboutGeoFiles() {
+        setContent(
+            RoutingState(
+                ruleSets =
+                listOf(
+                    providerRow.copy(assetState = RuleSetAssetState.Ready, requiresGeoFiles = false),
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("Geo files ready").assertDoesNotExist()
+    }
+
+    @Test
+    fun aGeoBackedProfileStillReportsItsAssetsAsReady() {
+        setContent(
+            RoutingState(
+                ruleSets =
+                listOf(
+                    providerRow.copy(assetState = RuleSetAssetState.Ready, requiresGeoFiles = true),
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("Geo files ready").assertIsDisplayed()
+    }
+
     @Test
     fun theOffRowIsAlwaysPresent() {
         setContent(RoutingState(ruleSets = listOf(blockedRow)))

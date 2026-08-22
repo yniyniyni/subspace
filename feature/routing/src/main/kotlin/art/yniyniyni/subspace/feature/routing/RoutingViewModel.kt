@@ -182,6 +182,7 @@ private fun StoredRuleSet.toRow(
         assetFailure = assetFailure,
         hasUnappliedDns = hasUnappliedDns,
         downloadProgress = download?.let { GeoProgress(it.downloadedBytes, it.totalBytes) },
+        requiresGeoFiles = required.isNotEmpty(),
     )
 }
 

@@ -3,7 +3,9 @@
 // tokens/spacing.css's --space-* scale, already named by the val each
 // initializes. See core/ui's GroupCard.kt and SettingRow.kt for the same
 // pattern.
-@file:Suppress("MagicNumber")
+// TooManyFunctions: one sheet, rendered as small single-purpose composables.
+// Splitting the file would separate the state from the bodies that read it.
+@file:Suppress("MagicNumber", "TooManyFunctions")
 
 package art.yniyniyni.subspace.feature.routing
 
@@ -25,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.parser.routing.ImportProblem
 import art.yniyniyni.subspace.core.ui.component.SubspaceBottomSheet
 
@@ -42,6 +45,16 @@ internal sealed interface Stage {
     data object Done : Stage
 
     data object Rejected : Stage
+
+    /**
+     * The import was confirmed and did not land.
+     *
+     * Distinct from [Rejected], which is a link this app would not parse.
+     * This one parsed, the user approved it, and the *installation* failed —
+     * so it carries a closed-vocabulary reason and a retry, where Rejected
+     * carries a parse problem and nothing to retry.
+     */
+    data object Failed : Stage
 }
 
 /**
@@ -81,6 +94,8 @@ internal data class ImportReviewState(
     val hasUnappliedDns: Boolean = false,
     val willActivate: Boolean = false,
     val problem: ImportProblem? = null,
+    /** Why a confirmed import did not land. Non-null only with [Stage.Failed]. */
+    val failure: RuleSetAssetFailure? = null,
 )
 
 /**
@@ -93,24 +108,29 @@ internal data class ImportReviewState(
 @Composable
 internal fun ImportReviewSheet(
     state: ImportReviewState,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
+    actions: ImportReviewActions,
     modifier: Modifier = Modifier,
 ) {
     SubspaceBottomSheet(
         open = state.stage != Stage.Done,
         titleRes = state.titleRes(),
-        onDismiss = onDismiss,
+        onDismiss = actions.onDismiss,
         modifier = modifier,
         dismissible = state.stage != Stage.Applying,
     ) {
-        ImportReviewSheetContent(
-            state = state,
-            onConfirm = onConfirm,
-            onDismiss = onDismiss,
-        )
+        ImportReviewSheetContent(state = state, actions = actions)
     }
 }
+
+/** The sheet's callbacks, grouped for the same reason [RoutingListActions] is. */
+internal data class ImportReviewActions(
+    val onConfirm: () -> Unit,
+    val onDismiss: () -> Unit,
+    /** Stops a download already in flight — the only reachable cancel while Applying. */
+    val onCancelApply: () -> Unit = {},
+    /** Returns a failed import to Reviewing so it can be confirmed again. */
+    val onRetry: () -> Unit = {},
+)
 
 /**
  * The stateless sheet body — same split [RoutingListScreenContent] documents:
@@ -121,8 +141,7 @@ internal fun ImportReviewSheet(
 @Composable
 internal fun ImportReviewSheetContent(
     state: ImportReviewState,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
+    actions: ImportReviewActions,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -135,6 +154,7 @@ internal fun ImportReviewSheetContent(
     ) {
         when {
             state.stage == Stage.Rejected -> RejectedBody(state.problem)
+            state.stage == Stage.Failed -> FailedBody(state.name, state.failure)
             state.isDisableRouting -> {
                 Text(
                     text = stringResource(R.string.import_review_disable_body),
@@ -146,11 +166,7 @@ internal fun ImportReviewSheetContent(
         if (state.stage == Stage.Applying) {
             CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
         }
-        ActionRow(
-            state = state,
-            onConfirm = onConfirm,
-            onDismiss = onDismiss,
-        )
+        ActionRow(state = state, actions = actions)
     }
 }
 
@@ -235,6 +251,45 @@ private fun GeoRow(download: GeoDownloadPreview) {
     }
 }
 
+/**
+ * A confirmed import that did not land, with the reason and a retry.
+ *
+ * §5.6: [RuleSetAssetFailure] is a closed vocabulary and no member carries a
+ * URL, so naming the reason discloses nothing about where the file came from.
+ */
+@Composable
+private fun FailedBody(
+    name: String,
+    failure: RuleSetAssetFailure?,
+) {
+    Text(text = name, style = MaterialTheme.typography.titleMedium)
+    Text(
+        text = stringResource(failure.sheetMessageRes()),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
+/**
+ * A [RuleSetAssetFailure] always accompanies [Stage.Failed] — the importer
+ * returns the pair — so null can only be a future state this `when` has not
+ * learned. It gets the least specific reason rather than a claim the state
+ * cannot support.
+ *
+ * Separate from [RuleSetCard]'s mapping of the same enum on purpose: the row
+ * reports a set's standing condition ("Update failed — timed out") while the
+ * sheet explains what just happened to an import the user confirmed a moment
+ * ago. Same vocabulary, different voice.
+ */
+private fun RuleSetAssetFailure?.sheetMessageRes(): Int =
+    when (this) {
+        RuleSetAssetFailure.DownloadFailed, null -> R.string.import_review_failed_download
+        RuleSetAssetFailure.TimedOut -> R.string.import_review_failed_timeout
+        RuleSetAssetFailure.Rejected -> R.string.import_review_failed_rejected
+        RuleSetAssetFailure.InstallFailed -> R.string.import_review_failed_install
+        RuleSetAssetFailure.Cancelled -> R.string.import_review_failed_cancelled
+    }
+
 @Composable
 private fun RejectedBody(problem: ImportProblem?) {
     Text(
@@ -247,35 +302,45 @@ private fun RejectedBody(problem: ImportProblem?) {
 @Composable
 private fun ActionRow(
     state: ImportReviewState,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit,
+    actions: ImportReviewActions,
 ) {
-    val reviewing = state.stage == Stage.Reviewing
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // While Applying, this sheet blocks swipe, scrim and system-back, and
+        // the row's own cancel sits behind it — so stopping the download has to
+        // be reachable from here or it is not reachable at all.
+        if (state.stage == Stage.Applying) {
+            Button(onClick = actions.onCancelApply) {
+                Text(stringResource(R.string.import_review_cancel_download))
+            }
+            return@Row
+        }
         // Filled Cancel is composed first so it, not Import, is the default
         // focused action — confirming a Dangerous directive must not be Enter.
-        Button(
-            onClick = onDismiss,
-            enabled = state.stage != Stage.Applying,
-        ) {
+        Button(onClick = actions.onDismiss) {
             Text(stringResource(R.string.import_review_dismiss))
         }
-        if (state.stage != Stage.Rejected) {
-            TextButton(onClick = onConfirm, enabled = reviewing) {
-                Text(
-                    stringResource(
-                        if (state.isDisableRouting) {
-                            R.string.import_review_disable_confirm
-                        } else {
-                            R.string.import_review_confirm
-                        },
-                    ),
-                )
-            }
+        when (state.stage) {
+            Stage.Rejected -> Unit
+            Stage.Failed ->
+                TextButton(onClick = actions.onRetry) {
+                    Text(stringResource(R.string.import_review_retry))
+                }
+            else ->
+                TextButton(onClick = actions.onConfirm, enabled = state.stage == Stage.Reviewing) {
+                    Text(
+                        stringResource(
+                            if (state.isDisableRouting) {
+                                R.string.import_review_disable_confirm
+                            } else {
+                                R.string.import_review_confirm
+                            },
+                        ),
+                    )
+                }
         }
     }
 }

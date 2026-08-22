@@ -88,6 +88,26 @@ internal interface RoutingRuleSetDao {
         subscriptionId: Long?,
     )
 
+    /**
+     * Publishes a generation whose rules are already stored — the duplicate path.
+     *
+     * Distinct from [commitGeneration]: a copy's rules were written by the
+     * ordinary upsert and must not be overwritten from a profile, and it
+     * deliberately gains no fingerprint, timestamp or geo URLs. It is a
+     * hand-made row that happens to own copied assets.
+     */
+    @Query(
+        """
+        UPDATE routing_rule_sets
+        SET assetGeneration = :generation, assetState = 'Ready', assetFailure = NULL
+        WHERE id = :id
+        """,
+    )
+    suspend fun publishCopiedGeneration(
+        id: Long,
+        generation: Long,
+    )
+
     /** Updates the persistent asset state and failure as one inseparable pair. */
     @Query("UPDATE routing_rule_sets SET assetState = :state, assetFailure = :failure WHERE id = :id")
     suspend fun updateAssetState(

@@ -156,6 +156,38 @@ class RoutingResolverTest {
         assetScope.inUse shouldBe false
     }
 
+    // Regression, P1: a valid imported profile may carry Geoipurl/Geositeurl
+    // while its rules are literal-only. The importer treats that as needing no
+    // geo files and commits generation 0; inferring ownership from URL presence
+    // then sent the service to generationDir(id, 0), whose positive-generation
+    // guard throws during tunnel startup.
+    @Test
+    fun `a literal-only profile carrying geo urls resolves to the shared root`() = runTest {
+        val assetScope =
+            FakeAssetScope(
+                directoryFor = { id, generation, own ->
+                    if (own) File("/geo/sets/$id/$generation") else File("/geo")
+                },
+            )
+        val resolver =
+            RoutingResolver(
+                activeRuleSetId = { 7L },
+                loadStored = {
+                    storedRuleSet(
+                        ruleSet = literalSet.copy(id = 7),
+                        generation = 0,
+                        hasOwnSources = true,
+                    )
+                },
+                installedGeoFiles = { emptySet() },
+                assetScope = assetScope,
+            )
+
+        val resolution = resolver.resolveForTest()
+
+        resolution.shouldBeInstanceOf<RoutingResolution.Active>().assetDir shouldBe File("/geo")
+    }
+
     @Test
     fun `a hand-made set still resolves to the shared root`() = runTest {
         val assetScope =
@@ -210,8 +242,12 @@ class RoutingResolverTest {
 
     @Test
     fun `a generation update during acquisition retries inside one resolution scope`() = runTest {
-        val generationOne = storedRuleSet(literalSet.copy(id = 7), generation = 1, hasOwnSources = true)
-        val generationTwo = storedRuleSet(literalSet.copy(id = 7), generation = 2, hasOwnSources = true)
+        // geoSet, not literalSet: owning a generation now means the published
+        // rules actually require a geo file, so a literal-only set — even one
+        // carrying a geo URL — resolves to the shared root and never takes a
+        // lease. That distinction is the defect this predicate was changed for.
+        val generationOne = storedRuleSet(geoSet.copy(id = 7), generation = 1, hasOwnSources = true)
+        val generationTwo = storedRuleSet(geoSet.copy(id = 7), generation = 2, hasOwnSources = true)
         val assetScope =
             FakeAssetScope(
                 directoryFor = { id, generation, _ -> File("/geo/sets/$id/$generation") },
@@ -226,7 +262,9 @@ class RoutingResolverTest {
                         else -> generationTwo
                     }
                 },
-                installedGeoFiles = { emptySet() },
+                // Present, because this test is about the lease retry and the
+                // directory it settles on, not the missing-file gate.
+                installedGeoFiles = { setOf("geosite.dat", "geoip.dat") },
                 assetScope = assetScope,
             )
 
@@ -248,7 +286,7 @@ class RoutingResolverTest {
         val resolver =
             RoutingResolver(
                 activeRuleSetId = { 7L },
-                loadStored = { storedRuleSet(literalSet.copy(id = 7), generation = 1, hasOwnSources = true) },
+                loadStored = { storedRuleSet(geoSet.copy(id = 7), generation = 1, hasOwnSources = true) },
                 installedGeoFiles = { emptySet() },
                 assetScope = assetScope,
             )

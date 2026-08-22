@@ -169,6 +169,20 @@ internal constructor(
         }
 
     /**
+     * The geo filenames actually present in [directory].
+     *
+     * The same question `RoutingResolver` asks at the service boundary, so the
+     * activation gate on screen and the resolution the tunnel performs cannot
+     * disagree. Asking the shared root for a row that reads its own generation
+     * is what let the list enable a profile whose generation was absent because
+     * a same-named shared file happened to exist.
+     */
+    public suspend fun installedFileNames(directory: File): Set<String> =
+        withContext(Dispatchers.IO) {
+            directory.listFiles().orEmpty().filter(File::isFile).map(File::getName).toSet()
+        }
+
+    /**
      * Best-effort removal of every generation for [setId] other than [keep].
      *
      * A failed sweep costs disk space only. In particular, [keep] is never

@@ -92,6 +92,23 @@ class RoutingViewModelTest {
             if (pending.value == offer) pending.value = null
         }
 
+        override suspend fun duplicate(
+            id: Long,
+            name: String,
+        ): Long? {
+            val original = sets.value.firstOrNull { it.ruleSet.id == id } ?: return null
+            val copyId = sets.value.maxOf { it.ruleSet.id } + 1
+            // Mirrors the real seam: a copy is a hand-made row (no provenance)
+            // that keeps the original's rules.
+            sets.value = sets.value + stored(original.ruleSet.copy(id = copyId, name = name))
+            return copyId
+        }
+
+        /** What the row's *own* generation directory holds, distinct from the shared root. */
+        val ownInstalled: MutableStateFlow<Set<String>> = MutableStateFlow(emptySet())
+
+        override suspend fun installedGeoFilesFor(set: StoredRuleSet): Set<String> = ownInstalled.value
+
         override suspend fun ruleSet(id: Long): RoutingRuleSet? =
             sets.value.firstOrNull { it.ruleSet.id == id }?.ruleSet
 
@@ -421,6 +438,45 @@ class RoutingViewModelTest {
         viewModel.consumePendingOffer(first)
 
         source.pending.value shouldBe second
+    }
+
+    // Regression, P1: the list used to subtract every row's requirements from
+    // the flat shared catalogue. A profile that owns a generation reads from
+    // geo/sets/<id>/<gen>, so a same-named shared file made an unusable profile
+    // look activatable, and an empty shared root blocked a valid one.
+    @Test
+    fun `an own-generation profile is gated on its own generation, not the shared root`() = runTest {
+        val ownGeneration =
+            stored(geoSet, RoutingSourceKind.Deeplink).copy(assetGeneration = 2)
+        val source =
+            FakeSource(
+                sets = MutableStateFlow(listOf(ownGeneration)),
+                // The shared root has the file; the row's own generation does not.
+                installed = MutableStateFlow(setOf("geosite.dat")),
+            )
+        source.ownInstalled.value = emptySet()
+
+        val row = RoutingViewModel(source).state.value.ruleSets.single()
+
+        row.missingGeoFiles shouldBe setOf("geosite.dat")
+        row.canActivate shouldBe false
+    }
+
+    @Test
+    fun `an own-generation profile with its files present activates despite an empty shared root`() = runTest {
+        val ownGeneration =
+            stored(geoSet, RoutingSourceKind.Deeplink).copy(assetGeneration = 2)
+        val source =
+            FakeSource(
+                sets = MutableStateFlow(listOf(ownGeneration)),
+                installed = MutableStateFlow(emptySet()),
+            )
+        source.ownInstalled.value = setOf("geosite.dat")
+
+        val row = RoutingViewModel(source).state.value.ruleSets.single()
+
+        row.missingGeoFiles shouldBe emptySet()
+        row.canActivate shouldBe true
     }
 
     @Test

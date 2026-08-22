@@ -54,7 +54,12 @@ constructor(
                 sets.map { stored ->
                     stored.toRow(
                         isActive = stored.ruleSet.id == activeId,
-                        installed = installed,
+                        // Per row, not one shared answer: a row that owns a
+                        // generation reads from it, and the shared catalogue
+                        // cannot speak for it. `installed` remains the answer
+                        // for rows that read the shared root, and
+                        // installedGeoFilesFor returns exactly that for them.
+                        installed = if (stored.usesOwnGeneration) source.installedGeoFilesFor(stored) else installed,
                         failed = failed,
                         subscriptionName = stored.subscriptionId?.let(names::get),
                         download = downloads[stored.ruleSet.id],
@@ -95,13 +100,11 @@ constructor(
     fun duplicate(id: Long) {
         viewModelScope.launch {
             val original = _state.value.ruleSets.firstOrNull { it.id == id } ?: return@launch
-            val rules = source.ruleSet(id) ?: return@launch
-            source.upsert(
-                rules.copy(
-                    id = 0L,
-                    name = copyNameFor(original.name, _state.value.ruleSets.map { it.name }.toSet()),
-                ),
-            )
+            // Through the importer, not upsert: a copy of a profile that owns a
+            // generation must own copied files, or its geosite:/geoip: rules
+            // silently start resolving against whatever the shared catalogue
+            // happens to hold under the same name.
+            source.duplicate(id, copyNameFor(original.name, _state.value.ruleSets.map { it.name }.toSet()))
         }
     }
 

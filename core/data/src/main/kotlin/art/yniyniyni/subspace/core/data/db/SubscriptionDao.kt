@@ -60,6 +60,16 @@ internal interface SubscriptionDao {
     @Query("SELECT * FROM subscriptions WHERE url = :url")
     suspend fun subscriptionByUrl(url: String): SubscriptionEntity?
 
+    /**
+     * The subscription owning [groupId], if one does.
+     *
+     * Exists so a group deletion can be routed to the subscription lifecycle
+     * instead of the plain group cascade: the cascade removes rows but not the
+     * active-routing setting or the `geo/sets/<id>` trees those rows owned.
+     */
+    @Query("SELECT * FROM subscriptions WHERE groupId = :groupId LIMIT 1")
+    suspend fun subscriptionByGroup(groupId: Long): SubscriptionEntity?
+
     @Query("SELECT * FROM subscriptions")
     suspend fun allSubscriptions(): List<SubscriptionEntity>
 

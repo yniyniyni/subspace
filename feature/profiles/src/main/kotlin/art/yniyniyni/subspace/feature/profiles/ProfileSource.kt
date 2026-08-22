@@ -228,7 +228,11 @@ constructor(
         name: String,
     ) = profileRepository.renameGroup(id, name)
 
-    override suspend fun deleteGroup(id: Long) = profileRepository.deleteGroup(id)
+    // Routed through SubscriptionRepository, not ProfileRepository: a
+    // subscription-backed group owns routing profiles and their geo/sets trees,
+    // and the plain group cascade removes neither the active-routing setting
+    // nor those files. It forwards to ProfileRepository for an ordinary group.
+    override suspend fun deleteGroup(id: Long) = subscriptionRepository.deleteGroup(id)
 
     override suspend fun defaultGroupId(): Long = profileRepository.defaultGroupId()
 

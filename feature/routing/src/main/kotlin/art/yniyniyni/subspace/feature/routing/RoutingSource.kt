@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.data.PendingRoutingImport
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.RoutingProfileImporter
 import art.yniyniyni.subspace.core.data.RoutingRepository
+import art.yniyniyni.subspace.core.data.RuleSetAssets
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
@@ -176,6 +177,21 @@ internal interface RoutingSource {
      */
     val pendingOffer: Flow<RoutingImportOffer?> get() = flowOf(null)
 
+    /**
+     * The geo filenames present in [set]'s **own** resolved asset directory.
+     *
+     * Not the shared root for every row: a profile that owns a generation reads
+     * from `geo/sets/<id>/<generation>`, and asking the shared catalogue about
+     * it let the list enable a profile whose generation was missing (because a
+     * same-named shared file existed) and block a valid one (because the shared
+     * root did not have the name). The activation gate must ask exactly what
+     * `RoutingResolver` asks.
+     *
+     * Defaults to empty for the same keep-fakes-compiling reason [ruleSet]
+     * documents.
+     */
+    suspend fun installedGeoFilesFor(set: StoredRuleSet): Set<String> = emptySet()
+
     /** Sets the active rule set, or turns routing off when [id] is `null`. */
     suspend fun setActive(id: Long?)
 
@@ -201,6 +217,21 @@ internal interface RoutingSource {
 
     /** Deletes a rule set. A no-op if it no longer exists. */
     suspend fun delete(id: Long)
+
+    /**
+     * Copies [id] into an editable rule set named [name], carrying its assets.
+     *
+     * Goes through the importer rather than a plain `upsert` of the rules: a
+     * copy of a generation-owning profile must own copied files, or it silently
+     * changes which data its `geosite:`/`geoip:` rules resolve against.
+     *
+     * Defaults to null for the same keep-fakes-compiling reason [ruleSet]
+     * documents.
+     */
+    suspend fun duplicate(
+        id: Long,
+        name: String,
+    ): Long? = null
 
     /**
      * The rule set with [id], or `null` when it has no matching row. See
@@ -267,7 +298,10 @@ internal interface RoutingSource {
 // LongParameterList: each repository is a distinct boundary this source translates.
 // Bundling them into a holder would hide which of them any given member actually
 // reads — the same reasoning RoutingProfileImporter's own suppression records.
-@Suppress("LongParameterList")
+// TooManyFunctions: this is the module's single translation boundary onto
+// :core:data, so its size tracks the repository surface the feature reads.
+// Splitting it would only move members without reducing the boundary.
+@Suppress("LongParameterList", "TooManyFunctions")
 internal class BoundRoutingSource
 @Inject
 constructor(
@@ -279,6 +313,7 @@ constructor(
     private val progressRegistry: GeoDownloadProgressRegistry,
     private val importer: RoutingProfileImporter,
     private val pendingRoutingImport: PendingRoutingImport,
+    private val assets: RuleSetAssets,
 ) : RoutingSource {
     override val ruleSets: Flow<List<StoredRuleSet>> = routingRepository.observeAllStored()
 
@@ -327,6 +362,11 @@ constructor(
     override suspend fun setActive(id: Long?) = settingsRepository.setActiveRoutingRuleSetId(id)
 
     override fun cancelDownload(id: Long) = progressRegistry.cancel(id)
+
+    override suspend fun installedGeoFilesFor(set: StoredRuleSet): Set<String> =
+        assets.installedFileNames(
+            assets.resolveAssetDir(set.ruleSet.id, set.assetGeneration, set.usesOwnGeneration),
+        )
 
     /**
      * A deeplink if one is waiting, otherwise the first provider directive that
@@ -411,6 +451,11 @@ constructor(
      * no longer exists.
      */
     override suspend fun delete(id: Long) = importer.delete(id)
+
+    override suspend fun duplicate(
+        id: Long,
+        name: String,
+    ): Long? = importer.duplicate(id, name)
 
     override suspend fun ruleSet(id: Long): RoutingRuleSet? = routingRepository.ruleSet(id)
 

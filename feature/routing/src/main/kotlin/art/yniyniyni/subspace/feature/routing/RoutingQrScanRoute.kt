@@ -34,8 +34,11 @@ fun RoutingQrScanRoute(
     val viewModel: ImportReviewViewModel = hiltViewModel(viewModelStoreOwner = routingBackStackEntry)
 
     QrScanner(
+        // Runs in the ViewModel's own scope, which is the routing list's, not
+        // this destination's: onDone pops the scanner immediately and a scope
+        // tied to this composable would cancel parse and preview mid-flight.
         onResult = { raw ->
-            viewModel.offer(raw, RoutingSourceKind.Qr)
+            viewModel.offerWithoutAcknowledgement(raw, RoutingSourceKind.Qr)
             onDone()
         },
         onCancel = onDone,

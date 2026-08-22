@@ -11,6 +11,7 @@ import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingProfile
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
 import art.yniyniyni.subspace.core.model.RuleBucket
+import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import art.yniyniyni.subspace.core.parser.routing.ImportProblem
@@ -210,6 +211,83 @@ class ImportReviewViewModelTest {
         viewModel.state.value.isDisableRouting shouldBe false
     }
 
+    // Regression, P1: a provider directive stays in the database, so the caller
+    // records that it was shown. Acknowledging before parse/preview finished
+    // meant a failed preview filtered the directive out forever.
+    @Test
+    fun aPreviewFailureIsNotAcknowledged() = runTest {
+        viewModel =
+            ImportReviewViewModel(
+                FakeImportReviewSource(
+                    repository,
+                    settings,
+                    downloads,
+                    failPreviewWith = IOException("database unavailable"),
+                ),
+            )
+
+        val accepted = viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Header, subscriptionId = 7L)
+
+        accepted shouldBe false
+        viewModel.state.value.stage shouldNotBe Stage.Reviewing
+    }
+
+    @Test
+    fun aHandoffTheSheetTookIsAcknowledged() = runTest {
+        val accepted = viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Header, subscriptionId = 7L)
+
+        accepted shouldBe true
+        viewModel.state.value.stage shouldBe Stage.Reviewing
+    }
+
+    // A malformed link is still a handoff: the sheet owns it and shows why.
+    @Test
+    fun aRejectedLinkIsStillAcknowledged() = runTest {
+        viewModel.offer("happ://routing/add/!!!", RoutingSourceKind.Header) shouldBe true
+    }
+
+    // Regression, P2: timeouts, rejected files and failed installs are returned,
+    // not thrown. Treating every normal return as success closed the sheet
+    // exactly as it does on success, with no reason and no retry.
+    @Test
+    fun aFailedImportStaysVisibleWithItsReason() = runTest {
+        viewModel =
+            ImportReviewViewModel(
+                FakeImportReviewSource(
+                    repository,
+                    settings,
+                    downloads,
+                    applyOutcome = ImportOutcome.Failed(1L, RuleSetAssetFailure.TimedOut),
+                ),
+            )
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
+
+        viewModel.confirm()
+
+        viewModel.state.value.stage shouldBe Stage.Failed
+        viewModel.state.value.failure shouldBe RuleSetAssetFailure.TimedOut
+    }
+
+    @Test
+    fun aFailedImportCanBeRetried() = runTest {
+        viewModel =
+            ImportReviewViewModel(
+                FakeImportReviewSource(
+                    repository,
+                    settings,
+                    downloads,
+                    applyOutcome = ImportOutcome.Failed(1L, RuleSetAssetFailure.DownloadFailed),
+                ),
+            )
+        viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
+        viewModel.confirm()
+
+        viewModel.retry()
+
+        viewModel.state.value.stage shouldBe Stage.Reviewing
+        viewModel.state.value.failure shouldBe null
+    }
+
     private fun sampleProfile(): RoutingProfile {
         val buckets =
             mapOf(
@@ -341,14 +419,22 @@ private class FakeSettingsRepository {
  * Read-only [preview] never records [downloads]; [apply] is the only write and
  * the only place a geo URL is treated as fetched.
  */
+// LongParameterList / ReturnCount: each injected failure is a distinct way the
+// real importer reports trouble — thrown, or returned as an outcome — and every
+// one is defaulted so a test names only the mode it exercises.
+@Suppress("LongParameterList")
 private class FakeImportReviewSource(
     private val repository: FakeRoutingRepository,
     private val settings: FakeSettingsRepository,
     private val downloads: MutableList<String>,
     private val failApplyWith: Throwable? = null,
     private val failDisableWith: Throwable? = null,
+    private val failPreviewWith: Throwable? = null,
+    /** A returned (not thrown) outcome, which is how the importer reports a failed install. */
+    private val applyOutcome: ImportOutcome? = null,
 ) : ImportReviewSource {
     override suspend fun preview(profile: RoutingProfile): ImportPreview {
+        failPreviewWith?.let { throw it }
         val decision = repository.decideFor(profile)
         val existingId =
             repository.observeAllStored().first().firstOrNull { it.ruleSet.name == profile.name }?.ruleSet?.id
@@ -361,6 +447,7 @@ private class FakeImportReviewSource(
         )
     }
 
+    @Suppress("ReturnCount") // Thrown failure, injected outcome and normal path terminate separately.
     override suspend fun apply(
         profile: RoutingProfile,
         verb: RoutingVerb,
@@ -368,6 +455,7 @@ private class FakeImportReviewSource(
         subscriptionId: Long?,
     ): ImportOutcome {
         failApplyWith?.let { throw it }
+        applyOutcome?.let { return it }
         val blocked =
             when (repository.decideFor(profile)) {
                 RoutingRepository.UpdateDecision.Unchanged -> ImportOutcome.Unchanged

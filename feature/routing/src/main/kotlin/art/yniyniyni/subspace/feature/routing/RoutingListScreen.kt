@@ -116,7 +116,7 @@ fun RoutingListScreen(
                     // a menu item that silently does nothing.
                     val text = clipboard.getClipEntry()?.clipData?.takeIf { it.itemCount > 0 }
                         ?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
-                    importViewModel.offer(text, RoutingSourceKind.Clipboard)
+                    importViewModel.offerWithoutAcknowledgement(text, RoutingSourceKind.Clipboard)
                 }
             },
             onScanQr = onScanQr,
@@ -132,25 +132,34 @@ fun RoutingListScreen(
     val pendingOffer by viewModel.pendingOffer.collectAsStateWithLifecycle()
     LaunchedEffect(pendingOffer) {
         pendingOffer?.let { offer ->
-            when (offer) {
-                is RoutingImportOffer.Deeplink ->
-                    importViewModel.offer(offer.text, RoutingSourceKind.Deeplink)
-                // Header, not Body: the transport a provider actually uses is
-                // the response header, and M4 established Remnawave emits no
-                // body directives at all. A body line reaching here is
-                // defensive, and calling it Header would only mislabel a
-                // channel nothing exercises.
-                is RoutingImportOffer.Provider ->
-                    importViewModel.offer(offer.text, RoutingSourceKind.Header, offer.subscriptionId)
-            }
-            viewModel.consumePendingOffer(offer)
+            val accepted =
+                when (offer) {
+                    is RoutingImportOffer.Deeplink ->
+                        importViewModel.offer(offer.text, RoutingSourceKind.Deeplink)
+                    // Header, not Body: the transport a provider actually uses
+                    // is the response header, and M4 established Remnawave
+                    // emits no body directives at all. A body line reaching
+                    // here is defensive, and calling it Header would only
+                    // mislabel a channel nothing exercises.
+                    is RoutingImportOffer.Provider ->
+                        importViewModel.offer(offer.text, RoutingSourceKind.Header, offer.subscriptionId)
+                }
+            // Only once the sheet actually owns it. Acknowledging an offer the
+            // sheet never took would strand a persisted provider directive: it
+            // stays in the database and would be filtered out forever.
+            if (accepted) viewModel.consumePendingOffer(offer)
         }
     }
 
     ImportReviewSheet(
         state = importState,
-        onConfirm = importViewModel::confirm,
-        onDismiss = importViewModel::dismiss,
+        actions =
+        ImportReviewActions(
+            onConfirm = importViewModel::confirm,
+            onDismiss = importViewModel::dismiss,
+            onCancelApply = importViewModel::cancelApply,
+            onRetry = importViewModel::retry,
+        ),
     )
 }
 

@@ -18,6 +18,7 @@ import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -1125,6 +1126,99 @@ class RoutingProfileImporterTest {
             geoSiteUrl = "https://assets.example/geosite.dat",
             lastUpdated = 1_800_000_000L,
         )
+
+    // Regression, P1: the incoming fingerprint used to be written at row
+    // creation, so a first install that failed left the row matching the very
+    // link that failed. Re-importing it answered Unchanged and did no I/O — a
+    // transient network failure could only be cleared by deleting the row.
+    @Test
+    fun anIdenticalRetryAfterAFailedFirstInstallDownloadsAgain() {
+        runBlocking {
+            val profile = geoIpOnlyProfile()
+            downloadFails = true
+            val failed = importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            failed.shouldBeInstanceOf<ImportOutcome.Failed>()
+            downloads.clear()
+
+            downloadFails = false
+            val retried = importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+
+            retried.shouldBeInstanceOf<ImportOutcome.Activated>()
+            downloads.shouldNotBeEmpty()
+            val stored = repository.stored(retried.id).shouldNotBeNull()
+            stored.assetState shouldBe RuleSetAssetState.Ready
+            stored.assetGeneration shouldBe 1L
+        }
+    }
+
+    // The other half: once something has actually been published, an identical
+    // re-delivery is still the silent no-op spec §7.3 requires.
+    @Test
+    fun anIdenticalReimportAfterASuccessfulInstallStaysSilent() {
+        runBlocking {
+            val profile = geoIpOnlyProfile()
+            importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+            downloads.clear()
+
+            importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Deeplink, null) shouldBe
+                ImportOutcome.Unchanged
+            downloads.shouldBeEmpty()
+        }
+    }
+
+    // Regression, P2: a row that stops needing its own geo files kept its old
+    // generation number published and its files on disk, so the service could
+    // be pointed at a directory validated for the previous profile.
+    @Test
+    fun aProfileThatStopsUsingItsOwnSourcesReclaimsItsGeneration() {
+        runBlocking {
+            val original = geoIpOnlyProfile()
+            val first = importer.apply(original, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            first.shouldBeInstanceOf<ImportOutcome.Activated>()
+            val id = first.id
+            repository.stored(id).shouldNotBeNull().assetGeneration shouldBe 1L
+
+            val literalOnly =
+                original.copy(
+                    lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
+                    geoIpUrl = null,
+                    geoSiteUrl = null,
+                    buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8"))),
+                )
+            importer.apply(literalOnly, RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+
+            val after = repository.stored(id).shouldNotBeNull()
+            after.assetGeneration shouldBe 0L
+            after.usesOwnGeneration shouldBe false
+            assets.generationDir(id, 1L).exists() shouldBe false
+        }
+    }
+
+    // Regression, P1: duplicating a generation-owning profile through the plain
+    // upsert path kept its geosite:/geoip: rules while silently switching them
+    // to whatever the shared catalogue held under the same name.
+    @Test
+    fun duplicatingAGenerationOwningProfileCopiesItsAssets() {
+        runBlocking {
+            val first = importer.apply(geoIpOnlyProfile(), RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            first.shouldBeInstanceOf<ImportOutcome.Activated>()
+            val originalId = first.id
+
+            val copyId = importer.duplicate(originalId, "copy").shouldNotBeNull()
+
+            val copy = repository.stored(copyId).shouldNotBeNull()
+            copy.sourceKind shouldBe null
+            copy.usesOwnGeneration shouldBe true
+            val copied = assets.generationDir(copyId, copy.assetGeneration)
+            val source = assets.generationDir(originalId, 1L)
+            copied.resolve("geoip.dat").readText() shouldBe source.resolve("geoip.dat").readText()
+
+            // Survives deletion of the original: the copy owns its bytes.
+            importer.delete(originalId)
+            copied.resolve("geoip.dat").isFile shouldBe true
+        }
+    }
 
     // Spec §9: the row renders "Downloading 12 MB / 23 MB". The counts have to
     // reach a reader outside the importer while the download is still running,

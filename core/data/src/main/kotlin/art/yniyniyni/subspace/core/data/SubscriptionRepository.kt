@@ -246,6 +246,25 @@ internal constructor(
         routingDeletion.deleteSubscription(id, subscription.groupId)
     }
 
+    /**
+     * Deletes [groupId] through whichever lifecycle owns it.
+     *
+     * A subscription-backed group must not go through the plain group cascade:
+     * foreign keys would remove the subscription and its routing rows, but
+     * nothing would clear `activeRoutingRuleSetId` when one of those rows was
+     * active, and nothing would remove the `geo/sets/<id>` trees they owned.
+     * Routing every group deletion through here is what stops a caller
+     * reintroducing that bypass by reaching for `ProfileRepository.deleteGroup`.
+     */
+    public suspend fun deleteGroup(groupId: Long) {
+        val subscription = dao.subscriptionByGroup(groupId)
+        if (subscription == null) {
+            profiles.deleteGroup(groupId)
+        } else {
+            routingDeletion.deleteSubscription(subscription.id, subscription.groupId)
+        }
+    }
+
     /** Toggles the HWID header (§A.4.1) for [id]. A no-op if the subscription no longer exists. */
     public suspend fun setHwidEnabled(
         id: Long,

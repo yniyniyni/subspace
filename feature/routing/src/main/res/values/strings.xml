@@ -173,6 +173,15 @@
     <string name="import_review_problem_invalid_entry">This routing profile contains an entry that cannot be used.</string>
     <string name="import_review_problem_malformed_geo_url">This routing profile names a geo file with an unusable address.</string>
     <string name="import_review_problem_insecure_geo_url">This routing profile would fetch a geo file over unencrypted HTTP.</string>
+    <!-- A confirmed import that did not land. Closed vocabulary, no URLs (§5.6). -->
+    <string name="import_review_failed_download">Could not download this profile\'s geo files.</string>
+    <string name="import_review_failed_timeout">The download took too long and was stopped.</string>
+    <string name="import_review_failed_rejected">The downloaded file was not a geo database.</string>
+    <string name="import_review_failed_install">The geo files could not be saved.</string>
+    <string name="import_review_failed_cancelled">The download was cancelled.</string>
+    <string name="import_review_retry">Try again</string>
+    <string name="import_review_cancel_download">Stop download</string>
+
     <string name="import_review_problem_unknown">This link could not be read.</string>
     <string name="import_review_problem_too_large">This routing profile is too large to import.</string>
 </resources>

@@ -32,6 +32,12 @@ private const val GEO_SITE_FILE_NAME = "geosite.dat"
 private const val DAT_SUFFIX = ".dat"
 private const val MISSING_SUBSCRIPTION_RULE_SET_ID = 0L
 
+/** The published generation of a row whose geo files come from the shared catalogue. */
+private const val NO_OWN_GENERATION = 0L
+
+/** The first generation a row can own; generations are positive by construction. */
+private const val FIRST_GENERATION = 1L
+
 /**
  * Coroutine deadline around the complete materialisation of one profile generation.
  *
@@ -232,8 +238,7 @@ internal constructor(
         val requested = profile.requestedGeoFiles()
 
         if (requested.isEmpty()) {
-            repository.commitGeneration(id, profile, stored.assetGeneration)
-            return activateIfAppropriate(id, verb)
+            return publishWithoutOwnGeneration(id, profile, stored, verb)
         }
 
         if (requested.any { it.fileName !in suppliedFileNames }) {
@@ -247,8 +252,7 @@ internal constructor(
                 repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.Rejected)
                 return ImportOutcome.Failed(id, RuleSetAssetFailure.Rejected)
             }
-            repository.commitGeneration(id, profile, stored.assetGeneration)
-            return activateIfAppropriate(id, verb)
+            return publishWithoutOwnGeneration(id, profile, stored, verb)
         }
 
         val nextGeneration = stored.assetGeneration + 1
@@ -296,6 +300,33 @@ internal constructor(
         return activateIfAppropriate(id, verb)
     }
 
+    /**
+     * Publishes a profile that reads from the shared catalogue, and reclaims any
+     * generation tree the row used to own.
+     *
+     * Generation **0**, not the row's previous number: a row that updates from
+     * own-source rules to literal-only (or to rules the shared catalogue already
+     * satisfies) stops owning a generation, and leaving the old number published
+     * would make [StoredRuleSet.usesOwnGeneration] keep pointing the service at
+     * a directory validated for the *previous* profile.
+     *
+     * The sweep runs strictly **after** publication. Deleting first would pull
+     * files out from under a service startup still holding the old generation's
+     * lease; `RuleSetAssets.removeSet` defers through `GenerationRetention` for
+     * exactly that reason, so a leased generation is reclaimed when released
+     * rather than never.
+     */
+    private suspend fun publishWithoutOwnGeneration(
+        id: Long,
+        profile: RoutingProfile,
+        stored: StoredRuleSet,
+        verb: RoutingVerb,
+    ): ImportOutcome {
+        repository.commitGeneration(id, profile, NO_OWN_GENERATION)
+        if (stored.assetGeneration > NO_OWN_GENERATION) assets.removeSet(id)
+        return activateIfAppropriate(id, verb)
+    }
+
     /** Everything that can delay generation readiness shares one deadline. */
     private suspend fun materialise(
         setId: Long,
@@ -326,6 +357,51 @@ internal constructor(
 
     /** Deletes one row and generation tree, clearing its active reference when necessary. */
     public suspend fun delete(id: Long) = deletion.deleteRuleSet(id)
+
+    /**
+     * Copies [id] into an editable rule set under [name], carrying its assets.
+     *
+     * Spec §4.2's "Duplicate and edit". The copy must own its own generation
+     * rather than fall back to the shared catalogue: an imported profile's
+     * `geosite.dat` came from *its* upstream, so a copy that kept
+     * `geosite:cn` rules while silently reading a same-named shared file would
+     * route on different data than the profile it claims to duplicate — and
+     * would simply not activate when the shared root lacks the name.
+     *
+     * Assets are copied before publication and the rules and generation are
+     * published together, so a failed copy leaves no half-built row. The copy
+     * carries no provenance, which is the point: the provider does not own it
+     * and the next sync will not overwrite it.
+     */
+    // ReturnCount: missing original, shared-catalogue copy, failed copy and
+    // published copy are four distinct terminal outcomes, and flattening them
+    // would hide which of them leaves the row without assets.
+    @Suppress("ReturnCount")
+    public suspend fun duplicate(
+        id: Long,
+        name: String,
+    ): Long? {
+        val original = repository.stored(id) ?: return null
+        val copyId = repository.upsert(original.ruleSet.copy(id = 0L, name = name))
+        if (!original.usesOwnGeneration) return copyId
+        val sourceDir = assets.generationDir(id, original.assetGeneration)
+        val copied =
+            runCatching {
+                val staged = assets.prepareGeneration(copyId, FIRST_GENERATION)
+                original.ruleSet.requiredGeoFiles().all { fileName ->
+                    assets.copyLocally(File(sourceDir, fileName), File(staged, fileName))
+                }
+            }.getOrDefault(false)
+        if (!copied) {
+            // The row exists and is editable; it simply has no assets of its own
+            // yet. Marking it Failed says that on the row rather than leaving a
+            // copy that looks complete and cannot activate.
+            repository.markAssets(copyId, RuleSetAssetState.Failed, RuleSetAssetFailure.InstallFailed)
+            return copyId
+        }
+        repository.publishCopiedGeneration(copyId, FIRST_GENERATION)
+        return copyId
+    }
 
     @Suppress(
         "NestedBlockDepth", // Copy, validation, and fallback download are one ordered per-file decision.

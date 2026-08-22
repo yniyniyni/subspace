@@ -15,6 +15,7 @@ import art.yniyniyni.subspace.core.model.RoutingSourceKind
 import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
+import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -43,6 +44,30 @@ public data class StoredRuleSet(
     public val assetState: RuleSetAssetState,
     public val assetFailure: RuleSetAssetFailure?,
 ) {
+    /**
+     * Whether this row's geo files live in its own generation directory rather
+     * than the shared catalogue root.
+     *
+     * **The one definition.** The importer, `RoutingResolver`, the routing list
+     * and duplication all ask this question, and answering it three different
+     * ways is what produced the defect this property replaces: the resolver used
+     * to infer ownership from URL presence, so a literal-only profile that
+     * merely *carried* `Geoipurl`/`Geositeurl` resolved to `generationDir(id, 0)`
+     * and threw during tunnel startup.
+     *
+     * Two conditions, both necessary:
+     * - the published rules actually **require** a geo file (URLs a profile
+     *   carries but never references buy it nothing), and
+     * - a positive generation has actually been **published** (generation `0`
+     *   means nothing was ever committed for this row).
+     *
+     * Deliberately provenance-independent: a duplicated hand-made row that owns
+     * copied assets is as much a generation owner as an imported one, and
+     * special-casing [sourceKind] here would reintroduce a second answer.
+     */
+    public val usesOwnGeneration: Boolean
+        get() = assetGeneration > 0 && ruleSet.requiredGeoFiles().isNotEmpty()
+
     /** §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs. */
     override fun toString(): String =
         "StoredRuleSet(ruleSet=$ruleSet, sourceKind=$sourceKind, " +
@@ -248,6 +273,20 @@ internal constructor(
         )
     }
 
+    /**
+     * Publishes copied assets as [generation] for a row whose rules already exist.
+     *
+     * See [RoutingRuleSetDao.publishCopiedGeneration] for why this is not
+     * [commitGeneration]: a duplicate is a hand-made row that owns copied files,
+     * and must gain no provenance, fingerprint or timestamp from its original.
+     */
+    public suspend fun publishCopiedGeneration(
+        id: Long,
+        generation: Long,
+    ) {
+        dao.publishCopiedGeneration(id, generation)
+    }
+
     /** Removes the rule set with [id]. A no-op when it does not exist. */
     public suspend fun delete(id: Long) {
         dao.deleteById(id)
@@ -370,8 +409,21 @@ private fun RoutingProfile.toEntity(
     toRuleSet().toEntity().copy(
         sourceKind = sourceKind.wireValue,
         subscriptionId = subscriptionId,
-        lastUpdated = lastUpdated,
-        fingerprint = fingerprint(),
+        // fingerprint and lastUpdated are deliberately NOT written here.
+        //
+        // They are the two gates decideFor reads, and writing them at row
+        // creation made a failed first install permanently unretryable: the row
+        // kept the incoming fingerprint at generation 0, so re-importing the
+        // byte-identical link answered Unchanged and performed no I/O. A
+        // transient download failure could then only be cleared by deleting the
+        // row.
+        //
+        // commitGeneration writes both, so they record *successfully published*
+        // content and nothing else. That is what spec §7.3's silent-no-op is
+        // actually about — an unchanged re-sync of something that already
+        // landed, not an unfinished attempt.
+        assetState = RuleSetAssetState.Pending.name,
+        assetFailure = null,
         geoIpUrl = geoIpUrl,
         geoSiteUrl = geoSiteUrl,
         dnsJson = dnsJson,

@@ -64,13 +64,13 @@ internal class RoutingResolver(
             // A rule set deleted while it was active leaves a dangling id. Routing
             // off is the honest reading — the user removed the rules.
             val snapshot = loadStored(id) ?: return block(RoutingResolution.Off)
-            val hasOwnSources = snapshot.hasOwnSources()
+            val hasOwnSources = snapshot.usesOwnGeneration
             val use =
                 assetScope.withResolvedAssetDir(id, snapshot.assetGeneration, hasOwnSources) { assetDir ->
                     val retained =
                         if (hasOwnSources) {
                             loadStored(id)?.takeIf { current ->
-                                current.assetGeneration == snapshot.assetGeneration && current.hasOwnSources()
+                                current.assetGeneration == snapshot.assetGeneration && current.usesOwnGeneration
                             }
                         } else {
                             snapshot
@@ -102,8 +102,6 @@ internal class RoutingResolver(
             RoutingResolution.MissingGeoData(missing)
         }
     }
-
-    private fun StoredRuleSet.hasOwnSources(): Boolean = !geoIpUrl.isNullOrBlank() || !geoSiteUrl.isNullOrBlank()
 
     private sealed interface ResolutionAttempt<out T> {
         data class Complete<T>(val value: T) : ResolutionAttempt<T>

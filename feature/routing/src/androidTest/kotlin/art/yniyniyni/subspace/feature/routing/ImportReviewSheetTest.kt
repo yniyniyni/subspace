@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import org.junit.Rule
 import org.junit.Test
@@ -57,13 +58,33 @@ class ImportReviewSheetTest {
             willActivate = true,
         )
 
+    // F8: a confirmed import that fails is returned, not thrown. Closing the
+    // sheet as if it had succeeded left the user with no reason and no retry.
+    @Test
+    fun aFailedImportNamesItsReasonAndOffersRetry() {
+        setContent(
+            reviewingState.copy(stage = Stage.Failed, failure = RuleSetAssetFailure.TimedOut),
+        )
+
+        composeRule.onNodeWithText("The download took too long and was stopped.").assertIsDisplayed()
+        composeRule.onNodeWithText("Try again").assertIsDisplayed()
+    }
+
+    // F9: while Applying this sheet blocks swipe, scrim and back, and the row's
+    // own cancel sits behind it — so this must be the reachable one.
+    @Test
+    fun anApplyingImportCanStillBeCancelled() {
+        setContent(reviewingState.copy(stage = Stage.Applying))
+
+        composeRule.onNodeWithText("Stop download").assertIsDisplayed()
+    }
+
     private fun setContent(state: ImportReviewState = reviewingState) {
         composeRule.setContent {
             SubspaceTheme {
                 ImportReviewSheetContent(
                     state = state,
-                    onConfirm = {},
-                    onDismiss = {},
+                    actions = ImportReviewActions(onConfirm = {}, onDismiss = {}),
                 )
             }
         }

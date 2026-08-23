@@ -57,13 +57,12 @@ internal interface RoutingRuleSetDao {
                 blockIps = entity.blockIps,
                 routeOrder = entity.routeOrder,
                 domainStrategy = entity.domainStrategy,
-                globalProxy = entity.globalProxy,
             )
             existing.id
         }
     }
 
-    /** Updates exactly the routing columns owned by a manual/editor save. */
+    /** Updates exactly the explicit rule and naming columns owned by a manual/editor save. */
     @Query(
         """
         UPDATE routing_rule_sets SET
@@ -71,8 +70,7 @@ internal interface RoutingRuleSetDao {
             directSites = :directSites, directIps = :directIps,
             proxySites = :proxySites, proxyIps = :proxyIps,
             blockSites = :blockSites, blockIps = :blockIps,
-            routeOrder = :routeOrder, domainStrategy = :domainStrategy,
-            globalProxy = :globalProxy
+            routeOrder = :routeOrder, domainStrategy = :domainStrategy
         WHERE id = :id
         """,
     )
@@ -88,7 +86,6 @@ internal interface RoutingRuleSetDao {
         blockIps: String,
         routeOrder: String,
         domainStrategy: String,
-        globalProxy: Boolean?,
     )
 
     /**

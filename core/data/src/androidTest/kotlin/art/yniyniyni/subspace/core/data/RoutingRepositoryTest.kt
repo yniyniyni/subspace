@@ -705,6 +705,54 @@ class RoutingRepositoryTest {
 
 class RoutingRepositoryEditorSaveTest {
     @Test
+    fun editingAnExistingRuleSetDoesNotRestoreAStaleGlobalProxySnapshot() = runTest {
+        val database = editorSaveDatabase()
+        try {
+            val seeded = seedLifecycleRow(database)
+            val repository = RoutingRepository(database.routingRuleSetDao())
+            val editorSnapshot = repository.ruleSet(seeded.id).shouldNotBeNull()
+
+            database.routingRuleSetDao().commitGeneration(
+                id = seeded.id,
+                directSites = seeded.entity.directSites,
+                directIps = seeded.entity.directIps,
+                proxySites = seeded.entity.proxySites,
+                proxyIps = seeded.entity.proxyIps,
+                blockSites = seeded.entity.blockSites,
+                blockIps = seeded.entity.blockIps,
+                routeOrder = seeded.entity.routeOrder,
+                domainStrategy = seeded.entity.domainStrategy,
+                globalProxy = true,
+                lastUpdated = seeded.entity.lastUpdated,
+                fingerprint = seeded.entity.fingerprint,
+                geoIpUrl = seeded.entity.geoIpUrl,
+                geoSiteUrl = seeded.entity.geoSiteUrl,
+                dnsJson = seeded.entity.dnsJson,
+                useChunkFiles = seeded.entity.useChunkFiles,
+                generation = seeded.entity.assetGeneration,
+            )
+
+            repository.upsert(
+                editorSnapshot.copy(
+                    buckets =
+                    editorSnapshot.buckets +
+                        (RouteOutcome.DIRECT to
+                            RuleBucket(
+                                sites = listOf("domain:edited-after-import.test"),
+                                ips = editorSnapshot.bucket(RouteOutcome.DIRECT).ips,
+                            )),
+                ),
+            )
+
+            val stored = database.routingRuleSetDao().byId(seeded.id).shouldNotBeNull()
+            stored.globalProxy shouldBe true
+            stored.directSites shouldBe "domain:edited-after-import.test"
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun editingAnExistingRuleSetPreservesEveryLifecycleColumn() = runTest {
         val database = editorSaveDatabase()
         try {

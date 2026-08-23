@@ -513,7 +513,7 @@ class RoutingProfileImporterTest {
             stored.ruleSet.bucket(RouteOutcome.BLOCK) shouldBe manual.bucket(RouteOutcome.BLOCK)
             stored.ruleSet.bucket(RouteOutcome.DIRECT).isEmpty shouldBe true
             stored.ruleSet.bucket(RouteOutcome.PROXY).isEmpty shouldBe true
-            stored.ruleSet.globalProxy shouldBe manual.globalProxy
+            stored.ruleSet.globalProxy shouldBe profile.globalProxy
             stored.sourceKind shouldBe RoutingSourceKind.Deeplink
             stored.subscriptionId shouldBe null
             stored.lastUpdated shouldBe profile.lastUpdated

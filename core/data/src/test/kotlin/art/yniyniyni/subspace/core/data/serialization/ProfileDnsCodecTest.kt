@@ -118,4 +118,37 @@ class ProfileDnsCodecTest {
         decoded.isInvalid shouldBe false
         decoded.hosts shouldBe emptyMap()
     }
+
+    // Ruling R8: the codec used to validate only a stored IP, not a stored DoH
+    // domain, unlike the import parser's resolverOf. A real row could hold
+    // RemoteDNSType: "DoH" with a junk domain and decode cleanly — this junk
+    // string would then reach xrayAddress() verbatim and land in dns.servers,
+    // producing a config the core rejects outright rather than a block honestly
+    // reported as unusable.
+    @Test
+    fun aStoredDoHResolverWithANonHttpsDomainDecodesToInvalid() {
+        val stored = """{"RemoteDNSType":"DoH","RemoteDNSDomain":"not-a-url"}"""
+
+        requireNotNull(ProfileDnsCodec.decode(stored)).isInvalid shouldBe true
+    }
+
+    @Test
+    fun aStoredDoHResolverWithAPlainHostnameDomainDecodesToInvalid() {
+        // A bare hostname (no scheme) is exactly the shape a hand-edited or
+        // buggy-exporter row would carry — DnsValidation.isHttpsUrl requires an
+        // explicit https:// scheme, and so must this codec.
+        val stored = """{"RemoteDNSType":"DoH","RemoteDNSDomain":"dns.example.com"}"""
+
+        requireNotNull(ProfileDnsCodec.decode(stored)).isInvalid shouldBe true
+    }
+
+    @Test
+    fun aStoredDoHResolverWithAValidHttpsDomainDecodesNormally() {
+        val stored = """{"RemoteDNSType":"DoH","RemoteDNSDomain":"https://dns.example/dns-query"}"""
+
+        val decoded = requireNotNull(ProfileDnsCodec.decode(stored))
+
+        decoded.isInvalid shouldBe false
+        decoded.remote?.domain shouldBe "https://dns.example/dns-query"
+    }
 }

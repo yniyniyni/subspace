@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.service
 import art.yniyniyni.subspace.core.data.ResolvedAssetUse
 import art.yniyniyni.subspace.core.data.RuleSetAssetScope
 import art.yniyniyni.subspace.core.data.StoredRuleSet
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
 import java.io.File
@@ -23,8 +24,11 @@ internal sealed interface RoutingResolution {
      *   A profile with its own geo sources resolves to its live generation;
      *   a hand-made set resolves to the shared catalogue root. Carrying the
      *   directory here prevents the service from re-reading mutable state.
+     * @property dns the active row's decoded DNS block, carried from the same
+     *   [StoredRuleSet] this resolution already loaded — never a second Room
+     *   read from the service.
      */
-    data class Active(val ruleSet: RoutingRuleSet, val assetDir: File) : RoutingResolution
+    data class Active(val ruleSet: RoutingRuleSet, val assetDir: File, val dns: ProfileDns?) : RoutingResolution
 
     /**
      * The active rule set references geo databases that are not on disk.
@@ -97,7 +101,7 @@ internal class RoutingResolver(
     private suspend fun StoredRuleSet.toResolution(assetDir: File): RoutingResolution {
         val missing = ruleSet.requiredGeoFiles() - installedGeoFiles(assetDir)
         return if (missing.isEmpty()) {
-            RoutingResolution.Active(ruleSet, assetDir)
+            RoutingResolution.Active(ruleSet, assetDir, dns)
         } else {
             RoutingResolution.MissingGeoData(missing)
         }

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.xray
 
 import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsValidation
 import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
@@ -36,6 +37,21 @@ public data class DnsPlan(
     override fun toString(): String =
         "DnsPlan(servers=${servers.size}, hosts=<redacted, ${hosts.size} entries>, " +
             "fakeDns=$fakeDns, matches=<redacted>)"
+
+    /**
+     * The address to hand `VpnService.Builder.addDnsServer` (§5.2, half two).
+     *
+     * Largely cosmetic while the port-53 hijack is in place, which is the point of
+     * stating it: if the hijack ever fails to match, the bypass reaches the
+     * resolver the user chose rather than a literal they never picked. A quieter
+     * failure is not the goal; a less wrong one is.
+     *
+     * Null when the plan has only a DoH endpoint and no bootstrap IP — the TUN
+     * needs an address literal, and the caller falls back to the app default.
+     */
+    public fun tunAdvertisedAddress(): String? =
+        servers.firstNotNullOfOrNull { server -> server.address.takeIf(DnsValidation::isAddressLiteral) }
+            ?: hosts.values.firstOrNull(DnsValidation::isAddressLiteral)
 }
 
 /**

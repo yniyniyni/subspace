@@ -92,7 +92,16 @@ public object ProfileDnsCodec {
     /** Marker for a resolver whose stored type or address this codec rejects. Never emitted. */
     private val INVALID_RESOLVER = DnsResolver(DnsTransport.DOU, domain = null, ip = null)
 
-    /** One resolver, null when the profile named no transport for it, or [INVALID_RESOLVER]. */
+    /**
+     * One resolver, null when the profile named no transport for it, or [INVALID_RESOLVER].
+     *
+     * Ruling R8: a stored DoH domain is validated as an `https://` URL, matching
+     * the import parser's `resolverOf` (`RoutingProfileImport.kt`). Without this,
+     * a row could hold `RemoteDNSType: "DoH"` with a junk domain that decodes
+     * cleanly — [DnsResolver.xrayAddress] would then hand the generator that
+     * junk string verbatim, producing a config the core rejects outright rather
+     * than a block honestly reported as unusable.
+     */
     @Suppress("ReturnCount") // Each early return names one distinct outcome, mirroring resolverOf's parser twin.
     private fun JsonObject.resolver(prefix: String): DnsResolver? {
         val rawType = (this["${prefix}DNSType"] as? JsonPrimitive)?.content?.takeIf(String::isNotBlank) ?: return null
@@ -101,6 +110,9 @@ public object ProfileDnsCodec {
         val ip = (this["${prefix}DNSIP"] as? JsonPrimitive)?.content?.takeIf(String::isNotBlank)
         if (domain == null && ip == null) return null
         if (ip != null && !DnsValidation.isAddressLiteral(ip)) return INVALID_RESOLVER
+        if (transport == DnsTransport.DOH && domain != null && !DnsValidation.isHttpsUrl(domain)) {
+            return INVALID_RESOLVER
+        }
         return DnsResolver(transport = transport, domain = domain, ip = ip)
     }
 

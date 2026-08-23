@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.data.db.RoutingRuleSetEntity
 import art.yniyniyni.subspace.core.data.serialization.ProfileDnsCodec
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingProfile
@@ -31,6 +32,13 @@ private const val ORDER_SEPARATOR = ","
  * [geoIpUrl] and [geoSiteUrl] are shown only in informed-consent UI. They, the
  * rule entries, and the stored DNS block are deliberately redacted from
  * [toString] under §5.6.
+ *
+ * @property hasDns whether the row has a (possibly unusable) DNS block at all —
+ *   the cheap presence check callers that never need the typed block still use.
+ * @property dns the decoded block itself, populated only by [RoutingRepository]'s
+ *   own mapper. Defaults to null so the other constructor call sites in this
+ *   codebase (tests, `ImportReviewViewModel`) that already pass [hasDns]
+ *   explicitly keep compiling unchanged.
  */
 public data class StoredRuleSet(
     public val ruleSet: RoutingRuleSet,
@@ -44,6 +52,7 @@ public data class StoredRuleSet(
     public val assetGeneration: Long,
     public val assetState: RuleSetAssetState,
     public val assetFailure: RuleSetAssetFailure?,
+    public val dns: ProfileDns? = null,
 ) {
     /**
      * Whether this row's geo files live in its own generation directory rather
@@ -69,12 +78,17 @@ public data class StoredRuleSet(
     public val usesOwnGeneration: Boolean
         get() = assetGeneration > 0 && ruleSet.requiredGeoFiles().isNotEmpty()
 
-    /** §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs. */
+    /**
+     * §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs.
+     *
+     * [dns] relies on [ProfileDns]'s own [ProfileDns.toString] redaction rather
+     * than repeating it here — one redaction to keep in sync, not two.
+     */
     override fun toString(): String =
         "StoredRuleSet(ruleSet=$ruleSet, sourceKind=$sourceKind, " +
             "subscriptionId=$subscriptionId, lastUpdated=$lastUpdated, " +
             "fingerprint=<redacted>, geoUrls=<redacted>, " +
-            "hasDns=$hasDns, assetGeneration=$assetGeneration, " +
+            "hasDns=$hasDns, dns=$dns, assetGeneration=$assetGeneration, " +
             "assetState=$assetState, assetFailure=$assetFailure)"
 }
 
@@ -385,6 +399,7 @@ private fun RoutingRuleSetEntity.toStored(): StoredRuleSet =
         assetGeneration = assetGeneration,
         assetState = assetState.toAssetState(),
         assetFailure = assetFailure.toAssetFailure(),
+        dns = ProfileDnsCodec.decode(dnsJson),
     )
 
 private fun String.toDomainStrategy(): DomainStrategy =

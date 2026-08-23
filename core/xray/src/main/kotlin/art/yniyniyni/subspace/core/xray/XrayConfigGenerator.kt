@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.xray
 
+import art.yniyniyni.subspace.core.model.DnsValidation
 import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
@@ -40,6 +41,15 @@ public data class TunnelSettings(
      * Allocated at connect time like [socksPort]; §10.6 forbids a literal.
      */
     val httpPort: Int? = null,
+    /**
+     * The resolved DNS plan, or null when nothing asks for DNS.
+     *
+     * Null is not a degraded mode: it produces the `"servers": ["1.1.1.1"]` block
+     * M1's proven tunnel has always carried, byte for byte, with no `dns-out`
+     * outbound and no prepended rules. Defaulted so call sites that do not resolve
+     * DNS yet keep compiling.
+     */
+    val dns: DnsPlan? = null,
 )
 
 /**
@@ -133,44 +143,76 @@ public object XrayConfigGenerator {
 
         appendDns(sb, settings)
         appendInbounds(sb, settings)
-        appendOutbounds(sb, outbound)
+        appendOutbounds(sb, outbound, settings)
 
-        appendRouting(sb, settings.routing)
+        appendRouting(sb, settings.routing, settings.dns)
         sb.append("}")
 
         return sb.toString()
     }
 
     /**
-     * §5.2, half one. The other half is `VpnService.Builder.addDnsServer()`.
+     * §5.2, half one. The other half is `VpnService.Builder.addDnsServer()`, and
+     * M6.5 adds a third that matters more than either: the port-53 hijack in
+     * [appendRouting], which is what makes any of this reach an app's resolver.
      *
-     * Setting only one produces a partial leak that works on Wi-Fi and fails on
-     * mobile, or the reverse. libXray v26.7.11 has no `setDNS`, so these two are
-     * the only levers that exist.
+     * libXray v26.7.11 has no `setDNS`, so the config is the only lever here.
      */
     private fun appendDns(
         sb: StringBuilder,
         settings: TunnelSettings,
     ) {
+        val plan = settings.dns
         sb.appendLine("""  "dns": {""")
-        sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
+        if (plan == null) {
+            sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
+            sb.appendLine("""  },""")
+            return
+        }
+        if (plan.hosts.isNotEmpty()) {
+            sb.appendLine("""    "hosts": {""")
+            // Sorted: a Map's iteration order is a property of its implementation
+            // rather than of its contents, and §6 requires byte-determinism.
+            val hosts = plan.hosts.toSortedMap().entries.toList()
+            hosts.forEachIndexed { index, (host, address) ->
+                val comma = if (index == hosts.size - 1) "" else ","
+                sb.appendLine("""      ${jsonString(host)}: ${jsonString(address)}$comma""")
+            }
+            sb.appendLine("""    },""")
+        }
+        sb.appendLine("""    "servers": [""")
+        val entries = buildList {
+            if (plan.fakeDns) add(""""fakedns"""")
+            plan.servers.forEach { add(it.render()) }
+        }
+        entries.forEachIndexed { index, entry ->
+            val comma = if (index == entries.size - 1) "" else ","
+            sb.appendLine("""      $entry$comma""")
+        }
+        sb.appendLine("""    ],""")
+        sb.appendLine("""    "queryStrategy": "UseIP",""")
+        sb.appendLine("""    "tag": "dns-module"""")
         sb.appendLine("""  },""")
     }
 
     /**
      * §6's routing block. Empty in M1; M5 fills it from the active rule set.
      *
-     * A null [routing] reproduces the M1 block exactly — `IPIfNonMatch` and an
-     * empty rule array — because the tunnel that block belongs to is proven on
-     * hardware and this milestone does not get to drift it. `XrayConfigGeneratorTest`
-     * pins that byte-for-byte.
+     * A null [routing] and a null [dns] reproduce the M1 block exactly —
+     * `IPIfNonMatch` and an empty rule array — because the tunnel that block
+     * belongs to is proven on hardware and this milestone does not get to drift
+     * it. `XrayConfigGeneratorTest` pins that byte-for-byte.
+     *
+     * M6.5 prepends [dns]'s resolver and hijack rules ahead of the profile's own
+     * — see [dnsRuleLines] for why the order matters.
      */
     private fun appendRouting(
         sb: StringBuilder,
         routing: RoutingRuleSet?,
+        dns: DnsPlan?,
     ) {
         val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
-        val rules = routing?.let(::routingRuleLines).orEmpty()
+        val rules = dnsRuleLines(dns) + routing?.let(::routingRuleLines).orEmpty()
 
         sb.appendLine("""  "routing": {""")
         sb.appendLine("""    "domainStrategy": ${jsonString(strategy.wireValue)},""")
@@ -200,6 +242,7 @@ public object XrayConfigGenerator {
     private fun appendOutbounds(
         sb: StringBuilder,
         out: VlessOutbound,
+        settings: TunnelSettings,
     ) {
         sb.appendLine("""  "outbounds": [""")
         sb.appendLine("""    {""")
@@ -227,7 +270,16 @@ public object XrayConfigGenerator {
         appendStreamSettings(sb, out)
         sb.appendLine("""    },""")
         sb.appendLine("""    { "tag": "direct", "protocol": "freedom" },""")
-        sb.appendLine("""    { "tag": "block", "protocol": "blackhole" }""")
+        val needsDnsOutbound = settings.dns != null
+        sb.appendLine("""    { "tag": "block", "protocol": "blackhole" }${if (needsDnsOutbound) "," else ""}""")
+        if (needsDnsOutbound) {
+            // No settings object: the modern (rewriteNetwork/rewriteAddress/rules)
+            // and legacy (network/address/nonIPQuery) field sets both exist at
+            // v26.7.11, and emitting neither is stable across the deprecation.
+            // Research §4: A/AAAA queries default to hijack into the built-in
+            // resolver, which is exactly what this config wants.
+            sb.appendLine("""    { "tag": "dns-out", "protocol": "dns" }""")
+        }
         sb.appendLine("""  ],""")
     }
 
@@ -378,9 +430,15 @@ private fun appendSocksInbound(
     sb.appendLine("""        "udp": true""")
     sb.appendLine("""      }${if (settings.enableSniffing) "," else ""}""")
     if (settings.enableSniffing) {
+        val overrides =
+            if (settings.dns?.fakeDns == true) {
+                """"http", "tls", "quic", "fakedns""""
+            } else {
+                """"http", "tls", "quic""""
+            }
         sb.appendLine("""      "sniffing": {""")
         sb.appendLine("""        "enabled": true,""")
-        sb.appendLine("""        "destOverride": ["http", "tls", "quic"]""")
+        sb.appendLine("""        "destOverride": [$overrides]""")
         sb.appendLine("""      }""")
     }
     sb.appendLine("""    }${if (trailingComma) "," else ""}""")
@@ -412,4 +470,45 @@ private fun appendHttpInbound(
     sb.appendLine("""      "port": $port,""")
     sb.appendLine("""      "settings": {}""")
     sb.appendLine("""    }""")
+}
+
+/**
+ * One `dns.servers` entry — a bare string when unscoped, an object when it carries
+ * `domains`.
+ *
+ * `skipFallback` on the scoped domestic server is load-bearing: without it a
+ * domestic miss falls through to the remote resolver, leaking in exactly the
+ * direction the profile author tried to prevent (spec §7.2).
+ */
+private fun DnsServerSpec.render(): String {
+    if (domains.isEmpty()) return jsonString(address)
+    val domainList = domains.joinToString(", ", transform = ::jsonString)
+    return """{ "address": ${jsonString(address)}, "domains": [$domainList], "skipFallback": $skipFallback }"""
+}
+
+/**
+ * The rules that must precede the profile's own, in this order.
+ *
+ * **The ordering is a loop hazard, not a preference.** The built-in resolver's own
+ * query to a DoU server is UDP to port 53. If the hijack rule came first, that
+ * query would be hijacked back into the resolver that issued it. Rules 1 and 2
+ * exist to claim that traffic before rule 3 can (spec §7.3).
+ */
+private fun dnsRuleLines(dns: DnsPlan?): List<String> {
+    if (dns == null) return emptyList()
+    val rules = mutableListOf<String>()
+    dns.directMatch?.let { match -> rules += resolverRule(match, "direct") }
+    dns.proxyMatch?.let { match -> rules += resolverRule(match, "proxy") }
+    rules += """{ "type": "field", "network": "tcp,udp", "port": 53, "outboundTag": "dns-out" }"""
+    return rules
+}
+
+/** Matches one resolver's own traffic by address — an IP literal on `ip`, a hostname on `domain`. */
+private fun resolverRule(
+    match: String,
+    outboundTag: String,
+): String {
+    val field = if (DnsValidation.isAddressLiteral(match)) "ip" else "domain"
+    return """{ "type": "field", "inboundTag": ["dns-module"], "$field": [${jsonString(match)}], """ +
+        """"outboundTag": "$outboundTag" }"""
 }

@@ -24,23 +24,11 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.Test
 
 class XrayConfigGeneratorTest {
-    private val reality =
-        Security.Reality(
-            serverName = "www.microsoft.com",
-            publicKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-            shortId = "0123abcd",
-            fingerprint = "chrome",
-            spiderX = "/",
-        )
-
-    private val outbound =
-        VlessOutbound(
-            address = "example.com",
-            port = 443,
-            uuid = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab",
-            flow = "xtls-rprx-vision",
-            stream = StreamSettings(network = "tcp", security = reality),
-        )
+    // Shared with XrayConfigGeneratorDnsTest via GoldenProfile.kt, so the two
+    // suites' golden fixtures cannot drift apart.
+    private val reality = GOLDEN_REALITY
+    private val outbound = GOLDEN_OUTBOUND
+    private val profile = GOLDEN_PROFILE
 
     private val settings =
         TunnelSettings(
@@ -48,8 +36,6 @@ class XrayConfigGeneratorTest {
             dnsServer = "1.1.1.1",
             enableSniffing = true,
         )
-
-    private val profile = Profile(id = "id", name = "n", outbound = outbound)
 
     /**
      * `generate` now returns a [ConfigResult], not a bare String. Every test

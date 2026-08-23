@@ -478,8 +478,10 @@ class RoutingProfileImporterTest {
         }
     }
 
+    // A save queued as a fresh manual row can lose the name race to an import. It may update the
+    // editable rules, but the import's published ownership and asset lifecycle stay database-owned.
     @Test
-    fun manualSaveWaitsForImportAndPublishesOneConsistentRow() {
+    fun manualSaveWaitsForImportAndPreservesPublishedLifecycle() {
         runBlocking {
             val importEntered = CompletableDeferred<Unit>()
             val releaseImport = CompletableDeferred<Unit>()
@@ -512,13 +514,13 @@ class RoutingProfileImporterTest {
             stored.ruleSet.bucket(RouteOutcome.DIRECT).isEmpty shouldBe true
             stored.ruleSet.bucket(RouteOutcome.PROXY).isEmpty shouldBe true
             stored.ruleSet.globalProxy shouldBe manual.globalProxy
-            stored.sourceKind shouldBe null
+            stored.sourceKind shouldBe RoutingSourceKind.Deeplink
             stored.subscriptionId shouldBe null
-            stored.lastUpdated shouldBe null
-            stored.fingerprint shouldBe null
-            stored.geoIpUrl shouldBe null
-            stored.assetGeneration shouldBe 0L
-            stored.assetState shouldBe RuleSetAssetState.None
+            stored.lastUpdated shouldBe profile.lastUpdated
+            stored.fingerprint shouldBe profile.fingerprint()
+            stored.geoIpUrl shouldBe profile.geoIpUrl
+            stored.assetGeneration shouldBe 1L
+            stored.assetState shouldBe RuleSetAssetState.Ready
         }
     }
 

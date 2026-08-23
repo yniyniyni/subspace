@@ -5,7 +5,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
-import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 /** Data access for [RoutingRuleSetEntity]. */
@@ -27,9 +26,6 @@ internal interface RoutingRuleSetDao {
     @Insert
     suspend fun insert(entity: RoutingRuleSetEntity): Long
 
-    @Update
-    suspend fun update(entity: RoutingRuleSetEntity)
-
     /**
      * Inserts a new row or updates an existing one by id or unique name.
      *
@@ -40,8 +36,9 @@ internal interface RoutingRuleSetDao {
      *
      * The read and write share one transaction so concurrent imports with the
      * same name cannot both observe an empty slot and race to the unique index.
-     * Existing [RoutingRuleSetEntity.createdAt] is retained on either update
-     * path; a replacement describes changed rules, not a newly created set.
+     * Existing rows move only through [updateEditableColumns]: provenance,
+     * subscription ownership, timestamps, profile metadata, and asset lifecycle
+     * remain database-owned rather than being reset by a stale editor snapshot.
      */
     @Transaction
     suspend fun upsertByIdOrName(entity: RoutingRuleSetEntity): Long {
@@ -49,10 +46,50 @@ internal interface RoutingRuleSetDao {
         return if (existing == null) {
             insert(entity)
         } else {
-            update(entity.copy(id = existing.id, createdAt = existing.createdAt))
+            updateEditableColumns(
+                id = existing.id,
+                name = entity.name,
+                directSites = entity.directSites,
+                directIps = entity.directIps,
+                proxySites = entity.proxySites,
+                proxyIps = entity.proxyIps,
+                blockSites = entity.blockSites,
+                blockIps = entity.blockIps,
+                routeOrder = entity.routeOrder,
+                domainStrategy = entity.domainStrategy,
+                globalProxy = entity.globalProxy,
+            )
             existing.id
         }
     }
+
+    /** Updates exactly the routing columns owned by a manual/editor save. */
+    @Query(
+        """
+        UPDATE routing_rule_sets SET
+            name = :name,
+            directSites = :directSites, directIps = :directIps,
+            proxySites = :proxySites, proxyIps = :proxyIps,
+            blockSites = :blockSites, blockIps = :blockIps,
+            routeOrder = :routeOrder, domainStrategy = :domainStrategy,
+            globalProxy = :globalProxy
+        WHERE id = :id
+        """,
+    )
+    @Suppress("LongParameterList") // One parameter per editor-owned column in the atomic update.
+    suspend fun updateEditableColumns(
+        id: Long,
+        name: String,
+        directSites: String,
+        directIps: String,
+        proxySites: String,
+        proxyIps: String,
+        blockSites: String,
+        blockIps: String,
+        routeOrder: String,
+        domainStrategy: String,
+        globalProxy: Boolean?,
+    )
 
     /**
      * Inserts a new imported profile or updates only safe provenance on collision.

@@ -80,6 +80,7 @@ internal data class RuleSetEditorState(
     val buckets: Map<RouteOutcome, RuleBucket> = emptyMap(),
     val order: List<RouteOutcome> = RoutingRuleSet.DEFAULT_ORDER,
     val domainStrategy: DomainStrategy = DomainStrategy.IP_IF_NON_MATCH,
+    val globalProxy: Boolean? = null,
     val siteCategories: List<GeoCategory> = emptyList(),
     val ipCategories: List<GeoCategory> = emptyList(),
     val saving: Boolean = false,
@@ -254,6 +255,7 @@ constructor(
                     buckets = current.buckets,
                     order = current.order,
                     domainStrategy = current.domainStrategy,
+                    globalProxy = current.globalProxy,
                 ),
             )
             _state.update { it.copy(saving = false, saved = true) }
@@ -291,4 +293,5 @@ private fun RoutingRuleSet.toEditorState(): RuleSetEditorState =
         buckets = buckets,
         order = order,
         domainStrategy = domainStrategy,
+        globalProxy = globalProxy,
     )

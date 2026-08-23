@@ -244,6 +244,27 @@ class RuleSetEditorViewModelTest {
         state.loading shouldBe false
     }
 
+    @Test
+    fun `saving an unrelated edit preserves every nullable global proxy value`() = runTest {
+        listOf<Boolean?>(false, true, null).forEach { globalProxy ->
+            val stored =
+                RoutingRuleSet(
+                    id = 7,
+                    name = "provider routing",
+                    buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("10.0.0.0/8"))),
+                    globalProxy = globalProxy,
+                )
+            val source = FakeSource(MutableStateFlow(listOf(stored)))
+            val viewModel = editor(source)
+            viewModel.load(stored.id)
+
+            viewModel.addEntry(RouteOutcome.BLOCK, BucketField.SITES, "domain:ads.test")
+            viewModel.save()
+
+            source.upserted?.globalProxy shouldBe globalProxy
+        }
+    }
+
     // NEW_RULE_SET (`:app`'s sentinel, 0L) resolves no row — the same value RoutingRuleSet's own
     // `id` already defaults to — so this is also the "create new" path, not only a stale-id edge
     // case.

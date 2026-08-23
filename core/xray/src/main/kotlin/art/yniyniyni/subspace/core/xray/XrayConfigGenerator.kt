@@ -315,7 +315,9 @@ public object XrayConfigGenerator {
         transport: TransportOptions.WebSocket,
     ) {
         sb.appendLine("""        "wsSettings": {""")
-        sb.appendLine("""          "path": ${jsonString(transport.path)}${if (transport.headers.isEmpty()) "" else ","}""")
+        sb.appendLine(
+            """          "path": ${jsonString(transport.path)}${if (transport.headers.isEmpty()) "" else ","}""",
+        )
         if (transport.headers.isNotEmpty()) {
             sb.appendLine("""          "headers": {""")
             // Sorted, like `OutboundMapper` sorts the same map before hashing it:

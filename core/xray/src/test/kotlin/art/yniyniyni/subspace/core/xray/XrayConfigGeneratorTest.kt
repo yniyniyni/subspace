@@ -603,6 +603,8 @@ private fun injection(field: String): String = "$field-\"\\\nx\",\"listen\":\"0.
 
 private fun String.shouldBeNonInjectable() {
     this shouldContain "x\\\",\\\"listen\\\":\\\"0.0.0.0"
+    this shouldContain "\\\\"
+    this shouldContain "\\n"
     this shouldNotContain "\"listen\":\"0.0.0.0\""
     countOccurrences("\"inbounds\"") shouldBe 1
 }

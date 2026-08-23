@@ -487,18 +487,32 @@ private fun DnsServerSpec.render(): String {
 }
 
 /**
- * The rules that must precede the profile's own, in this order.
+ * The rules that must precede the profile's own, in this order: the domestic
+ * direct-match rule (if any), the remote proxy-match rule (if any), the
+ * unconditional catch-all below, then the hijack rule.
  *
- * **The ordering is a loop hazard, not a preference.** The built-in resolver's own
- * query to a DoU server is UDP to port 53. If the hijack rule came first, that
- * query would be hijacked back into the resolver that issued it. Rules 1 and 2
- * exist to claim that traffic before rule 3 can (spec §7.3).
+ * **The ordering is a loop hazard, not a preference, and claiming the traffic
+ * is not optional.** The built-in resolver's own query to a configured server
+ * is UDP to port 53. If nothing ahead of the hijack rule claimed it first, that
+ * query would match the hijack and be fed straight back into the resolver that
+ * issued it. [directMatch][DnsPlan.directMatch] and
+ * [proxyMatch][DnsPlan.proxyMatch] are frequently both null — no profile
+ * resolver, or a profile that names only hosts — so they cannot be what
+ * guarantees this. The catch-all is: it is emitted unconditionally, on every
+ * non-null plan, matching `inboundTag: ["dns-module"]` with no address filter,
+ * so *all* of the resolver's own traffic is claimed before rule 3 can see it,
+ * regardless of which matches happen to be set (spec §7.3).
+ *
+ * The catch-all's target is `proxy`, never `direct`: a resolver query sent to
+ * `direct` leaves the tunnel, which is the exact §5.2 leak this plan exists to
+ * prevent.
  */
 private fun dnsRuleLines(dns: DnsPlan?): List<String> {
     if (dns == null) return emptyList()
     val rules = mutableListOf<String>()
     dns.directMatch?.let { match -> rules += resolverRule(match, "direct") }
     dns.proxyMatch?.let { match -> rules += resolverRule(match, "proxy") }
+    rules += """{ "type": "field", "inboundTag": ["dns-module"], "outboundTag": "proxy" }"""
     rules += """{ "type": "field", "network": "tcp,udp", "port": 53, "outboundTag": "dns-out" }"""
     return rules
 }

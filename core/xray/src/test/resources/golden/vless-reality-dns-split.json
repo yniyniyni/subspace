@@ -69,6 +69,7 @@
     "rules": [
       { "type": "field", "inboundTag": ["dns-module"], "ip": ["8.8.8.8"], "outboundTag": "direct" },
       { "type": "field", "inboundTag": ["dns-module"], "domain": ["cloudflare-dns.com"], "outboundTag": "proxy" },
+      { "type": "field", "inboundTag": ["dns-module"], "outboundTag": "proxy" },
       { "type": "field", "network": "tcp,udp", "port": 53, "outboundTag": "dns-out" }
     ]
   }

@@ -112,7 +112,10 @@ public data class StreamSettings(
      * they are correct to, since the formats they read carried nothing more.
      */
     val transport: TransportOptions = TransportOptions.None,
-)
+) {
+    override fun toString(): String =
+        "StreamSettings(network=$network, security=${security.renderType()}, transport=${transport.renderType()})"
+}
 
 public sealed interface Security {
     public data object None : Security
@@ -132,3 +135,18 @@ public sealed interface Security {
         val allowInsecure: Boolean,
     ) : Security
 }
+
+private fun Security.renderType(): String =
+    when (this) {
+        Security.None -> "None"
+        is Security.Reality -> "Reality"
+        is Security.Tls -> "Tls"
+    }
+
+private fun TransportOptions.renderType(): String =
+    when (this) {
+        TransportOptions.None -> "None"
+        is TransportOptions.Grpc -> "Grpc"
+        is TransportOptions.WebSocket -> "WebSocket"
+        is TransportOptions.Xhttp -> "Xhttp"
+    }

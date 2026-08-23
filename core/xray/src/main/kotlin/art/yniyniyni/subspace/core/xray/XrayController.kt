@@ -32,10 +32,22 @@ import java.io.File
  *   Null when routing is off and no rule needs geo data — callers are not
  *   required to have one.
  */
-public class XrayController(
+public class XrayController private constructor(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val geoAssetDir: File? = null,
+    private val invocation: XrayControllerInvocation,
 ) {
+    public constructor(
+        io: CoroutineDispatcher = Dispatchers.IO,
+        geoAssetDir: File? = null,
+    ) : this(io, geoAssetDir, XrayControllerInvocation())
+
+    internal constructor(
+        invocation: XrayControllerInvocation,
+        io: CoroutineDispatcher = Dispatchers.IO,
+        geoAssetDir: File? = null,
+    ) : this(io, geoAssetDir, invocation)
+
     /**
      * The `env` object attached to every [validate]/[start] call. Built once per
      * instance rather than per call — the directory is fixed for the life of a
@@ -119,6 +131,7 @@ public class XrayController(
      * it: `applyEnv` runs before `Invoke` dispatches on `method` (see the patch),
      * so one request both sets the asset location and starts the core.
      */
+    @Suppress("TooGenericExceptionCaught")
     public suspend fun start(
         configFile: File,
         protector: SocketProtector,
@@ -128,34 +141,14 @@ public class XrayController(
             // int, so the bridge narrows here. The Go wrapper discards the returned
             // boolean, so a false does not abort the dial — it surfaces only as
             // §5.1's symptom. SocketProtector's implementation must log it.
-            LibXray.registerDialerController(ProtectorHolder)
-            LibXray.registerListenerController(ProtectorHolder)
-            ProtectorHolder.target = protector
-
-            LibXrayInvoke.call(
-                "runXray",
-                JSONObject().put("configPath", configFile.absolutePath),
-                env,
-            )
+            invocation.retainProtector(protector)
+            try {
+                invocation.runXray(configFile, env)
+            } catch (error: Throwable) {
+                invocation.clearProtector()
+                throw error
+            }
         }
-    }
-
-    /**
-     * The one object the Go runtime ever holds.
-     *
-     * libXray's dialer controller is process-global state with no unregister
-     * call, so whatever is passed to it lives as long as the process. Passing a
-     * lambda that captured the `VpnService` would strand a destroyed service —
-     * and its `Context` — in native memory until the process dies.
-     *
-     * Instead Go holds this singleton forever and we swap [target], so a stopped
-     * session leaves nothing but a null field behind.
-     */
-    private object ProtectorHolder : DialerController {
-        @Volatile
-        var target: SocketProtector? = null
-
-        override fun protectFd(fd: Long): Boolean = target?.protect(fd.toInt()) ?: false
     }
 
     /** True when the core reports itself running. §5.5 — never infer this locally. */
@@ -195,13 +188,78 @@ public class XrayController(
         // Drop the protector first. Go keeps its reference to ProtectorHolder
         // forever — there is no unregister — so this is the only way to stop a
         // finished session's VpnService from being reachable from native code.
-        ProtectorHolder.target = null
+        invocation.clearProtector()
         try {
-            LibXrayInvoke.call("stopXray")
+            invocation.stopXray()
         } catch (e: XrayException) {
             // Deliberately swallowed — see the KDoc above. Not logged, because
             // the message can quote the config (§5.6) and the caller already
             // publishes a state transition.
         }
+    }
+}
+
+/**
+ * The process-global protector bridge and the native calls that define its lifetime.
+ *
+ * [ProtectorHolder] stays private: tests may observe only whether it retains a target,
+ * never retrieve the service-backed [SocketProtector] itself. Replacing the three native
+ * operations lets JVM tests exercise [XrayController.start] and [XrayController.stopBlocking]
+ * without loading libXray.
+ */
+internal class XrayControllerInvocation(
+    private val registerControllers: (DialerController) -> Unit = { controller ->
+        LibXray.registerDialerController(controller)
+        LibXray.registerListenerController(controller)
+    },
+    private val invokeRunXray: (File, XrayEnv?) -> Unit = { configFile, env ->
+        LibXrayInvoke.call(
+            "runXray",
+            JSONObject().put("configPath", configFile.absolutePath),
+            env,
+        )
+    },
+    private val invokeStopXray: () -> Unit = {
+        LibXrayInvoke.call("stopXray")
+    },
+) {
+    fun retainProtector(protector: SocketProtector) {
+        registerControllers(ProtectorHolder)
+        ProtectorHolder.target = protector
+    }
+
+    fun runXray(
+        configFile: File,
+        env: XrayEnv?,
+    ) {
+        invokeRunXray(configFile, env)
+    }
+
+    fun clearProtector() {
+        ProtectorHolder.target = null
+    }
+
+    fun stopXray() {
+        invokeStopXray()
+    }
+
+    fun hasProtectorTarget(): Boolean = ProtectorHolder.target != null
+
+    /**
+     * The one object the Go runtime ever holds.
+     *
+     * libXray's dialer controller is process-global state with no unregister
+     * call, so whatever is passed to it lives as long as the process. Passing a
+     * lambda that captured the `VpnService` would strand a destroyed service —
+     * and its `Context` — in native memory until the process dies.
+     *
+     * Instead Go holds this singleton forever and we swap [target], so a stopped
+     * session leaves nothing but a null field behind.
+     */
+    private object ProtectorHolder : DialerController {
+        @Volatile
+        var target: SocketProtector? = null
+
+        override fun protectFd(fd: Long): Boolean = target?.protect(fd.toInt()) ?: false
     }
 }

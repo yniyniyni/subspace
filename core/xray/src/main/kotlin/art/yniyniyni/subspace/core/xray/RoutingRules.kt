@@ -5,10 +5,6 @@ import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 
-private const val JSON_CONTROL_MAX = 0x1F
-private const val JSON_ESCAPE_RADIX = 16
-private const val JSON_ESCAPE_WIDTH = 4
-
 /**
  * The catch-all `GlobalProxy: "false"` needs, and why it is a rule rather than
  * an outbound reorder.
@@ -89,30 +85,5 @@ private fun ruleLine(
     tag: String,
 ): String {
     val array = values.joinToString(", ", transform = ::jsonString)
-    return """{ "type": "field", "$field": [$array], "outboundTag": "$tag" }"""
+    return """{ "type": "field", ${jsonString(field)}: [$array], "outboundTag": ${jsonString(tag)} }"""
 }
-
-private fun jsonString(value: String): String =
-    buildString {
-        append('"')
-        value.forEach { char ->
-            when (char) {
-                '"' -> append("\\\"")
-                '\\' -> append("\\\\")
-                '\b' -> append("\\b")
-                '\u000C' -> append("\\f")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> {
-                    if (char.code <= JSON_CONTROL_MAX) {
-                        append("\\u")
-                        append(char.code.toString(JSON_ESCAPE_RADIX).padStart(JSON_ESCAPE_WIDTH, '0'))
-                    } else {
-                        append(char)
-                    }
-                }
-            }
-        }
-        append('"')
-    }

@@ -153,7 +153,7 @@ public object XrayConfigGenerator {
         settings: TunnelSettings,
     ) {
         sb.appendLine("""  "dns": {""")
-        sb.appendLine("""    "servers": ["${settings.dnsServer}"]""")
+        sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
         sb.appendLine("""  },""")
     }
 
@@ -173,7 +173,7 @@ public object XrayConfigGenerator {
         val rules = routing?.let(::routingRuleLines).orEmpty()
 
         sb.appendLine("""  "routing": {""")
-        sb.appendLine("""    "domainStrategy": "${strategy.wireValue}",""")
+        sb.appendLine("""    "domainStrategy": ${jsonString(strategy.wireValue)},""")
         if (rules.isEmpty()) {
             sb.appendLine("""    "rules": []""")
         } else {
@@ -208,16 +208,16 @@ public object XrayConfigGenerator {
         sb.appendLine("""      "settings": {""")
         sb.appendLine("""        "vnext": [""")
         sb.appendLine("""          {""")
-        sb.appendLine("""            "address": "${out.address}",""")
+        sb.appendLine("""            "address": ${jsonString(out.address)},""")
         sb.appendLine("""            "port": ${out.port},""")
         sb.appendLine("""            "users": [""")
         sb.appendLine("""              {""")
-        sb.appendLine("""                "id": "${out.uuid}",""")
+        sb.appendLine("""                "id": ${jsonString(out.uuid)},""")
         // VLESS has no transport encryption of its own; "none" is required, not
         // a weakening — TLS/REALITY in streamSettings is what secures it.
         sb.appendLine("""                "encryption": "none"${if (out.flow != null) "," else ""}""")
-        if (out.flow != null) {
-            sb.appendLine("""                "flow": "${out.flow}"""")
+        out.flow?.let { flow ->
+            sb.appendLine("""                "flow": ${jsonString(flow)}""")
         }
         sb.appendLine("""              }""")
         sb.appendLine("""            ]""")
@@ -241,24 +241,24 @@ public object XrayConfigGenerator {
         // one is decided here rather than inside each security branch.
         val tail = if (stream.transport is TransportOptions.None) "" else ","
         sb.appendLine("""      "streamSettings": {""")
-        sb.appendLine("""        "network": "${stream.network}",""")
+        sb.appendLine("""        "network": ${jsonString(stream.network)},""")
         when (val security = stream.security) {
             is Security.Reality -> {
                 sb.appendLine("""        "security": "reality",""")
                 sb.appendLine("""        "realitySettings": {""")
-                sb.appendLine("""          "serverName": "${security.serverName}",""")
-                sb.appendLine("""          "publicKey": "${security.publicKey}",""")
-                sb.appendLine("""          "shortId": "${security.shortId}",""")
-                sb.appendLine("""          "fingerprint": "${security.fingerprint}",""")
-                sb.appendLine("""          "spiderX": "${security.spiderX}"""")
+                sb.appendLine("""          "serverName": ${jsonString(security.serverName)},""")
+                sb.appendLine("""          "publicKey": ${jsonString(security.publicKey)},""")
+                sb.appendLine("""          "shortId": ${jsonString(security.shortId)},""")
+                sb.appendLine("""          "fingerprint": ${jsonString(security.fingerprint)},""")
+                sb.appendLine("""          "spiderX": ${jsonString(security.spiderX)}""")
                 sb.appendLine("""        }$tail""")
             }
 
             is Security.Tls -> {
                 sb.appendLine("""        "security": "tls",""")
                 sb.appendLine("""        "tlsSettings": {""")
-                sb.appendLine("""          "serverName": "${security.serverName}",""")
-                sb.appendLine("""          "fingerprint": "${security.fingerprint}",""")
+                sb.appendLine("""          "serverName": ${jsonString(security.serverName)},""")
+                sb.appendLine("""          "fingerprint": ${jsonString(security.fingerprint)},""")
                 sb.appendLine("""          "allowInsecure": ${security.allowInsecure}""")
                 sb.appendLine("""        }$tail""")
             }
@@ -302,7 +302,7 @@ public object XrayConfigGenerator {
             is TransportOptions.WebSocket -> appendWebSocketSettings(sb, transport)
             is TransportOptions.Grpc -> {
                 sb.appendLine("""        "grpcSettings": {""")
-                sb.appendLine("""          "serviceName": "${transport.serviceName}"""")
+                sb.appendLine("""          "serviceName": ${jsonString(transport.serviceName)}""")
                 sb.appendLine("""        }""")
             }
 
@@ -315,7 +315,7 @@ public object XrayConfigGenerator {
         transport: TransportOptions.WebSocket,
     ) {
         sb.appendLine("""        "wsSettings": {""")
-        sb.appendLine("""          "path": "${transport.path}"${if (transport.headers.isEmpty()) "" else ","}""")
+        sb.appendLine("""          "path": ${jsonString(transport.path)}${if (transport.headers.isEmpty()) "" else ","}""")
         if (transport.headers.isNotEmpty()) {
             sb.appendLine("""          "headers": {""")
             // Sorted, like `OutboundMapper` sorts the same map before hashing it:
@@ -324,7 +324,7 @@ public object XrayConfigGenerator {
             val headers = transport.headers.toSortedMap()
             headers.entries.forEachIndexed { index, (name, value) ->
                 val comma = if (index == headers.size - 1) "" else ","
-                sb.appendLine("""            "$name": "$value"$comma""")
+                sb.appendLine("""            ${jsonString(name)}: ${jsonString(value)}$comma""")
             }
             sb.appendLine("""          }""")
         }
@@ -338,9 +338,9 @@ public object XrayConfigGenerator {
         // Built as a list first: `host` and `mode` are independently optional, so
         // deciding each line's trailing comma in place would need to look ahead
         // past the other one.
-        val fields = mutableListOf(""""path": "${transport.path}"""")
-        transport.host?.let { fields += """"host": "$it"""" }
-        transport.mode?.let { fields += """"mode": "$it"""" }
+        val fields = mutableListOf(""""path": ${jsonString(transport.path)}""")
+        transport.host?.let { fields += """"host": ${jsonString(it)}""" }
+        transport.mode?.let { fields += """"mode": ${jsonString(it)}""" }
 
         sb.appendLine("""        "xhttpSettings": {""")
         fields.forEachIndexed { index, field ->
@@ -378,7 +378,7 @@ private fun appendSocksInbound(
     if (settings.enableSniffing) {
         sb.appendLine("""      "sniffing": {""")
         sb.appendLine("""        "enabled": true,""")
-        sb.appendLine("""        "destOverride": ["http", "tls"]""")
+        sb.appendLine("""        "destOverride": ["http", "tls", "quic"]""")
         sb.appendLine("""      }""")
     }
     sb.appendLine("""    }${if (trailingComma) "," else ""}""")

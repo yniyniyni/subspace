@@ -119,6 +119,14 @@ class XrayConfigGeneratorTest {
     fun `omits sniffing when disabled`() {
         val json = generateJson(outbound, settings.copy(enableSniffing = false))
         json shouldNotContain "\"sniffing\""
+        json shouldNotContain "\"destOverride\""
+    }
+
+    @Test
+    fun `enabled sniffing overrides HTTP TLS and QUIC destinations`() {
+        val json = generateJson(outbound, settings)
+
+        json shouldContain "\"destOverride\": [\"http\", \"tls\", \"quic\"]"
     }
 
     @Test
@@ -233,6 +241,89 @@ class XrayConfigGeneratorTest {
 
         json shouldContain
             """{ "type": "field", "domain": ["safe\"\n\u0001\"outboundTag\": \"block"], "outboundTag": "proxy" }"""
+    }
+
+    @Test
+    fun `escapes remote address UUID flow DNS server and stream network`() {
+        val malicious =
+            outbound.copy(
+                address = injection("address"),
+                uuid = injection("uuid"),
+                flow = injection("flow"),
+                stream = StreamSettings(network = injection("network"), security = Security.None),
+            )
+
+        val json = generateJson(malicious, settings.copy(dnsServer = injection("dns")))
+
+        json.shouldBeNonInjectable()
+    }
+
+    @Test
+    fun `escapes remote REALITY fields`() {
+        val maliciousReality =
+            Security.Reality(
+                serverName = injection("reality-server-name"),
+                publicKey = injection("reality-public-key"),
+                shortId = injection("reality-short-id"),
+                fingerprint = injection("reality-fingerprint"),
+                spiderX = injection("reality-spider-x"),
+            )
+
+        val json = generateJson(outbound.copy(stream = StreamSettings("tcp", maliciousReality)), settings)
+
+        json.shouldBeNonInjectable()
+    }
+
+    @Test
+    fun `escapes remote TLS fields`() {
+        val maliciousTls =
+            Security.Tls(
+                serverName = injection("tls-server-name"),
+                fingerprint = injection("tls-fingerprint"),
+                allowInsecure = false,
+            )
+
+        val json = generateJson(outbound.copy(stream = StreamSettings("tcp", maliciousTls)), settings)
+
+        json.shouldBeNonInjectable()
+    }
+
+    @Test
+    fun `escapes WebSocket path header names and header values`() {
+        val webSocket =
+            TransportOptions.WebSocket(
+                path = injection("ws-path"),
+                headers = mapOf(injection("ws-header-name") to injection("ws-header-value")),
+            )
+
+        val json = generateJson(vlessWith("ws", Security.None, webSocket), settings)
+
+        json.shouldBeNonInjectable()
+    }
+
+    @Test
+    fun `escapes gRPC service names`() {
+        val json =
+            generateJson(
+                vlessWith("grpc", Security.None, TransportOptions.Grpc(injection("grpc-service-name"))),
+                settings,
+            )
+
+        json.shouldBeNonInjectable()
+    }
+
+    @Test
+    fun `escapes XHTTP path host and mode`() {
+        val xhttp =
+            TransportOptions.Xhttp(
+                path = injection("xhttp-path"),
+                host = injection("xhttp-host"),
+                mode = injection("xhttp-mode"),
+            )
+
+        val json = generateJson(vlessWith("xhttp", Security.None, xhttp), settings)
+
+        json.shouldBeNonInjectable()
     }
 
     @Test
@@ -507,3 +598,13 @@ class XrayConfigGeneratorTest {
         }
     }
 }
+
+private fun injection(field: String): String = "$field-\"\\\nx\",\"listen\":\"0.0.0.0"
+
+private fun String.shouldBeNonInjectable() {
+    this shouldContain "x\\\",\\\"listen\\\":\\\"0.0.0.0"
+    this shouldNotContain "\"listen\":\"0.0.0.0\""
+    countOccurrences("\"inbounds\"") shouldBe 1
+}
+
+private fun String.countOccurrences(value: String): Int = windowed(value.length).count { it == value }

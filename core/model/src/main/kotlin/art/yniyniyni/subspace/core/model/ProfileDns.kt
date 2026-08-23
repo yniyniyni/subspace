@@ -79,10 +79,24 @@ public data class ProfileDns(
     /** True when the block names at least one resolver. Not the same as "the block is empty". */
     public val hasResolver: Boolean get() = remote != null || domestic != null
 
+    /** True when this is the rejected-block sentinel. See [INVALID]. */
+    public val isInvalid: Boolean get() = this === INVALID
+
     /** §5.6: resolver endpoints and host mappings never reach a log line. */
     override fun toString(): String =
         "ProfileDns(remote=$remote, domestic=$domestic, " +
             "hosts=<redacted, ${hosts.size} entries>, fakeDns=$fakeDns)"
+
+    public companion object {
+        /**
+         * The block was present and could not be understood (spec §5).
+         *
+         * A distinct value rather than null, because "no DNS block" and "a DNS
+         * block we refused" are different things to the user: the first says
+         * nothing, the second must say so on the review sheet.
+         */
+        public val INVALID: ProfileDns = ProfileDns()
+    }
 }
 
 /** Shared validation, so the import parser and the settings screen agree on what is valid. */

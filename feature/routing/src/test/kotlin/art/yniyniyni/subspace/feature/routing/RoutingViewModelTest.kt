@@ -135,7 +135,7 @@ class RoutingViewModelTest {
             set: RoutingRuleSet,
             sourceKind: RoutingSourceKind? = null,
             subscriptionId: Long? = null,
-            hasUnappliedDns: Boolean = false,
+            hasDns: Boolean = false,
             assetState: RuleSetAssetState = RuleSetAssetState.None,
             assetFailure: RuleSetAssetFailure? = null,
         ) = StoredRuleSet(
@@ -146,7 +146,7 @@ class RoutingViewModelTest {
             fingerprint = null,
             geoIpUrl = null,
             geoSiteUrl = null,
-            hasUnappliedDns = hasUnappliedDns,
+            hasDns = hasDns,
             assetGeneration = 0L,
             assetState = assetState,
             assetFailure = assetFailure,
@@ -398,10 +398,10 @@ class RoutingViewModelTest {
     fun `a profile carrying DNS says it is not applied`() = runTest {
         val source =
             FakeSource(
-                MutableStateFlow(listOf(stored(literalSet, RoutingSourceKind.Deeplink, hasUnappliedDns = true))),
+                MutableStateFlow(listOf(stored(literalSet, RoutingSourceKind.Deeplink, hasDns = true))),
             )
 
-        RoutingViewModel(source).state.value.ruleSets.single().hasUnappliedDns shouldBe true
+        RoutingViewModel(source).state.value.ruleSets.single().hasDns shouldBe true
     }
 
     // Task 14. A deeplink reaches the sheet through this flow rather than a

@@ -99,7 +99,7 @@ internal fun RuleSetCard(
             // above blocks activation, hasFailedGeoUpdate reports a refresh of
             // an installed file, and this reports *this set's own* generation.
             AssetStateRow(row = row, onCancelDownload = actions.onCancelDownload)
-            if (row.hasUnappliedDns) {
+            if (row.hasDns) {
                 MarkerRow(
                     text = stringResource(R.string.routing_dns_not_applied),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

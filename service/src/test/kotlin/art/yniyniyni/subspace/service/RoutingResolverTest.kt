@@ -47,7 +47,7 @@ class RoutingResolverTest {
             fingerprint = null,
             geoIpUrl = "https://example.test/geoip.dat".takeIf { hasOwnSources },
             geoSiteUrl = null,
-            hasUnappliedDns = false,
+            hasDns = false,
             assetGeneration = generation,
             assetState = RuleSetAssetState.None,
             assetFailure = null,

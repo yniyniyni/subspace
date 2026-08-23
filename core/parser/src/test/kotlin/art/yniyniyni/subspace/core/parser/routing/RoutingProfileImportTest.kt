@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.core.parser.routing
 
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import io.kotest.matchers.shouldBe
@@ -18,7 +19,7 @@ class RoutingProfileImportTest {
         result.profile.globalProxy shouldBe false
         result.profile.routeOrder shouldBe listOf(RouteOutcome.BLOCK, RouteOutcome.DIRECT, RouteOutcome.PROXY)
         result.profile.useChunkFiles shouldBe true
-        result.profile.hasUnappliedDns shouldBe true
+        result.profile.hasDns shouldBe true
     }
 
     @Test
@@ -190,7 +191,7 @@ class RoutingProfileImportTest {
     }
 
     @Test
-    fun capturesDnsBlockWithoutInterpretingIt() {
+    fun capturesTheDnsBlockAsATypedProfileDns() {
         val json =
             """
             {"Name":"P","ProxySites":["a.test"],
@@ -205,8 +206,12 @@ class RoutingProfileImportTest {
                 ).shouldBeInstanceOf<ImportResult.Imported>()
                 .profile
 
-        profile.hasUnappliedDns shouldBe true
-        checkNotNull(profile.dnsJson).contains("DoH") shouldBe true
+        profile.hasDns shouldBe true
+        val dns = checkNotNull(profile.dns)
+        dns.isInvalid shouldBe false
+        dns.remote?.transport shouldBe DnsTransport.DOH
+        dns.domestic?.transport shouldBe DnsTransport.DOU
+        dns.fakeDns shouldBe true
     }
 
     @Test

@@ -5,6 +5,7 @@ package art.yniyniyni.subspace.core.data
 
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetDao
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetEntity
+import art.yniyniyni.subspace.core.data.serialization.ProfileDnsCodec
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.RouteOutcome
@@ -39,7 +40,7 @@ public data class StoredRuleSet(
     public val fingerprint: String?,
     public val geoIpUrl: String?,
     public val geoSiteUrl: String?,
-    public val hasUnappliedDns: Boolean,
+    public val hasDns: Boolean,
     public val assetGeneration: Long,
     public val assetState: RuleSetAssetState,
     public val assetFailure: RuleSetAssetFailure?,
@@ -73,7 +74,7 @@ public data class StoredRuleSet(
         "StoredRuleSet(ruleSet=$ruleSet, sourceKind=$sourceKind, " +
             "subscriptionId=$subscriptionId, lastUpdated=$lastUpdated, " +
             "fingerprint=<redacted>, geoUrls=<redacted>, " +
-            "hasUnappliedDns=$hasUnappliedDns, assetGeneration=$assetGeneration, " +
+            "hasDns=$hasDns, assetGeneration=$assetGeneration, " +
             "assetState=$assetState, assetFailure=$assetFailure)"
 }
 
@@ -291,7 +292,7 @@ internal constructor(
             fingerprint = profile.fingerprint(),
             geoIpUrl = profile.geoIpUrl,
             geoSiteUrl = profile.geoSiteUrl,
-            dnsJson = profile.dnsJson,
+            dnsJson = ProfileDnsCodec.encode(profile.dns),
             useChunkFiles = profile.useChunkFiles,
             generation = generation,
         )
@@ -380,7 +381,7 @@ private fun RoutingRuleSetEntity.toStored(): StoredRuleSet =
         fingerprint = fingerprint,
         geoIpUrl = geoIpUrl,
         geoSiteUrl = geoSiteUrl,
-        hasUnappliedDns = !dnsJson.isNullOrBlank(),
+        hasDns = !dnsJson.isNullOrBlank(),
         assetGeneration = assetGeneration,
         assetState = assetState.toAssetState(),
         assetFailure = assetFailure.toAssetFailure(),
@@ -442,6 +443,6 @@ private fun RoutingProfile.toEntity(
         assetFailure = null,
         geoIpUrl = geoIpUrl,
         geoSiteUrl = geoSiteUrl,
-        dnsJson = dnsJson,
+        dnsJson = ProfileDnsCodec.encode(dns),
         useChunkFiles = useChunkFiles,
     )

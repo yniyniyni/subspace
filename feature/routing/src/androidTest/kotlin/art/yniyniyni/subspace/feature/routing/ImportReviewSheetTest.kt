@@ -54,7 +54,7 @@ class ImportReviewSheetTest {
                     alreadyOnDevice = true,
                 ),
             ),
-            hasUnappliedDns = true,
+            hasDns = true,
             willActivate = true,
         )
 

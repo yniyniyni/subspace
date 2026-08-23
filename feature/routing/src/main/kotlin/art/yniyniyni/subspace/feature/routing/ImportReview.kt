@@ -93,7 +93,7 @@ internal data class ImportReviewState(
     val bucketCounts: Map<RouteOutcome, Int> = emptyMap(),
     val defaultRouteIsDirect: Boolean = false,
     val geoDownloads: List<GeoDownloadPreview> = emptyList(),
-    val hasUnappliedDns: Boolean = false,
+    val hasDns: Boolean = false,
     val willActivate: Boolean = false,
     val problem: ImportProblem? = null,
     /** Why a confirmed import did not land. Non-null only with [Stage.Failed]. */
@@ -209,7 +209,7 @@ private fun ProfileBody(state: ImportReviewState) {
     state.geoDownloads.forEach { download ->
         GeoRow(download)
     }
-    if (state.hasUnappliedDns) {
+    if (state.hasDns) {
         Text(
             text = stringResource(R.string.import_review_dns_unapplied),
             style = MaterialTheme.typography.bodyMedium,

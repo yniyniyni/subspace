@@ -79,7 +79,7 @@ internal data class RuleSetRow(
     val subscriptionName: String? = null,
     val assetState: RuleSetAssetState = RuleSetAssetState.None,
     val assetFailure: RuleSetAssetFailure? = null,
-    val hasUnappliedDns: Boolean = false,
+    val hasDns: Boolean = false,
     val downloadProgress: GeoProgress? = null,
     /**
      * Whether the published rules reference any geo database at all.

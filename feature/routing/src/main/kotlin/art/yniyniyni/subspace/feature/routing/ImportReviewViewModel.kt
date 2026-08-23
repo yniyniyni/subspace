@@ -281,7 +281,7 @@ constructor(
                 bucketCounts = bucketCounts(result.profile),
                 defaultRouteIsDirect = result.profile.globalProxy == false,
                 geoDownloads = preview.geoFiles.map { it.toDownloadPreview() },
-                hasUnappliedDns = result.profile.hasUnappliedDns,
+                hasDns = result.profile.hasDns,
                 willActivate = result.verb == RoutingVerb.OnAdd || preview.willActivate,
             )
     }

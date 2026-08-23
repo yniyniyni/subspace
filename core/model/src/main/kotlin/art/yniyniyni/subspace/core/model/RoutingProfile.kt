@@ -28,7 +28,7 @@ private const val HEX_RADIX = 16
  *   guessed chunk protocol against an unpublished format is exactly the failure
  *   §10.5 exists to prevent.
  *
- * §5.6: [buckets] holds domains and addresses the user visits, and [dnsJson] can
+ * §5.6: [buckets] holds domains and addresses the user visits, and [dns] can
  * hold resolver hostnames. The generated `toString()` would print all of them —
  * see the override.
  *
@@ -41,9 +41,9 @@ private const val HEX_RADIX = 16
  * @property geoSiteUrl the optional provider URL for the geosite database.
  * @property lastUpdated the profile's own unix seconds, or null when absent or
  *   unparseable. Null means the monotonicity gate cannot apply (spec §7.3).
- * @property dnsJson the DNS block verbatim, stored and read by nobody until M6.5.
- *   One opaque string rather than typed fields on purpose: M6 does not interpret
- *   it, and a typed shape invented now is one M6.5 would have to migrate away from.
+ * @property dns the profile's DNS block, applied by M6.5. Null when the profile
+ *   carried none of the DNS keys; [ProfileDns.INVALID] when it carried some and
+ *   they could not be understood (spec §5).
  * @property useChunkFiles the provider's chunk-file hint, stored but not applied.
  */
 public data class RoutingProfile(
@@ -55,7 +55,13 @@ public data class RoutingProfile(
     public val geoIpUrl: String? = null,
     public val geoSiteUrl: String? = null,
     public val lastUpdated: Long? = null,
-    public val dnsJson: String? = null,
+    /**
+     * The profile's DNS block, applied by M6.5.
+     *
+     * M6 stored this as one opaque `dnsJson` string on purpose, so this milestone
+     * could choose the typed shape rather than inherit a guess. This is that shape.
+     */
+    public val dns: ProfileDns? = null,
     public val useChunkFiles: Boolean? = null,
 ) {
     /** The entries for [outcome], or an empty bucket. Mirrors [RoutingRuleSet.bucket]. */
@@ -65,8 +71,8 @@ public data class RoutingProfile(
     public val entryCount: Int
         get() = buckets.values.sumOf { it.sites.size + it.ips.size }
 
-    /** True when this profile carries a DNS block M6 stores but does not apply. */
-    public val hasUnappliedDns: Boolean get() = !dnsJson.isNullOrBlank()
+    /** True when this profile carries a DNS block, valid or not. */
+    public val hasDns: Boolean get() = dns != null
 
     /**
      * A stable hash of everything that changes what this profile *does*.
@@ -102,7 +108,18 @@ public data class RoutingProfile(
         }
         feed(geoIpUrl)
         feed(geoSiteUrl)
-        feed(dnsJson)
+        feed(dns?.remote?.transport?.name)
+        feed(dns?.remote?.domain)
+        feed(dns?.remote?.ip)
+        feed(dns?.domestic?.transport?.name)
+        feed(dns?.domestic?.domain)
+        feed(dns?.domestic?.ip)
+        dns?.hosts?.toSortedMap()?.forEach { (host, address) ->
+            feed(host)
+            feed(address)
+        }
+        feed(dns?.fakeDns?.toString())
+        feed(dns?.isInvalid?.toString())
         feed(useChunkFiles?.toString())
         return digest.digest().joinToString("") { byte ->
             (byte.toInt() and HEX_MASK).toString(HEX_RADIX).padStart(HEX_DIGIT_WIDTH, HEX_PADDING_CHARACTER)
@@ -129,7 +146,7 @@ public data class RoutingProfile(
         "RoutingProfile(name=$name, globalProxy=$globalProxy, order=$routeOrder, " +
             "domainStrategy=$domainStrategy, entries=<redacted, $entryCount entries>, " +
             "geoUrls=<redacted, ${listOfNotNull(geoIpUrl, geoSiteUrl).size}>, " +
-            "lastUpdated=$lastUpdated, dns=<redacted, present=$hasUnappliedDns>, " +
+            "lastUpdated=$lastUpdated, dns=$dns, " +
             "useChunkFiles=$useChunkFiles)"
 }
 

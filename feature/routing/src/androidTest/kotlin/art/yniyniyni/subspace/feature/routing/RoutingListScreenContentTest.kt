@@ -62,7 +62,7 @@ class RoutingListScreenContentTest {
             sourceKind = RoutingSourceKind.Header,
             subscriptionName = "NameVPN",
             assetState = RuleSetAssetState.Ready,
-            hasUnappliedDns = true,
+            hasDns = true,
         )
     private val downloadingRow =
         RuleSetRow(

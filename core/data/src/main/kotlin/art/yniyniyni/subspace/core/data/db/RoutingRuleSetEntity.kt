@@ -63,7 +63,11 @@ internal data class RoutingRuleSetEntity(
     val geoSiteUrl: String? = null,
     /** Null preserves proxy-by-default; false emits a catch-all to `direct`. */
     val globalProxy: Boolean? = null,
-    /** The DNS block verbatim. Read by nobody until M6.5. */
+    /**
+     * The profile's DNS block, canonicalised through
+     * [art.yniyniyni.subspace.core.data.serialization.ProfileDnsCodec] in Happ's
+     * own key names, so an M6-era row still decodes (M6.5).
+     */
     val dnsJson: String? = null,
     /** Stored, never read. Research §3.3. */
     val useChunkFiles: Boolean? = null,

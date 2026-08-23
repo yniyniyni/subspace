@@ -203,12 +203,20 @@ class VlessLinkTest {
     }
 
     @Test
-    fun `uses none for absent or unknown security`() {
+    fun `uses none for absent or explicitly none security`() {
         val absent = parseVlessLink("vless://$UUID@host.example:443", 0) as LinkResult.Ok
-        val unknown = parseVlessLink("vless://$UUID@host.example:443?security=other", 0) as LinkResult.Ok
+        val explicitlyNone = parseVlessLink("vless://$UUID@host.example:443?security=none", 0) as LinkResult.Ok
 
         (absent.profile.outbound as VlessOutbound).stream.security shouldBe Security.None
-        (unknown.profile.outbound as VlessOutbound).stream.security shouldBe Security.None
+        (explicitlyNone.profile.outbound as VlessOutbound).stream.security shouldBe Security.None
+    }
+
+    @Test
+    fun `unknown security is rejected without importing a profile`() {
+        val outcome = SubscriptionParser.parse("vless://$UUID@host.example:443?security=bogus")
+
+        outcome.profiles shouldBe emptyList()
+        outcome.failures.single().detail shouldBe FailureDetail.Unsupported(DetailField.Security)
     }
 
     @Test

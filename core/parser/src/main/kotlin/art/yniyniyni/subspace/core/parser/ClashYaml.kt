@@ -239,8 +239,16 @@ private fun vless(
     validateUuid(uuid)?.let { return bad(common.index, ParseFailureReason.MissingCredential, it) }
 
     val reality = proxy.node("reality-opts") as? YamlMap
+    val tlsDisabled = proxy.text("tls") == "false"
     val security =
         if (reality != null) {
+            if (tlsDisabled) {
+                return bad(
+                    common.index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Unsupported(DetailField.Security),
+                )
+            }
             val publicKey = reality.text("public-key").orEmpty()
             validateRealityPublicKey(publicKey)?.let {
                 return bad(common.index, ParseFailureReason.InvalidRealityKey, it)
@@ -252,6 +260,8 @@ private fun vless(
                 fingerprint = proxy.text("client-fingerprint") ?: "chrome",
                 spiderX = "",
             )
+        } else if (tlsDisabled) {
+            Security.None
         } else {
             tls(common)
         }

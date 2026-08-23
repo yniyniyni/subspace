@@ -572,6 +572,46 @@ class ClashYamlTest {
     }
 
     @Test
+    fun `vless with tls false and no reality material imports without security`() {
+        val yaml =
+            """
+            proxies:
+              - name: Plain
+                type: vless
+                server: 198.51.100.8
+                port: 8443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000002
+                tls: false
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.failures shouldBe emptyList()
+        (outcome.profiles.single().outbound as VlessOutbound).stream.security shouldBe Security.None
+    }
+
+    @Test
+    fun `vless with tls false and reality material is rejected without importing a profile`() {
+        val yaml =
+            """
+            proxies:
+              - name: Conflicted
+                type: vless
+                server: 198.51.100.15
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000007
+                tls: false
+                reality-opts:
+                  public-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.profiles shouldBe emptyList()
+        outcome.failures.single().detail shouldBe FailureDetail.Unsupported(DetailField.Security)
+    }
+
+    @Test
     fun `vless missing uuid fails with a structured detail and does not lose its neighbours`() {
         val yaml =
             """

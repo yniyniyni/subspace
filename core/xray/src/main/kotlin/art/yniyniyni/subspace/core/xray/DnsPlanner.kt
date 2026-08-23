@@ -2,7 +2,6 @@
 package art.yniyniyni.subspace.core.xray
 
 import art.yniyniyni.subspace.core.model.DnsResolver
-import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
@@ -48,8 +47,15 @@ public data class DnsPlan(
  * rather than fighting it, and precedence lives here so M7 need not restate it.
  */
 public object DnsPlanner {
-    /** The resolver the app ships with, and the value that makes [plan] return null. */
-    public val DEFAULT_SETTING: DnsResolver = DnsResolver(DnsTransport.DOU, ip = "1.1.1.1")
+    /**
+     * The resolver the app ships with, and the value that makes [plan] return null.
+     *
+     * An alias for [DnsResolver.DEFAULT], which is where the literal actually
+     * lives: `:core:data`'s `SettingsRepository` needs the same default and may
+     * not depend on this module (ARCHITECTURE.md §4), so `:core:model` is the one
+     * place that may declare it.
+     */
+    public val DEFAULT_SETTING: DnsResolver = DnsResolver.DEFAULT
 
     /**
      * Null when nothing asks for DNS — no profile block, and the setting at its

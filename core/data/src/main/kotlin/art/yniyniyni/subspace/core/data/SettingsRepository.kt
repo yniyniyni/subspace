@@ -3,6 +3,8 @@ package art.yniyniyni.subspace.core.data
 
 import art.yniyniyni.subspace.core.data.db.SettingDao
 import art.yniyniyni.subspace.core.data.db.SettingEntity
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.perAppModeFrom
@@ -10,6 +12,7 @@ import art.yniyniyni.subspace.core.model.perAppModeWire
 import art.yniyniyni.subspace.core.model.pingModeFrom
 import art.yniyniyni.subspace.core.network.HwidProvider
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,6 +35,9 @@ private const val SELECTED_GEO_SOURCE_ID_DELIMITER = ","
 private const val KEY_PER_APP_MODE = "per_app_mode"
 private const val KEY_PER_APP_USER_PACKAGES = "per_app_user_packages"
 private const val PER_APP_PACKAGE_DELIMITER = ","
+private const val KEY_DNS_TRANSPORT = "dns_transport"
+private const val KEY_DNS_DOMAIN = "dns_domain"
+private const val KEY_DNS_IP = "dns_ip"
 
 /**
  * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
@@ -305,5 +311,40 @@ internal constructor(
     public suspend fun setPerAppUserPackages(packages: Set<String>) {
         val value = packages.sorted().joinToString(PER_APP_PACKAGE_DELIMITER)
         dao.put(SettingEntity(key = KEY_PER_APP_USER_PACKAGES, value = value))
+    }
+
+    /**
+     * The resolver used when no routing profile supplies one.
+     *
+     * Precedence is fixed (spec §6): an active profile's valid DNS block wins
+     * wholesale. This applies when there is no active profile, the active profile
+     * carries no DNS block, or its block was rejected at import.
+     *
+     * The default is today's hardcoded literal, deliberately: making the default
+     * identical to current behaviour is what lets the generator keep emitting the
+     * hardware-proven M1 config byte-for-byte when nothing asks for DNS (§7.4).
+     */
+    public val dnsResolver: Flow<DnsResolver> =
+        combine(
+            dao.observe(KEY_DNS_TRANSPORT),
+            dao.observe(KEY_DNS_DOMAIN),
+            dao.observe(KEY_DNS_IP),
+        ) { transport, domain, ip ->
+            val parsed = DnsTransport.fromWire(transport)
+            val resolver =
+                parsed?.let {
+                    DnsResolver(
+                        transport = it,
+                        domain = domain?.takeIf(String::isNotBlank),
+                        ip = ip?.takeIf(String::isNotBlank),
+                    )
+                }
+            if (resolver != null && resolver.xrayAddress() != null) resolver else DnsResolver.DEFAULT
+        }
+
+    public suspend fun setDnsResolver(resolver: DnsResolver) {
+        dao.put(SettingEntity(key = KEY_DNS_TRANSPORT, value = resolver.transport.wireValue))
+        dao.put(SettingEntity(key = KEY_DNS_DOMAIN, value = resolver.domain.orEmpty()))
+        dao.put(SettingEntity(key = KEY_DNS_IP, value = resolver.ip.orEmpty()))
     }
 }

@@ -57,6 +57,19 @@ public data class DnsResolver(
     override fun toString(): String =
         "DnsResolver(transport=$transport, domain=<redacted, present=${domain != null}>, " +
             "ip=<redacted, present=${ip != null}>)"
+
+    public companion object {
+        /**
+         * The resolver the app ships with, and the app-level setting's own default.
+         *
+         * Lives here rather than in `:core:xray`'s `DnsPlanner` (which formerly
+         * declared it as `DEFAULT_SETTING`) because `:core:data` needs it too, and
+         * `:core:data` may not depend on `:core:xray` (ARCHITECTURE.md §4).
+         * `DnsPlanner.DEFAULT_SETTING` now aliases this value rather than
+         * duplicating the literal.
+         */
+        public val DEFAULT: DnsResolver = DnsResolver(DnsTransport.DOU, ip = "1.1.1.1")
+    }
 }
 
 /**

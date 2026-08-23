@@ -5,6 +5,8 @@ import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.db.SettingEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.shouldBe
@@ -266,6 +268,30 @@ class SettingsRepositoryTest {
             db.settingDao().put(SettingEntity(key = "per_app_user_packages", value = ""))
 
             repository.perAppUserPackages.first() shouldBe emptySet()
+        }
+
+    @Test
+    fun dnsResolverDefaultsToThePlainCloudflareLiteral() =
+        runTest {
+            repository.dnsResolver.first() shouldBe DnsResolver(DnsTransport.DOU, ip = "1.1.1.1")
+        }
+
+    @Test
+    fun dnsResolverRoundTripsADohEndpoint() =
+        runTest {
+            val doh = DnsResolver(DnsTransport.DOH, domain = "https://dns.example.test/dns-query", ip = "9.9.9.9")
+
+            repository.setDnsResolver(doh)
+
+            repository.dnsResolver.first() shouldBe doh
+        }
+
+    @Test
+    fun aStoredResolverWithAGarbageTransportFallsBackToTheDefault() =
+        runTest {
+            db.settingDao().put(SettingEntity(key = "dns_transport", value = "DoQ"))
+
+            repository.dnsResolver.first() shouldBe DnsResolver(DnsTransport.DOU, ip = "1.1.1.1")
         }
 
     private companion object {

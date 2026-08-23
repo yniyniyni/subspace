@@ -167,4 +167,26 @@ class OutboundRedactionTest {
         message shouldContain "security=Reality"
         message shouldContain "transport=WebSocket"
     }
+
+    @Test
+    fun `interpolating an outbound renders an unknown network without its value`() {
+        val stream =
+            StreamSettings(
+                network = "TASK4_UNKNOWN_NETWORK_VALUE_SECRET",
+                security = Security.None,
+            )
+        val outbound =
+            VlessOutbound(
+                address = "secret-host-hotel.example.net",
+                port = 443,
+                uuid = "23232323-4545-6767-8989-010101010101",
+                flow = null,
+                stream = stream,
+            )
+
+        val message = "could not connect to $outbound"
+
+        message shouldNotContain "TASK4_UNKNOWN_NETWORK_VALUE_SECRET"
+        message shouldContain "network=Unknown"
+    }
 }

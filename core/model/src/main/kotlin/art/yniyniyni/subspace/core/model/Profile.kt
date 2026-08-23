@@ -114,7 +114,8 @@ public data class StreamSettings(
     val transport: TransportOptions = TransportOptions.None,
 ) {
     override fun toString(): String =
-        "StreamSettings(network=$network, security=${security.renderType()}, transport=${transport.renderType()})"
+        "StreamSettings(network=${network.renderNetworkType()}, " +
+            "security=${security.renderType()}, transport=${transport.renderType()})"
 }
 
 public sealed interface Security {
@@ -149,4 +150,13 @@ private fun TransportOptions.renderType(): String =
         is TransportOptions.Grpc -> "Grpc"
         is TransportOptions.WebSocket -> "WebSocket"
         is TransportOptions.Xhttp -> "Xhttp"
+    }
+
+private fun String.renderNetworkType(): String =
+    when (lowercase()) {
+        "tcp", "raw" -> "tcp"
+        "ws", "websocket" -> "ws"
+        "grpc" -> "grpc"
+        "xhttp", "splithttp" -> "xhttp"
+        else -> "Unknown"
     }

@@ -141,8 +141,8 @@ public class XrayController private constructor(
             // int, so the bridge narrows here. The Go wrapper discards the returned
             // boolean, so a false does not abort the dial — it surfaces only as
             // §5.1's symptom. SocketProtector's implementation must log it.
-            invocation.retainProtector(protector)
             try {
+                invocation.retainProtector(protector)
                 invocation.runXray(configFile, env)
             } catch (error: Throwable) {
                 invocation.clearProtector()
@@ -208,9 +208,9 @@ public class XrayController private constructor(
  * without loading libXray.
  */
 internal class XrayControllerInvocation(
-    private val registerControllers: (DialerController) -> Unit = { controller ->
-        LibXray.registerDialerController(controller)
-        LibXray.registerListenerController(controller)
+    private val registerControllers: () -> Unit = {
+        LibXray.registerDialerController(ProtectorHolder)
+        LibXray.registerListenerController(ProtectorHolder)
     },
     private val invokeRunXray: (File, XrayEnv?) -> Unit = { configFile, env ->
         LibXrayInvoke.call(
@@ -224,7 +224,7 @@ internal class XrayControllerInvocation(
     },
 ) {
     fun retainProtector(protector: SocketProtector) {
-        registerControllers(ProtectorHolder)
+        registerControllers()
         ProtectorHolder.target = protector
     }
 

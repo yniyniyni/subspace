@@ -53,4 +53,69 @@ class ProfileDnsCodecTest {
         decoded.remote?.ip shouldBe "1.1.1.1"
         decoded.fakeDns shouldBe false
     }
+
+    // Fix round 1, Finding 1: an unsafe cast here used to throw
+    // IllegalStateException on a structurally-valid-but-malformed row, which
+    // contradicts decode()'s own "unreadable storage -> null" contract.
+    @Test
+    fun toleratesFakeDnsStoredAsAnObjectRatherThanThrowing() {
+        val decoded = requireNotNull(ProfileDnsCodec.decode("""{"FakeDNS":{"nested":"true"}}"""))
+
+        decoded.fakeDns shouldBe null
+    }
+
+    @Test
+    fun toleratesFakeDnsStoredAsAnArrayRatherThanThrowing() {
+        val decoded = requireNotNull(ProfileDnsCodec.decode("""{"FakeDNS":["true"]}"""))
+
+        decoded.fakeDns shouldBe null
+    }
+
+    // Fix round 1, Finding 2 / controller ruling R7: the previous milestone
+    // stored this block raw and unvalidated, so a real row can hold a
+    // transport we don't recognise or an address that isn't a literal. That
+    // must decode to the same INVALID sentinel the import parser already
+    // produces for identical bytes, not to a resolver-less (silently
+    // half-applied) block.
+    @Test
+    fun anUnrecognisedStoredTransportDecodesToInvalid() {
+        val stored = """{"RemoteDNSType":"DoQ","RemoteDNSIP":"1.1.1.1"}"""
+
+        requireNotNull(ProfileDnsCodec.decode(stored)).isInvalid shouldBe true
+    }
+
+    @Test
+    fun aStoredNonLiteralIpDecodesToInvalid() {
+        val stored = """{"DomesticDNSType":"DoU","DomesticDNSIP":"not-an-ip"}"""
+
+        requireNotNull(ProfileDnsCodec.decode(stored)).isInvalid shouldBe true
+    }
+
+    @Test
+    fun anAbsentTypeKeyIsStillAValidDomesticOnlyBlock() {
+        val stored = """{"DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8"}"""
+
+        val decoded = requireNotNull(ProfileDnsCodec.decode(stored))
+
+        decoded.isInvalid shouldBe false
+        decoded.remote shouldBe null
+        decoded.domestic?.ip shouldBe "8.8.8.8"
+    }
+
+    @Test
+    fun anAbsentTypeKeyIsStillAValidResolverlessBlock() {
+        val decoded = requireNotNull(ProfileDnsCodec.decode("""{"FakeDNS":"true"}"""))
+
+        decoded.isInvalid shouldBe false
+        decoded.remote shouldBe null
+        decoded.domestic shouldBe null
+    }
+
+    @Test
+    fun anEmptyDnsHostsBlockIsValidNotInvalid() {
+        val decoded = requireNotNull(ProfileDnsCodec.decode("""{"DnsHosts":{}}"""))
+
+        decoded.isInvalid shouldBe false
+        decoded.hosts shouldBe emptyMap()
+    }
 }

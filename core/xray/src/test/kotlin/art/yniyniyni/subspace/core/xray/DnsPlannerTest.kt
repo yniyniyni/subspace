@@ -118,6 +118,78 @@ class DnsPlannerTest {
         plan.fakeDns shouldBe false
     }
 
+    // Fix round 1, Finding 2/3: tunAdvertisedAddress() used to return whichever
+    // hosts-map entry happened to be first — an arbitrary profile A-record, not
+    // necessarily this resolver's own bootstrap. These tests build DnsPlan
+    // directly rather than through DnsPlanner.plan, so each case is isolated.
+    @Test
+    fun `tunAdvertisedAddress returns a DoU server's own ip literal`() {
+        val plan =
+            DnsPlan(
+                servers = listOf(DnsServerSpec("8.8.8.8")),
+                hosts = emptyMap(),
+                fakeDns = false,
+                directMatch = null,
+                proxyMatch = null,
+            )
+
+        plan.tunAdvertisedAddress() shouldBe "8.8.8.8"
+    }
+
+    @Test
+    fun `tunAdvertisedAddress returns a DoH server's own bootstrap ip, not an unrelated host entry`() {
+        val plan =
+            DnsPlan(
+                servers = listOf(DnsServerSpec("https://dns.example/dns-query")),
+                hosts =
+                mapOf(
+                    "dns.example" to "9.9.9.9",
+                    // An unrelated profile-pinned A record. The old
+                    // hosts.values.firstOrNull(isAddressLiteral) implementation
+                    // could return this instead of the resolver's own bootstrap
+                    // depending on map iteration order — the exact Finding 2 bug.
+                    "another-site.example" to "1.2.3.4",
+                ),
+                fakeDns = false,
+                directMatch = null,
+                proxyMatch = null,
+            )
+
+        plan.tunAdvertisedAddress() shouldBe "9.9.9.9"
+    }
+
+    @Test
+    fun `tunAdvertisedAddress is null for a DoH server with no bootstrap entry`() {
+        val plan =
+            DnsPlan(
+                servers = listOf(DnsServerSpec("https://dns.example/dns-query")),
+                hosts = mapOf("another-site.example" to "1.2.3.4"),
+                fakeDns = false,
+                directMatch = null,
+                proxyMatch = null,
+            )
+
+        plan.tunAdvertisedAddress() shouldBe null
+    }
+
+    @Test
+    fun `tunAdvertisedAddress falls through a bootstrap-less domestic server to a literal remote one`() {
+        val plan =
+            DnsPlan(
+                servers =
+                listOf(
+                    DnsServerSpec("https://domestic.example/dns-query", domains = listOf("geosite:cn")),
+                    DnsServerSpec("8.8.8.8"),
+                ),
+                hosts = emptyMap(),
+                fakeDns = false,
+                directMatch = null,
+                proxyMatch = null,
+            )
+
+        plan.tunAdvertisedAddress() shouldBe "8.8.8.8"
+    }
+
     @Test
     fun `a dns block asking for nothing is treated as absent`() {
         // R2: a block that only carries fakeDns = false (or an empty hosts map)

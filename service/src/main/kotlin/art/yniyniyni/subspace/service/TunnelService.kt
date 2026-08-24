@@ -72,6 +72,13 @@ private const val TUN_MTU = 8500
 // where nothing asked for DNS at all (spec §7.4's M1-compatible path).
 private const val DNS_SERVER = "1.1.1.1"
 
+// Fix round 1, Finding 4: sniffing is not a user setting in this build, so both
+// DnsPlanner.plan's sniffingEnabled and TunnelSettings.enableSniffing must read
+// this one constant rather than repeat the literal `true` in two places coupled
+// only by a comment — if sniffing ever becomes configurable, both call sites
+// change together because there is only one place to change.
+private const val SNIFFING_ENABLED = true
+
 /** Decodes only this service's explicit connect request without exposing/logging its payload. */
 @Suppress("DEPRECATION")
 internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
@@ -491,16 +498,12 @@ class TunnelService : VpnService() {
                 // uses, rather than in startCore or attachTun — both need the exact
                 // same plan, and computing it once is what keeps the generated
                 // config and the TUN's advertised resolver from disagreeing.
-                // sniffingEnabled is the literal `true` startCore passes
-                // TunnelSettings.enableSniffing below: sniffing is not a user
-                // setting in this build, so both reads come from the same place on
-                // purpose — if it ever becomes configurable, both change together.
                 val dnsPlan =
                     DnsPlanner.plan(
                         profileDns = (routing as? RoutingResolution.Active)?.dns,
                         setting = settingsRepository.dnsResolver.first(),
                         routing = (routing as? RoutingResolution.Active)?.ruleSet,
-                        sniffingEnabled = true,
+                        sniffingEnabled = SNIFFING_ENABLED,
                     )
                 val assetDir =
                     (routing as? RoutingResolution.Active)?.assetDir
@@ -564,7 +567,7 @@ class TunnelService : VpnService() {
             TunnelSettings(
                 socksPort = socksPort,
                 dnsServer = DNS_SERVER,
-                enableSniffing = true,
+                enableSniffing = SNIFFING_ENABLED,
                 routing = (routing as? RoutingResolution.Active)?.ruleSet,
                 httpPort = httpPort,
                 dns = dnsPlan,
@@ -909,7 +912,7 @@ class TunnelService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
                 .addRoute("::", 0)
-                .addDnsServer(dnsPlan?.tunAdvertisedAddress() ?: DNS_SERVER)
+        builder.addDnsServerOrFallback(dnsPlan)
 
         when (plan) {
             BuilderPlan.DisallowOwnOnly -> if (!excludeSelf(builder)) return TunResult.Failed
@@ -942,6 +945,26 @@ class TunnelService : VpnService() {
         }
 
         return builder.establish()?.let { TunResult.Established(it) } ?: TunResult.Failed
+    }
+
+    /**
+     * Fix round 1, Finding 1: [DnsPlan.tunAdvertisedAddress] is only as trustworthy
+     * as [art.yniyniyni.subspace.core.model.DnsValidation.isAddressLiteral], whose
+     * IPv6 regex is deliberately loose (real validation is the core's, end to end)
+     * and whose `hosts` values are entirely unvalidated author input. A shape that
+     * regex accepts but `Builder.addDnsServer` rejects throws
+     * `IllegalArgumentException` from inside [establishTun] — by which point
+     * [startCore] already has a core running. Uncaught, that would escape to
+     * [errorHandler] (§10.4), which publishes `Failed` but does not stop the core
+     * or clear the foreground notification: a stuck notification over a runtime
+     * nobody is tracking. Degrading to [DNS_SERVER] here, rather than tightening
+     * the validator, keeps the containment at this one call site.
+     */
+    private fun Builder.addDnsServerOrFallback(dnsPlan: DnsPlan?) {
+        if (addDnsServerOrFallback(dnsPlan?.tunAdvertisedAddress(), DNS_SERVER, ::addDnsServer)) {
+            // §5.6: no address in this line — only that one was rejected.
+            Log.w(TAG, "addDnsServer rejected the plan's address; falling back to the app default")
+        }
     }
 
     /** §5.6: the count, never the names. A package name identifies an installed app. */

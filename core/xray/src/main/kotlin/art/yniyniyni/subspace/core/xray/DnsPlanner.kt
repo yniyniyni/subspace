@@ -46,12 +46,26 @@ public data class DnsPlan(
      * resolver the user chose rather than a literal they never picked. A quieter
      * failure is not the goal; a less wrong one is.
      *
+     * Walks [servers] in order (domestic before remote, per [buildServers]) and,
+     * for each, either takes its address directly when it is already a literal
+     * (the DoU case) or — for a DoH `https://` address — looks up **that
+     * server's own** bootstrap entry in [hosts] by its hostname
+     * ([DnsValidation.hostOf]). Fix round 1, Finding 2: this used to be
+     * `hosts.values.firstOrNull { isAddressLiteral }`, which returns whichever
+     * host-map entry happens to be first — an arbitrary profile A-record
+     * pinning some unrelated site, not necessarily this resolver's bootstrap.
+     * The import parser already synthesises a `hostOf(domain) -> ip` entry for
+     * a DoH resolver with a bootstrap IP, so this lookup normally finds it.
+     *
      * Null when the plan has only a DoH endpoint and no bootstrap IP — the TUN
      * needs an address literal, and the caller falls back to the app default.
      */
     public fun tunAdvertisedAddress(): String? =
-        servers.firstNotNullOfOrNull { server -> server.address.takeIf(DnsValidation::isAddressLiteral) }
-            ?: hosts.values.firstOrNull(DnsValidation::isAddressLiteral)
+        servers.firstNotNullOfOrNull { server ->
+            server.address.takeIf(DnsValidation::isAddressLiteral)
+                ?: DnsValidation.hostOf(server.address)
+                    ?.let { host -> hosts[host]?.takeIf(DnsValidation::isAddressLiteral) }
+        }
 }
 
 /**

@@ -530,6 +530,13 @@ class RoutingRepositoryTest {
         stored.geoIpUrl shouldBe profile.geoIpUrl
         stored.geoSiteUrl shouldBe profile.geoSiteUrl
         stored.hasDns shouldBe true
+        // Fix round 1, Finding 3: the milestone's specific failure mode is a
+        // stored DNS block that decodes fine in isolation but never reaches
+        // anything downstream — a green suite over an inert tunnel. This is the
+        // guard for the first hop of that chain: a row with a DNS block must
+        // expose a non-null, correctly decoded StoredRuleSet.dns, not just a
+        // true hasDns flag.
+        stored.dns shouldBe profile.dns
         stored.assetGeneration shouldBe 0L
         // §7.4 step 1: "Approved import writes the row with assetState = Pending."
         stored.assetState shouldBe RuleSetAssetState.Pending

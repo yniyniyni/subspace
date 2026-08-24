@@ -36,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import art.yniyniyni.subspace.core.model.DnsState
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
@@ -99,11 +100,23 @@ internal fun RuleSetCard(
             // above blocks activation, hasFailedGeoUpdate reports a refresh of
             // an installed file, and this reports *this set's own* generation.
             AssetStateRow(row = row, onCancelDownload = actions.onCancelDownload)
-            if (row.hasUnappliedDns) {
-                MarkerRow(
-                    text = stringResource(R.string.routing_dns_not_applied),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            when (row.dnsState) {
+                DnsState.None -> Unit
+                DnsState.Applied ->
+                    MarkerRow(
+                        text = stringResource(R.string.routing_dns_applied),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                DnsState.Invalid ->
+                    MarkerRow(
+                        text = stringResource(R.string.routing_dns_invalid),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                DnsState.NeedsSniffing ->
+                    MarkerRow(
+                        text = stringResource(R.string.routing_dns_needs_sniffing),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
             }
         }
     }

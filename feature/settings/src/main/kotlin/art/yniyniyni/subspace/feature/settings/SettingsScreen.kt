@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
@@ -90,6 +91,9 @@ fun SettingsScreen(
             onPingTimeoutChanged = viewModel::onPingTimeoutChanged,
             onPingOnLaunchChanged = viewModel::onPingOnLaunchChanged,
             onPingOnLaunchMeteredChanged = viewModel::onPingOnLaunchMeteredChanged,
+            onDnsTransportChanged = viewModel::onDnsTransportChanged,
+            onDnsAddressChanged = viewModel::onDnsAddressChanged,
+            onDnsBootstrapIpChanged = viewModel::onDnsBootstrapIpChanged,
             onGeoSourceSelected = viewModel::onGeoSourceSelected,
             onGeoUpdateNow = viewModel::onGeoUpdateNow,
             onAddCustomGeoSource = viewModel::onAddCustomGeoSource,
@@ -118,6 +122,9 @@ internal data class SettingsActions(
     val onPingTimeoutChanged: (Int) -> Unit,
     val onPingOnLaunchChanged: (Boolean) -> Unit,
     val onPingOnLaunchMeteredChanged: (Boolean) -> Unit,
+    val onDnsTransportChanged: (DnsTransport) -> Unit,
+    val onDnsAddressChanged: (String) -> Unit,
+    val onDnsBootstrapIpChanged: (String) -> Unit,
     val onGeoSourceSelected: (String) -> Unit,
     val onGeoUpdateNow: (GeoRow) -> Unit,
     val onAddCustomGeoSource: (url: String, fileName: String, geoType: GeoDataKind) -> Unit,
@@ -164,6 +171,8 @@ internal fun SettingsScreenContent(
 
         SectionHeader(stringResource(R.string.settings_latency_section))
         LatencyControls(state = state, actions = actions)
+
+        SettingsDnsSection(state = state, actions = actions)
 
         SectionHeader(stringResource(R.string.settings_section_routing))
         SettingRow(

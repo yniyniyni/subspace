@@ -4,6 +4,9 @@ package art.yniyniyni.subspace.service
 import art.yniyniyni.subspace.core.data.ResolvedAssetUse
 import art.yniyniyni.subspace.core.data.RuleSetAssetScope
 import art.yniyniyni.subspace.core.data.StoredRuleSet
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RuleBucket
@@ -38,6 +41,7 @@ class RoutingResolverTest {
         ruleSet: RoutingRuleSet,
         generation: Long = 0,
         hasOwnSources: Boolean = false,
+        dns: ProfileDns? = null,
     ): StoredRuleSet =
         StoredRuleSet(
             ruleSet = ruleSet,
@@ -47,10 +51,11 @@ class RoutingResolverTest {
             fingerprint = null,
             geoIpUrl = "https://example.test/geoip.dat".takeIf { hasOwnSources },
             geoSiteUrl = null,
-            hasUnappliedDns = false,
+            hasDns = dns != null,
             assetGeneration = generation,
             assetState = RuleSetAssetState.None,
             assetFailure = null,
+            dns = dns,
         )
 
     private val geoSet =
@@ -88,6 +93,26 @@ class RoutingResolverTest {
 
         resolution.shouldBeInstanceOf<RoutingResolution.Active>()
         resolution.ruleSet shouldBe literalSet
+    }
+
+    // Fix round 1, Finding 3: nothing previously asserted that Active actually
+    // carries the stored row's DNS block through rather than defaulting to
+    // null — every earlier test in this file left `dns` unset. This is the
+    // milestone's specific failure mode: a stored DNS block that never reaches
+    // the tunnel while every test still passes, because nothing checked this
+    // one hop of the chain.
+    @Test
+    fun `an active resolution carries the stored row's dns block through`() = runTest {
+        val dns = ProfileDns(remote = DnsResolver(DnsTransport.DOU, ip = "8.8.8.8"))
+        val resolver =
+            RoutingResolver(
+                activeRuleSetId = { 2L },
+                loadStored = { storedRuleSet(literalSet, dns = dns) },
+                installedGeoFiles = { emptySet() },
+                assetScope = FakeAssetScope(directoryFor = { _, _, _ -> File("/geo") }),
+            )
+
+        resolver.resolveForTest().shouldBeInstanceOf<RoutingResolution.Active>().dns shouldBe dns
     }
 
     @Test

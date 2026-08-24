@@ -6,7 +6,12 @@ import art.yniyniyni.subspace.core.data.ImportOutcome
 import art.yniyniyni.subspace.core.data.ImportPreview
 import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.StoredRuleSet
+import art.yniyniyni.subspace.core.data.serialization.ProfileDnsCodec
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsState
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingProfile
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
@@ -83,9 +88,18 @@ class ImportReviewViewModelTest {
     }
 
     @Test
-    fun aDnsCarryingProfileFlagsItAsUnapplied() = runTest {
+    fun aValidDnsBlockIsShownAsApplied() = runTest {
         viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
-        viewModel.state.value.hasUnappliedDns shouldBe true
+        viewModel.state.value.dnsState shouldBe DnsState.Applied
+        viewModel.state.value.dns shouldBe sampleProfile().dns
+    }
+
+    @Test
+    fun anInvalidDnsBlockIsShownAsInvalid() = runTest {
+        viewModel.offer(invalidDnsLink(), RoutingSourceKind.Deeplink)
+
+        viewModel.state.value.dnsState shouldBe DnsState.Invalid
+        viewModel.state.value.dns shouldBe ProfileDns.INVALID
     }
 
     @Test
@@ -303,7 +317,7 @@ class ImportReviewViewModelTest {
             geoIpUrl = "https://example.test/geoip.dat",
             geoSiteUrl = "https://example.test/geosite.dat",
             lastUpdated = 1_700_000_000L,
-            dnsJson = """{"RemoteDNSType":"DoH"}""",
+            dns = ProfileDns(remote = DnsResolver(DnsTransport.DOH, domain = "https://dns.test/dns-query")),
             useChunkFiles = true,
         )
     }
@@ -313,10 +327,17 @@ class ImportReviewViewModelTest {
         return "happ://routing/add/$encoded"
     }
 
+    private fun invalidDnsLink(): String {
+        val withoutDns = happJson(sampleProfile().copy(dns = null)).removeSuffix("}")
+        val invalidDns = "$withoutDns,\"RemoteDNSType\":\"DoH\",\"RemoteDNSDomain\":\"not-a-url\"}"
+        val encoded = Base64.getEncoder().encodeToString(invalidDns.toByteArray())
+        return "happ://routing/add/$encoded"
+    }
+
     /**
      * Happ-shaped JSON that [art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport]
-     * round-trips into [profile]. DNS keys are merged at the root so a non-blank
-     * [RoutingProfile.dnsJson] survives parse as `hasUnappliedDns`.
+     * round-trips into [profile]. DNS keys are merged at the root so a non-null
+     * [RoutingProfile.dns] survives parse as `hasDns`.
      */
     private fun happJson(profile: RoutingProfile): String {
         val members = mutableListOf<String>()
@@ -329,7 +350,8 @@ class ImportReviewViewModelTest {
         profile.geoSiteUrl?.let { members += """"Geositeurl":"$it"""" }
         profile.lastUpdated?.let { members += """"LastUpdated":"$it"""" }
         profile.useChunkFiles?.let { members += """"UseChunkFiles":"$it"""" }
-        profile.dnsJson
+        ProfileDnsCodec
+            .encode(profile.dns)
             ?.trim()
             ?.removePrefix("{")
             ?.removeSuffix("}")
@@ -382,7 +404,7 @@ private class FakeRoutingRepository {
                 fingerprint = profile.fingerprint(),
                 geoIpUrl = profile.geoIpUrl,
                 geoSiteUrl = profile.geoSiteUrl,
-                hasUnappliedDns = profile.hasUnappliedDns,
+                hasDns = profile.hasDns,
                 assetGeneration = existing?.assetGeneration ?: 0L,
                 assetState = existing?.assetState ?: RuleSetAssetState.None,
                 assetFailure = existing?.assetFailure,

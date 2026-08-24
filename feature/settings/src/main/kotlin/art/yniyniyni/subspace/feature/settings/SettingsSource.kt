@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.settings
 
+import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.DnsResolver
 import art.yniyniyni.subspace.core.model.PingMode
+import art.yniyniyni.subspace.core.model.ProfileDns
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -62,6 +66,14 @@ internal interface SettingsSource {
 
     suspend fun setPingOnLaunchMetered(enabled: Boolean)
 
+    /** The resolver used while no active routing profile has an effective DNS block. */
+    val dnsResolver: Flow<DnsResolver>
+
+    suspend fun setDnsResolver(resolver: DnsResolver)
+
+    /** Whether the active routing profile currently supplies an effective DNS change. */
+    val dnsOverriddenByProfile: Flow<Boolean>
+
     /**
      * Whether a *scheduled* geo-database refresh may run on a metered network. See
      * [SettingsRepository.geoRefreshOnMetered]. A manual "Update now" is unaffected by this — see
@@ -86,6 +98,7 @@ internal class BoundSettingsSource
 @Inject
 constructor(
     private val settingsRepository: SettingsRepository,
+    private val routingRepository: RoutingRepository,
 ) : SettingsSource {
     override val theme: Flow<ThemePreference> = settingsRepository.theme
     override val hwidEnabled: Flow<Boolean> = settingsRepository.hwidEnabled
@@ -112,6 +125,18 @@ constructor(
     override suspend fun setPingOnLaunchMetered(enabled: Boolean) =
         settingsRepository.setPingOnLaunchMetered(enabled)
 
+    override val dnsResolver: Flow<DnsResolver> = settingsRepository.dnsResolver
+
+    override suspend fun setDnsResolver(resolver: DnsResolver) = settingsRepository.setDnsResolver(resolver)
+
+    override val dnsOverriddenByProfile: Flow<Boolean> =
+        combine(
+            settingsRepository.activeRoutingRuleSetId,
+            routingRepository.observeAllStored(),
+        ) { activeId, ruleSets ->
+            dnsOverriddenByProfile(ruleSets.firstOrNull { it.ruleSet.id == activeId }?.dns)
+        }
+
     override val geoRefreshOnMetered: Flow<Boolean> = settingsRepository.geoRefreshOnMetered
 
     override suspend fun setGeoRefreshOnMetered(enabled: Boolean) =
@@ -122,3 +147,9 @@ constructor(
     override suspend fun setSelectedGeoSourceIds(ids: Set<String>) =
         settingsRepository.setSelectedGeoSourceIds(ids)
 }
+
+/** True only when a valid active profile materially changes DNS behavior (R21). */
+internal fun dnsOverriddenByProfile(dns: ProfileDns?): Boolean =
+    dns != null &&
+        !dns.isInvalid &&
+        (dns.hasResolver || dns.hosts.isNotEmpty() || dns.fakeDns == true)

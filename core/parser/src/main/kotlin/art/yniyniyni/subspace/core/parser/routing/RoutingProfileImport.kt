@@ -2,7 +2,11 @@
 package art.yniyniyni.subspace.core.parser.routing
 
 import art.yniyniyni.subspace.core.model.BucketField
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
+import art.yniyniyni.subspace.core.model.DnsValidation
 import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingProfile
@@ -11,7 +15,6 @@ import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.parseRouteOrder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -114,15 +117,91 @@ private fun String?.toDomainStrategy(): DomainStrategy =
         strategy.wireValue.equals(this?.trim(), ignoreCase = true)
     } ?: DomainStrategy.IP_IF_NON_MATCH
 
-/** Stores the DNS field subset as opaque JSON until M6.5 interprets it. */
-private fun JsonObject.dnsBlock(): String? {
-    val present: Map<String, JsonElement> =
-        DNS_KEYS
-            .mapNotNull { key ->
-                this[key]?.let { key to it }
-            }.toMap()
-    return if (present.isEmpty()) null else JsonObject(present).toString()
+/** One resolver triple, or null when the profile named no transport for it. */
+@Suppress("ReturnCount") // Each early return names one distinct rejection reason.
+private fun JsonObject.resolverOf(prefix: String): DnsResolver? {
+    val rawType = stringOf("${prefix}DNSType")?.takeIf(String::isNotBlank) ?: return null
+    val transport = DnsTransport.fromWire(rawType) ?: return INVALID_RESOLVER
+    val domain = stringOf("${prefix}DNSDomain")?.takeIf(String::isNotBlank)
+    val ip = stringOf("${prefix}DNSIP")?.takeIf(String::isNotBlank)
+
+    val valid =
+        when (transport) {
+            DnsTransport.DOH -> domain != null && DnsValidation.isHttpsUrl(domain)
+            DnsTransport.DOU -> ip != null && DnsValidation.isAddressLiteral(ip)
+        }
+    if (!valid) return INVALID_RESOLVER
+    if (ip != null && !DnsValidation.isAddressLiteral(ip)) return INVALID_RESOLVER
+    return DnsResolver(transport = transport, domain = domain, ip = ip)
 }
+
+/** Marker for a resolver that was named and could not be understood. Never emitted. */
+private val INVALID_RESOLVER = DnsResolver(DnsTransport.DOU, domain = null, ip = null)
+
+/** Reads `DnsHosts`, or null when the value is present and malformed. */
+@Suppress("ReturnCount") // Each early return names one distinct malformed shape.
+private fun JsonObject.dnsHostsOf(): Map<String, String>? {
+    val value = this["DnsHosts"] ?: return emptyMap()
+    val obj = value as? JsonObject ?: return null
+    val out = mutableMapOf<String, String>()
+    for ((key, element) in obj) {
+        if (key.isBlank()) return null
+        val primitive = element as? JsonPrimitive ?: return null
+        if (!primitive.isString) return null
+        val mapped = primitive.content.trim()
+        if (mapped.isEmpty()) return null
+        if (!DnsValidation.isAddressLiteral(mapped) && DnsValidation.hostOf("https://$mapped") == null) return null
+        out[key.trim()] = mapped
+    }
+    return out
+}
+
+/**
+ * The typed DNS block, or null when the profile carries none of its keys.
+ *
+ * [ProfileDns.INVALID] when the block is present and unusable — spec §5: that
+ * does not fail the import, it falls back to the app-level setting and says so.
+ */
+@Suppress("ReturnCount") // Each early return names one distinct outcome for the block.
+internal fun JsonObject.profileDns(): ProfileDns? {
+    if (DNS_KEYS.none { this[it] != null }) return null
+
+    val remote = resolverOf("Remote")
+    val domestic = resolverOf("Domestic")
+    if (remote === INVALID_RESOLVER || domestic === INVALID_RESOLVER) return ProfileDns.INVALID
+
+    val authored = dnsHostsOf() ?: return ProfileDns.INVALID
+    val hosts = authored + bootstrapEntries(remote, domestic, authored)
+
+    return ProfileDns(
+        remote = remote,
+        domestic = domestic,
+        hosts = hosts,
+        fakeDns = looseBooleanOf("FakeDNS"),
+    )
+}
+
+/**
+ * The `hosts` entries a DoH resolver's own hostname needs (spec §5.1).
+ *
+ * Upstream recommends mapping a DNS server's domain to its IP directly, to
+ * prevent resolution loops (research §3). Only synthesised when the author did
+ * not already name that hostname — a different mapping was a choice, and ours
+ * must not win.
+ */
+@Suppress("UnreachableCode") // K2 detekt misreads the deliberate typed early returns as unreachable.
+private fun bootstrapEntries(
+    remote: DnsResolver?,
+    domestic: DnsResolver?,
+    authored: Map<String, String>,
+): Map<String, String> =
+    listOfNotNull(remote, domestic)
+        .filter { it.transport == DnsTransport.DOH }
+        .mapNotNull { resolver ->
+            val host = resolver.domain?.let(DnsValidation::hostOf) ?: return@mapNotNull null
+            val ip = resolver.ip?.takeIf(DnsValidation::isAddressLiteral) ?: return@mapNotNull null
+            if (authored.containsKey(host)) null else host to ip
+        }.toMap()
 
 /**
  * Parses a Happ-compatible routing deeplink into a [RoutingProfile].
@@ -286,7 +365,7 @@ public object RoutingProfileImport {
                 geoIpUrl = geoIpUrl,
                 geoSiteUrl = geoSiteUrl,
                 lastUpdated = root.lastUpdatedOf("LastUpdated"),
-                dnsJson = root.dnsBlock(),
+                dns = root.profileDns(),
                 useChunkFiles = root.looseBooleanOf("UseChunkFiles"),
             )
         return ImportResult.Imported(verb = verb, profile = profile)

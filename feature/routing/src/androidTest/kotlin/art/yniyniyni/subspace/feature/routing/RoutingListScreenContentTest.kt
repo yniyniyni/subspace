@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import art.yniyniyni.subspace.core.model.DnsState
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
@@ -62,7 +63,7 @@ class RoutingListScreenContentTest {
             sourceKind = RoutingSourceKind.Header,
             subscriptionName = "NameVPN",
             assetState = RuleSetAssetState.Ready,
-            hasUnappliedDns = true,
+            dnsState = DnsState.Applied,
         )
     private val downloadingRow =
         RuleSetRow(
@@ -156,10 +157,33 @@ class RoutingListScreenContentTest {
     }
 
     @Test
-    fun aProfileCarryingDnsSaysItIsNotApplied() {
+    fun aProfileWithValidDnsSaysItSetsDns() {
         setContent(RoutingState(ruleSets = listOf(providerRow)))
 
-        composeRule.onNodeWithText("DNS settings in this profile are stored but not applied").assertIsDisplayed()
+        composeRule.onNodeWithText("Sets DNS").assertIsDisplayed()
+    }
+
+    @Test
+    fun aProfileWithInvalidDnsSaysItUsesTheDnsSetting() {
+        setContent(RoutingState(ruleSets = listOf(providerRow.copy(dnsState = DnsState.Invalid))))
+
+        composeRule.onNodeWithText("DNS block not understood — using your DNS setting").assertIsDisplayed()
+    }
+
+    @Test
+    fun aProfileWithFakeDnsAndNoSniffingSaysItNeedsSniffing() {
+        setContent(RoutingState(ruleSets = listOf(providerRow.copy(dnsState = DnsState.NeedsSniffing))))
+
+        composeRule.onNodeWithText("Needs sniffing on for FakeDNS").assertIsDisplayed()
+    }
+
+    @Test
+    fun aProfileWithoutDnsShowsNoDnsBadge() {
+        setContent(RoutingState(ruleSets = listOf(providerRow.copy(dnsState = DnsState.None))))
+
+        composeRule.onNodeWithText("Sets DNS").assertDoesNotExist()
+        composeRule.onNodeWithText("DNS block not understood — using your DNS setting").assertDoesNotExist()
+        composeRule.onNodeWithText("Needs sniffing on for FakeDNS").assertDoesNotExist()
     }
 
     // Three independent axes. A downloading row is not a failed one, and a

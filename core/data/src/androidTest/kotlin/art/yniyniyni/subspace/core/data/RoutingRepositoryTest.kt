@@ -8,7 +8,10 @@ import art.yniyniyni.subspace.core.data.db.RoutingRuleSetEntity
 import art.yniyniyni.subspace.core.data.db.SubscriptionEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.data.testing.InMemoryRoutingStack
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingProfile
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
@@ -76,8 +79,7 @@ class RoutingRepositoryTest {
             geoIpUrl = "https://assets.example/geoip.dat",
             geoSiteUrl = "https://assets.example/geosite.dat",
             lastUpdated = lastUpdated,
-            dnsJson =
-            """{"RemoteDNSType":"DoH","RemoteDNSDomain":"https://dns.example/dns-query"}""",
+            dns = ProfileDns(remote = DnsResolver(DnsTransport.DOH, domain = "https://dns.example/dns-query")),
             useChunkFiles = true,
         )
 
@@ -213,6 +215,24 @@ class RoutingRepositoryTest {
 
         stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.New
         publish(profile)
+
+        stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.Unchanged
+    }
+
+    /**
+     * Branch review finding 1, and spec §9's mandated case: M6.5 changed
+     * `fingerprint()` from one `feed(dnsJson)` to a fold over the typed DNS
+     * projection, which changes the digest of **every** stored profile — a
+     * DNS-less one included, because `feed(null)` still writes a separator.
+     * Comparing against the stored column therefore answered `Changed` (a
+     * spurious review sheet) or `Stale` (a real provider update silently
+     * refused) for every row on the first sync after upgrading.
+     */
+    @Test
+    fun aRowWhoseStoredFingerprintPredatesTheCurrentAlgorithmIsStillUnchanged() = runTest {
+        val profile = sampleProfile()
+        publish(profile)
+        stack.forgeStoredFingerprints("an-m6-era-digest-this-algorithm-would-never-produce")
 
         stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.Unchanged
     }
@@ -377,7 +397,7 @@ class RoutingRepositoryTest {
                     ),
                     geoIpUrl = "https://committed.example/geoip.dat",
                     geoSiteUrl = null,
-                    dnsJson = null,
+                    dns = null,
                     useChunkFiles = false,
                 )
             repository.markAssets(id, RuleSetAssetState.Failed, RuleSetAssetFailure.TimedOut)
@@ -406,7 +426,7 @@ class RoutingRepositoryTest {
                 ),
                 geoIpUrl = "https://committed.example/geoip.dat",
                 geoSiteUrl = null,
-                dnsJson = null,
+                dns = null,
                 useChunkFiles = false,
             )
         stack.repository.commitGeneration(id, committed, generation = 4)
@@ -441,7 +461,7 @@ class RoutingRepositoryTest {
         stored.fingerprint shouldBe committed.fingerprint()
         stored.geoIpUrl shouldBe committed.geoIpUrl
         stored.geoSiteUrl shouldBe committed.geoSiteUrl
-        stored.hasUnappliedDns shouldBe false
+        stored.hasDns shouldBe false
         stored.assetGeneration shouldBe 4L
         stored.assetState shouldBe RuleSetAssetState.Ready
         stored.assetFailure shouldBe null
@@ -527,7 +547,14 @@ class RoutingRepositoryTest {
         stored.fingerprint shouldBe profile.fingerprint()
         stored.geoIpUrl shouldBe profile.geoIpUrl
         stored.geoSiteUrl shouldBe profile.geoSiteUrl
-        stored.hasUnappliedDns shouldBe true
+        stored.hasDns shouldBe true
+        // Fix round 1, Finding 3: the milestone's specific failure mode is a
+        // stored DNS block that decodes fine in isolation but never reaches
+        // anything downstream — a green suite over an inert tunnel. This is the
+        // guard for the first hop of that chain: a row with a DNS block must
+        // expose a non-null, correctly decoded StoredRuleSet.dns, not just a
+        // true hasDns flag.
+        stored.dns shouldBe profile.dns
         stored.assetGeneration shouldBe 0L
         // §7.4 step 1: "Approved import writes the row with assetState = Pending."
         stored.assetState shouldBe RuleSetAssetState.Pending
@@ -628,7 +655,7 @@ class RoutingRepositoryTest {
                 ),
                 geoIpUrl = "https://next.example/geoip.dat",
                 geoSiteUrl = null,
-                dnsJson = null,
+                dns = null,
                 useChunkFiles = false,
             )
 
@@ -648,7 +675,7 @@ class RoutingRepositoryTest {
         stored.fingerprint shouldBe updated.fingerprint()
         stored.geoIpUrl shouldBe updated.geoIpUrl
         stored.geoSiteUrl shouldBe null
-        stored.hasUnappliedDns shouldBe false
+        stored.hasDns shouldBe false
     }
 
     @Test

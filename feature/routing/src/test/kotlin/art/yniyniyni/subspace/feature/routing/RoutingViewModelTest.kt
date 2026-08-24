@@ -3,6 +3,10 @@ package art.yniyniyni.subspace.feature.routing
 
 import art.yniyniyni.subspace.core.data.GeoDownloadProgress
 import art.yniyniyni.subspace.core.data.StoredRuleSet
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsState
+import art.yniyniyni.subspace.core.model.DnsTransport
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
@@ -135,7 +139,7 @@ class RoutingViewModelTest {
             set: RoutingRuleSet,
             sourceKind: RoutingSourceKind? = null,
             subscriptionId: Long? = null,
-            hasUnappliedDns: Boolean = false,
+            dns: ProfileDns? = null,
             assetState: RuleSetAssetState = RuleSetAssetState.None,
             assetFailure: RuleSetAssetFailure? = null,
         ) = StoredRuleSet(
@@ -146,10 +150,11 @@ class RoutingViewModelTest {
             fingerprint = null,
             geoIpUrl = null,
             geoSiteUrl = null,
-            hasUnappliedDns = hasUnappliedDns,
+            hasDns = dns != null,
             assetGeneration = 0L,
             assetState = assetState,
             assetFailure = assetFailure,
+            dns = dns,
         )
     }
 
@@ -395,13 +400,14 @@ class RoutingViewModelTest {
 
     // /off and the routing-enable directive both need a visible target.
     @Test
-    fun `a profile carrying DNS says it is not applied`() = runTest {
+    fun `a profile carrying valid DNS says it sets DNS`() = runTest {
+        val dns = ProfileDns(remote = DnsResolver(DnsTransport.DOU, ip = "1.1.1.1"))
         val source =
             FakeSource(
-                MutableStateFlow(listOf(stored(literalSet, RoutingSourceKind.Deeplink, hasUnappliedDns = true))),
+                MutableStateFlow(listOf(stored(literalSet, RoutingSourceKind.Deeplink, dns = dns))),
             )
 
-        RoutingViewModel(source).state.value.ruleSets.single().hasUnappliedDns shouldBe true
+        RoutingViewModel(source).state.value.ruleSets.single().dnsState shouldBe DnsState.Applied
     }
 
     // Task 14. A deeplink reaches the sheet through this flow rather than a

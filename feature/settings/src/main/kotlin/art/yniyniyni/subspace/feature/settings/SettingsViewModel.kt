@@ -6,11 +6,16 @@ import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.GeoInstallRequest
 import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
+import art.yniyniyni.subspace.core.model.DnsValidation
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.isGeoFileName
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,6 +54,10 @@ constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState(appVersion = appVersionSource.version))
     val state: StateFlow<SettingsState> = _state.asStateFlow()
+    private val dnsWriteRequests = Channel<DnsWriteRequest>(Channel.CONFLATED)
+    private var dnsRevision = 0L
+    private var editableDnsRevision: Long? = null
+    private var latestPersistedDnsResolver = DnsResolver.DEFAULT
 
     init {
         settingsSource.theme
@@ -77,6 +86,24 @@ constructor(
 
         settingsSource.pingOnLaunchMetered
             .onEach { enabled -> _state.update { it.copy(pingOnLaunchMetered = enabled) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.dnsResolver
+            .onEach { resolver ->
+                latestPersistedDnsResolver = resolver
+                if (editableDnsRevision == null) {
+                    _state.update { it.withDnsResolver(resolver) }
+                }
+            }.launchIn(viewModelScope)
+
+        viewModelScope.launch {
+            for (request in dnsWriteRequests) {
+                persistDnsWrite(request)
+            }
+        }
+
+        settingsSource.dnsOverriddenByProfile
+            .onEach { overridden -> _state.update { it.copy(dnsOverriddenByProfile = overridden) } }
             .launchIn(viewModelScope)
 
         settingsSource.geoRefreshOnMetered
@@ -142,6 +169,51 @@ constructor(
 
     fun onPingOnLaunchMeteredChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setPingOnLaunchMetered(enabled) }
+    }
+
+    /** Starts a new local resolver draft; persistence waits for a complete valid resolver. */
+    fun onDnsTransportChanged(transport: DnsTransport) {
+        if (_state.value.dnsTransport == transport) return
+        updateDnsDraft { current -> current.copy(dnsTransport = transport, dnsAddress = "", dnsBootstrapIp = "") }
+    }
+
+    fun onDnsAddressChanged(address: String) {
+        updateDnsDraft { current -> current.copy(dnsAddress = address) }
+    }
+
+    fun onDnsBootstrapIpChanged(bootstrapIp: String) {
+        updateDnsDraft { current -> current.copy(dnsBootstrapIp = bootstrapIp) }
+    }
+
+    private fun updateDnsDraft(transform: (SettingsState) -> SettingsState) {
+        val updated = transform(_state.value)
+        if (updated == _state.value) return
+
+        val revision = ++dnsRevision
+        editableDnsRevision = revision
+        _state.value = updated
+        updated.dnsResolverOrNull()?.let { resolver ->
+            dnsWriteRequests.trySend(DnsWriteRequest(revision = revision, resolver = resolver))
+        }
+    }
+
+    /** Serializes failure recovery with the revision that owns the visible DNS draft. */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun persistDnsWrite(request: DnsWriteRequest) {
+        try {
+            settingsSource.setDnsResolver(request.resolver)
+            if (editableDnsRevision == request.revision) {
+                editableDnsRevision = null
+                _state.update { it.withDnsResolver(request.resolver) }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            if (editableDnsRevision == request.revision) {
+                editableDnsRevision = null
+                _state.update { it.withDnsResolver(latestPersistedDnsResolver) }
+            }
+        }
     }
 
     /**
@@ -255,4 +327,39 @@ constructor(
         if (!row.isCustom) return
         viewModelScope.launch { geoAssetSource.remove(fileName) }
     }
+}
+
+private fun SettingsState.dnsResolverOrNull(): DnsResolver? =
+    when (dnsTransport) {
+        DnsTransport.DOH ->
+            dnsAddress
+                .trim()
+                .takeIf(DnsValidation::isHttpsUrl)
+                ?.takeIf { dnsBootstrapIp.trim().isBlank() || DnsValidation.isAddressLiteral(dnsBootstrapIp.trim()) }
+                ?.let { domain ->
+                    DnsResolver(
+                        transport = DnsTransport.DOH,
+                        domain = domain,
+                        ip = dnsBootstrapIp.trim().takeIf(String::isNotBlank),
+                    )
+                }
+
+        DnsTransport.DOU ->
+            dnsAddress.trim().takeIf(DnsValidation::isAddressLiteral)?.let { ip ->
+                DnsResolver(DnsTransport.DOU, ip = ip)
+            }
+    }
+
+private fun SettingsState.withDnsResolver(resolver: DnsResolver): SettingsState =
+    copy(
+        dnsTransport = resolver.transport,
+        dnsAddress = resolver.xrayAddress().orEmpty(),
+        dnsBootstrapIp = if (resolver.transport == DnsTransport.DOH) resolver.ip.orEmpty() else "",
+    )
+
+private data class DnsWriteRequest(
+    val revision: Long,
+    val resolver: DnsResolver,
+) {
+    override fun toString(): String = "DnsWriteRequest(revision=$revision, resolver=<redacted>)"
 }

@@ -9,6 +9,10 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.platform.app.InstrumentationRegistry
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsState
+import art.yniyniyni.subspace.core.model.DnsTransport
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
@@ -54,7 +58,14 @@ class ImportReviewSheetTest {
                     alreadyOnDevice = true,
                 ),
             ),
-            hasUnappliedDns = true,
+            dns =
+            ProfileDns(
+                remote = DnsResolver(DnsTransport.DOH, domain = "https://dns.example/dns-query"),
+                domestic = DnsResolver(DnsTransport.DOU, ip = "1.1.1.1"),
+                hosts = mapOf("dns.example" to "1.1.1.1", "local.example" to "10.0.0.1"),
+                fakeDns = true,
+            ),
+            dnsState = DnsState.Applied,
             willActivate = true,
         )
 
@@ -118,6 +129,50 @@ class ImportReviewSheetTest {
     }
 
     @Test
+    fun theDnsDisclosureShowsResolverContentsHostsAndFakeDns() {
+        setContent()
+
+        composeRule.onNodeWithText("Remote DNS: DoH https://dns.example/dns-query").assertIsDisplayed()
+        composeRule.onNodeWithText("Domestic DNS: DoU 1.1.1.1").assertIsDisplayed()
+        composeRule.onNodeWithText("2 custom host mappings").assertIsDisplayed()
+        composeRule.onNodeWithText("Uses FakeDNS").assertIsDisplayed()
+    }
+
+    @Test
+    fun anInvalidDnsDisclosureUsesTheSafeFallbackCopy() {
+        setContent(reviewingState.copy(dns = ProfileDns.INVALID, dnsState = DnsState.Invalid))
+
+        composeRule
+            .onNodeWithText("This profile's DNS settings could not be read. Your own DNS setting will be used.")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun aFakeDnsDisclosureWithoutSniffingNamesTheRequirement() {
+        setContent(
+            reviewingState.copy(
+                dns = ProfileDns(fakeDns = true),
+                dnsState = DnsState.NeedsSniffing,
+            ),
+        )
+
+        composeRule
+            .onNodeWithText("Asks for FakeDNS, which needs sniffing enabled in Settings")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun aProfileWithoutDnsShowsNoDnsDisclosure() {
+        setContent(reviewingState.copy(dns = null, dnsState = DnsState.None))
+
+        composeRule.onNodeWithText("Remote DNS:", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Domestic DNS:", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("custom host mapping", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("FakeDNS", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("could not be read", substring = true).assertDoesNotExist()
+    }
+
+    @Test
     fun theFiveDisclosuresRenderFromResources() {
         setContent()
 
@@ -128,7 +183,14 @@ class ImportReviewSheetTest {
         composeRule.onNodeWithText(bucketCount(R.string.rule_set_editor_outcome_direct, 1)).assertIsDisplayed()
         composeRule.onNodeWithText(string(R.string.import_review_default_direct)).assertIsDisplayed()
         composeRule.onAllNodesWithText("example.test", substring = true).assertCountEquals(2)
-        composeRule.onNodeWithText(string(R.string.import_review_dns_unapplied)).assertIsDisplayed()
+        composeRule
+            .onNodeWithText(
+                string(
+                    R.string.import_review_dns_remote,
+                    "DoH",
+                    "https://dns.example/dns-query",
+                ),
+            ).assertIsDisplayed()
         composeRule.onNodeWithText(string(R.string.import_review_will_activate)).assertIsDisplayed()
     }
 

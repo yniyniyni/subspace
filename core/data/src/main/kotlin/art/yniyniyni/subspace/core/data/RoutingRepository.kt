@@ -5,8 +5,10 @@ package art.yniyniyni.subspace.core.data
 
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetDao
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetEntity
+import art.yniyniyni.subspace.core.data.serialization.ProfileDnsCodec
 import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.DomainStrategy
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingProfile
@@ -30,6 +32,13 @@ private const val ORDER_SEPARATOR = ","
  * [geoIpUrl] and [geoSiteUrl] are shown only in informed-consent UI. They, the
  * rule entries, and the stored DNS block are deliberately redacted from
  * [toString] under §5.6.
+ *
+ * @property hasDns whether the row has a (possibly unusable) DNS block at all —
+ *   the cheap presence check callers that never need the typed block still use.
+ * @property dns the decoded block itself, populated only by [RoutingRepository]'s
+ *   own mapper. Defaults to null so the other constructor call sites in this
+ *   codebase (tests, `ImportReviewViewModel`) that already pass [hasDns]
+ *   explicitly keep compiling unchanged.
  */
 public data class StoredRuleSet(
     public val ruleSet: RoutingRuleSet,
@@ -39,10 +48,11 @@ public data class StoredRuleSet(
     public val fingerprint: String?,
     public val geoIpUrl: String?,
     public val geoSiteUrl: String?,
-    public val hasUnappliedDns: Boolean,
+    public val hasDns: Boolean,
     public val assetGeneration: Long,
     public val assetState: RuleSetAssetState,
     public val assetFailure: RuleSetAssetFailure?,
+    public val dns: ProfileDns? = null,
 ) {
     /**
      * Whether this row's geo files live in its own generation directory rather
@@ -68,12 +78,17 @@ public data class StoredRuleSet(
     public val usesOwnGeneration: Boolean
         get() = assetGeneration > 0 && ruleSet.requiredGeoFiles().isNotEmpty()
 
-    /** §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs. */
+    /**
+     * §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs.
+     *
+     * [dns] relies on [ProfileDns]'s own [ProfileDns.toString] redaction rather
+     * than repeating it here — one redaction to keep in sync, not two.
+     */
     override fun toString(): String =
         "StoredRuleSet(ruleSet=$ruleSet, sourceKind=$sourceKind, " +
             "subscriptionId=$subscriptionId, lastUpdated=$lastUpdated, " +
             "fingerprint=<redacted>, geoUrls=<redacted>, " +
-            "hasUnappliedDns=$hasUnappliedDns, assetGeneration=$assetGeneration, " +
+            "hasDns=$hasDns, dns=$dns, assetGeneration=$assetGeneration, " +
             "assetState=$assetState, assetFailure=$assetFailure)"
 }
 
@@ -208,7 +223,22 @@ internal constructor(
         // the refresh cap "exists to stop a chatty profile hammering a CDN, not
         // to tell the device's owner no". This gate is what makes that true.
         if (existing.assetState != RuleSetAssetState.Ready.name) return UpdateDecision.Changed
-        if (existing.fingerprint == profile.fingerprint()) return UpdateDecision.Unchanged
+        // Recomputed from the stored row, never read from the `fingerprint` column.
+        //
+        // The column records whatever algorithm was current when the row was
+        // written, and M6.5 changed that algorithm: `fingerprint()` went from one
+        // `feed(dnsJson)` to a fold over the typed DNS projection, which moves the
+        // digest of every stored profile — a DNS-less one included, since
+        // `feed(null)` still writes a field separator. Comparing against the column
+        // would answer `Changed` for every row on the first sync after an upgrade,
+        // which is spec §4.3's "one unexplained review sheet per user", or `Stale`
+        // for a row carrying a timestamp, silently refusing a real update.
+        //
+        // Recomputing both sides with the same algorithm makes the comparison
+        // answer the question it is actually asking — "is the delivered content the
+        // content already applied?" — and makes any future change to the algorithm
+        // safe by construction rather than by remembering to write a migration.
+        if (existing.toProfile().fingerprint() == profile.fingerprint()) return UpdateDecision.Unchanged
         val incoming = profile.lastUpdated ?: return UpdateDecision.Changed
         val stored = existing.lastUpdated ?: return UpdateDecision.Changed
         return if (incoming > stored) UpdateDecision.Changed else UpdateDecision.Stale
@@ -291,7 +321,7 @@ internal constructor(
             fingerprint = profile.fingerprint(),
             geoIpUrl = profile.geoIpUrl,
             geoSiteUrl = profile.geoSiteUrl,
-            dnsJson = profile.dnsJson,
+            dnsJson = ProfileDnsCodec.encode(profile.dns),
             useChunkFiles = profile.useChunkFiles,
             generation = generation,
         )
@@ -371,6 +401,29 @@ private fun RoutingRuleSetEntity.toModel(): RoutingRuleSet =
         globalProxy = globalProxy,
     )
 
+/**
+ * The stored row as the profile it was published from, for fingerprinting.
+ *
+ * Every field [RoutingProfile.fingerprint] folds is a column on this table, so the
+ * projection is faithful; `lastUpdated` rides along for completeness even though
+ * the digest excludes it deliberately (it is the freshness gate, not content).
+ */
+private fun RoutingRuleSetEntity.toProfile(): RoutingProfile {
+    val model = toModel()
+    return RoutingProfile(
+        name = model.name,
+        buckets = model.buckets,
+        routeOrder = model.order,
+        domainStrategy = model.domainStrategy,
+        globalProxy = model.globalProxy,
+        geoIpUrl = geoIpUrl,
+        geoSiteUrl = geoSiteUrl,
+        lastUpdated = lastUpdated,
+        dns = ProfileDnsCodec.decode(dnsJson),
+        useChunkFiles = useChunkFiles,
+    )
+}
+
 private fun RoutingRuleSetEntity.toStored(): StoredRuleSet =
     StoredRuleSet(
         ruleSet = toModel(),
@@ -380,10 +433,11 @@ private fun RoutingRuleSetEntity.toStored(): StoredRuleSet =
         fingerprint = fingerprint,
         geoIpUrl = geoIpUrl,
         geoSiteUrl = geoSiteUrl,
-        hasUnappliedDns = !dnsJson.isNullOrBlank(),
+        hasDns = !dnsJson.isNullOrBlank(),
         assetGeneration = assetGeneration,
         assetState = assetState.toAssetState(),
         assetFailure = assetFailure.toAssetFailure(),
+        dns = ProfileDnsCodec.decode(dnsJson),
     )
 
 private fun String.toDomainStrategy(): DomainStrategy =
@@ -442,6 +496,6 @@ private fun RoutingProfile.toEntity(
         assetFailure = null,
         geoIpUrl = geoIpUrl,
         geoSiteUrl = geoSiteUrl,
-        dnsJson = dnsJson,
+        dnsJson = ProfileDnsCodec.encode(dns),
         useChunkFiles = useChunkFiles,
     )

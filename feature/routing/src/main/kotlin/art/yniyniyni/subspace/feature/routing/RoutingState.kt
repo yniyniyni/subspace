@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace.feature.routing
 
+import art.yniyniyni.subspace.core.model.DnsState
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
@@ -79,7 +80,8 @@ internal data class RuleSetRow(
     val subscriptionName: String? = null,
     val assetState: RuleSetAssetState = RuleSetAssetState.None,
     val assetFailure: RuleSetAssetFailure? = null,
-    val hasUnappliedDns: Boolean = false,
+    /** What this profile's typed DNS block does when activated. */
+    val dnsState: DnsState = DnsState.None,
     val downloadProgress: GeoProgress? = null,
     /**
      * Whether the published rules reference any geo database at all.

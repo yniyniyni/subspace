@@ -96,7 +96,7 @@ class RoutingProfileTest {
             geoIpUrl = "https://example.test/geoip.dat",
             geoSiteUrl = "https://example.test/geosite.dat",
             lastUpdated = 1_700_000_000L,
-            dnsJson = """{"RemoteDNSType":"DoH"}""",
+            dns = ProfileDns(remote = DnsResolver(DnsTransport.DOH, domain = "https://dns.test/dns-query")),
             useChunkFiles = true,
         )
     }

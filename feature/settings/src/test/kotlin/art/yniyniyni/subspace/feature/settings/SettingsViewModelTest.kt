@@ -5,22 +5,27 @@ import art.yniyniyni.subspace.core.data.GeoInstallRequest
 import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.InstalledGeoAsset
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -51,7 +56,10 @@ class SettingsViewModelTest {
      * being given a way to skip [SettingsSource.theme] in the first place,
      * which is the only source `state.theme` is derived from.
      */
-    private class FakeSettingsSource(initial: ThemePreference = ThemePreference.System) : SettingsSource {
+    private class FakeSettingsSource(
+        initial: ThemePreference = ThemePreference.System,
+        initialDnsResolver: DnsResolver = DnsResolver.DEFAULT,
+    ) : SettingsSource {
         private val _theme = MutableStateFlow(initial)
         private val _hwidEnabled = MutableStateFlow(true)
         override val theme: Flow<ThemePreference> = _theme.asStateFlow()
@@ -65,6 +73,40 @@ class SettingsViewModelTest {
         override suspend fun setHwidEnabled(enabled: Boolean) {
             _hwidEnabled.value = enabled
         }
+
+        private val _dnsResolver = MutableStateFlow(initialDnsResolver)
+        override val dnsResolver: Flow<DnsResolver> = _dnsResolver.asStateFlow()
+        private val dnsWriteGates = ArrayDeque<CompletableDeferred<Unit>>()
+        private var failNextDnsWrite = false
+
+        val dnsWriteCount: Int get() = dnsWriteRequests.size
+        private val dnsWriteRequests = mutableListOf<DnsResolver>()
+
+        override suspend fun setDnsResolver(resolver: DnsResolver) {
+            dnsWriteRequests += resolver
+            val gate = if (dnsWriteGates.isEmpty()) null else dnsWriteGates.removeFirst()
+            gate?.await()
+            if (failNextDnsWrite) {
+                failNextDnsWrite = false
+                check(false) { "controlled DNS write failure" }
+            }
+            _dnsResolver.value = resolver
+        }
+
+        fun pauseNextDnsWrite(gate: CompletableDeferred<Unit>) {
+            dnsWriteGates.addLast(gate)
+        }
+
+        fun failNextDnsWrite() {
+            failNextDnsWrite = true
+        }
+
+        fun publishDnsResolver(resolver: DnsResolver) {
+            _dnsResolver.value = resolver
+        }
+
+        private val _dnsOverriddenByProfile = MutableStateFlow(false)
+        override val dnsOverriddenByProfile: Flow<Boolean> = _dnsOverriddenByProfile.asStateFlow()
 
         private val _pingMode = MutableStateFlow(PingMode.TCP)
         private val _pingCheckUrl = MutableStateFlow("https://www.gstatic.com/generate_204")
@@ -323,6 +365,187 @@ class SettingsViewModelTest {
 
             model.state.value.pingOnLaunch shouldBe false
             model.state.value.pingOnLaunchMetered shouldBe true
+        }
+
+    // ── M6.5: DNS setting ──────────────────────────────────────────────────
+
+    @Test
+    fun `changing DNS transport updates the editable state without persisting`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOH)
+
+            model.state.value.dnsTransport shouldBe DnsTransport.DOH
+            source.dnsResolver.first() shouldBe DnsResolver.DEFAULT
+        }
+
+    @Test
+    fun `selecting the active DNS transport does not claim a draft or write`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOU)
+            source.publishDnsResolver(DnsResolver(DnsTransport.DOH, domain = "https://dns.example.test/dns-query"))
+            advanceUntilIdle()
+
+            assertTrue("Selecting the current DNS transport must not write", source.dnsWriteCount == 0)
+            assertTrue(
+                "Selecting the current DNS transport must not claim the draft",
+                model.state.value.dnsTransport == DnsTransport.DOH,
+            )
+        }
+
+    @Test
+    fun `a persisted resolver update does not discard an active DNS transport draft`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOH)
+            source.publishDnsResolver(DnsResolver(DnsTransport.DOU, ip = "9.9.9.9"))
+            advanceUntilIdle()
+
+            model.state.value.dnsTransport shouldBe DnsTransport.DOH
+        }
+
+    @Test
+    fun `an invalid DoH endpoint updates the draft but leaves the resolver unchanged`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOH)
+            model.onDnsAddressChanged("cloudflare-dns.com")
+            advanceUntilIdle()
+
+            assertTrue(
+                "The editable DNS address must retain an invalid draft",
+                model.state.value.dnsAddress == "cloudflare-dns.com",
+            )
+            source.dnsResolver.first() shouldBe DnsResolver.DEFAULT
+        }
+
+    @Test
+    fun `a valid DoU address persists the resolver`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOU)
+            model.onDnsAddressChanged("9.9.9.9")
+            advanceUntilIdle()
+
+            source.dnsResolver.first() shouldBe DnsResolver(DnsTransport.DOU, ip = "9.9.9.9")
+        }
+
+    @Test
+    fun `overlapping DNS writes persist the latest valid resolver`() =
+        runTest {
+            val firstWrite = CompletableDeferred<Unit>()
+            val source = FakeSettingsSource()
+            source.pauseNextDnsWrite(firstWrite)
+            val model = viewModel(source)
+
+            model.onDnsAddressChanged("9.9.9.9")
+            advanceUntilIdle()
+            model.onDnsAddressChanged("8.8.8.8")
+            firstWrite.complete(Unit)
+            advanceUntilIdle()
+
+            val latest = DnsResolver(DnsTransport.DOU, ip = "8.8.8.8")
+            assertTrue("DNS writes must be serialized", source.dnsWriteCount == 2)
+            val persisted = source.dnsResolver.first()
+            assertTrue("The latest DNS resolver must win", persisted == latest)
+            assertTrue(
+                "Successful DNS writes must normalize visible state",
+                model.state.value.dnsAddress == latest.ip,
+            )
+        }
+
+    @Test
+    fun `a failed latest DNS write releases the draft to the persisted resolver`() =
+        runTest {
+            val source = FakeSettingsSource()
+            source.failNextDnsWrite()
+            val model = viewModel(source)
+
+            model.onDnsAddressChanged("9.9.9.9")
+            advanceUntilIdle()
+
+            assertTrue(
+                "A failed DNS write must restore the persisted projection",
+                model.state.value.dnsAddress == DnsResolver.DEFAULT.ip,
+            )
+            model.onDnsAddressChanged("8.8.8.8")
+            advanceUntilIdle()
+
+            val persisted = source.dnsResolver.first()
+            assertTrue(
+                "A failed DNS write must release ownership for the next edit",
+                persisted == DnsResolver(DnsTransport.DOU, ip = "8.8.8.8"),
+            )
+        }
+
+    @Test
+    fun `DNS edits trim resolver and bootstrap fields before persistence`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOH)
+            model.onDnsAddressChanged(" https://dns.example.test/dns-query ")
+            model.onDnsBootstrapIpChanged(" 2001:db8::1 ")
+            advanceUntilIdle()
+
+            val persisted = source.dnsResolver.first()
+            assertTrue(
+                "DNS persistence must trim resolver fields",
+                persisted ==
+                    DnsResolver(
+                        DnsTransport.DOH,
+                        domain = "https://dns.example.test/dns-query",
+                        ip = "2001:db8::1",
+                    ),
+            )
+            assertTrue(
+                "DNS state must display normalized resolver fields",
+                model.state.value.dnsAddress == "https://dns.example.test/dns-query" &&
+                    model.state.value.dnsBootstrapIp == "2001:db8::1",
+            )
+        }
+
+    @Test
+    fun `a malformed IPv6 DNS address remains an unpersisted draft`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsAddressChanged("1:2:3:4:5:6:7:8:9")
+            advanceUntilIdle()
+
+            val persisted = source.dnsResolver.first()
+            assertTrue("Malformed IPv6 DNS input must not be persisted", persisted == DnsResolver.DEFAULT)
+        }
+
+    @Test
+    fun `an invalid DoH bootstrap IP leaves the persisted resolver unchanged`() =
+        runTest {
+            val persisted =
+                DnsResolver(
+                    transport = DnsTransport.DOH,
+                    domain = "https://dns.example/dns-query",
+                    ip = "192.0.2.1",
+                )
+            val source = FakeSettingsSource(initialDnsResolver = persisted)
+            val model = viewModel(source)
+
+            model.onDnsBootstrapIpChanged("not-an-address")
+            advanceUntilIdle()
+
+            source.dnsResolver.first() shouldBe persisted
         }
 
     // ── M5: geo databases (Task 17) ─────────────────────────────────────────

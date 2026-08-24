@@ -28,6 +28,8 @@ import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
 import art.yniyniyni.subspace.core.xray.ConfigResult
+import art.yniyniyni.subspace.core.xray.DnsPlan
+import art.yniyniyni.subspace.core.xray.DnsPlanner
 import art.yniyniyni.subspace.core.xray.LibXrayPingApi
 import art.yniyniyni.subspace.core.xray.ProxyHeadProbe
 import art.yniyniyni.subspace.core.xray.SocketProtector
@@ -62,7 +64,20 @@ private const val TUN_ADDRESS_V6 = "fd00:1:2:3::1"
 private const val TUN_PREFIX_V6 = 126
 
 private const val TUN_MTU = 8500
+
+// No longer "the" resolver: since M6.5, a session's DnsPlan chooses what the app
+// actually queries and what it advertises on the TUN (DnsPlan.tunAdvertisedAddress).
+// This is only the fallback for a plan that yields no address literal — a DoH-only
+// setting or profile with no IP the TUN can be handed — and for the null-plan case
+// where nothing asked for DNS at all (spec §7.4's M1-compatible path).
 private const val DNS_SERVER = "1.1.1.1"
+
+// Fix round 1, Finding 4: sniffing is not a user setting in this build, so both
+// DnsPlanner.plan's sniffingEnabled and TunnelSettings.enableSniffing must read
+// this one constant rather than repeat the literal `true` in two places coupled
+// only by a comment — if sniffing ever becomes configurable, both call sites
+// change together because there is only one place to change.
+private const val SNIFFING_ENABLED = true
 
 /** Decodes only this service's explicit connect request without exposing/logging its payload. */
 @Suppress("DEPRECATION")
@@ -429,7 +444,7 @@ class TunnelService : VpnService() {
             launchStartup = {
                 scope.launch {
                     val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
-                    attachTun(gen, started.xray, started.ports.socksPort, started.ports.httpPort, rowId)
+                    attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)
                 }
             },
         )
@@ -444,8 +459,17 @@ class TunnelService : VpnService() {
      */
     private data class StartedPorts(val socksPort: Int, val httpPort: Int)
 
-    /** A started core leaves the routing-generation lease but still needs its TUN attached. */
-    private data class StartedCore(val xray: XrayController, val ports: StartedPorts)
+    /**
+     * A started core leaves the routing-generation lease but still needs its TUN
+     * attached.
+     *
+     * [dnsPlan] rides along rather than being recomputed in [attachTun]: it is
+     * already baked into the generated config by [startCore], and a second
+     * `DnsPlanner.plan` call there — even from the same inputs — is one more place
+     * the TUN's advertised resolver and the config's `dns.servers` could disagree
+     * if either input changed between the two reads.
+     */
+    private data class StartedCore(val xray: XrayController, val ports: StartedPorts, val dnsPlan: DnsPlan?)
 
     /**
      * Resolves routing, builds the controller, validates, and starts Xray inside
@@ -470,6 +494,17 @@ class TunnelService : VpnService() {
                     )
                     return@withResolution null
                 }
+                // Built here, from the same already-resolved rule set the geo `env`
+                // uses, rather than in startCore or attachTun — both need the exact
+                // same plan, and computing it once is what keeps the generated
+                // config and the TUN's advertised resolver from disagreeing.
+                val dnsPlan =
+                    DnsPlanner.plan(
+                        profileDns = (routing as? RoutingResolution.Active)?.dns,
+                        setting = settingsRepository.dnsResolver.first(),
+                        routing = (routing as? RoutingResolution.Active)?.ruleSet,
+                        sniffingEnabled = SNIFFING_ENABLED,
+                    )
                 val assetDir =
                     (routing as? RoutingResolution.Active)?.assetDir
                         ?: geoAssetRepository.geoDirectory()
@@ -485,8 +520,8 @@ class TunnelService : VpnService() {
                     }
                 if (!ownsStart) return@withResolution null
 
-                val ports = startCore(gen, xray, profile, rowId, routing) ?: return@withResolution null
-                StartedCore(xray, ports)
+                val ports = startCore(gen, xray, profile, rowId, routing, dnsPlan) ?: return@withResolution null
+                StartedCore(xray, ports, dnsPlan)
             }
         } catch (e: CancellationException) {
             throw e
@@ -497,13 +532,20 @@ class TunnelService : VpnService() {
 
     // One early return per step is the point, not a smell: §10.4 requires each
     // stage of the start sequence to fail specifically and stop there.
-    @Suppress("ReturnCount")
+    //
+    // LongParameterList: gen/rowId identify the attempt, xray/profile/routing are
+    // the three inputs the config generator needs, and dnsPlan is the plan
+    // resolveAndStartCore already computed once from routing — recomputing it
+    // here to shrink the list would risk the TUN and the config disagreeing
+    // (§7.4). Six genuinely distinct inputs, not one bundle hiding as several.
+    @Suppress("ReturnCount", "LongParameterList")
     private suspend fun startCore(
         gen: Int,
         xray: XrayController,
         profile: Profile,
         rowId: Long,
         routing: RoutingResolution,
+        dnsPlan: DnsPlan?,
     ): StartedPorts? {
         // One call for both ports, not two calls to allocatePort(): §10.6 and
         // docs/agent/research/libxray-api.md §5 — getFreePorts closes each
@@ -525,9 +567,10 @@ class TunnelService : VpnService() {
             TunnelSettings(
                 socksPort = socksPort,
                 dnsServer = DNS_SERVER,
-                enableSniffing = true,
+                enableSniffing = SNIFFING_ENABLED,
                 routing = (routing as? RoutingResolution.Active)?.ruleSet,
                 httpPort = httpPort,
+                dns = dnsPlan,
             )
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
@@ -655,9 +698,10 @@ class TunnelService : VpnService() {
         gen: Int,
         xray: XrayController,
         plan: BuilderPlan,
+        dnsPlan: DnsPlan?,
         rowId: Long,
     ): ParcelFileDescriptor? =
-        when (val result = establishTun(plan)) {
+        when (val result = establishTun(plan, dnsPlan)) {
             is TunResult.Established -> result.fd
             // §10.4: the same reason an empty selection gets, because after the
             // skipping there is genuinely no application left to allow.
@@ -685,12 +729,17 @@ class TunnelService : VpnService() {
      */
     // Same reasoning as startCore: each early return is a distinct §10.4 failure
     // or a supersede check, and collapsing them would hide which one fired.
+    //
+    // LongParameterList: [ports] bundles socksPort/httpPort rather than taking
+    // them separately, reusing the pairing [startCore] already established —
+    // one fewer place to mismatch which index is which, and it keeps this
+    // signature at five rather than six now that [dnsPlan] joined it.
     @Suppress("ReturnCount")
     private suspend fun attachTun(
         gen: Int,
         xray: XrayController,
-        socksPort: Int,
-        httpPort: Int,
+        ports: StartedPorts,
+        dnsPlan: DnsPlan?,
         rowId: Long,
     ) {
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
@@ -699,7 +748,7 @@ class TunnelService : VpnService() {
                 is PerAppGateResult.Proceed -> gate.plan
                 PerAppGateResult.Failed -> return
             }
-        val fd = establishOrFail(gen, xray, plan, rowId) ?: return
+        val fd = establishOrFail(gen, xray, plan, dnsPlan, rowId) ?: return
         synchronized(lock) {
             if (gen != generation) {
                 // Superseded while establishing. Close what we just made rather
@@ -711,7 +760,7 @@ class TunnelService : VpnService() {
         }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingTunnel))) return
-        val config = tun2socksConfig(socksPort = socksPort, mtu = TUN_MTU)
+        val config = tun2socksConfig(socksPort = ports.socksPort, mtu = TUN_MTU)
         // The shim refuses a bad fd rather than aborting the process; false here
         // is a real start failure, never something to ignore.
         if (!Tun2Socks.start(config, fd.fd)) {
@@ -731,7 +780,7 @@ class TunnelService : VpnService() {
             return
         }
 
-        val connected = ConnectionState.Connected(System.currentTimeMillis(), socksPort, httpPort)
+        val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
         // One generation-checked transition: the connected notification is established and
         // `Connected` published together under the lock, and the spec-D4 success write (see
         // ConnectionRecorder) happens strictly after. Previously this published, suspended in
@@ -841,13 +890,20 @@ class TunnelService : VpnService() {
      *
      * @param plan §8's per-app decision, already made — see [builderPlan] for why
      *   the decision is a type rather than a pair of booleans checked here.
+     * @param dnsPlan the same plan already baked into the generated config's
+     *   `dns` block, so the TUN advertises the resolver the session actually
+     *   uses. [DNS_SERVER] is the fallback for a null plan, or one with no
+     *   address literal to advertise — see [DnsPlan.tunAdvertisedAddress].
      */
     // Each return is a distinct outcome: the fatal own-package failure reached
     // from two arms of the plan, the emptied allow list, and success. Folding
     // them would mean building the whole interface before discovering we cannot
     // exclude ourselves, and would lose which failure the user is looking at.
     @Suppress("ReturnCount")
-    private fun establishTun(plan: BuilderPlan): TunResult {
+    private fun establishTun(
+        plan: BuilderPlan,
+        dnsPlan: DnsPlan?,
+    ): TunResult {
         val builder =
             Builder()
                 .setSession(getString(R.string.tunnel_session_name))
@@ -856,7 +912,7 @@ class TunnelService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
                 .addRoute("::", 0)
-                .addDnsServer(DNS_SERVER)
+        builder.addDnsServerOrFallback(dnsPlan)
 
         when (plan) {
             BuilderPlan.DisallowOwnOnly -> if (!excludeSelf(builder)) return TunResult.Failed
@@ -889,6 +945,26 @@ class TunnelService : VpnService() {
         }
 
         return builder.establish()?.let { TunResult.Established(it) } ?: TunResult.Failed
+    }
+
+    /**
+     * Fix round 1, Finding 1: [DnsPlan.tunAdvertisedAddress] is only as trustworthy
+     * as [art.yniyniyni.subspace.core.model.DnsValidation.isAddressLiteral], whose
+     * IPv6 regex is deliberately loose (real validation is the core's, end to end)
+     * and whose `hosts` values are entirely unvalidated author input. A shape that
+     * regex accepts but `Builder.addDnsServer` rejects throws
+     * `IllegalArgumentException` from inside [establishTun] — by which point
+     * [startCore] already has a core running. Uncaught, that would escape to
+     * [errorHandler] (§10.4), which publishes `Failed` but does not stop the core
+     * or clear the foreground notification: a stuck notification over a runtime
+     * nobody is tracking. Degrading to [DNS_SERVER] here, rather than tightening
+     * the validator, keeps the containment at this one call site.
+     */
+    private fun Builder.addDnsServerOrFallback(dnsPlan: DnsPlan?) {
+        if (addDnsServerOrFallback(dnsPlan?.tunAdvertisedAddress(), DNS_SERVER, ::addDnsServer)) {
+            // §5.6: no address in this line — only that one was rejected.
+            Log.w(TAG, "addDnsServer rejected the plan's address; falling back to the app default")
+        }
     }
 
     /** §5.6: the count, never the names. A package name identifies an installed app. */

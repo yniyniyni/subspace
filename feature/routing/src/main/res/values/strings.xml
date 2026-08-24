@@ -53,8 +53,9 @@
     <string name="routing_asset_failed_install">Update failed — could not be saved</string>
     <string name="routing_asset_failed_cancelled">Update cancelled</string>
 
-    <!-- The visible cost of the M6/M6.5 split. Removed when DNS is applied. -->
-    <string name="routing_dns_not_applied">DNS settings in this profile are stored but not applied</string>
+    <string name="routing_dns_applied">Sets DNS</string>
+    <string name="routing_dns_invalid">DNS block not understood — using your DNS setting</string>
+    <string name="routing_dns_needs_sniffing">Needs sniffing on for FakeDNS</string>
 
     <!-- Imported profiles are read-only; editing means editing a copy (spec §4.2). -->
     <string name="routing_duplicate_label">Duplicate</string>
@@ -158,7 +159,15 @@
     <!-- %1$s host, %2$s filename, %3$s short file size -->
     <string name="import_review_geo_row_with_size">%1$s · %2$s · %3$s</string>
     <string name="import_review_geo_already_on_device">Already on this device</string>
-    <string name="import_review_dns_unapplied">DNS settings in this profile are stored but not applied</string>
+    <string name="import_review_dns_remote">Remote DNS: %1$s %2$s</string>
+    <string name="import_review_dns_domestic">Domestic DNS: %1$s %2$s</string>
+    <string name="import_review_dns_invalid">This profile\'s DNS settings could not be read. Your own DNS setting will be used.</string>
+    <string name="import_review_dns_fakedns">Uses FakeDNS</string>
+    <string name="import_review_dns_fakedns_needs_sniffing">Asks for FakeDNS, which needs sniffing enabled in Settings</string>
+    <plurals name="import_review_dns_hosts">
+        <item quantity="one">%1$d custom host mapping</item>
+        <item quantity="other">%1$d custom host mappings</item>
+    </plurals>
     <string name="import_review_will_activate">This profile will become the active routing rules.</string>
     <string name="import_review_will_not_activate">This profile will be stored and will not replace the active rules.</string>
     <string name="import_review_replaces_active">These rules are the ones currently in use, so they take effect right away.</string>
@@ -188,4 +197,3 @@
     <string name="import_review_problem_unknown">This link could not be read.</string>
     <string name="import_review_problem_too_large">This routing profile is too large to import.</string>
 </resources>
-

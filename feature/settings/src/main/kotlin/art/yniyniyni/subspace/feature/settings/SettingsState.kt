@@ -4,6 +4,8 @@ package art.yniyniyni.subspace.feature.settings
 import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.InstalledGeoAsset
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.GeoSource
 import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
@@ -32,6 +34,14 @@ internal data class SettingsState(
     val pingTimeoutSeconds: Int = 5,
     val pingOnLaunch: Boolean = true,
     val pingOnLaunchMetered: Boolean = false,
+    /** The resolver transport currently being edited, which may be ahead of the persisted value. */
+    val dnsTransport: DnsTransport = DnsResolver.DEFAULT.transport,
+    /** The editable endpoint: a DoH URL or a DoU address, depending on [dnsTransport]. */
+    val dnsAddress: String = DnsResolver.DEFAULT.ip.orEmpty(),
+    /** An optional literal bootstrap address for a DoH endpoint. */
+    val dnsBootstrapIp: String = "",
+    /** Whether the active routing profile currently supersedes the app-level resolver. */
+    val dnsOverriddenByProfile: Boolean = false,
     /** The full catalogue, for the source picker. */
     val geoSources: List<GeoSource> = GeoSourceCatalogue.sources,
     /**
@@ -62,7 +72,7 @@ internal data class SettingsState(
     /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (§5.6). */
     override fun toString(): String =
         "SettingsState(theme=$theme, appVersion=$appVersion, xrayVersion=$xrayVersion, " +
-            "hwidEnabled=$hwidEnabled, hwid=<redacted>)"
+            "hwidEnabled=$hwidEnabled, hwid=<redacted>, dns=<redacted>)"
 }
 
 /**

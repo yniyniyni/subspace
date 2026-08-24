@@ -20,11 +20,12 @@
 # boolean and guards the fd instead.
 #
 # The parent repository owns one reviewed HEV patch under
-# third_party/hev-patches/. Gradle verifies the pinned clean submodule, applies
-# that patch into service/build/generated/hev-socks5-tunnel, checks the exact
-# patched hashes, and makes every native configure task depend on that output.
-# This makefile compiles only the generated tree. Upstream hev-jni.c is then the
-# sole source filtered out of that patched copy.
+# third_party/hev-patches/. Gradle verifies the outer and nested pins, exports
+# only their tracked indexes into service/build/generated/hev-socks5-tunnel,
+# verifies the complete pre/post-patch inventory and exact reviewed hashes, and
+# makes every native configure task depend on that output. This makefile
+# compiles only the generated tree. Upstream hev-jni.c is then the sole source
+# filtered out of that patched copy.
 #
 # §10.2: this bridge is load-bearing, not boilerplate. Do not refactor it for
 # elegance.

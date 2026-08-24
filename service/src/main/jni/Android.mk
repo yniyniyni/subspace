@@ -19,15 +19,23 @@
 # can reach — UI says connected, nothing works, no log line. Our shim returns a
 # boolean and guards the fd instead.
 #
-# Everything else upstream builds is used unmodified; only that one file is
-# filtered out.
+# The parent repository owns one reviewed HEV patch under
+# third_party/hev-patches/. Gradle verifies the pinned clean submodule, applies
+# that patch into service/build/generated/hev-socks5-tunnel, checks the exact
+# patched hashes, and makes every native configure task depend on that output.
+# This makefile compiles only the generated tree. Upstream hev-jni.c is then the
+# sole source filtered out of that patched copy.
 #
 # §10.2: this bridge is load-bearing, not boilerplate. Do not refactor it for
 # elegance.
 
 SUBSPACE_JNI_PATH := $(call my-dir)
-HEV_DIR := $(SUBSPACE_JNI_PATH)/../../../../third_party/hev-socks5-tunnel
-HEV_REL := ../../../../third_party/hev-socks5-tunnel
+HEV_REL := ../../../build/generated/hev-socks5-tunnel
+HEV_DIR := $(SUBSPACE_JNI_PATH)/$(HEV_REL)
+
+ifeq ($(wildcard $(HEV_DIR)/src/hev-main.c),)
+$(error patched HEV tree is missing - run the Gradle native task, which depends on preparePatchedHev)
+endif
 
 # Upstream's three vendored static dependencies, built by their own makefiles.
 include $(HEV_DIR)/third-part/yaml/Android.mk

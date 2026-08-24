@@ -186,6 +186,8 @@ constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(ImportState())
     val state: StateFlow<ImportState> = _state.asStateFlow()
+    private var nextFileReadOwner = 0L
+    private var activeFileReadOwner: Long? = null
 
     /** The paste field's `onValueChange` — see [ImportState.input]'s own KDoc. */
     fun onInputChanged(text: String) {
@@ -199,8 +201,11 @@ constructor(
      * banner is cleared before the new one starts, the same reset [import]
      * does for the paste path.
      */
-    fun beginFileRead() {
+    fun beginFileRead(): Long {
+        val owner = ++nextFileReadOwner
+        activeFileReadOwner = owner
         _state.update { ImportState(input = it.input, busy = true) }
+        return owner
     }
 
     /**
@@ -210,8 +215,22 @@ constructor(
      * Either way this is a *reported* outcome, never a silent one (§7/§10.4).
      * Takes no cause — see [ImportState.fileReadFailed]'s KDoc for why.
      */
-    fun reportFileReadFailure() {
+    fun reportFileReadFailure(owner: Long) {
+        if (activeFileReadOwner != owner) return
+        activeFileReadOwner = null
         _state.update { it.copy(busy = false, fileReadFailed = true) }
+    }
+
+    /**
+     * Returns a composition-owned file read to idle without inventing an I/O failure.
+     *
+     * [owner] prevents a cancelled, older composition from clearing the busy state of a newer
+     * file read that has already taken ownership.
+     */
+    fun cancelFileRead(owner: Long) {
+        if (activeFileReadOwner != owner) return
+        activeFileReadOwner = null
+        _state.update { it.copy(busy = false) }
     }
 
     /**
@@ -220,8 +239,16 @@ constructor(
      * §5.6/§10.4: never throws and never logs [raw] — a clipboard paste or an
      * imported file *is* config content. [ImportState.failures] carries only
      * [ParseFailure]'s closed vocabulary, never the input that produced it.
+     *
+     * @return false only when [fileReadOwner] no longer owns the read, so stale content is not
+     *   imported after a newer file choice has replaced it.
      */
-    fun import(raw: String) {
+    fun import(
+        raw: String,
+        fileReadOwner: Long? = null,
+    ): Boolean {
+        if (fileReadOwner != null && activeFileReadOwner != fileReadOwner) return false
+        activeFileReadOwner = null
         viewModelScope.launch {
             _state.update { ImportState(input = it.input, busy = true) }
 
@@ -262,6 +289,7 @@ constructor(
                 )
             }
         }
+        return true
     }
 
     /**

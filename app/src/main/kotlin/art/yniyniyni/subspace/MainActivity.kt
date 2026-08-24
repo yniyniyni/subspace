@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        recordRoutingLink(intent)
+        if (savedInstanceState == null) recordRoutingLink(intent)
 
         // Task 22 persisted the Appearance choice correctly, but nothing
         // ever read it back: SubspaceTheme was called with no darkTheme

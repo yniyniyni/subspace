@@ -79,6 +79,20 @@ internal interface SubscriptionDao {
     @Update
     suspend fun updateSubscription(subscription: SubscriptionEntity)
 
+    /** Updates only the user-owned HWID preference, preserving concurrent sync columns. */
+    @Query("UPDATE subscriptions SET hwidEnabled = :enabled WHERE id = :id")
+    suspend fun setHwidEnabled(
+        id: Long,
+        enabled: Boolean,
+    )
+
+    /** Updates only the user-owned User-Agent preference, preserving concurrent sync columns. */
+    @Query("UPDATE subscriptions SET userAgentOverride = :value WHERE id = :id")
+    suspend fun setUserAgentOverride(
+        id: Long,
+        value: String?,
+    )
+
     @Query("DELETE FROM subscriptions WHERE id = :id")
     suspend fun deleteSubscription(id: Long)
 

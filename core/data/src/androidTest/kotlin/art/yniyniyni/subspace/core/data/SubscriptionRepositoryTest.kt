@@ -232,6 +232,52 @@ class SubscriptionRepositoryTest {
     }
 
     @Test
+    fun hwidSetterPreservesSyncStatusThatLandsInsideItsWriteWindow() = runTest {
+        val id = repository.add("https://example.com/sub", name = "Provider").id
+        installSyncDuringUserWriteTrigger(column = "hwidEnabled", status = "SyncedAfterRead")
+
+        repository.setHwidEnabled(id, false)
+
+        val stored = repository.observeSubscriptions().first().single()
+        stored.hwidEnabled shouldBe false
+        stored.lastFetchStatus shouldBe "SyncedAfterRead"
+    }
+
+    @Test
+    fun userAgentSetterPreservesSyncStatusThatLandsInsideItsWriteWindow() = runTest {
+        val id = repository.add("https://example.com/sub", name = "Provider").id
+        installSyncDuringUserWriteTrigger(column = "userAgentOverride", status = "SyncedAfterRead")
+
+        repository.setUserAgentOverride(id, "Subspace/Test")
+
+        val stored = repository.observeSubscriptions().first().single()
+        stored.userAgentOverride shouldBe "Subspace/Test"
+        stored.lastFetchStatus shouldBe "SyncedAfterRead"
+    }
+
+    @Test
+    fun syncStatusWrittenAfterUserSettersPreservesBothUserValues() = runTest {
+        val id = repository.add("https://example.com/sub", name = "Provider").id
+
+        repository.setHwidEnabled(id, false)
+        repository.setUserAgentOverride(id, "Subspace/Test")
+        db.subscriptionDao().recordFetchResult(id, at = 42L, status = "NoServers", detail = "NoServers")
+
+        val stored = repository.observeSubscriptions().first().single()
+        stored.hwidEnabled shouldBe false
+        stored.userAgentOverride shouldBe "Subspace/Test"
+        stored.lastFetchStatus shouldBe "NoServers"
+    }
+
+    @Test
+    fun userSettersAreNoOpsWhenTheSubscriptionIsMissing() = runTest {
+        repository.setHwidEnabled(id = 404L, enabled = false)
+        repository.setUserAgentOverride(id = 404L, userAgent = "Subspace/Test")
+
+        repository.observeSubscriptions().first().shouldBeEmpty()
+    }
+
+    @Test
     fun refreshScheduleChangesReEmitWhenAnIntervalPinLands() {
         runBlocking {
             val id = repository.add("https://example.com/sub", name = "Provider").id
@@ -308,5 +354,30 @@ class SubscriptionRepositoryTest {
                 collector.cancel()
             }
         }
+    }
+
+    /**
+     * Simulates the interleaving a stale read-then-full-row setter otherwise makes possible:
+     * SQLite runs this trigger after the setter has captured its arguments but before its UPDATE
+     * lands. A targeted column UPDATE leaves the status written here alone; Room's generated
+     * full-row `@Update` writes the captured null status back over it.
+     */
+    private fun installSyncDuringUserWriteTrigger(
+        column: String,
+        status: String,
+    ) {
+        require(column == "hwidEnabled" || column == "userAgentOverride")
+        db.openHelper.writableDatabase.execSQL(
+            """
+            CREATE TRIGGER sync_during_user_write
+            BEFORE UPDATE OF $column ON subscriptions
+            BEGIN
+                UPDATE subscriptions
+                SET lastAttemptedAt = 41, lastFetchedAt = 42,
+                    lastFetchStatus = '$status', lastFetchDetail = '$status'
+                WHERE id = OLD.id;
+            END
+            """.trimIndent(),
+        )
     }
 }

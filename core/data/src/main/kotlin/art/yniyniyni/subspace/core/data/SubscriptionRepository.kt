@@ -269,19 +269,13 @@ internal constructor(
     public suspend fun setHwidEnabled(
         id: Long,
         enabled: Boolean,
-    ) {
-        val existing = dao.subscription(id) ?: return
-        dao.updateSubscription(existing.copy(hwidEnabled = enabled))
-    }
+    ): Unit = dao.setHwidEnabled(id, enabled)
 
     /** Sets a per-subscription User-Agent override, or clears it when [userAgent] is null or blank. */
     public suspend fun setUserAgentOverride(
         id: Long,
         userAgent: String?,
-    ) {
-        val existing = dao.subscription(id) ?: return
-        dao.updateSubscription(existing.copy(userAgentOverride = userAgent?.takeIf(String::isNotBlank)))
-    }
+    ): Unit = dao.setUserAgentOverride(id, userAgent?.takeIf(String::isNotBlank))
 
     /** Pins [value] for [key], so no future fetch moves it (spec D3). */
     public suspend fun pin(

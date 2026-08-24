@@ -32,9 +32,8 @@ import com.charleskorn.kaml.YamlScalar
  * Everything else — `hysteria`, `wireguard`, proxy providers — is reported as
  * an unsupported type rather than skipped, so a subscription that yields
  * nothing says why. `ws-opts` and `grpc-opts` feed `TransportOptions` (see
- * `ClashTransport.kt`) for `vless` only; the other protocols still carry
- * [StreamSettings]'s transport name alone (SOCKS has no transport surface at
- * all), a limitation this file's history predates and does not change.
+ * `ClashTransport.kt`) for `vless`, `vmess`, and `trojan`. SOCKS has no
+ * transport surface at all.
  *
  * Every node read goes through `node`/`text` in `ClashYamlNode.kt` and a safe
  * cast rather than kaml's `YamlMap.get<T>` — see that file for why.
@@ -201,8 +200,23 @@ private fun vmess(
                 )
         }
 
-    val security = if (proxy.text("tls") == "true") tls(common) else Security.None
-    val stream = StreamSettings(network = common.network, security = security)
+    val security =
+        when (parseClashVmessTls(proxy)) {
+            ClashVmessTls.Enabled -> tls(common)
+            ClashVmessTls.Disabled -> Security.None
+            ClashVmessTls.Invalid ->
+                return bad(
+                    index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Unsupported(DetailField.Security),
+                )
+        }
+    val stream =
+        StreamSettings(
+            network = common.network,
+            security = security,
+            transport = transportOptionsPreservingEmpty(proxy, common.network),
+        )
     val cipher = proxy.text("cipher") ?: "auto"
     val outbound = VmessOutbound(common.server, common.port, uuid, alterId, cipher, stream)
     val id = profileId("vmess", common.server, common.port, uuid)
@@ -222,13 +236,18 @@ private fun trojan(
             )
 
     // Trojan is TLS-only by definition — see TrojanLink.kt.
-    val stream = StreamSettings(network = common.network, security = tls(common))
+    val stream =
+        StreamSettings(
+            network = common.network,
+            security = tls(common),
+            transport = transportOptionsPreservingEmpty(proxy, common.network),
+        )
     val outbound = TrojanOutbound(common.server, common.port, password, stream)
     val id = profileId("trojan", common.server, common.port, password)
     return LinkResult.Ok(Profile(id, common.name, outbound))
 }
 
-@Suppress("ReturnCount")
+@Suppress("LongMethod", "ReturnCount")
 private fun vless(
     proxy: YamlMap,
     common: ClashCommon,
@@ -239,8 +258,37 @@ private fun vless(
     validateUuid(uuid)?.let { return bad(common.index, ParseFailureReason.MissingCredential, it) }
 
     val reality = proxy.node("reality-opts") as? YamlMap
+    val tls =
+        when (val tlsNode = proxy.node("tls")) {
+            null -> null
+            is YamlScalar ->
+                when (tlsNode.content) {
+                    "true" -> true
+                    "false" -> false
+                    else ->
+                        return bad(
+                            common.index,
+                            ParseFailureReason.MalformedYaml,
+                            FailureDetail.Unsupported(DetailField.Security),
+                        )
+                }
+
+            else ->
+                return bad(
+                    common.index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Unsupported(DetailField.Security),
+                )
+        }
     val security =
         if (reality != null) {
+            if (tls == false) {
+                return bad(
+                    common.index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Unsupported(DetailField.Security),
+                )
+            }
             val publicKey = reality.text("public-key").orEmpty()
             validateRealityPublicKey(publicKey)?.let {
                 return bad(common.index, ParseFailureReason.InvalidRealityKey, it)
@@ -252,6 +300,8 @@ private fun vless(
                 fingerprint = proxy.text("client-fingerprint") ?: "chrome",
                 spiderX = "",
             )
+        } else if (tls == false) {
+            Security.None
         } else {
             tls(common)
         }
@@ -292,6 +342,13 @@ private fun shadowsocks(
     port: Int,
     name: String,
 ): LinkResult {
+    if (proxy.node("plugin") != null || proxy.node("plugin-opts") != null) {
+        return bad(
+            index,
+            ParseFailureReason.MalformedYaml,
+            FailureDetail.Unsupported(DetailField.Plugin),
+        )
+    }
     // Clash calls it `cipher`; Shadowsocks calls it `method`. Same field.
     val method = proxy.text("cipher").orEmpty()
     validateShadowsocksMethod(method)?.let { return bad(index, ParseFailureReason.UnsupportedMethod, it) }

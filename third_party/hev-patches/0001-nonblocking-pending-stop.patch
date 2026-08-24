@@ -1,0 +1,178 @@
+diff --git a/src/hev-main.c b/src/hev-main.c
+index 38dcae0..4531e91 100644
+--- a/src/hev-main.c
++++ b/src/hev-main.c
+@@ -78 +78,2 @@ hev_socks5_tunnel_main_inner (int tun_fd)
+-    hev_socks5_tunnel_run ();
++    if (hev_socks5_tunnel_mark_ready ())
++        hev_socks5_tunnel_run ();
+@@ -79,0 +81 @@ hev_socks5_tunnel_main_inner (int tun_fd)
++    hev_socks5_tunnel_begin_finalize ();
+@@ -91,0 +94,2 @@ hev_socks5_tunnel_main_from_file (const char *config_path, int tun_fd)
++    hev_socks5_tunnel_ensure_prepared ();
++
+@@ -93 +97,2 @@ hev_socks5_tunnel_main_from_file (const char *config_path, int tun_fd)
+-    if (res < 0)
++    if (res < 0) {
++        hev_socks5_tunnel_finish ();
+@@ -94,0 +100 @@ hev_socks5_tunnel_main_from_file (const char *config_path, int tun_fd)
++    }
+@@ -96 +102,3 @@ hev_socks5_tunnel_main_from_file (const char *config_path, int tun_fd)
+-    return hev_socks5_tunnel_main_inner (tun_fd);
++    res = hev_socks5_tunnel_main_inner (tun_fd);
++    hev_socks5_tunnel_finish ();
++    return res;
+@@ -102,0 +111,2 @@ hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
++    hev_socks5_tunnel_ensure_prepared ();
++
+@@ -104 +114,2 @@ hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
+-    if (res < 0)
++    if (res < 0) {
++        hev_socks5_tunnel_finish ();
+@@ -105,0 +117 @@ hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
++    }
+@@ -107 +119,3 @@ hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
+-    return hev_socks5_tunnel_main_inner (tun_fd);
++    res = hev_socks5_tunnel_main_inner (tun_fd);
++    hev_socks5_tunnel_finish ();
++    return res;
+diff --git a/src/hev-main.h b/src/hev-main.h
+index 49896b9..ce2d203 100644
+--- a/src/hev-main.h
++++ b/src/hev-main.h
+@@ -62,0 +63,9 @@ int hev_socks5_tunnel_main_from_str (const unsigned char *config_str,
++/**
++ * hev_socks5_tunnel_prepare:
++ *
++ * Prepare an asynchronously launched tunnel before creating its worker.
++ * A quit requested after this call is retained until initialization observes
++ * it. Synchronous callers of the main entry points do not need to call this.
++ */
++void hev_socks5_tunnel_prepare (void);
++
+diff --git a/src/hev-socks5-tunnel.c b/src/hev-socks5-tunnel.c
+index a7e253b..4846354 100644
+--- a/src/hev-socks5-tunnel.c
++++ b/src/hev-socks5-tunnel.c
+@@ -11 +11 @@
+-#include <assert.h>
++#include <sched.h>
+@@ -12,0 +13 @@
++#include <stdatomic.h>
+@@ -47,0 +49,12 @@ static int event_fds[2] = { -1, -1 };
++enum StopState {
++    STOP_STATE_IDLE,
++    STOP_STATE_REQUESTED,
++    STOP_STATE_READY,
++    STOP_STATE_SIGNALING,
++    STOP_STATE_SIGNALLED,
++    STOP_STATE_FINALIZING,
++    STOP_STATE_FINISHED,
++};
++
++static atomic_int stop_state = STOP_STATE_FINISHED;
++
+@@ -693,0 +707,49 @@ hev_socks5_tunnel_run (void)
++void
++hev_socks5_tunnel_prepare (void)
++{
++    atomic_store (&stop_state, STOP_STATE_IDLE);
++}
++
++void
++hev_socks5_tunnel_ensure_prepared (void)
++{
++    int expected = STOP_STATE_FINISHED;
++
++    atomic_compare_exchange_strong (&stop_state, &expected, STOP_STATE_IDLE);
++}
++
++int
++hev_socks5_tunnel_mark_ready (void)
++{
++    int expected = STOP_STATE_IDLE;
++
++    return atomic_compare_exchange_strong (&stop_state, &expected,
++                                           STOP_STATE_READY);
++}
++
++void
++hev_socks5_tunnel_begin_finalize (void)
++{
++    int expected;
++
++    for (;;) {
++        expected = atomic_load (&stop_state);
++        if (expected == STOP_STATE_SIGNALING) {
++            sched_yield ();
++            continue;
++        }
++        if (expected == STOP_STATE_FINALIZING ||
++            expected == STOP_STATE_FINISHED)
++            return;
++        if (atomic_compare_exchange_weak (&stop_state, &expected,
++                                          STOP_STATE_FINALIZING))
++            return;
++    }
++}
++
++void
++hev_socks5_tunnel_finish (void)
++{
++    atomic_store (&stop_state, STOP_STATE_FINISHED);
++}
++
+@@ -697,2 +759 @@ hev_socks5_tunnel_stop (void)
+-    int res = 0;
+-    int fd;
++    int expected;
+@@ -703,2 +764,6 @@ hev_socks5_tunnel_stop (void)
+-        fd = READ_ONCE (event_fds[1]);
+-        if (fd >= 0)
++        expected = atomic_load (&stop_state);
++        switch (expected) {
++        case STOP_STATE_IDLE:
++            if (atomic_compare_exchange_weak (&stop_state, &expected,
++                                              STOP_STATE_REQUESTED))
++                return;
+@@ -706,2 +771,23 @@ hev_socks5_tunnel_stop (void)
+-        /* Wait for async initialization */
+-        usleep (100 * 1000);
++        case STOP_STATE_READY:
++            if (atomic_compare_exchange_weak (&stop_state, &expected,
++                                              STOP_STATE_SIGNALING)) {
++                int value = 0;
++                int fd = READ_ONCE (event_fds[1]);
++                ssize_t res;
++
++                do {
++                    res = write (fd, &value, 1);
++                } while (res < 0 && errno == EINTR);
++                atomic_store (&stop_state, STOP_STATE_SIGNALLED);
++                if (res != 1)
++                    LOG_E ("socks5 tunnel write event");
++                return;
++            }
++            break;
++        case STOP_STATE_REQUESTED:
++        case STOP_STATE_SIGNALING:
++        case STOP_STATE_SIGNALLED:
++        case STOP_STATE_FINALIZING:
++        case STOP_STATE_FINISHED:
++            return;
++        }
+@@ -709,3 +794,0 @@ hev_socks5_tunnel_stop (void)
+-
+-    res = write (fd, &res, 1);
+-    assert (res > 0 && "socks5 tunnel write event");
+diff --git a/src/hev-socks5-tunnel.h b/src/hev-socks5-tunnel.h
+index 3086329..4ac2071 100644
+--- a/src/hev-socks5-tunnel.h
++++ b/src/hev-socks5-tunnel.h
+@@ -17,0 +18,6 @@ void hev_socks5_tunnel_fini (void);
++void hev_socks5_tunnel_prepare (void);
++void hev_socks5_tunnel_ensure_prepared (void);
++int hev_socks5_tunnel_mark_ready (void);
++void hev_socks5_tunnel_begin_finalize (void);
++void hev_socks5_tunnel_finish (void);
++

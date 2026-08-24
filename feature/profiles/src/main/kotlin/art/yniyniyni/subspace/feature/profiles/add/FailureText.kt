@@ -92,4 +92,5 @@ internal fun DetailField.labelRes(): Int =
         DetailField.YamlBody -> R.string.import_detail_field_yaml_body
         DetailField.Credential -> R.string.import_detail_field_credential
         DetailField.AlterId -> R.string.import_detail_field_alter_id
+        DetailField.Plugin -> R.string.import_detail_field_plugin
     }

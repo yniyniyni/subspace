@@ -5,6 +5,8 @@ import art.yniyniyni.subspace.core.network.di.AppVersion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -21,9 +23,28 @@ import javax.inject.Singleton
 import javax.net.ssl.SSLException
 
 private const val HTTP_NOT_FOUND = 404
+private const val HTTP_SUCCESS_FLOOR = 200
+private const val HTTP_SUCCESS_CEILING = 299
 private const val HTTP_CLIENT_ERROR_FLOOR = 400
 private const val HTTP_SERVER_ERROR_FLOOR = 500
+private const val MAX_REDIRECTS = 5
 private const val HEADER_TRUE = "true"
+
+private const val HTTP_MULTIPLE_CHOICES = 300
+private const val HTTP_MOVED_PERMANENTLY = 301
+private const val HTTP_FOUND = 302
+private const val HTTP_SEE_OTHER = 303
+private const val HTTP_TEMPORARY_REDIRECT = 307
+private const val HTTP_PERMANENT_REDIRECT = 308
+
+private val REDIRECT_STATUS_CODES = setOf(
+    HTTP_MULTIPLE_CHOICES,
+    HTTP_MOVED_PERMANENTLY,
+    HTTP_FOUND,
+    HTTP_SEE_OTHER,
+    HTTP_TEMPORARY_REDIRECT,
+    HTTP_PERMANENT_REDIRECT,
+)
 
 /** How long to wait before the single retry [SubscriptionFetcher.fetch] makes. */
 private const val RETRY_DELAY_MILLIS = 400L
@@ -61,6 +82,23 @@ private fun FetchOutcome.isWorthRetrying(): Boolean =
  */
 internal const val MAX_SUBSCRIPTION_BODY_BYTES = 2L * 1024 * 1024
 
+internal fun safeRedirectTarget(
+    currentUrl: HttpUrl,
+    location: String,
+    redirectsFollowed: Int,
+): HttpUrl? =
+    if (redirectsFollowed < MAX_REDIRECTS) {
+        currentUrl.resolve(location)?.takeIf { target ->
+            currentUrl.isHttps &&
+                target.isHttps &&
+                target.scheme == currentUrl.scheme &&
+                target.host == currentUrl.host &&
+                target.port == currentUrl.port
+        }
+    } else {
+        null
+    }
+
 /**
  * ARCHITECTURE.md §A.1's first pipeline stage.
  *
@@ -86,7 +124,10 @@ constructor(
     @param:AppVersion private val appVersion: String,
     private val deviceInfo: DeviceInfo = EmptyDeviceInfo,
 ) : SubscriptionSource {
-    private val baseClient = OkHttpClient.Builder().build()
+    private val baseClient = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
     /**
      * Fetches [request], retrying once if the connection died before any answer arrived. Always on
@@ -142,6 +183,7 @@ constructor(
                 .callTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .connectTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .readTimeout(request.timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .addInterceptor { chain -> chain.proceedWithSafeRedirects() }
                 .apply {
                     // Proxy.Type.HTTP, never SOCKS. Whether a Java SOCKS proxy resolves the
                     // hostname locally before connecting — which would leak it to the local
@@ -249,11 +291,44 @@ private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
 
         code >= HTTP_CLIENT_ERROR_FLOOR -> FetchOutcome.Failed(FetchFailure.ClientError)
 
-        else -> body.readBounded(MAX_SUBSCRIPTION_BODY_BYTES)
+        code in HTTP_SUCCESS_FLOOR..HTTP_SUCCESS_CEILING -> body.readBounded(MAX_SUBSCRIPTION_BODY_BYTES)
             ?.let { FetchOutcome.Success(it, headers) }
             ?: FetchOutcome.Failed(FetchFailure.ServerError)
+
+        else -> FetchOutcome.Failed(FetchFailure.ServerError)
     }
 }
+
+private fun Int.isRedirectStatus(): Boolean = this in REDIRECT_STATUS_CODES
+
+private fun Interceptor.Chain.proceedWithSafeRedirects(): Response {
+    var currentRequest = request()
+    var redirectsFollowed = 0
+    var response = proceed(currentRequest)
+
+    while (response.code.isRedirectStatus() && !response.hasHwidFailureMarker()) {
+        val target = response.header("location")?.let { location ->
+            safeRedirectTarget(
+                currentUrl = response.request.url,
+                location = location,
+                redirectsFollowed = redirectsFollowed,
+            )
+        } ?: break
+
+        response.close()
+        // Reusing the request retains subscription headers. This is safe only after the target
+        // has passed the HTTPS same-origin check above; no rejected target ever reaches proceed.
+        currentRequest = currentRequest.newBuilder().url(target).build()
+        redirectsFollowed++
+        response = proceed(currentRequest)
+    }
+
+    return response
+}
+
+private fun Response.hasHwidFailureMarker(): Boolean =
+    header("x-hwid-max-devices-reached").equals(HEADER_TRUE, ignoreCase = true) ||
+        header("x-hwid-not-supported").equals(HEADER_TRUE, ignoreCase = true)
 
 /**
  * This throwable's class name, plus its root cause's when that differs — never any message.

@@ -10,6 +10,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.channels.FileChannel
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -17,6 +18,7 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.nio.file.StandardOpenOption.WRITE
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -37,6 +39,7 @@ private const val COPY_BUFFER_BYTES = 64 * 1024
  * next 64 KiB operation. [afterChunk] exposes the real boundary for deterministic timeout tests.
  */
 internal class CooperativeRuleSetFileCopier(
+    private val afterCopy: suspend (source: File, target: File) -> Unit = { _, _ -> },
     private val afterChunk: suspend (copiedBytes: Long) -> Unit = {},
 ) {
     @Suppress("NestedBlockDepth") // Input, output, and chunk loop must share deterministic close scopes.
@@ -60,8 +63,19 @@ internal class CooperativeRuleSetFileCopier(
                 }
             }
         }
+        afterCopy(source, target)
     }
 }
+
+/** Forces one completed generation file to stable storage before publication may continue. */
+internal fun interface StableFileForcer {
+    fun force(file: File)
+}
+
+private val fileChannelForcer =
+    StableFileForcer { file ->
+        FileChannel.open(file.toPath(), WRITE).use { channel -> channel.force(true) }
+    }
 
 /**
  * Where one rule set's own geo databases live, generation by generation.
@@ -77,6 +91,7 @@ public class RuleSetAssets
 internal constructor(
     @GeoAssetRoot private val root: File,
     private val copier: CooperativeRuleSetFileCopier,
+    private val fileForcer: StableFileForcer = fileChannelForcer,
 ) : RuleSetAssetScope {
     @Inject
     internal constructor(
@@ -265,9 +280,13 @@ internal constructor(
         setId: Long,
         generation: Long,
         fileName: String,
+        expectedDigest: String? = null,
     ): Boolean =
         withContext(Dispatchers.IO) {
             requireValidAssetFileName(fileName)
+            require(expectedDigest == null || expectedDigest.isValidatedDigest()) {
+                "Expected digest must be lowercase SHA-256"
+            }
             val directory = generationDir(setId, generation)
             val data = File(directory, fileName)
             val metadata = validatedDigestFile(directory, fileName)
@@ -275,7 +294,10 @@ internal constructor(
             try {
                 if (!data.isFile) return@withContext false
                 val digest = data.sha256()
+                if (expectedDigest != null && digest != expectedDigest) return@withContext false
+                fileForcer.force(data)
                 temporary.writeText(digest)
+                fileForcer.force(temporary)
                 Files.move(temporary.toPath(), metadata.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
                 metadata.isFile
             } catch (_: IOException) {
@@ -287,6 +309,27 @@ internal constructor(
             }
         }
 
+    /**
+     * Copies one source generation file and records it only if the target retains the source digest.
+     *
+     * The source's Ready state is not accepted as proof: [validatedGenerationDigest] re-hashes its
+     * live bytes against its forced metadata first, then [recordValidatedFile] independently hashes
+     * the copied target before either target file may become publishable.
+     */
+    internal suspend fun copyValidatedFile(
+        sourceSetId: Long,
+        sourceGeneration: Long,
+        targetSetId: Long,
+        targetGeneration: Long,
+        fileName: String,
+    ): Boolean {
+        val expectedDigest = validatedGenerationDigest(sourceSetId, sourceGeneration, fileName) ?: return false
+        val source = File(generationDir(sourceSetId, sourceGeneration), fileName)
+        val target = File(generationDir(targetSetId, targetGeneration), fileName)
+        return copyLocally(source, target) &&
+            recordValidatedFile(targetSetId, targetGeneration, fileName, expectedDigest)
+    }
+
     /** Returns a live generation file only while its bytes match staged validation metadata. */
     internal suspend fun verifiedGenerationFile(
         setId: Long,
@@ -296,15 +339,27 @@ internal constructor(
         withContext(Dispatchers.IO) {
             requireValidAssetFileName(fileName)
             try {
-                val directory = generationDir(setId, generation)
-                val data = File(directory, fileName)
-                val expected = readValidatedDigest(directory, fileName) ?: return@withContext null
-                data.takeIf { it.isFile && it.sha256() == expected }
+                validatedGenerationDigest(setId, generation, fileName)?.let {
+                    File(generationDir(setId, generation), fileName)
+                }
             } catch (_: IOException) {
                 null
             } catch (_: SecurityException) {
                 null
             }
+        }
+
+    private suspend fun validatedGenerationDigest(
+        setId: Long,
+        generation: Long,
+        fileName: String,
+    ): String? =
+        withContext(Dispatchers.IO) {
+            requireValidAssetFileName(fileName)
+            val directory = generationDir(setId, generation)
+            val data = File(directory, fileName)
+            val expected = readValidatedDigest(directory, fileName) ?: return@withContext null
+            expected.takeIf { data.isFile && data.sha256() == expected }
         }
 
     /** Validates the set ID before deriving the only tree this class may delete. */
@@ -369,7 +424,7 @@ internal constructor(
         try {
             validatedDigestFile(generation, fileName)
                 .readText()
-                .takeIf { it.length == SHA_256_HEX_LENGTH && it.all { char -> char.isLowerHexDigit() } }
+                .takeIf { digest -> digest.isValidatedDigest() }
         } catch (_: IOException) {
             null
         } catch (_: SecurityException) {
@@ -392,6 +447,9 @@ internal constructor(
     }
 
     private fun Char.isLowerHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f'
+
+    private fun String.isValidatedDigest(): Boolean =
+        length == SHA_256_HEX_LENGTH && all { char -> char.isLowerHexDigit() }
 
     /**
      * Deletes [target] without following directory links, returning whether it was removed.

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import io.kotest.matchers.shouldBe
 import org.junit.Test
@@ -48,6 +49,51 @@ class TrojanLinkTest {
         security.serverName shouldBe "host.example"
         security.fingerprint shouldBe "chrome"
         security.allowInsecure shouldBe false
+    }
+
+    @Test
+    fun `websocket path and host survive parsing`() {
+        val result =
+            parseTrojanLink(
+                "trojan://pw@host.example:443?type=ws&path=%2Frpc&host=cdn.example#WS",
+                0,
+            ) as LinkResult.Ok
+        val transport = (result.profile.outbound as TrojanOutbound).stream.transport
+
+        transport shouldBe
+            TransportOptions.WebSocket(
+                path = "/rpc",
+                headers = mapOf("Host" to "cdn.example"),
+            )
+    }
+
+    @Test
+    fun `websocket preserves explicit empty path and host`() {
+        val result =
+            parseTrojanLink(
+                "trojan://pw@host.example:443?type=ws&path=&host=",
+                0,
+            ) as LinkResult.Ok
+        val transport = (result.profile.outbound as TrojanOutbound).stream.transport
+
+        transport shouldBe TransportOptions.WebSocket(path = "", headers = mapOf("Host" to ""))
+    }
+
+    @Test
+    fun `websocket distinguishes absent fields from explicit empty fields`() {
+        val result = parseTrojanLink("trojan://pw@host.example:443?type=ws", 0) as LinkResult.Ok
+        val transport = (result.profile.outbound as TrojanOutbound).stream.transport
+
+        transport shouldBe TransportOptions.WebSocket(path = "/", headers = emptyMap())
+    }
+
+    @Test
+    fun `grpc service name survives parsing including explicit empty`() {
+        val named = parseTrojanLink("trojan://pw@host.example:443?type=grpc&serviceName=ray", 0) as LinkResult.Ok
+        val empty = parseTrojanLink("trojan://pw@host.example:443?type=grpc&serviceName=", 0) as LinkResult.Ok
+
+        (named.profile.outbound as TrojanOutbound).stream.transport shouldBe TransportOptions.Grpc("ray")
+        (empty.profile.outbound as TrojanOutbound).stream.transport shouldBe TransportOptions.Grpc("")
     }
 
     @Test

@@ -3,7 +3,9 @@ package art.yniyniyni.subspace.core.data
 
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
+import art.yniyniyni.subspace.core.data.db.ProfileGroupEntity
 import art.yniyniyni.subspace.core.data.db.RoutingRuleSetEntity
+import art.yniyniyni.subspace.core.data.db.SubscriptionEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.data.testing.InMemoryRoutingStack
 import art.yniyniyni.subspace.core.model.DomainStrategy
@@ -700,3 +702,207 @@ class RoutingRepositoryTest {
         const val SAMPLE_LAST_UPDATED = 1_700_000_000L
     }
 }
+
+class RoutingRepositoryEditorSaveTest {
+    @Test
+    fun editingAnExistingRuleSetDoesNotRestoreAStaleGlobalProxySnapshot() = runTest {
+        val database = editorSaveDatabase()
+        try {
+            val seeded = seedLifecycleRow(database)
+            val repository = RoutingRepository(database.routingRuleSetDao())
+            val editorSnapshot = repository.ruleSet(seeded.id).shouldNotBeNull()
+
+            database.routingRuleSetDao().commitGeneration(
+                id = seeded.id,
+                directSites = seeded.entity.directSites,
+                directIps = seeded.entity.directIps,
+                proxySites = seeded.entity.proxySites,
+                proxyIps = seeded.entity.proxyIps,
+                blockSites = seeded.entity.blockSites,
+                blockIps = seeded.entity.blockIps,
+                routeOrder = seeded.entity.routeOrder,
+                domainStrategy = seeded.entity.domainStrategy,
+                globalProxy = true,
+                lastUpdated = seeded.entity.lastUpdated,
+                fingerprint = seeded.entity.fingerprint,
+                geoIpUrl = seeded.entity.geoIpUrl,
+                geoSiteUrl = seeded.entity.geoSiteUrl,
+                dnsJson = seeded.entity.dnsJson,
+                useChunkFiles = seeded.entity.useChunkFiles,
+                generation = seeded.entity.assetGeneration,
+            )
+
+            repository.upsert(
+                editorSnapshot.copy(
+                    buckets =
+                    editorSnapshot.buckets +
+                        (
+                            RouteOutcome.DIRECT to
+                                RuleBucket(
+                                    sites = listOf("domain:edited-after-import.test"),
+                                    ips = editorSnapshot.bucket(RouteOutcome.DIRECT).ips,
+                                )
+                            ),
+                ),
+            )
+
+            val stored = database.routingRuleSetDao().byId(seeded.id).shouldNotBeNull()
+            stored.globalProxy shouldBe true
+            stored.directSites shouldBe "domain:edited-after-import.test"
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun editingAnExistingRuleSetPreservesEveryLifecycleColumn() = runTest {
+        val database = editorSaveDatabase()
+        try {
+            val seeded = seedLifecycleRow(database)
+            val edited = editedRuleSet(seeded.id)
+            val repository = RoutingRepository(database.routingRuleSetDao())
+
+            repository.upsert(edited) shouldBe seeded.id
+
+            database.routingRuleSetDao().byId(seeded.id).shouldNotBeNull() shouldBe
+                seeded.entity.copy(
+                    id = seeded.id,
+                    name = edited.name,
+                    directSites = "domain:new-direct.test",
+                    directIps = "10.1.0.0/16",
+                    proxySites = "domain:new-proxy.test",
+                    proxyIps = "203.0.113.0/24",
+                    blockSites = "domain:new-block.test",
+                    blockIps = "2001:db8::/32",
+                    routeOrder = "PROXY,DIRECT,BLOCK",
+                    domainStrategy = DomainStrategy.AS_IS.name,
+                    globalProxy = false,
+                )
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun insertingANewManualRuleSetKeepsManualLifecycleDefaults() = runTest {
+        val database = editorSaveDatabase()
+        try {
+            val repository = RoutingRepository(database.routingRuleSetDao())
+
+            val id = repository.upsert(RoutingRuleSet(name = "manual"))
+
+            val stored = database.routingRuleSetDao().byId(id).shouldNotBeNull()
+            stored.sourceKind shouldBe null
+            stored.subscriptionId shouldBe null
+            stored.lastUpdated shouldBe null
+            stored.fingerprint shouldBe null
+            stored.geoIpUrl shouldBe null
+            stored.geoSiteUrl shouldBe null
+            stored.globalProxy shouldBe null
+            stored.dnsJson shouldBe null
+            stored.useChunkFiles shouldBe null
+            stored.assetGeneration shouldBe 0L
+            stored.assetState shouldBe RuleSetAssetState.None.name
+            stored.assetFailure shouldBe null
+        } finally {
+            database.close()
+        }
+    }
+}
+
+private data class SeededLifecycleRow(
+    val id: Long,
+    val entity: RoutingRuleSetEntity,
+)
+
+private suspend fun seedLifecycleRow(database: SubspaceDatabase): SeededLifecycleRow {
+    val subscriptionId = insertSubscription(database)
+    val entity = lifecycleEntity(subscriptionId)
+    return SeededLifecycleRow(database.routingRuleSetDao().insert(entity), entity)
+}
+
+private suspend fun insertSubscription(database: SubspaceDatabase): Long {
+    val groupId =
+        database.profileDao().insertGroup(
+            ProfileGroupEntity(
+                name = "Provider",
+                source = "SUBSCRIPTION",
+                position = 0,
+                createdAt = 11L,
+            ),
+        )
+    return database.subscriptionDao().insertSubscription(
+        SubscriptionEntity(
+            groupId = groupId,
+            url = "https://provider.example/subscription",
+            userAgentOverride = "ProviderClient/1",
+            hwidEnabled = true,
+            lastFetchedAt = 21L,
+            lastAttemptedAt = 22L,
+            lastFetchStatus = "NoServers",
+            lastFetchDetail = "EmptyBody",
+            createdAt = 12L,
+        ),
+    )
+}
+
+private fun lifecycleEntity(subscriptionId: Long): RoutingRuleSetEntity =
+    RoutingRuleSetEntity(
+        name = "provider routing",
+        directSites = "domain:old-direct.test",
+        directIps = "10.0.0.0/8",
+        proxySites = "domain:old-proxy.test",
+        proxyIps = "192.0.2.0/24",
+        blockSites = "domain:old-block.test",
+        blockIps = "198.51.100.0/24",
+        routeOrder = "BLOCK,PROXY,DIRECT",
+        domainStrategy = DomainStrategy.IP_IF_NON_MATCH.name,
+        createdAt = 31L,
+        sourceKind = RoutingSourceKind.Header.wireValue,
+        subscriptionId = subscriptionId,
+        lastUpdated = 1_700_000_123L,
+        fingerprint = "preserved-fingerprint",
+        geoIpUrl = "https://assets.example/geoip.dat",
+        geoSiteUrl = "https://assets.example/geosite.dat",
+        globalProxy = false,
+        dnsJson = "{\"FakeDNS\":\"true\"}",
+        useChunkFiles = true,
+        assetGeneration = 9L,
+        assetState = RuleSetAssetState.Failed.name,
+        assetFailure = RuleSetAssetFailure.TimedOut.name,
+    )
+
+private fun editedRuleSet(id: Long): RoutingRuleSet =
+    RoutingRuleSet(
+        id = id,
+        name = "edited routing",
+        buckets =
+        mapOf(
+            RouteOutcome.DIRECT to
+                RuleBucket(
+                    sites = listOf("domain:new-direct.test"),
+                    ips = listOf("10.1.0.0/16"),
+                ),
+            RouteOutcome.PROXY to
+                RuleBucket(
+                    sites = listOf("domain:new-proxy.test"),
+                    ips = listOf("203.0.113.0/24"),
+                ),
+            RouteOutcome.BLOCK to
+                RuleBucket(
+                    sites = listOf("domain:new-block.test"),
+                    ips = listOf("2001:db8::/32"),
+                ),
+        ),
+        order = listOf(RouteOutcome.PROXY, RouteOutcome.DIRECT, RouteOutcome.BLOCK),
+        domainStrategy = DomainStrategy.AS_IS,
+        globalProxy = false,
+    )
+
+private fun editorSaveDatabase(): SubspaceDatabase =
+    Room
+        .inMemoryDatabaseBuilder(
+            InstrumentationRegistry.getInstrumentation().targetContext,
+            SubspaceDatabase::class.java,
+        ).allowMainThreadQueries()
+        .build()

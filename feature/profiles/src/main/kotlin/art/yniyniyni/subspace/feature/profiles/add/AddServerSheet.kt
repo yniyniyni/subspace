@@ -139,21 +139,26 @@ private fun AddServerSheetBody(
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
             scope.launch {
-                viewModel.beginFileRead()
-                val text =
-                    try {
-                        withContext(Dispatchers.IO) {
-                            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                val owner = viewModel.beginFileRead()
+                var handedToImport = false
+                try {
+                    val text =
+                        try {
+                            withContext(Dispatchers.IO) {
+                                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                            }
+                        } catch (ignored: IOException) {
+                            null
+                        } catch (ignored: SecurityException) {
+                            null
                         }
-                    } catch (ignored: IOException) {
-                        null
-                    } catch (ignored: SecurityException) {
-                        null
+                    if (text != null) {
+                        handedToImport = viewModel.import(text, owner)
+                    } else {
+                        viewModel.reportFileReadFailure(owner)
                     }
-                if (text != null) {
-                    viewModel.import(text)
-                } else {
-                    viewModel.reportFileReadFailure()
+                } finally {
+                    if (!handedToImport) viewModel.cancelFileRead(owner)
                 }
             }
         }

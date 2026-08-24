@@ -9,6 +9,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -198,6 +199,121 @@ class SubscriptionFetcherTest {
 
         server.enqueue(MockResponse(code = 502))
         fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.ServerError)
+    }
+
+    @Test
+    fun `300 without a location is a server failure`() = runTest {
+        server.enqueue(MockResponse(code = 300))
+
+        fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.ServerError)
+    }
+
+    @Test
+    fun `304 is a server failure rather than a successful empty subscription`() = runTest {
+        server.enqueue(MockResponse(code = 304))
+
+        fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.ServerError)
+    }
+
+    @Test
+    fun `a rejected cross-origin redirect sends no subscription headers to the target`() = runTest {
+        MockWebServer().use { otherOrigin ->
+            otherOrigin.start()
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(302)
+                    .addHeader("Location", otherOrigin.url("/redirected"))
+                    .build(),
+            )
+            otherOrigin.enqueue(MockResponse(code = 200, body = "must-not-be-fetched"))
+
+            val outcome = fetcher().fetch(
+                request().copy(userAgentOverride = "ProviderSpecific/secret"),
+            )
+
+            outcome shouldBe FetchOutcome.Failed(FetchFailure.ServerError)
+            server.requestCount shouldBe 1
+            // No second request means neither x-hwid nor the provider-specific User-Agent can be
+            // forwarded to the redirect target.
+            otherOrigin.requestCount shouldBe 0
+        }
+    }
+
+    @Test
+    fun `a same-origin relative redirect from an insecure source sends no second request`() = runTest {
+        server.enqueue(
+            MockResponse.Builder()
+                .code(302)
+                .addHeader("Location", "/redirected")
+                .build(),
+        )
+        server.enqueue(MockResponse(code = 200, body = "must-not-be-fetched"))
+
+        fetcher().fetch(request()) shouldBe FetchOutcome.Failed(FetchFailure.ServerError)
+        server.requestCount shouldBe 1
+    }
+
+    @Test
+    fun `redirect decision allows a relative target on the same HTTPS origin`() {
+        safeRedirectTarget(
+            currentUrl = "https://subscriptions.example/base/list".toHttpUrl(),
+            location = "../next?format=vless",
+            redirectsFollowed = 0,
+        ) shouldBe "https://subscriptions.example/next?format=vless".toHttpUrl()
+    }
+
+    @Test
+    fun `redirect decision treats an explicit default port as the same HTTPS origin`() {
+        safeRedirectTarget(
+            currentUrl = "https://subscriptions.example/list".toHttpUrl(),
+            location = "https://subscriptions.example:443/next",
+            redirectsFollowed = 0,
+        ) shouldBe "https://subscriptions.example/next".toHttpUrl()
+    }
+
+    @Test
+    fun `redirect decision rejects HTTPS downgrade`() {
+        safeRedirectTarget(
+            currentUrl = "https://subscriptions.example/list".toHttpUrl(),
+            location = "http://subscriptions.example/next",
+            redirectsFollowed = 0,
+        ) shouldBe null
+    }
+
+    @Test
+    fun `redirect decision rejects a different host`() {
+        safeRedirectTarget(
+            currentUrl = "https://subscriptions.example/list".toHttpUrl(),
+            location = "https://redirect.example/next",
+            redirectsFollowed = 0,
+        ) shouldBe null
+    }
+
+    @Test
+    fun `redirect decision rejects a different effective port`() {
+        safeRedirectTarget(
+            currentUrl = "https://subscriptions.example/list".toHttpUrl(),
+            location = "https://subscriptions.example:444/next",
+            redirectsFollowed = 0,
+        ) shouldBe null
+    }
+
+    @Test
+    fun `redirect decision rejects a relative target from an insecure origin`() {
+        safeRedirectTarget(
+            currentUrl = "http://subscriptions.example/list".toHttpUrl(),
+            location = "/next",
+            redirectsFollowed = 0,
+        ) shouldBe null
+    }
+
+    @Test
+    fun `redirect decision allows five hops and rejects a sixth`() {
+        val current = "https://subscriptions.example/list".toHttpUrl()
+
+        safeRedirectTarget(current, "/fifth", redirectsFollowed = 4) shouldBe
+            "https://subscriptions.example/fifth".toHttpUrl()
+        safeRedirectTarget(current, "/sixth", redirectsFollowed = 5) shouldBe null
     }
 
     @Test

@@ -2,7 +2,6 @@
 package art.yniyniyni.subspace.service;
 
 import art.yniyniyni.subspace.service.ConnectionStateParcel;
-import art.yniyniyni.subspace.service.ProfileParcel;
 import art.yniyniyni.subspace.service.ITunnelCallback;
 import art.yniyniyni.subspace.service.ILatencyCallback;
 import art.yniyniyni.subspace.service.LatencyOptionsParcel;
@@ -15,13 +14,10 @@ import art.yniyniyni.subspace.service.LatencyOptionsParcel;
  * consistent crosses here or through Room — never through a shared reference.
  */
 interface ITunnelService {
-    void connect(in ProfileParcel profile);
-
     /**
-     * `oneway` deliberately. Teardown joins the tun2socks worker and stops the
-     * Go core; hev's quit can busy-wait (docs/agent/research/hev-api.md §4). A
-     * synchronous binder call would charge all of that to the caller's UI
-     * thread, which is exactly the freeze §5.3 forbids.
+     * `oneway` deliberately. The Binder method only enqueues into the service's
+     * serial coordinator; teardown joins the tun2socks worker and stops the Go
+     * core from that consumer, never from the caller's UI thread (§5.3).
      */
     oneway void disconnect();
 

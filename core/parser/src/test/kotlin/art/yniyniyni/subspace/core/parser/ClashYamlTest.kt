@@ -20,6 +20,7 @@ private const val VMESS_BODY =
         "NDhjNS1iMmY0LTRhMWUtOWYzZC0wMTIzNDU2Nzg5YWIiLCJhaWQiOiIwIiwic2N5IjoiYXV0byIsIm5ldCI6InRjcCJ9"
 private const val VMESS_LINK = "vmess://$VMESS_BODY"
 
+@Suppress("LargeClass")
 class ClashYamlTest {
     private val config =
         """
@@ -569,6 +570,87 @@ class ClashYamlTest {
 
         (outbound.stream.security as Security.Tls).serverName shouldBe "plain.example.com"
         outbound.stream.transport shouldBe TransportOptions.None
+    }
+
+    @Test
+    fun `vless with tls false and no reality material imports without security`() {
+        val yaml =
+            """
+            proxies:
+              - name: Plain
+                type: vless
+                server: 198.51.100.8
+                port: 8443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000002
+                tls: false
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.failures shouldBe emptyList()
+        (outcome.profiles.single().outbound as VlessOutbound).stream.security shouldBe Security.None
+    }
+
+    @Test
+    fun `vless with tls false and reality material is rejected without importing a profile`() {
+        val yaml =
+            """
+            proxies:
+              - name: Conflicted
+                type: vless
+                server: 198.51.100.15
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000007
+                tls: false
+                reality-opts:
+                  public-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.profiles shouldBe emptyList()
+        outcome.failures.single().detail shouldBe FailureDetail.Unsupported(DetailField.Security)
+    }
+
+    @Test
+    fun `vless with an unrecognized tls scalar is rejected without importing a profile`() {
+        val yaml =
+            """
+            proxies:
+              - name: Ambiguous
+                type: vless
+                server: 198.51.100.16
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000008
+                tls: bogus
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.profiles shouldBe emptyList()
+        outcome.failures.single().detail shouldBe FailureDetail.Unsupported(DetailField.Security)
+    }
+
+    @Test
+    fun `vless with a non-scalar tls value and reality material is rejected without importing a profile`() {
+        val yaml =
+            """
+            proxies:
+              - name: Ambiguous
+                type: vless
+                server: 198.51.100.17
+                port: 443
+                uuid: 8f2c4a1e-0000-4000-8000-000000000009
+                tls:
+                  enabled: true
+                reality-opts:
+                  public-key: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
+            """.trimIndent()
+
+        val outcome = parseClashYaml(yaml)
+
+        outcome.profiles shouldBe emptyList()
+        outcome.failures.single().detail shouldBe FailureDetail.Unsupported(DetailField.Security)
     }
 
     @Test

@@ -1,13 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 package art.yniyniyni.subspace
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.os.SystemClock
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.platform.app.InstrumentationRegistry
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Test
 import java.util.Base64
 
@@ -22,9 +31,6 @@ import java.util.Base64
  * `ImportReviewSheetTest`'s subject, and driving the whole navigation graph
  * here would make a filter regression fail as a Compose-finder error.
  *
- * **Not run in this environment** — no Android device or emulator is reachable
- * here. Compiled and left for a `connectedDebugAndroidTest` pass.
- *
  * camelCase test names throughout, same DEX-040 constraint every other
  * instrumented test in this repo documents.
  */
@@ -37,20 +43,6 @@ class RoutingDeeplinkTest {
             scenario.awaitEnteredImportPipeline(FIRST_LINK)
         }
     }
-
-    // `onNewIntent` under singleTop is deliberately NOT tested here.
-    //
-    // ActivityScenario cannot model an activity that re-enters itself: driving
-    // the override directly through Instrumentation.callActivityOnNewIntent
-    // bypasses its lifecycle bookkeeping, and starting the intent from the
-    // activity leaves its tracked instance stuck at PAUSED. Both produce a test
-    // that asserts correctly and then fails for 45 s in close().
-    //
-    // It is verified on hardware instead, and was: with the first review sheet
-    // open, a second `subspace://routing/add/...` delivered by `adb shell am
-    // start` replaced the sheet's contents with the second profile rather than
-    // being dropped. Recorded as a device-checklist row in
-    // docs/agent/research/2026-08-20-m6-device-verification.md.
 
     // subspace:// is registered alongside happ:// and costs one manifest line;
     // a filter that silently covers only one scheme is the failure this pins.
@@ -70,6 +62,45 @@ class RoutingDeeplinkTest {
             scenario.onActivity { activity ->
                 activity.pendingRoutingImport.link.value shouldBe null
             }
+        }
+    }
+
+    @Test
+    fun recreationDoesNotReplayConsumedLaunchIntentButOnNewIntentDoes() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val first =
+            instrumentation.startActivitySync(
+                viewIntent(FIRST_LINK).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            ) as MainActivity
+        first.pendingRoutingImport.consume(FIRST_LINK)
+        val offers = Channel<String>(Channel.UNLIMITED)
+        val collector = launch { first.pendingRoutingImport.link.filterNotNull().collect(offers::send) }
+        val application = context.applicationContext as Application
+        val recreationObserver = MainActivityRecreationObserver(first)
+        application.registerActivityLifecycleCallbacks(recreationObserver)
+
+        try {
+            instrumentation.runOnMainSync(first::recreate)
+            val recreated =
+                checkNotNull(withTimeoutOrNull(PIPELINE_TIMEOUT_MILLIS) { recreationObserver.resumed.receive() }) {
+                    "MainActivity did not resume after recreation"
+                }
+            withTimeoutOrNull(NO_REPLAY_WINDOW_MILLIS) { offers.receive() } shouldBe null
+
+            context.startActivity(
+                viewIntent(FIRST_LINK).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+            withTimeoutOrNull(PIPELINE_TIMEOUT_MILLIS) { offers.receive() } shouldBe FIRST_LINK
+
+            recreated.pendingRoutingImport.consume(FIRST_LINK)
+            context.startActivity(
+                viewIntent(FIRST_LINK).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+            withTimeoutOrNull(PIPELINE_TIMEOUT_MILLIS) { offers.receive() } shouldBe FIRST_LINK
+            instrumentation.runOnMainSync(recreated::finish)
+        } finally {
+            application.unregisterActivityLifecycleCallbacks(recreationObserver)
+            collector.cancel()
         }
     }
 
@@ -106,6 +137,7 @@ class RoutingDeeplinkTest {
     private companion object {
         const val PIPELINE_TIMEOUT_MILLIS = 5_000L
         const val POLL_INTERVAL_MILLIS = 50L
+        const val NO_REPLAY_WINDOW_MILLIS = 500L
 
         // §5.6: a test fixture, not a user's routing table — no real domain here.
         const val FIRST_PROFILE = """{"Name":"FirstProfile","DirectSites":["domain:first.example"]}"""
@@ -115,5 +147,33 @@ class RoutingDeeplinkTest {
             Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
 
         val FIRST_LINK = "happ://routing/add/" + encode(FIRST_PROFILE)
+    }
+
+    private class MainActivityRecreationObserver(
+        private val previous: MainActivity,
+    ) : Application.ActivityLifecycleCallbacks {
+        val resumed = Channel<MainActivity>(capacity = 1)
+
+        override fun onActivityResumed(activity: Activity) {
+            if (activity is MainActivity && activity !== previous) resumed.trySend(activity)
+        }
+
+        override fun onActivityCreated(
+            activity: Activity,
+            savedInstanceState: Bundle?,
+        ) = Unit
+
+        override fun onActivityStarted(activity: Activity) = Unit
+
+        override fun onActivityPaused(activity: Activity) = Unit
+
+        override fun onActivityStopped(activity: Activity) = Unit
+
+        override fun onActivitySaveInstanceState(
+            activity: Activity,
+            outState: Bundle,
+        ) = Unit
+
+        override fun onActivityDestroyed(activity: Activity) = Unit
     }
 }

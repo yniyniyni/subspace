@@ -168,7 +168,7 @@ internal constructor(
                 ProfileGroup(
                     id = group.id,
                     name = group.name,
-                    profiles = profilesByGroup[group.id].orEmpty().map { it.toStoredProfile() },
+                    profiles = profilesByGroup[group.id].orEmpty().mapNotNull { it.toStoredProfile() },
                 )
             }
         }
@@ -315,7 +315,7 @@ internal constructor(
      * longer exists.
      *
      * @return `false` if [ProfileEntity]'s unique `(groupId, identityHash)` index (§4.2)
-     *   already holds an identical outbound in [toGroupId] — [ProfileDao.updateProfile]'s
+     *   already holds an identical outbound in [toGroupId] — [ProfileDao.moveProfile]'s
      *   default `ABORT` conflict strategy throws [SQLiteConstraintException] rather than
      *   silently dropping the write, and that exception carries this table's column values
      *   in its message, so it is caught and turned into a plain `false` here rather than
@@ -337,9 +337,8 @@ internal constructor(
         profileId: Long,
         toGroupId: Long,
     ): Boolean {
-        val existing = dao.profile(profileId) ?: return true
         return try {
-            dao.updateProfile(existing.copy(groupId = toGroupId))
+            dao.moveProfile(profileId, toGroupId)
             true
         } catch (ignored: SQLiteConstraintException) {
             false
@@ -350,10 +349,7 @@ internal constructor(
     public suspend fun rename(
         profileId: Long,
         name: String,
-    ) {
-        val existing = dao.profile(profileId) ?: return
-        dao.updateProfile(existing.copy(name = name))
-    }
+    ): Unit = dao.renameProfile(profileId, name)
 
     /**
      * Rewrites a `TYPED` profile's name and whole [outbound] in place, recomputing every
@@ -372,7 +368,7 @@ internal constructor(
      * @return `false` if the recomputed [identityHash] collides with another profile
      *   already in this profile's group — [ProfileEntity]'s unique `(groupId,
      *   identityHash)` index (§4.2) makes that a real possibility (editing a profile's
-     *   outbound until it matches a sibling's), and [ProfileDao.updateProfile]'s `ABORT`
+     *   outbound until it matches a sibling's), and [ProfileDao.updateTypedProfile]'s `ABORT`
      *   conflict strategy throws [SQLiteConstraintException] rather than silently
      *   dropping the write. That exception can quote this table's column values, so it is
      *   caught here and turned into a plain `false` rather than let propagate past
@@ -384,18 +380,16 @@ internal constructor(
         name: String,
         outbound: Outbound,
     ): Boolean {
-        val existing = dao.profile(profileId) ?: return true
         return try {
-            dao.updateProfile(
-                existing.copy(
-                    name = name,
-                    protocol = outbound.protocolName(),
-                    address = outbound.address,
-                    port = outbound.port,
-                    transport = outbound.transportSummary(),
-                    outbound = outbound.toJson(),
-                    identityHash = identityHashOf(outbound, ProfileKind.TYPED),
-                ),
+            dao.updateTypedProfile(
+                id = profileId,
+                name = name,
+                protocol = outbound.protocolName(),
+                address = outbound.address,
+                port = outbound.port,
+                transport = outbound.transportSummary(),
+                outbound = outbound.toJson(),
+                identityHash = identityHashOf(outbound, ProfileKind.TYPED),
             )
             true
         } catch (ignored: SQLiteConstraintException) {
@@ -429,11 +423,14 @@ internal constructor(
         redactedDetail: String,
     ): Unit = dao.recordError(profileId, redactedDetail)
 
-    private fun ProfileEntity.toStoredProfile(): StoredProfile =
-        StoredProfile(
+    private fun ProfileEntity.toStoredProfile(): StoredProfile? {
+        // Decode the discriminator first. A row with an unknown kind is corrupt, and returning
+        // here ensures no other persisted column — including outbound JSON — is parsed or guessed.
+        val decodedKind = decodeProfileKind(kind) ?: return null
+        return StoredProfile(
             id = id,
             groupId = groupId,
-            kind = ProfileKind.valueOf(kind),
+            kind = decodedKind,
             name = name,
             protocol = protocol,
             address = address,
@@ -445,7 +442,11 @@ internal constructor(
             lastError = lastError,
             droppedFromSubscriptionAt = droppedFromSubscriptionAt,
         )
+    }
 }
+
+private fun decodeProfileKind(value: String): ProfileKind? =
+    ProfileKind.entries.firstOrNull { it.name == value }
 
 /**
  * The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`).

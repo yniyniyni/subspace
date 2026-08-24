@@ -138,7 +138,7 @@ class DirectiveRegistryTest {
      * without the user approving it, in a UI that shows them what they are
      * approving. `routing` earns it through M6's import review sheet (spec §6).
      */
-    @Suppress("VariableNaming")
+    @Suppress("VariableNaming", "ktlint:standard:property-naming")
     private val CONFIRMED_DANGEROUS_KEYS = setOf("routing")
 
     @Test

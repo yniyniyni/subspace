@@ -432,11 +432,40 @@ class ImportViewModelTest {
     fun `reportFileReadFailure surfaces a visible failure and leaves busy false`() =
         runTest {
             val viewModel = ImportViewModel(FakeProfileSource())
-            viewModel.beginFileRead()
+            val owner = viewModel.beginFileRead()
 
-            viewModel.reportFileReadFailure()
+            viewModel.reportFileReadFailure(owner)
 
             viewModel.state.value.fileReadFailed shouldBe true
+            viewModel.state.value.busy shouldBe false
+        }
+
+    @Test
+    fun `cancelling a file read clears busy without fabricating an outcome`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val owner = viewModel.beginFileRead()
+
+            viewModel.cancelFileRead(owner)
+
+            viewModel.state.value.busy shouldBe false
+            viewModel.state.value.completed shouldBe false
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.failures.shouldBeEmpty()
+            viewModel.state.value.fileReadFailed shouldBe false
+        }
+
+    @Test
+    fun `a stale file read cancellation cannot clear a newer read busy state`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val staleOwner = viewModel.beginFileRead()
+            val currentOwner = viewModel.beginFileRead()
+
+            viewModel.cancelFileRead(staleOwner)
+
+            viewModel.state.value.busy shouldBe true
+            viewModel.cancelFileRead(currentOwner)
             viewModel.state.value.busy shouldBe false
         }
 

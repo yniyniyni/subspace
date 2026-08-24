@@ -31,7 +31,9 @@ internal fun parseVlessLink(
     }
 
     val security =
-        when (uri.query["security"]) {
+        when (uri.query["security"]?.lowercase()) {
+            null, "none" -> Security.None
+
             "reality" -> {
                 val pbk = uri.query["pbk"].orEmpty()
                 validateRealityPublicKey(pbk)?.let {
@@ -41,7 +43,14 @@ internal fun parseVlessLink(
             }
 
             "tls" -> buildTls(uri)
-            else -> Security.None
+            else ->
+                return LinkResult.Bad(
+                    parseFailure(
+                        index,
+                        ParseFailureReason.MalformedUri,
+                        FailureDetail.Unsupported(DetailField.Security),
+                    ),
+                )
         }
 
     val network = uri.query["type"]?.takeIf { it.isNotBlank() } ?: "tcp"

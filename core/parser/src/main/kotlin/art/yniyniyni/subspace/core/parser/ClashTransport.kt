@@ -16,6 +16,17 @@ import com.charleskorn.kaml.YamlScalar
 internal fun transportOptions(
     proxy: YamlMap,
     network: String,
+): TransportOptions = transportOptions(proxy, network, preserveExplicitEmpty = false)
+
+internal fun transportOptionsPreservingEmpty(
+    proxy: YamlMap,
+    network: String,
+): TransportOptions = transportOptions(proxy, network, preserveExplicitEmpty = true)
+
+private fun transportOptions(
+    proxy: YamlMap,
+    network: String,
+    preserveExplicitEmpty: Boolean,
 ): TransportOptions =
     when (network) {
         "ws" -> {
@@ -27,13 +38,21 @@ internal fun transportOptions(
                         (value as? YamlScalar)?.content?.let { key.content to it }
                     }?.toMap()
                     .orEmpty()
-            TransportOptions.WebSocket(path = opts?.text("path") ?: "/", headers = headers)
+            val path = opts?.transportText("path", preserveExplicitEmpty) ?: "/"
+            TransportOptions.WebSocket(path = path, headers = headers)
         }
 
         "grpc" -> {
-            val name = (proxy.node("grpc-opts") as? YamlMap)?.text("grpc-service-name")
+            val name =
+                (proxy.node("grpc-opts") as? YamlMap)
+                    ?.transportText("grpc-service-name", preserveExplicitEmpty)
             if (name == null) TransportOptions.None else TransportOptions.Grpc(name)
         }
 
         else -> TransportOptions.None
     }
+
+private fun YamlMap.transportText(
+    key: String,
+    preserveExplicitEmpty: Boolean,
+): String? = if (preserveExplicitEmpty) (node(key) as? YamlScalar)?.content else text(key)

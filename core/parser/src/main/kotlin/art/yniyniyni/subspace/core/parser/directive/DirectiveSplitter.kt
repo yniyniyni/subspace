@@ -90,6 +90,10 @@ private fun asRoutingLinkDirective(trimmed: String): RawDirective? {
     return if (matches) RawDirective("routing", trimmed.trimEnd(), DirectiveSource.BodyLine) else null
 }
 
+// ReturnCount: the routing-link form and the `#key:` form are two distinct
+// recognitions of the same line, each with its own early exit. Nesting them
+// would hide that a line matching neither stays in the body.
+
 /**
  * `#key: value` at the start of a line, or null.
  *
@@ -97,9 +101,6 @@ private fun asRoutingLinkDirective(trimmed: String): RawDirective? {
  * (`vless://…#My%20Server`) and consuming it would destroy the server's name.
  * A `#` with no colon after it is an ordinary comment and stays in the body.
  */
-// ReturnCount: the routing-link form and the `#key:` form are two distinct
-// recognitions of the same line, each with its own early exit. Nesting them
-// would hide that a line matching neither stays in the body.
 @Suppress("ReturnCount")
 private fun String.asBodyDirective(): RawDirective? {
     val trimmed = trimStart()

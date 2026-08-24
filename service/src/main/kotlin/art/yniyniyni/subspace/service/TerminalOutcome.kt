@@ -83,27 +83,60 @@ internal class TerminalOutcome(
      * take the tunnel down (§10.4); [ConnectionRecorder] already owns that, and cancellation
      * propagates rather than being mistaken for a failed write.
      *
-     * @return `true` if the transition committed, `false` if [gen] had already been
-     *   superseded — in which case neither [lifecycle] nor [persist] ran, and the caller must
-     *   abandon its sequence immediately. There is no outcome to record for a generation that
-     *   no longer owns the tunnel: the generation that superseded it publishes its own.
+     * @return [TerminalSettlement.Committed] if the transition committed,
+     *   [TerminalSettlement.Superseded] if [gen] no longer owns the tunnel, or
+     *   [TerminalSettlement.LifecycleRejected] if foreground lifecycle could not be
+     *   established. Neither non-committed outcome publishes or persists [state].
      */
     suspend fun settle(
         gen: Int,
         state: ConnectionState,
-        lifecycle: () -> Unit,
+        lifecycle: () -> Boolean,
         persist: suspend () -> Unit,
-    ): Boolean {
-        synchronized(lock) {
-            if (gen != currentGeneration()) return false
-            // Lifecycle first, then publication: the state the UI is told about must
-            // already be true of the service when it hears it.
-            lifecycle()
-            publish(state)
+    ): TerminalSettlement {
+        val settlement =
+            synchronized(lock) {
+                when {
+                    gen != currentGeneration() -> TerminalSettlement.Superseded
+                    !lifecycle() -> TerminalSettlement.LifecycleRejected
+                    else -> {
+                        // Lifecycle first, then publication: the state the UI is
+                        // told about must already be true when it hears it.
+                        publish(state)
+                        TerminalSettlement.Committed
+                    }
+                }
+            }
+        if (settlement != TerminalSettlement.Committed) {
+            return settlement
         }
         // Past this line nothing may mutate lifecycle for `gen`. A teardown or a newer
         // start can and will run during this suspension, and it owns the service now.
         persist()
-        return true
+        return settlement
     }
+}
+
+/** Runs terminal cleanup exactly when [TerminalOutcome.settle] rejects lifecycle establishment. */
+internal suspend fun TerminalOutcome.settleHandlingLifecycleRejection(
+    gen: Int,
+    state: ConnectionState,
+    lifecycle: () -> Boolean,
+    persist: suspend () -> Unit,
+    onLifecycleRejected: suspend () -> Unit,
+): TerminalSettlement {
+    val settlement = settle(gen, state, lifecycle, persist)
+    if (settlement == TerminalSettlement.LifecycleRejected) {
+        onLifecycleRejected()
+    }
+    return settlement
+}
+
+/** The closed result of attempting to settle one start generation. */
+internal sealed interface TerminalSettlement {
+    data object Committed : TerminalSettlement
+
+    data object Superseded : TerminalSettlement
+
+    data object LifecycleRejected : TerminalSettlement
 }

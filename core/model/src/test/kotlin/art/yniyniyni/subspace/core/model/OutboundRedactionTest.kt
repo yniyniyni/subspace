@@ -117,4 +117,76 @@ class OutboundRedactionTest {
         message shouldNotContain "secret-host-foxtrot.example.net"
         message shouldNotContain "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     }
+
+    @Test
+    fun `interpolating a vless outbound exposes stream shape without nested secrets`() {
+        val reality =
+            Security.Reality(
+                serverName = "TASK4_REALITY_SERVER_NAME_SECRET.example",
+                publicKey = "TASK4_REALITY_PUBLIC_KEY_SECRET",
+                shortId = "TASK4_REALITY_SHORT_ID_SECRET",
+                fingerprint = "TASK4_REALITY_FINGERPRINT_SECRET",
+                spiderX = "/TASK4_REALITY_SPIDER_X_SECRET",
+            )
+        val webSocketHeaders =
+            mapOf(
+                "TASK4_WEBSOCKET_HEADER_NAME_SECRET" to
+                    "TASK4_WEBSOCKET_HEADER_VALUE_SECRET",
+            )
+        val webSocket =
+            TransportOptions.WebSocket(
+                path = "/TASK4_WEBSOCKET_PATH_SECRET",
+                headers = webSocketHeaders,
+            )
+        val stream =
+            StreamSettings(
+                network = "ws",
+                security = reality,
+                transport = webSocket,
+            )
+        val outbound =
+            VlessOutbound(
+                address = "secret-host-golf.example.net",
+                port = 443,
+                uuid = "12121212-3434-5656-7878-909090909090",
+                flow = "xtls-rprx-vision",
+                stream = stream,
+            )
+
+        val message = "could not connect to $outbound"
+
+        message shouldNotContain "TASK4_REALITY_SERVER_NAME_SECRET.example"
+        message shouldNotContain "TASK4_REALITY_PUBLIC_KEY_SECRET"
+        message shouldNotContain "TASK4_REALITY_SHORT_ID_SECRET"
+        message shouldNotContain "TASK4_REALITY_FINGERPRINT_SECRET"
+        message shouldNotContain "/TASK4_REALITY_SPIDER_X_SECRET"
+        message shouldNotContain "/TASK4_WEBSOCKET_PATH_SECRET"
+        message shouldNotContain "TASK4_WEBSOCKET_HEADER_NAME_SECRET"
+        message shouldNotContain "TASK4_WEBSOCKET_HEADER_VALUE_SECRET"
+        message shouldContain "network=ws"
+        message shouldContain "security=Reality"
+        message shouldContain "transport=WebSocket"
+    }
+
+    @Test
+    fun `interpolating an outbound renders an unknown network without its value`() {
+        val stream =
+            StreamSettings(
+                network = "TASK4_UNKNOWN_NETWORK_VALUE_SECRET",
+                security = Security.None,
+            )
+        val outbound =
+            VlessOutbound(
+                address = "secret-host-hotel.example.net",
+                port = 443,
+                uuid = "23232323-4545-6767-8989-010101010101",
+                flow = null,
+                stream = stream,
+            )
+
+        val message = "could not connect to $outbound"
+
+        message shouldNotContain "TASK4_UNKNOWN_NETWORK_VALUE_SECRET"
+        message shouldContain "network=Unknown"
+    }
 }

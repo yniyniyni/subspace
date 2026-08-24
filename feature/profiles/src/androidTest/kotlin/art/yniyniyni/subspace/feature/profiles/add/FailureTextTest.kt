@@ -93,6 +93,26 @@ class FailureTextTest {
     }
 
     @Test
+    fun unsupportedPluginUsesOnlyTheBoundedFieldLabel() {
+        val failure =
+            parseFailure(
+                0,
+                ParseFailureReason.UnsupportedMethod,
+                FailureDetail.Unsupported(DetailField.Plugin),
+            )
+        var rendered = ""
+
+        composeRule.setContent {
+            rendered = failureText(failure)
+        }
+        composeRule.waitForIdle()
+
+        rendered shouldBe "Entry 1: Plugin is not supported"
+        rendered shouldNotContain "v2ray-plugin"
+        rendered shouldNotContain "plugin-opts"
+    }
+
+    @Test
     fun theEntryNumberShownIsOneBasedNotTheRawZeroBasedIndex() {
         // ParseFailure.index is 0-based (its own KDoc); a user reading "Entry
         // 0 failed" for the very first line would be confusing, so the

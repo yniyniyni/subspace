@@ -99,7 +99,11 @@ internal constructor(
         /** Meaningful content changed and passed the timestamp gate. */
         Changed,
 
-        /** The fingerprint is identical; callers must perform no later write or download. */
+        /**
+         * The fingerprint is identical: no rule-row, download, generation, or asset-file write.
+         *
+         * The importing verb may still update the separate active-rule-set setting.
+         */
         Unchanged,
 
         /** Meaningful content changed but its timestamp is not strictly newer. */
@@ -138,7 +142,13 @@ internal constructor(
      */
     public suspend fun ruleSetNamed(name: String): RoutingRuleSet? = dao.byName(name)?.toModel()
 
-    /** Inserts or updates under the same name lifecycle used by profile imports. */
+    /**
+     * Inserts a new manual row or updates only its editor-owned routing fields.
+     *
+     * On an existing id/name, [RoutingRuleSetDao.upsertByIdOrName] preserves
+     * imported provenance and asset lifecycle instead of replacing the full
+     * Room row with this model's deliberately narrower snapshot.
+     */
     public suspend fun upsert(set: RoutingRuleSet): Long {
         set.requireValidEntries()
         if (set.id == 0L) {

@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.IBinder
+import android.os.Message
+import android.os.Messenger
 import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
@@ -62,6 +64,31 @@ private const val TUN_PREFIX_V6 = 126
 private const val TUN_MTU = 8500
 private const val DNS_SERVER = "1.1.1.1"
 
+/** Decodes only this service's explicit connect request without exposing/logging its payload. */
+@Suppress("DEPRECATION")
+internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
+    if (intent?.action != ACTION_CONNECT) return null
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        intent.getParcelableExtra(EXTRA_PROFILE, ProfileParcel::class.java)
+    } else {
+        intent.getParcelableExtra(EXTRA_PROFILE)
+    }
+}
+
+/** Returns the same-UID debug-test callback only; release builds ignore this extra. */
+@Suppress("DEPRECATION")
+internal fun testConnectObserverFrom(
+    intent: Intent?,
+    debuggable: Boolean,
+): Messenger? {
+    if (!debuggable || intent?.action != ACTION_CONNECT) return null
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        intent.getParcelableExtra(EXTRA_TEST_CONNECT_OBSERVER, Messenger::class.java)
+    } else {
+        intent.getParcelableExtra(EXTRA_TEST_CONNECT_OBSERVER)
+    }
+}
+
 /**
  * Owns the tunnel.
  *
@@ -71,9 +98,11 @@ private const val DNS_SERVER = "1.1.1.1"
  *
  * ## Concurrency
  *
- * §5.4 says teardown is reachable from three places that are **not** serialised
- * with each other: `disconnect()` and `onRevoke()` arrive on binder threads,
- * `onDestroy()` on the main thread, and the start sequence runs on IO. So:
+ * §5.4 teardown still has platform entry points outside the UI-command stream:
+ * `onRevoke()` arrives through `VpnService`, `onDestroy()` on the main thread,
+ * and the start sequence runs on IO. Connect, disconnect, and per-app reapply
+ * first enter [commandCoordinator], while [lock] and [generation] handle those
+ * platform callbacks racing the asynchronous start sequence. So:
  *
  *  - [lock] guards every field below and every state publication. `RemoteCallbackList`
  *    is not safe for concurrent broadcast — `beginBroadcast()` throws if one is
@@ -87,7 +116,7 @@ private const val DNS_SERVER = "1.1.1.1"
  *    block state publication forever.
  */
 @AndroidEntryPoint
-@Suppress("TooManyFunctions")
+@Suppress("LargeClass", "TooManyFunctions")
 class TunnelService : VpnService() {
     // Field injection, not constructor injection: VpnService (like every Android
     // component) is instantiated by the platform, not by Hilt. Available once
@@ -179,12 +208,19 @@ class TunnelService : VpnService() {
      * Cleared by both terminal paths a start can take: [stopTunnel] (disconnect,
      * revoke, `onDestroy`) so a settled-down service cannot be restarted into a
      * session the user ended, and [failStart] so a session that never came up
-     * does not linger here either. The binder's `reapplyPerApp` additionally
+     * does not linger here either. The coordinator's `reapplyPerApp` additionally
      * gates on [ownTunnelActive] rather than trusting this field's nullness
      * alone, but a stale non-null value here would still be a latent trap for
      * the next reader, not just a harmless one.
      */
-    private var liveSession: Pair<Profile, Long>? = null
+    private data class LiveSession(
+        val profile: Profile,
+        val rowId: Long,
+        val startId: Int,
+    )
+
+    private var liveSession: LiveSession? = null
+    private var activeStartId = 0
 
     /**
      * Commits a terminal outcome in an order teardown cannot interleave with — see
@@ -201,9 +237,23 @@ class TunnelService : VpnService() {
             publish = { state -> publishLocked(state) },
         )
 
+    /** UI tunnel commands mutate session state only from this single consumer. */
+    private val commandCoordinator =
+        TunnelCommandCoordinator(
+            scope = scope,
+            connect = ::connectFromCommand,
+            rejectConnect = ::rejectConnectFromCommand,
+            disconnect = { startId ->
+                stopTunnel(ConnectionState.Disconnected)
+                stopStartedService(startId)
+            },
+            reapplyPerApp = ::reapplyPerAppFromCommand,
+            observeConnect = ::observeConnectFromCommand,
+        )
+    private val commandIngress = TunnelCommandIngress(commandCoordinator::enqueue)
+
     override fun onCreate() {
         super.onCreate()
-        TunnelNotification.ensureChannel(this)
         // §5.6: a config left by a start that failed, or by a process the system
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
@@ -242,7 +292,62 @@ class TunnelService : VpnService() {
         intent: Intent?,
         flags: Int,
         startId: Int,
-    ): Int = START_NOT_STICKY
+    ): Int {
+        val request = connectProfileFrom(intent)
+        val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+        val testObserver = testConnectObserverFrom(intent, debuggable)
+        if (!commandIngress.started(request, startId, testObserver)) {
+            Log.w(TAG, "connect request dropped: service command queue closed")
+            stopStartedService(startId)
+        }
+        return START_NOT_STICKY
+    }
+
+    /** Reports actor receipt to a same-UID debug test without changing the connect path. */
+    @Suppress("SwallowedException")
+    private fun observeConnectFromCommand(command: TunnelCommand.Connect) {
+        val observer = command.testObserver ?: return
+        val message =
+            Message.obtain(null, TEST_CONNECT_RECEIVED).apply {
+                data = android.os.Bundle().apply { putParcelable(EXTRA_PROFILE, command.profile) }
+            }
+        try {
+            observer.send(message)
+        } catch (e: android.os.RemoteException) {
+            // The debug instrumentation process ended before actor receipt.
+        }
+    }
+
+    private suspend fun rejectConnectFromCommand(
+        startId: Int,
+        rowId: Long,
+    ) {
+        Log.e(TAG, "connect request refused: ProfileDecodeFailed")
+        val failed = failure(FailureReason.ProfileDecodeFailed, "connect request could not be decoded")
+        stopTunnel(failed)
+        stopStartedService(startId)
+        connectionRecorder.record(rowId, failed)
+    }
+
+    private fun rejectInitialForegroundLifecycle(
+        gen: Int,
+        rowId: Long,
+    ) {
+        val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
+        val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
+        stopStartedService(startId)
+        scope.launch { connectionRecorder.record(rowId, failed) }
+    }
+
+    private suspend fun handleForegroundLifecycleRejection(
+        gen: Int,
+        rowId: Long,
+    ) {
+        val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
+        val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
+        stopStartedService(startId)
+        connectionRecorder.record(rowId, failed)
+    }
 
     // ── State publication ───────────────────────────────────────────────────
 
@@ -293,6 +398,7 @@ class TunnelService : VpnService() {
     private fun startTunnel(
         profile: Profile,
         rowId: Long,
+        startId: Int,
     ) {
         val gen =
             synchronized(lock) {
@@ -302,22 +408,31 @@ class TunnelService : VpnService() {
                 if (currentState !is ConnectionState.Disconnected &&
                     currentState !is ConnectionState.Failed
                 ) {
+                    activeStartId = startId
+                    liveSession = liveSession?.copy(startId = startId)
                     Log.w(TAG, "connect ignored: a session is already active")
                     return
                 }
-                liveSession = profile to rowId
-                ++generation
+                activeStartId = startId
+                liveSession = LiveSession(profile, rowId, startId)
+                val nextGeneration = ++generation
+                // Claim the session before the coordinator accepts another
+                // command. Otherwise a second queued connect can observe the
+                // old Disconnected state before the startup coroutine runs.
+                publishLocked(ConnectionState.Connecting(StartupStage.AllocatingPort))
+                nextGeneration
             }
 
-        // §9: go foreground BEFORE the slow work. startForegroundService
-        // gives a few seconds to call startForeground or the system kills :bg —
-        // and a start that fails validation never reaches the success path at all.
-        goForeground(R.string.notification_connecting)
-
-        scope.launch {
-            val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
-            attachTun(gen, started.xray, started.ports.socksPort, started.ports.httpPort, rowId)
-        }
+        runAfterForegroundEstablished(
+            establishForeground = { goForeground(R.string.notification_connecting) },
+            onRejected = { rejectInitialForegroundLifecycle(gen, rowId) },
+            launchStartup = {
+                scope.launch {
+                    val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
+                    attachTun(gen, started.xray, started.ports.socksPort, started.ports.httpPort, rowId)
+                }
+            },
+        )
     }
 
     /**
@@ -390,7 +505,6 @@ class TunnelService : VpnService() {
         rowId: Long,
         routing: RoutingResolution,
     ): StartedPorts? {
-        if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.AllocatingPort))) return null
         // One call for both ports, not two calls to allocatePort(): §10.6 and
         // docs/agent/research/libxray-api.md §5 — getFreePorts closes each
         // listener before opening the next, so nothing stops the kernel handing
@@ -624,12 +738,15 @@ class TunnelService : VpnService() {
         // the write, and called goForeground() on the way out — so a teardown during the
         // write left this coroutine to restore the connected notification over a tunnel that
         // was already down (§5.5). Nothing may be added after the `persist` lambda.
-        terminalOutcome.settle(
-            gen = gen,
-            state = connected,
-            lifecycle = { goForeground(R.string.notification_connected) },
-            persist = { connectionRecorder.record(rowId, connected) },
-        )
+        val settlement =
+            terminalOutcome.settleHandlingLifecycleRejection(
+                gen = gen,
+                state = connected,
+                lifecycle = { goForeground(R.string.notification_connected) },
+                persist = { connectionRecorder.record(rowId, connected) },
+                onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
+            )
+        if (settlement != TerminalSettlement.Committed) return
     }
 
     /**
@@ -663,8 +780,11 @@ class TunnelService : VpnService() {
                 configFile = null
                 controller = null
                 liveSession = null
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                val startId = activeStartId
+                activeStartId = 0
+                removeForegroundSafely()
+                stopStartedService(startId)
+                true
             },
             persist = { connectionRecorder.record(rowId, failed) },
         )
@@ -792,6 +912,17 @@ class TunnelService : VpnService() {
             false
         }
 
+    @Suppress("TooGenericExceptionCaught") // RuntimeException is the Android framework boundary here.
+    private fun removeForegroundSafely() {
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "foreground removal failed: ${e.javaClass.simpleName}")
+        }
+    }
+
     /** @return false when the package is no longer installed. See [applyEach]. */
     // Swallowed deliberately: the only thing this exception carries is the
     // package name, and §5.6 forbids logging it. The count is the whole report.
@@ -816,21 +947,32 @@ class TunnelService : VpnService() {
             false
         }
 
-    private fun goForeground(textRes: Int) {
-        val notification = TunnelNotification.build(this, getString(textRes))
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            // §14.1. The typed overload is API 29+, and systemExempted only
-            // becomes meaningful on API 34, so below Q the untyped call is both
-            // the only option and the correct one.
-            startForeground(
-                TunnelNotification.ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
-            )
-        } else {
-            startForeground(TunnelNotification.ID, notification)
+    @Suppress("TooGenericExceptionCaught") // RuntimeException is the Android framework boundary here.
+    private fun goForeground(textRes: Int): Boolean =
+        try {
+            TunnelNotification.ensureChannel(this)
+            val notification = TunnelNotification.build(this, getString(textRes))
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                // §14.1. The typed overload is API 29+, and systemExempted only
+                // becomes meaningful on API 34, so below Q the untyped call is both
+                // the only option and the correct one.
+                startForeground(
+                    TunnelNotification.ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED,
+                )
+            } else {
+                startForeground(TunnelNotification.ID, notification)
+            }
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RuntimeException) {
+            // Framework failures only. Never log a message: notification and
+            // platform errors can quote caller-controlled material.
+            Log.e(TAG, "foreground lifecycle rejected: ${e.javaClass.simpleName}")
+            false
         }
-    }
 
     // ── Teardown ────────────────────────────────────────────────────────────
 
@@ -842,12 +984,17 @@ class TunnelService : VpnService() {
      * finds every field already null and does nothing twice.
      */
     @Suppress("TooGenericExceptionCaught")
-    private fun stopTunnel(finalState: ConnectionState) {
+    private fun stopTunnel(
+        finalState: ConnectionState,
+        expectedGeneration: Int? = null,
+    ): Int? {
         val xray: XrayController?
         val fd: ParcelFileDescriptor?
         val cfg: File?
+        val startId: Int
 
         synchronized(lock) {
+            if (expectedGeneration != null && expectedGeneration != generation) return null
             // Supersede any in-flight start before taking ownership of its state.
             ++generation
             xray = controller
@@ -857,6 +1004,8 @@ class TunnelService : VpnService() {
             tunInterface = null
             configFile = null
             liveSession = null
+            startId = activeStartId
+            activeStartId = 0
             publishLocked(ConnectionState.Disconnecting)
         }
 
@@ -881,9 +1030,14 @@ class TunnelService : VpnService() {
         xray?.stopBlocking()
         cfg?.delete()
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        removeForegroundSafely()
         publish(finalState)
+        return startId
     }
+
+    /** Stops only the started-service generation that owns the completed command. */
+    private fun stopStartedService(startId: Int): Boolean =
+        startId > 0 && stopSelfResult(startId)
 
     /**
      * §5.4: called when another VPN app takes over or the user revokes
@@ -895,8 +1049,8 @@ class TunnelService : VpnService() {
      * user needs. We stop explicitly instead.
      */
     override fun onRevoke() {
-        stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
-        stopSelf()
+        val startId = stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
+        if (startId != null) stopStartedService(startId)
     }
 
     override fun onDestroy() {
@@ -906,6 +1060,7 @@ class TunnelService : VpnService() {
                 currentState as? ConnectionState.Failed ?: ConnectionState.Disconnected
             }
         stopTunnel(finalState)
+        commandCoordinator.close()
         callbacks.kill()
         scope.cancel()
         super.onDestroy()
@@ -989,69 +1144,12 @@ class TunnelService : VpnService() {
 
     private val binder =
         object : ITunnelService.Stub() {
-            override fun connect(profile: ProfileParcel) {
-                // §10.4: fail loudly and specifically. A parcel carrying a
-                // discriminant this process cannot name decodes to null rather
-                // than to a plausible default — see ProfileParcel.toProfile.
-                // Connecting on a guess would dial the wrong protocol, or drop
-                // REALITY and go out in the clear, at a real address.
-                val decoded = profile.toProfile()
-                if (decoded == null) {
-                    Log.e(TAG, "connect refused: profile parcel carries an unknown discriminant")
-                    publish(
-                        failure(
-                            FailureReason.ProfileDecodeFailed,
-                            "profile could not be decoded",
-                        ),
-                    )
-                    stopSelf()
-                    return
-                }
-                startTunnel(decoded, profile.rowId)
-            }
-
             override fun disconnect() {
-                stopTunnel(ConnectionState.Disconnected)
-                stopSelf()
+                commandIngress.disconnect()
             }
 
             override fun reapplyPerApp() {
-                // §8: the allow/deny calls apply at establish() time only, so the
-                // running interface keeps whatever selection it was built with.
-                // Rebuilding is the only way to change it.
-                val session = synchronized(lock) { liveSession.takeIf { ownTunnelActive() } }
-                if (session == null) {
-                    // Not an error: the UI saves whether or not a tunnel is up, and
-                    // a disconnected save simply takes effect at the next connect.
-                    return
-                }
-                val (profile, rowId) = session
-                // Not stopSelf() after stopTunnel, unlike disconnect(): the service
-                // must survive to start again. A save racing a user disconnect is
-                // NOT ordered by startTunnel's generation check — stopTunnel below
-                // always leaves currentState Disconnected, so the following
-                // startTunnel passes that guard regardless of whether a disconnect()
-                // landed in between. What keeps the stop+start pair below from
-                // being interleaved with another transaction on this Stub is
-                // binder's per-node serialization: a binder node dispatches its
-                // async (`oneway`) transactions one at a time, so a second
-                // reapplyPerApp or a disconnect() runs strictly before or strictly
-                // after this one — not part-way through it. That holds regardless of
-                // how many clients bind or which threads they call from; it is a
-                // property of the node, not of "one client, one calling thread".
-                //
-                // It does NOT extend to onRevoke(). That arrives on VpnService's own
-                // binder, a different node, so it is not serialized against this
-                // one: a revoke landing between the ownTunnelActive() gate above and
-                // the stopTunnel below would have its Revoked state overwritten by
-                // this rebuild's generic outcome. Narrow, and pre-existing in shape
-                // — the revoke has already torn the interface down, so nothing is
-                // left running and no core is orphaned; what is lost is the specific
-                // reason shown to the user. Recorded rather than fixed: closing it
-                // means a lock discipline spanning two binder nodes, which is a
-                // larger change than the mislabelled failure it would prevent.
-                stopTunnel(ConnectionState.Disconnected)
-                startTunnel(profile, rowId)
+                commandIngress.reapplyPerApp()
             }
 
             override fun getState(): ConnectionStateParcel =
@@ -1121,6 +1219,25 @@ class TunnelService : VpnService() {
         }
     }
 
+    private suspend fun connectFromCommand(
+        profile: ProfileParcel,
+        startId: Int,
+    ) {
+        val decoded = profile.toProfile()
+        if (decoded == null) {
+            rejectConnectFromCommand(startId, profile.rowId)
+            return
+        }
+        startTunnel(decoded, profile.rowId, startId)
+    }
+
+    private fun reapplyPerAppFromCommand() {
+        // Sample only when this command reaches the service-owned consumer.
+        val session = synchronized(lock) { liveSession.takeIf { ownTunnelActive() } } ?: return
+        stopTunnel(ConnectionState.Disconnected)
+        startTunnel(session.profile, session.rowId, session.startId)
+    }
+
     /**
      * The system binds with [SERVICE_INTERFACE] for always-on VPN and must get
      * `VpnService`'s own binder; the app gets ours. Getting this backwards breaks
@@ -1131,6 +1248,7 @@ class TunnelService : VpnService() {
 
     private companion object {
         const val CONFIG_NAME = "xray-config.json"
+        const val FOREGROUND_LIFECYCLE_REJECTED = "ForegroundLifecycleRejected"
     }
 }
 

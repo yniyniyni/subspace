@@ -60,7 +60,7 @@ public sealed interface ImportOutcome {
         public val id: Long,
     ) : ImportOutcome
 
-    /** Its canonical fingerprint was already stored, so no write or I/O occurred. */
+    /** Its content was already stored and the requested activation changed no setting. */
     public data object Unchanged : ImportOutcome
 
     /** Its changed content did not pass the profile timestamp gate. */
@@ -123,6 +123,7 @@ internal constructor(
     private val progress: GeoDownloadProgressRegistry,
 ) {
     private var materialisationTimeoutMillis: Long = GEO_DOWNLOAD_TIMEOUT_MILLIS
+    private var afterUnchangedDecision: suspend () -> Unit = {}
     private var beforeGenerationCommit: suspend (setId: Long, generation: Long) -> Unit = { _, _ -> }
 
     /** Instrumented seams for the real-time deadline and exact pre-publication boundary. */
@@ -137,10 +138,12 @@ internal constructor(
         deletion: RoutingProfileDeletion,
         progress: GeoDownloadProgressRegistry,
         materialisationTimeoutMillis: Long,
+        afterUnchangedDecision: suspend () -> Unit = {},
         beforeGenerationCommit: suspend (setId: Long, generation: Long) -> Unit = { _, _ -> },
     ) : this(database, repository, assets, geoAssets, settings, validator, downloader, deletion, progress) {
         require(materialisationTimeoutMillis > 0) { "Materialisation timeout must be positive" }
         this.materialisationTimeoutMillis = materialisationTimeoutMillis
+        this.afterUnchangedDecision = afterUnchangedDecision
         this.beforeGenerationCommit = beforeGenerationCommit
     }
 
@@ -182,8 +185,9 @@ internal constructor(
     /**
      * Applies one profile after the caller's confirmation gate.
      *
-     * Early returns are intentional ordering barriers: unchanged/stale inputs
-     * cannot reach disk, and failed staging cannot reach the atomic publication.
+     * Early returns are intentional ordering barriers: unchanged inputs may update only the
+     * activation setting, never the rule row or its files; stale inputs cannot write anything;
+     * and failed staging cannot reach the atomic publication.
      */
     @Suppress(
         "CyclomaticComplexMethod", // Explicit gates prevent stale, partial, or failed assets from reaching publication.
@@ -203,6 +207,7 @@ internal constructor(
     @Suppress(
         "CyclomaticComplexMethod", // Explicit gates prevent stale, partial, or failed assets from reaching publication.
         "LongMethod", // Keeping the gate → stage → swap → sweep sequence linear makes its order reviewable.
+        "LoopWithTooManyJumpStatements", // A vanished unchanged row retries; a material change exits.
         "ReturnCount", // Every early return protects a distinct no-I/O or no-publication guarantee.
     )
     private suspend fun applySerialized(
@@ -215,12 +220,18 @@ internal constructor(
         if (subscriptionId != null && database.subscriptionDao().subscription(subscriptionId) == null) {
             return ImportOutcome.Failed(MISSING_SUBSCRIPTION_RULE_SET_ID, RuleSetAssetFailure.Rejected)
         }
-        when (repository.decideFor(profile)) {
-            RoutingRepository.UpdateDecision.Unchanged -> return ImportOutcome.Unchanged
-            RoutingRepository.UpdateDecision.Stale -> return ImportOutcome.Stale
-            RoutingRepository.UpdateDecision.New,
-            RoutingRepository.UpdateDecision.Changed,
-            -> Unit
+        while (true) {
+            when (repository.decideFor(profile)) {
+                RoutingRepository.UpdateDecision.Unchanged -> {
+                    afterUnchangedDecision()
+                    val existingId = repository.ruleSetNamed(profile.name)?.id ?: continue
+                    return activationOutcome(existingId, verb, unchanged = true)
+                }
+                RoutingRepository.UpdateDecision.Stale -> return ImportOutcome.Stale
+                RoutingRepository.UpdateDecision.New,
+                RoutingRepository.UpdateDecision.Changed,
+                -> break
+            }
         }
 
         val id =
@@ -300,7 +311,7 @@ internal constructor(
         }
 
         assets.sweepExcept(id, keep = nextGeneration)
-        return activateIfAppropriate(id, verb)
+        return activationOutcome(id, verb)
     }
 
     /**
@@ -327,7 +338,7 @@ internal constructor(
     ): ImportOutcome {
         repository.commitGeneration(id, profile, NO_OWN_GENERATION)
         if (stored.assetGeneration > NO_OWN_GENERATION) assets.removeSet(id)
-        return activateIfAppropriate(id, verb)
+        return activationOutcome(id, verb)
     }
 
     /** Everything that can delay generation readiness shares one deadline. */
@@ -387,21 +398,36 @@ internal constructor(
         val original = repository.stored(id) ?: return null
         val copyId = repository.upsert(original.ruleSet.copy(id = 0L, name = name))
         if (!original.usesOwnGeneration) return copyId
-        val sourceDir = assets.generationDir(id, original.assetGeneration)
         val copied =
             runCatching {
-                val staged = assets.prepareGeneration(copyId, FIRST_GENERATION)
-                original.ruleSet.requiredGeoFiles().all { fileName ->
-                    assets.copyLocally(File(sourceDir, fileName), File(staged, fileName))
+                assets.prepareGeneration(copyId, FIRST_GENERATION)
+                when (
+                    val retained =
+                        assets.withResolvedAssetDir(id, original.assetGeneration, hasOwnSources = true) {
+                            original.ruleSet.requiredGeoFiles().all { fileName ->
+                                assets.copyValidatedFile(
+                                    sourceSetId = id,
+                                    sourceGeneration = original.assetGeneration,
+                                    targetSetId = copyId,
+                                    targetGeneration = FIRST_GENERATION,
+                                    fileName = fileName,
+                                )
+                            }
+                        }
+                ) {
+                    is ResolvedAssetUse.Used -> retained.value
+                    ResolvedAssetUse.GenerationUnavailable -> false
                 }
             }.getOrDefault(false)
         if (!copied) {
             // The row exists and is editable; it simply has no assets of its own
             // yet. Marking it Failed says that on the row rather than leaving a
             // copy that looks complete and cannot activate.
+            assets.removeSet(copyId)
             repository.markAssets(copyId, RuleSetAssetState.Failed, RuleSetAssetFailure.InstallFailed)
             return copyId
         }
+        beforeGenerationCommit(copyId, FIRST_GENERATION)
         repository.publishCopiedGeneration(copyId, FIRST_GENERATION)
         return copyId
     }
@@ -506,21 +532,36 @@ internal constructor(
         }
     }
 
+    private suspend fun activationOutcome(
+        id: Long,
+        verb: RoutingVerb,
+        unchanged: Boolean = false,
+    ): ImportOutcome {
+        val activated = activateIfAppropriate(id, verb)
+        return when {
+            activated -> ImportOutcome.Activated(id)
+            unchanged -> ImportOutcome.Unchanged
+            else -> ImportOutcome.Stored(id)
+        }
+    }
+
     private suspend fun activateIfAppropriate(
         id: Long,
         verb: RoutingVerb,
-    ): ImportOutcome =
+    ): Boolean =
         RoutingProfileProcessCoordinator.withSettings {
-            val activated =
-                when (verb) {
-                    RoutingVerb.OnAdd -> {
+            when (verb) {
+                RoutingVerb.OnAdd -> {
+                    if (settings.activeRoutingRuleSetId.first() == id) {
+                        false
+                    } else {
                         settings.setActiveRoutingRuleSetId(id)
                         true
                     }
-                    RoutingVerb.Add -> settings.activateRoutingRuleSetIfNone(id)
-                    RoutingVerb.Off -> false
                 }
-            if (activated) ImportOutcome.Activated(id) else ImportOutcome.Stored(id)
+                RoutingVerb.Add -> settings.activateRoutingRuleSetIfNone(id)
+                RoutingVerb.Off -> false
+            }
         }
 
     private suspend fun removeUnpublishedGenerations(

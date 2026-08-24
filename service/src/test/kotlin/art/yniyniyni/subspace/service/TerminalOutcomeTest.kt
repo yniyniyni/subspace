@@ -108,11 +108,14 @@ class TerminalOutcomeTest {
                 service.outcome.settle(
                     gen = gen,
                     state = connected,
-                    lifecycle = { service.lifecycle.goForeground("connected") },
+                    lifecycle = {
+                        service.lifecycle.goForeground("connected")
+                        true
+                    },
                     persist = { service.lifecycle.transcript += "persist" },
                 )
 
-            settled shouldBe true
+            settled shouldBe TerminalSettlement.Committed
             // Lifecycle before publication, and persistence strictly after both.
             service.lifecycle.transcript shouldBe
                 listOf("foreground:connecting", "foreground:connected", "publish:Connected", "persist")
@@ -130,14 +133,39 @@ class TerminalOutcomeTest {
                 service.outcome.settle(
                     gen = gen,
                     state = connected,
-                    lifecycle = { service.lifecycle.goForeground("connected") },
+                    lifecycle = {
+                        service.lifecycle.goForeground("connected")
+                        true
+                    },
                     persist = { service.lifecycle.transcript += "persist" },
                 )
 
-            settled shouldBe false
+            settled shouldBe TerminalSettlement.Superseded
             // Not even the persist ran: there is no outcome to record for a
             // generation that no longer owns the tunnel.
             service.lifecycle.transcript shouldBe transcriptAfterTeardown
+        }
+
+    @Test
+    fun `a rejected lifecycle publishes and persists nothing`() =
+        runTest {
+            val service = FakeService()
+            val gen = service.startNewGeneration()
+            var persisted = false
+
+            val settled =
+                service.outcome.settleHandlingLifecycleRejection(
+                    gen = gen,
+                    state = connected,
+                    lifecycle = { false },
+                    persist = { persisted = true },
+                    onLifecycleRejected = { service.lifecycle.transcript += "cleanup" },
+                )
+
+            settled shouldBe TerminalSettlement.LifecycleRejected
+            service.published shouldBe emptyList()
+            persisted shouldBe false
+            service.lifecycle.transcript shouldBe listOf("foreground:connecting", "cleanup")
         }
 
     @Test
@@ -155,7 +183,10 @@ class TerminalOutcomeTest {
                     service.outcome.settle(
                         gen = gen,
                         state = connected,
-                        lifecycle = { service.lifecycle.goForeground("connected") },
+                        lifecycle = {
+                            service.lifecycle.goForeground("connected")
+                            true
+                        },
                         persist = {
                             writeStarted.complete(Unit)
                             letWriteFinish.await()
@@ -192,6 +223,7 @@ class TerminalOutcomeTest {
                         lifecycle = {
                             service.lifecycle.removeForeground()
                             service.lifecycle.stopSelf()
+                            true
                         },
                         persist = {
                             writeStarted.complete(Unit)
@@ -229,7 +261,10 @@ class TerminalOutcomeTest {
             service.outcome.settle(
                 gen = gen,
                 state = connected,
-                lifecycle = { service.lifecycle.goForeground("connected") },
+                lifecycle = {
+                    service.lifecycle.goForeground("connected")
+                    true
+                },
                 persist = { stateAtWriteTime = service.lifecycle.foregroundText },
             )
 

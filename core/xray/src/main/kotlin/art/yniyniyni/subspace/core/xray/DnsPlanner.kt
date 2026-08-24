@@ -128,7 +128,7 @@ public object DnsPlanner {
             val remoteMatch = effective?.remote?.routingMatch()
             DnsPlan(
                 servers = it,
-                hosts = effective?.hosts.orEmpty(),
+                hosts = hostsFor(effective, setting),
                 fakeDns = (effective?.fakeDns ?: false) && sniffingEnabled,
                 directMatch = domesticMatch,
                 // Collapse when both resolvers are one server: two contradictory
@@ -136,6 +136,40 @@ public object DnsPlanner {
                 proxyMatch = remoteMatch?.takeIf { match -> match != domesticMatch },
             )
         }
+    }
+
+    /**
+     * The profile's `DnsHosts`, plus the bootstrap entry an app-level DoH resolver needs.
+     *
+     * Spec §5.1 makes a DoH resolver's `*DNSIP` a `hosts` entry pinning the resolver
+     * URL's own hostname, so the built-in client never has to resolve its resolver
+     * through itself (research §3). That synthesis lives in the import parser, which
+     * only the *profile* path traverses — the settings path builds a [DnsResolver]
+     * directly. Without this the app-level bootstrap IP was stored, shown in the
+     * settings screen, and silently dropped: no `hosts` entry, and
+     * [DnsPlan.tunAdvertisedAddress] finding no literal fell back to the app default
+     * rather than §7.6's "domestic-or-bootstrap IP". Found on hardware, M6.5 device run.
+     *
+     * Only when the setting is what supplies the server — a profile that names its own
+     * resolver has already been through the parser — and only when the profile's own
+     * `DnsHosts` does not already name that hostname, mirroring §5.1's precedence: an
+     * author who wrote a different mapping meant it.
+     */
+    private fun hostsFor(
+        dns: ProfileDns?,
+        setting: DnsResolver,
+    ): Map<String, String> {
+        val profileHosts = dns?.hosts.orEmpty()
+        val bootstrap =
+            if (dns?.hasResolver == true) {
+                null
+            } else {
+                setting.domain
+                    ?.let(DnsValidation::hostOf)
+                    ?.takeUnless(profileHosts::containsKey)
+                    ?.let { host -> setting.ip?.takeIf(DnsValidation::isAddressLiteral)?.let { ip -> host to ip } }
+            }
+        return bootstrap?.let { profileHosts + it } ?: profileHosts
     }
 
     private fun buildServers(

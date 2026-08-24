@@ -109,6 +109,57 @@ class DnsPlannerTest {
         plan.servers.single().address shouldBe "1.1.1.1"
     }
 
+    /**
+     * Device run D1: the app-level setting's bootstrap IP was stored and shown but
+     * never reached the config, so `dns.hosts` carried no entry and
+     * `tunAdvertisedAddress()` fell back to the app default. The import parser
+     * synthesises this entry for a *profile* resolver (spec §5.1); the settings
+     * path never traverses that parser, so the planner has to do it here.
+     */
+    @Test
+    fun `an app-level DoH setting bootstraps its own resolver hostname`() {
+        val setting =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+
+        val plan = requireNotNull(DnsPlanner.plan(null, setting, null, sniffingEnabled = true))
+
+        plan.hosts shouldBe mapOf("security.cloudflare-dns.com" to "1.1.1.2")
+    }
+
+    @Test
+    fun `a profile host entry for the setting's resolver hostname is not overwritten`() {
+        val setting =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+        val profile = ProfileDns(hosts = mapOf("security.cloudflare-dns.com" to "9.9.9.9"))
+
+        val plan = requireNotNull(DnsPlanner.plan(profile, setting, null, sniffingEnabled = true))
+
+        plan.hosts shouldBe mapOf("security.cloudflare-dns.com" to "9.9.9.9")
+    }
+
+    @Test
+    fun `a profile that names its own resolver does not inherit the setting's bootstrap`() {
+        val setting =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+        val profile = ProfileDns(remote = DnsResolver(DnsTransport.DOU, ip = "8.8.8.8"))
+
+        val plan = requireNotNull(DnsPlanner.plan(profile, setting, null, sniffingEnabled = true))
+
+        plan.hosts shouldBe emptyMap()
+    }
+
     @Test
     fun `fakedns is refused when sniffing is off`() {
         val profile = ProfileDns(fakeDns = true)

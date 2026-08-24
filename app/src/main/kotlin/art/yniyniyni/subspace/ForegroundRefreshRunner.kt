@@ -19,10 +19,13 @@ internal suspend fun runForegroundRefresh(
     val refreshCancellation = runForegroundStep(refresh, reportFailure)
     val rescheduleCancellation = runForegroundStep(reschedule, reportFailure)
 
-    when {
-        refreshCancellation != null -> throw refreshCancellation
-        rescheduleCancellation != null -> throw rescheduleCancellation
+    if (refreshCancellation != null) {
+        if (rescheduleCancellation != null && rescheduleCancellation !== refreshCancellation) {
+            refreshCancellation.addSuppressed(rescheduleCancellation)
+        }
+        throw refreshCancellation
     }
+    if (rescheduleCancellation != null) throw rescheduleCancellation
 }
 
 @Suppress("TooGenericExceptionCaught") // Application-scope containment is this boundary's contract.

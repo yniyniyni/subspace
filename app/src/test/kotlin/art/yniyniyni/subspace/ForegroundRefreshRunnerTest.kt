@@ -109,4 +109,52 @@ class ForegroundRefreshRunnerTest {
 
             thrown shouldBe cancellation
         }
+
+    @Test
+    fun `dual cancellation preserves refresh precedence and suppresses reschedule cancellation`() =
+        runTest {
+            val refreshCancellation = CancellationException("refresh cancellation")
+            val rescheduleCancellation = CancellationException("reschedule cancellation")
+            var rescheduleAttempts = 0
+            val reported = mutableListOf<String>()
+            var thrown: CancellationException? = null
+
+            try {
+                runForegroundRefresh(
+                    refresh = { throw refreshCancellation },
+                    reschedule = {
+                        rescheduleAttempts++
+                        throw rescheduleCancellation
+                    },
+                    reportFailure = reported::add,
+                )
+            } catch (error: CancellationException) {
+                thrown = error
+            }
+
+            thrown shouldBe refreshCancellation
+            thrown?.suppressed?.toList() shouldBe listOf(rescheduleCancellation)
+            rescheduleAttempts shouldBe 1
+            reported shouldBe emptyList()
+        }
+
+    @Test
+    fun `the same cancellation instance is never self-suppressed`() =
+        runTest {
+            val cancellation = CancellationException("shared cancellation")
+            var thrown: CancellationException? = null
+
+            try {
+                runForegroundRefresh(
+                    refresh = { throw cancellation },
+                    reschedule = { throw cancellation },
+                    reportFailure = {},
+                )
+            } catch (error: CancellationException) {
+                thrown = error
+            }
+
+            thrown shouldBe cancellation
+            thrown?.suppressed?.toList() shouldBe emptyList()
+        }
 }

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.data
 
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
@@ -501,6 +502,28 @@ class RuleSetAssetsTest {
         internalFiles.size shouldBe 1
         internalFiles.single().parentFile shouldBe generation
         subject.sharedRoot().listFiles().orEmpty().none { it.name.endsWith(".sha256") } shouldBe true
+    }
+
+    @Test
+    fun validatedFileIsRecordedOnlyAfterDataAndPendingMetadataAreForced() = runTest {
+        val forced = mutableListOf<String>()
+        val subject =
+            RuleSetAssets(
+                temp.newFolder("forced-validation"),
+                CooperativeRuleSetFileCopier(),
+                StableFileForcer { file -> forced += file.name },
+            )
+        val generation = subject.prepareGeneration(9, 1)
+        File(generation, "geoip.dat").writeText("validated bytes")
+
+        subject.recordValidatedFile(9, 1, "geoip.dat") shouldBe true
+
+        forced shouldBe
+            listOf(
+                "geoip.dat",
+                ".subspace-validated-geoip.dat.sha256.pending",
+            )
+        subject.verifiedGenerationFile(9, 1, "geoip.dat").shouldNotBeNull()
     }
 
     @Test

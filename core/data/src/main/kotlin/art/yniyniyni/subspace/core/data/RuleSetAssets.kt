@@ -10,6 +10,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.channels.FileChannel
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -17,6 +18,7 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.nio.file.StandardOpenOption.WRITE
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import javax.inject.Inject
@@ -63,6 +65,16 @@ internal class CooperativeRuleSetFileCopier(
     }
 }
 
+/** Forces one completed generation file to stable storage before publication may continue. */
+internal fun interface StableFileForcer {
+    fun force(file: File)
+}
+
+private val fileChannelForcer =
+    StableFileForcer { file ->
+        FileChannel.open(file.toPath(), WRITE).use { channel -> channel.force(true) }
+    }
+
 /**
  * Where one rule set's own geo databases live, generation by generation.
  *
@@ -77,6 +89,7 @@ public class RuleSetAssets
 internal constructor(
     @GeoAssetRoot private val root: File,
     private val copier: CooperativeRuleSetFileCopier,
+    private val fileForcer: StableFileForcer = fileChannelForcer,
 ) : RuleSetAssetScope {
     @Inject
     internal constructor(
@@ -275,7 +288,9 @@ internal constructor(
             try {
                 if (!data.isFile) return@withContext false
                 val digest = data.sha256()
+                fileForcer.force(data)
                 temporary.writeText(digest)
+                fileForcer.force(temporary)
                 Files.move(temporary.toPath(), metadata.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
                 metadata.isFile
             } catch (_: IOException) {

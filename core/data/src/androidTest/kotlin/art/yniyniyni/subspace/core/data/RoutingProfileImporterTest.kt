@@ -149,18 +149,132 @@ class RoutingProfileImporterTest {
     }
 
     @Test
-    fun anUnchangedProfileTouchesNothing() = runTest {
+    fun unchangedAddActivatesTheExistingRowWhenNothingIsActiveWithoutMaterialising() = runTest {
         val profile = sampleProfile()
-        importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null)
+        val existingId =
+            importer
+                .apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        settings.setActiveRoutingRuleSetId(null)
         downloads.clear()
         downloadTargets.clear()
+        val beforeFiles = fileTreeSnapshot(root)
+        installRuleSetUpdateCounter()
+
+        importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null) shouldBe
+            ImportOutcome.Activated(existingId)
+
+        settings.activeRoutingRuleSetId.first() shouldBe existingId
+        downloads.shouldBeEmpty()
+        downloadTargets.shouldBeEmpty()
+        ruleSetUpdateCount() shouldBe 0L
+        fileTreeSnapshot(root) shouldBe beforeFiles
+        assets.generationDir(existingId, 2).exists() shouldBe false
+    }
+
+    @Test
+    fun unchangedAddLeavesAnotherActiveRowInPlaceWithoutMaterialising() = runTest {
+        val profile = sampleProfile()
+        val existingId =
+            importer
+                .apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        val otherId =
+            importer
+                .apply(
+                    sampleProfile().copy(name = "Other active profile"),
+                    RoutingVerb.OnAdd,
+                    RoutingSourceKind.Header,
+                    null,
+                ).shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        downloads.clear()
+        downloadTargets.clear()
+        val beforeFiles = fileTreeSnapshot(root)
+        installRuleSetUpdateCounter()
 
         importer.apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null) shouldBe
             ImportOutcome.Unchanged
 
+        settings.activeRoutingRuleSetId.first() shouldBe otherId
         downloads.shouldBeEmpty()
         downloadTargets.shouldBeEmpty()
-        repository.observeAllStored().first().single().assetGeneration shouldBe 1L
+        ruleSetUpdateCount() shouldBe 0L
+        fileTreeSnapshot(root) shouldBe beforeFiles
+        assets.generationDir(existingId, 2).exists() shouldBe false
+    }
+
+    @Test
+    fun unchangedOnAddDisplacesAnotherActiveRowWithoutMaterialising() = runTest {
+        val profile = sampleProfile()
+        val existingId =
+            importer
+                .apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        importer.apply(
+            sampleProfile().copy(name = "Other active profile"),
+            RoutingVerb.OnAdd,
+            RoutingSourceKind.Header,
+            null,
+        ).shouldBeInstanceOf<ImportOutcome.Activated>()
+        downloads.clear()
+        downloadTargets.clear()
+        val beforeFiles = fileTreeSnapshot(root)
+        installRuleSetUpdateCounter()
+
+        importer.apply(profile, RoutingVerb.OnAdd, RoutingSourceKind.Header, null) shouldBe
+            ImportOutcome.Activated(existingId)
+
+        settings.activeRoutingRuleSetId.first() shouldBe existingId
+        downloads.shouldBeEmpty()
+        downloadTargets.shouldBeEmpty()
+        ruleSetUpdateCount() shouldBe 0L
+        fileTreeSnapshot(root) shouldBe beforeFiles
+        assets.generationDir(existingId, 2).exists() shouldBe false
+    }
+
+    @Test
+    fun unchangedDecisionRestartsWhenItsRowVanishesBeforeIdResolution() = runTest {
+        val profile = geoIpOnlyProfile()
+        val vanishedId =
+            importer
+                .apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+                .id
+        settings.setActiveRoutingRuleSetId(null)
+        downloads.clear()
+        var deleteOnce = true
+        val racingImporter =
+            RoutingProfileImporter(
+                database = database,
+                repository = repository,
+                assets = assets,
+                geoAssets = geoAssets,
+                settings = settings,
+                validator = validator,
+                downloader = downloader,
+                deletion = deletion,
+                progress = progress,
+                materialisationTimeoutMillis = GEO_DOWNLOAD_TIMEOUT_MILLIS,
+                afterUnchangedDecision = {
+                    if (deleteOnce) {
+                        database.routingRuleSetDao().deleteById(vanishedId)
+                        deleteOnce = false
+                    }
+                },
+            )
+
+        val result =
+            racingImporter
+                .apply(profile, RoutingVerb.Add, RoutingSourceKind.Header, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+
+        result.id shouldBe repository.ruleSetNamed(profile.name).shouldNotBeNull().id
+        result.id shouldBe settings.activeRoutingRuleSetId.first()
+        downloads.shouldNotBeEmpty()
     }
 
     // Was `anUnchangedFailedProfileIsStillAnUnconditionalNoOp`, which asserted
@@ -676,6 +790,52 @@ class RoutingProfileImporterTest {
 
         downloads.shouldBeEmpty()
         repository.observeAllStored().first().single().assetGeneration shouldBe 0L
+    }
+
+    @Test
+    fun aForceFailureBlocksGenerationPublication() = runTest {
+        val forceFailingAssets =
+            RuleSetAssets(
+                root,
+                CooperativeRuleSetFileCopier(),
+                StableFileForcer { throw IOException("injected force failure") },
+            )
+        val forceFailingDeletion =
+            RoutingProfileDeletion(
+                database,
+                repository,
+                forceFailingAssets,
+                settings,
+                ProfileRepository(database.profileDao()),
+            )
+        var commitGenerationReached = false
+        val subject =
+            RoutingProfileImporter(
+                database,
+                repository,
+                forceFailingAssets,
+                geoAssets,
+                settings,
+                validator,
+                downloader,
+                forceFailingDeletion,
+                progress,
+                GEO_DOWNLOAD_TIMEOUT_MILLIS,
+            ) { _, _ -> commitGenerationReached = true }
+
+        val outcome =
+            subject
+                .apply(geoIpOnlyProfile(), RoutingVerb.OnAdd, RoutingSourceKind.Deeplink, null)
+                .shouldBeInstanceOf<ImportOutcome.Failed>()
+
+        outcome.failure shouldBe RuleSetAssetFailure.InstallFailed
+        commitGenerationReached shouldBe false
+        repository.stored(outcome.id).shouldNotBeNull().let { stored ->
+            stored.assetGeneration shouldBe 0L
+            stored.assetState shouldBe RuleSetAssetState.Failed
+            stored.assetFailure shouldBe RuleSetAssetFailure.InstallFailed
+        }
+        settings.activeRoutingRuleSetId.first() shouldBe null
     }
 
     // Regression, device run 2026-08-22 item 9: §7.4.1's dedupe excluded the
@@ -1389,6 +1549,32 @@ class RoutingProfileImporterTest {
                 val path = file.relativeTo(directory).path
                 if (file.isFile) "$path:${file.length()}:${file.sha256()}" else "$path/"
             }.toList()
+
+    private fun installRuleSetUpdateCounter() {
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TABLE routing_rule_set_update_audit (updates INTEGER NOT NULL)",
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "INSERT INTO routing_rule_set_update_audit (updates) VALUES (0)",
+        )
+        database.openHelper.writableDatabase.execSQL(
+            """
+            CREATE TRIGGER count_routing_rule_set_updates
+            AFTER UPDATE ON routing_rule_sets
+            BEGIN
+                UPDATE routing_rule_set_update_audit SET updates = updates + 1;
+            END
+            """.trimIndent(),
+        )
+    }
+
+    private fun ruleSetUpdateCount(): Long =
+        database.openHelper.readableDatabase
+            .query("SELECT updates FROM routing_rule_set_update_audit")
+            .use { cursor ->
+                check(cursor.moveToFirst())
+                cursor.getLong(0)
+            }
 
     private fun File.sha256(): String =
         MessageDigest

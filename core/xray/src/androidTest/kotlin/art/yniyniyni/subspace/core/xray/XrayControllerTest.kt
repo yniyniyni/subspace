@@ -120,6 +120,85 @@ class XrayControllerTest {
             }
         }
 
+    private fun dnsShapes(): Map<String, DnsPlan?> =
+        mapOf(
+            "null plan" to null,
+            "custom DoU setting" to
+                DnsPlan(
+                    servers = listOf(DnsServerSpec("9.9.9.9")),
+                    hosts = emptyMap(),
+                    fakeDns = false,
+                    directMatch = null,
+                    proxyMatch = "9.9.9.9",
+                ),
+            "DoH with bootstrap hosts" to
+                DnsPlan(
+                    servers = listOf(DnsServerSpec("https://cloudflare-dns.com/dns-query")),
+                    hosts = mapOf("cloudflare-dns.com" to "1.1.1.1"),
+                    fakeDns = false,
+                    directMatch = null,
+                    proxyMatch = "cloudflare-dns.com",
+                ),
+            "split scoped server and remote" to
+                DnsPlan(
+                    servers = listOf(
+                        DnsServerSpec(
+                            "8.8.8.8",
+                            domains = listOf("domain:direct.example"),
+                            skipFallback = true,
+                        ),
+                        DnsServerSpec("https://cloudflare-dns.com/dns-query"),
+                    ),
+                    hosts = mapOf("cloudflare-dns.com" to "1.1.1.1"),
+                    fakeDns = false,
+                    directMatch = "8.8.8.8",
+                    proxyMatch = "cloudflare-dns.com",
+                ),
+            "FakeDNS with sniffing" to
+                DnsPlan(
+                    servers = listOf(DnsServerSpec("1.1.1.1")),
+                    hosts = emptyMap(),
+                    fakeDns = true,
+                    directMatch = null,
+                    proxyMatch = "1.1.1.1",
+                ),
+        )
+
+    /**
+     * The generator's DNS branches must be parsed by libXray itself: a JVM
+     * assertion can prove the JSON text we emitted, but not that an Xray DNS
+     * object or resolver-routing rule has the wire shape the core accepts.
+     */
+    @Test
+    fun everyDnsShapeIsAcceptedByTheRealCore() =
+        runTest {
+            val controller = XrayController()
+
+            dnsShapes().entries.forEachIndexed { index, (label, plan) ->
+                val settings =
+                    TunnelSettings(
+                        socksPort = controller.allocatePort(),
+                        dnsServer = "1.1.1.1",
+                        enableSniffing = true,
+                        dns = plan,
+                    )
+                val profile = Profile(id = "id", name = "n", outbound = outbound)
+                val result = XrayConfigGenerator.generate(profile, settings)
+                assertTrue("DNS shape generation must return ConfigResult.Ok", result is ConfigResult.Ok)
+                val configFile = File.createTempFile("instr-dns-shape-$index-", ".json", cacheDir)
+
+                try {
+                    configFile.writeText((result as ConfigResult.Ok).json)
+                    controller.validate(configFile)
+                } catch (e: XrayException) {
+                    // §5.6: libXray's message can quote the generated config.
+                    fail("the core rejected DNS shape $label: ${e.javaClass.simpleName}")
+                } finally {
+                    configFile.delete()
+                }
+            }
+        }
+
     /**
      * The same §10.5 argument as [generatedConfigIsAcceptedByTheRealCore], for the
      * transport blocks — and this is the test that matters most for them.

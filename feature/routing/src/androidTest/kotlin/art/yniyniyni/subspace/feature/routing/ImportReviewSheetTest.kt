@@ -148,6 +148,31 @@ class ImportReviewSheetTest {
     }
 
     @Test
+    fun aFakeDnsDisclosureWithoutSniffingNamesTheRequirement() {
+        setContent(
+            reviewingState.copy(
+                dns = ProfileDns(fakeDns = true),
+                dnsState = DnsState.NeedsSniffing,
+            ),
+        )
+
+        composeRule
+            .onNodeWithText("Asks for FakeDNS, which needs sniffing enabled in Settings")
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun aProfileWithoutDnsShowsNoDnsDisclosure() {
+        setContent(reviewingState.copy(dns = null, dnsState = DnsState.None))
+
+        composeRule.onNodeWithText("Remote DNS:", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Domestic DNS:", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("custom host mapping", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("FakeDNS", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("could not be read", substring = true).assertDoesNotExist()
+    }
+
+    @Test
     fun theFiveDisclosuresRenderFromResources() {
         setContent()
 

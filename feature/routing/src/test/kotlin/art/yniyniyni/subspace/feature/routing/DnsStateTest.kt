@@ -22,6 +22,11 @@ class DnsStateTest {
     }
 
     @Test
+    fun anOrdinaryEmptyDnsBlockIsAppliedNotInvalid() {
+        dnsStateOf(ProfileDns(), sniffingEnabled = true) shouldBe DnsState.Applied
+    }
+
+    @Test
     fun rejectedDnsBlockIsInvalid() {
         dnsStateOf(ProfileDns.INVALID, sniffingEnabled = true) shouldBe DnsState.Invalid
     }

@@ -200,7 +200,17 @@ private fun vmess(
                 )
         }
 
-    val security = if (proxy.text("tls") == "true") tls(common) else Security.None
+    val security =
+        when (parseClashVmessTls(proxy)) {
+            ClashVmessTls.Enabled -> tls(common)
+            ClashVmessTls.Disabled -> Security.None
+            ClashVmessTls.Invalid ->
+                return bad(
+                    index,
+                    ParseFailureReason.MalformedYaml,
+                    FailureDetail.Unsupported(DetailField.Security),
+                )
+        }
     val stream =
         StreamSettings(
             network = common.network,

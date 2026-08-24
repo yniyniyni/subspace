@@ -54,6 +54,7 @@ public enum class DetailField {
     Uuid,
     Password,
     Method,
+    Plugin,
     PublicKey,
     ShortId,
     Fingerprint,

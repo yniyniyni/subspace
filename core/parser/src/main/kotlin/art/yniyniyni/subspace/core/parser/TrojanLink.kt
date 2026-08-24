@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 
 /** Parse a `trojan://password@host:port?params#name` share link. */
@@ -40,7 +41,12 @@ internal fun parseTrojanLink(
     val allowInsecure = uri.query["allowInsecure"] == "1"
     val security = Security.Tls(serverName, fingerprint, allowInsecure)
     val network = uri.query["type"]?.takeIf { it.isNotBlank() } ?: "tcp"
-    val stream = StreamSettings(network = network, security = security)
+    val stream =
+        StreamSettings(
+            network = network,
+            security = security,
+            transport = trojanTransportOptions(uri, network),
+        )
     val outbound =
         TrojanOutbound(
             address = uri.host,
@@ -56,3 +62,29 @@ internal fun parseTrojanLink(
         ),
     )
 }
+
+private fun trojanTransportOptions(
+    uri: UriParts,
+    network: String,
+): TransportOptions =
+    when (network) {
+        "ws" -> {
+            val path = if (uri.query.containsKey("path")) uri.query.getValue("path") else "/"
+            val headers =
+                if (uri.query.containsKey("host")) {
+                    mapOf("Host" to uri.query.getValue("host"))
+                } else {
+                    emptyMap()
+                }
+            TransportOptions.WebSocket(path = path, headers = headers)
+        }
+
+        "grpc" ->
+            if (uri.query.containsKey("serviceName")) {
+                TransportOptions.Grpc(uri.query.getValue("serviceName"))
+            } else {
+                TransportOptions.None
+            }
+
+        else -> TransportOptions.None
+    }

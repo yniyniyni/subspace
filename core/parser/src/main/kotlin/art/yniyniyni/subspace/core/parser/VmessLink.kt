@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.core.parser
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VmessOutbound
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -83,17 +84,23 @@ internal fun parseVmessLink(
     }
 
     val security =
-        if (obj.nonBlankString("tls") == "tls") {
-            val serverName = obj.nonBlankString("sni") ?: obj.nonBlankString("host") ?: address
-            val fingerprint = obj.nonBlankString("fp") ?: "chrome"
-            Security.Tls(serverName, fingerprint, allowInsecure = false)
-        } else {
-            Security.None
+        when (val parsed = vmessSecurity(obj, address)) {
+            is VmessSecurity.Ok -> parsed.security
+            VmessSecurity.Bad ->
+                return LinkResult.Bad(
+                    parseFailure(
+                        index,
+                        ParseFailureReason.MalformedJson,
+                        FailureDetail.Unsupported(DetailField.Security),
+                    ),
+                )
         }
+    val network = obj.nonBlankString("net") ?: "tcp"
     val stream =
         StreamSettings(
-            network = obj.nonBlankString("net") ?: "tcp",
+            network = network,
             security = security,
+            transport = vmessTransportOptions(obj, network),
         )
     val alterId =
         if (!obj.containsKey("aid")) {
@@ -131,6 +138,72 @@ internal fun parseVmessLink(
     )
 }
 
+private sealed interface VmessSecurity {
+    data class Ok(
+        val security: Security,
+    ) : VmessSecurity
+
+    data object Bad : VmessSecurity
+}
+
+private enum class VmessTls {
+    Enabled,
+    Disabled,
+    Invalid,
+}
+
+private fun vmessSecurity(
+    obj: JsonObject,
+    address: String,
+): VmessSecurity =
+    when (vmessTls(obj["tls"])) {
+        VmessTls.Disabled -> VmessSecurity.Ok(Security.None)
+        VmessTls.Invalid -> VmessSecurity.Bad
+        VmessTls.Enabled -> {
+            val serverName = obj.nonBlankString("sni") ?: obj.nonBlankString("host") ?: address
+            val fingerprint = obj.nonBlankString("fp") ?: "chrome"
+            VmessSecurity.Ok(Security.Tls(serverName, fingerprint, allowInsecure = false))
+        }
+    }
+
+private fun vmessTls(value: kotlinx.serialization.json.JsonElement?): VmessTls {
+    val primitive = value as? JsonPrimitive ?: return if (value == null) VmessTls.Disabled else VmessTls.Invalid
+    return if (primitive.isString) {
+        when {
+            primitive.content == "tls" -> VmessTls.Enabled
+            primitive.content.isBlank() -> VmessTls.Disabled
+            else -> VmessTls.Invalid
+        }
+    } else {
+        when (primitive.content) {
+            "true" -> VmessTls.Enabled
+            "false" -> VmessTls.Disabled
+            else -> VmessTls.Invalid
+        }
+    }
+}
+
+private fun vmessTransportOptions(
+    obj: JsonObject,
+    network: String,
+): TransportOptions =
+    when (network) {
+        "ws" -> {
+            val path = obj.stringPreservingEmpty("path") ?: "/"
+            val host = obj.stringPreservingEmpty("host")
+            val headers = if (host == null) emptyMap() else mapOf("Host" to host)
+            TransportOptions.WebSocket(path = path, headers = headers)
+        }
+
+        "grpc" ->
+            obj
+                .stringPreservingEmpty("path")
+                ?.let(TransportOptions::Grpc)
+                ?: TransportOptions.None
+
+        else -> TransportOptions.None
+    }
+
 private fun parseJsonObject(text: String): JsonObject? {
     val element = runCatching { Json.parseToJsonElement(text) }.getOrNull()
     return when (element) {
@@ -144,6 +217,11 @@ private fun JsonObject.stringOrNull(key: String): String? {
     val primitive = this[key] as? JsonPrimitive
     val value = primitive?.content
     return if (primitive?.isString == true) value?.takeIf { it.isNotEmpty() } else null
+}
+
+private fun JsonObject.stringPreservingEmpty(key: String): String? {
+    val primitive = this[key] as? JsonPrimitive
+    return if (primitive?.isString == true) primitive.content else null
 }
 
 private fun JsonObject.integerOrStringIntOrNull(key: String): Int? {

@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.parser
 
 import art.yniyniyni.subspace.core.model.Security
+import art.yniyniyni.subspace.core.model.TransportOptions
 import art.yniyniyni.subspace.core.model.VmessOutbound
 import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.matchers.shouldBe
@@ -131,6 +132,72 @@ class VmessLinkTest {
     }
 
     @Test
+    fun `websocket fields and boolean tls survive parsing`() {
+        val json =
+            """{"add":"host.example","port":443,"id":"$VMESS_UUID","net":"ws",""" +
+                """"path":"/rpc","host":"cdn.example","tls":true,"sni":"sni.example"}"""
+        val out = okOutbound(json)
+
+        out.stream.security shouldBe Security.Tls("sni.example", "chrome", false)
+        out.stream.transport shouldBe
+            TransportOptions.WebSocket(
+                path = "/rpc",
+                headers = mapOf("Host" to "cdn.example"),
+            )
+    }
+
+    @Test
+    fun `boolean false tls imports without security`() {
+        val json = """{"add":"host.example","port":443,"id":"$VMESS_UUID","tls":false}"""
+
+        okOutbound(json).stream.security shouldBe Security.None
+    }
+
+    @Test
+    fun `unknown tls shapes fail closed with a security detail`() {
+        val invalidValues = listOf("\"bogus\"", "null", "[]", "{}", "7")
+
+        invalidValues.forEach { value ->
+            val json = """{"add":"host.example","port":443,"id":"$VMESS_UUID","tls":$value}"""
+            val result = parseVmessLink(vmessLink(json), 0)
+
+            (result as LinkResult.Bad).failure.detail shouldBe
+                FailureDetail.Unsupported(DetailField.Security)
+        }
+    }
+
+    @Test
+    fun `websocket preserves explicit empty path and host`() {
+        val json =
+            """{"add":"host.example","port":443,"id":"$VMESS_UUID","net":"ws","path":"","host":""}"""
+
+        okOutbound(json).stream.transport shouldBe
+            TransportOptions.WebSocket(path = "", headers = mapOf("Host" to ""))
+    }
+
+    @Test
+    fun `websocket distinguishes absent fields from explicit empty fields`() {
+        val json = """{"add":"host.example","port":443,"id":"$VMESS_UUID","net":"ws"}"""
+
+        okOutbound(json).stream.transport shouldBe TransportOptions.WebSocket(path = "/", headers = emptyMap())
+    }
+
+    @Test
+    fun `grpc path survives as service name including explicit empty`() {
+        val named =
+            okOutbound(
+                """{"add":"host.example","port":443,"id":"$VMESS_UUID","net":"grpc","path":"ray"}""",
+            )
+        val empty =
+            okOutbound(
+                """{"add":"host.example","port":443,"id":"$VMESS_UUID","net":"grpc","path":""}""",
+            )
+
+        named.stream.transport shouldBe TransportOptions.Grpc("ray")
+        empty.stream.transport shouldBe TransportOptions.Grpc("")
+    }
+
+    @Test
     fun `arbitrary malformed input never throws`() {
         shouldNotThrowAny {
             parseVmessLink("vmess://\u0000\u0001not-json", -1)
@@ -162,7 +229,7 @@ class VmessLinkTest {
         result.profile.name shouldBe "host.example"
         outbound.stream.network shouldBe "tcp"
         outbound.security shouldBe "auto"
-        outbound.stream.security shouldBe Security.None
+        outbound.stream.security shouldBe Security.Tls("host.example", "chrome", false)
     }
 
     @Test

@@ -21,6 +21,19 @@ class ShadowsocksLinkTest {
     }
 
     @Test
+    fun `rejects SIP003 plugin query instead of importing plain shadowsocks`() {
+        val credentials = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret".toByteArray())
+        val result =
+            parseShadowsocksLink(
+                "ss://$credentials@host.example:8388/?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example#Paris",
+                6,
+            ) as LinkResult.Bad
+
+        result.failure.index shouldBe 6
+        result.failure.detail shouldBe FailureDetail.Unsupported(DetailField.Plugin)
+    }
+
+    @Test
     fun `parses legacy fully encoded form`() {
         val body = Base64.getEncoder().encodeToString("aes-256-gcm:s3cret@host.example:8388".toByteArray())
         val result = parseShadowsocksLink("ss://$body#Oslo", 0) as LinkResult.Ok

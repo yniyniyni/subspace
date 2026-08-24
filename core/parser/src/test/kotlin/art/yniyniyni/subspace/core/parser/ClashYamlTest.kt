@@ -20,6 +20,7 @@ private const val VMESS_BODY =
         "NDhjNS1iMmY0LTRhMWUtOWYzZC0wMTIzNDU2Nzg5YWIiLCJhaWQiOiIwIiwic2N5IjoiYXV0byIsIm5ldCI6InRjcCJ9"
 private const val VMESS_LINK = "vmess://$VMESS_BODY"
 
+@Suppress("LargeClass")
 class ClashYamlTest {
     private val config =
         """

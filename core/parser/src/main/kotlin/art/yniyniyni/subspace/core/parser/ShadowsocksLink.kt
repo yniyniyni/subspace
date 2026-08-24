@@ -41,6 +41,15 @@ private fun parseShadowsocksLinkSafely(
     val body = if (fragmentIndex >= 0) rest.substring(0, fragmentIndex) else rest
     val name = if (fragmentIndex >= 0) percentDecode(rest.substring(fragmentIndex + 1)) else ""
     if (body.isEmpty()) return malformed(index)
+    if (hasSip003Plugin(body)) {
+        return LinkResult.Bad(
+            parseFailure(
+                index,
+                ParseFailureReason.MalformedUri,
+                FailureDetail.Unsupported(DetailField.Plugin),
+            ),
+        )
+    }
 
     // Decide the format before decoding: an outside-blob '@' is SIP002.
     val parts = if (body.contains('@')) parseSip002(body) else parseLegacy(body)
@@ -66,6 +75,15 @@ private fun parseShadowsocksLinkSafely(
     val credential = shadowsocksIdentityMaterial(parts.method, parts.password)
     val id = profileId("ss", parts.host, parts.port, credential)
     return LinkResult.Ok(Profile(id, name.ifBlank { parts.host }, outbound))
+}
+
+private fun hasSip003Plugin(body: String): Boolean {
+    val queryStart = body.indexOf('?')
+    if (queryStart < 0) return false
+    return body
+        .substring(queryStart + 1)
+        .split('&')
+        .any { parameter -> percentDecode(parameter.substringBefore('=')) == "plugin" }
 }
 
 private data class SsParts(

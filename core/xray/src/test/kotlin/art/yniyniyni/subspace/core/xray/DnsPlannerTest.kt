@@ -217,6 +217,46 @@ class DnsPlannerTest {
         plan.hosts shouldBe emptyMap()
     }
 
+    /**
+     * Branch review finding 4 — D1's twin on the profile path. Spec §5.1's
+     * synthesis lives in the import parser, so a row written by M6 (which stored
+     * this column unvalidated and un-synthesised) reaches the planner with a DoH
+     * resolver, a bootstrap IP, and no `DnsHosts` — no pin for the resolver's own
+     * hostname, and `tunAdvertisedAddress()` falling back to the app default.
+     */
+    @Test
+    fun `a profile DoH resolver's bootstrap ip is pinned even when the block carries no hosts`() {
+        val resolver =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+
+        val plan =
+            requireNotNull(
+                DnsPlanner.plan(ProfileDns(remote = resolver), defaultSetting, null, sniffingEnabled = true),
+            )
+
+        plan.hosts shouldBe mapOf("security.cloudflare-dns.com" to "1.1.1.2")
+        plan.tunAdvertisedAddress() shouldBe "1.1.1.2"
+    }
+
+    @Test
+    fun `a profile's own host entry still wins over its resolver's bootstrap ip`() {
+        val resolver =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+        val profile = ProfileDns(remote = resolver, hosts = mapOf("security.cloudflare-dns.com" to "9.9.9.9"))
+
+        val plan = requireNotNull(DnsPlanner.plan(profile, defaultSetting, null, sniffingEnabled = true))
+
+        plan.hosts shouldBe mapOf("security.cloudflare-dns.com" to "9.9.9.9")
+    }
+
     @Test
     fun `fakedns is refused when sniffing is off`() {
         val profile = ProfileDns(fakeDns = true)

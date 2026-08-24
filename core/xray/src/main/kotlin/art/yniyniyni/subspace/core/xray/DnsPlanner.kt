@@ -168,17 +168,33 @@ public object DnsPlanner {
         setting: DnsResolver,
     ): Map<String, String> {
         val profileHosts = dns?.hosts.orEmpty()
-        val bootstrap =
-            if (!usesSetting(dns) || setting.transport != DnsTransport.DOH) {
-                null
-            } else {
-                setting.domain
-                    ?.let(DnsValidation::hostOf)
-                    ?.takeUnless(profileHosts::containsKey)
-                    ?.let { host -> setting.ip?.takeIf(DnsValidation::isAddressLiteral)?.let { ip -> host to ip } }
-            }
-        return bootstrap?.let { profileHosts + it } ?: profileHosts
+        // Whichever resolvers actually supply the servers are the ones whose own
+        // hostnames need pinning. Branch review finding 4: doing this only for the
+        // setting left a row written by M6 — stored before the import parser
+        // synthesised anything — with a DoH endpoint and nothing pinning it.
+        val sources = if (usesSetting(dns)) listOf(setting) else listOfNotNull(dns?.remote, dns?.domestic)
+        val bootstraps =
+            sources
+                .mapNotNull(::bootstrapOf)
+                .filterNot { (host, _) -> profileHosts.containsKey(host) }
+        return profileHosts + bootstraps
     }
+
+    /**
+     * A DoH resolver's `hostname -> bootstrap ip` pin, or null when it has none.
+     *
+     * Spec §5.1, and the same rule `RoutingProfileImport.bootstrapEntries` applies
+     * at import: only DoH has a hostname to resolve, and only an address literal
+     * can break the cycle. Gated on the transport rather than on a non-null domain
+     * because [DnsResolver] permits a DoU value carrying one, and pinning a name
+     * that resolver never dials would be a fabricated A-record.
+     */
+    private fun bootstrapOf(resolver: DnsResolver): Pair<String, String>? =
+        resolver
+            .takeIf { it.transport == DnsTransport.DOH }
+            ?.domain
+            ?.let(DnsValidation::hostOf)
+            ?.let { host -> resolver.ip?.takeIf(DnsValidation::isAddressLiteral)?.let { ip -> host to ip } }
 
     /**
      * Whether the app-level setting, rather than the profile, supplies the servers.

@@ -40,6 +40,22 @@ public class InMemoryRoutingStack(context: Context) {
     public val subscriptionRepository: SubscriptionRepository =
         SubscriptionRepository(database.subscriptionDao(), profiles, database, deletion)
 
+    /**
+     * Overwrites every stored routing fingerprint, standing in for a row written
+     * by a build whose fingerprint algorithm differed from the current one.
+     *
+     * `decideFor` must still recognise identical content as unchanged: the stored
+     * column records what an *older* algorithm computed, and treating it as
+     * authoritative makes every profile re-prompt on the first sync after an
+     * upgrade — spec §4.3's "one unexplained review sheet per user".
+     */
+    public fun forgeStoredFingerprints(value: String) {
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE routing_rule_sets SET fingerprint = ?",
+            arrayOf<Any>(value),
+        )
+    }
+
     public fun close() {
         database.close()
         root.deleteRecursively()

@@ -77,6 +77,56 @@ class ProfileDnsCodecTest {
     // must decode to the same INVALID sentinel the import parser already
     // produces for identical bytes, not to a resolver-less (silently
     // half-applied) block.
+    /**
+     * Branch review finding 2. The codec rejected a resolver only when *both*
+     * address fields were absent, so a DoH entry carrying only an IP — a shape
+     * `RoutingProfileImport.resolverOf` rejects outright, and which an M6-era row
+     * can hold because M6 stored this column unvalidated — decoded to a resolver
+     * whose `xrayAddress()` is null. `DnsPlanner` then saw `hasResolver`, refused
+     * to consult the app-level setting, produced no servers, and returned a null
+     * plan: the M1 config, no hijack, and the user's own resolver silently
+     * discarded while two UI surfaces claimed the profile was setting DNS.
+     */
+    @Test
+    fun aStoredDoHResolverWithNoDomainDecodesToInvalid() {
+        ProfileDnsCodec.decode("""{"RemoteDNSType":"DoH","RemoteDNSIP":"1.1.1.1"}""") shouldBe ProfileDns.INVALID
+    }
+
+    @Test
+    fun aStoredDouResolverWithNoIpDecodesToInvalid() {
+        ProfileDnsCodec.decode(
+            """{"DomesticDNSType":"DoU","DomesticDNSDomain":"https://dns.example/dns-query"}""",
+        ) shouldBe ProfileDns.INVALID
+    }
+
+    /**
+     * Branch review finding 3: the codec filtered malformed `DnsHosts` entries
+     * instead of rejecting the block, which is a half-applied block — the thing
+     * spec §5 makes all-or-nothing. An array value is the shape that matters:
+     * research §1.2 says it is legal upstream, and coercing it to `""` dropped
+     * the mapping silently.
+     */
+    @Test
+    fun aStoredHostsEntryWithAnArrayValueDecodesToInvalid() {
+        ProfileDnsCodec.decode(
+            """{"DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8","DnsHosts":{"a.test":["1.1.1.1"]}}""",
+        ) shouldBe ProfileDns.INVALID
+    }
+
+    @Test
+    fun aStoredHostsEntryWithABlankKeyDecodesToInvalid() {
+        ProfileDnsCodec.decode(
+            """{"DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8","DnsHosts":{"  ":"1.1.1.1"}}""",
+        ) shouldBe ProfileDns.INVALID
+    }
+
+    @Test
+    fun aStoredHostsEntryWithAnUnusableValueDecodesToInvalid() {
+        ProfileDnsCodec.decode(
+            """{"DomesticDNSType":"DoU","DomesticDNSIP":"8.8.8.8","DnsHosts":{"a.test":"not a host"}}""",
+        ) shouldBe ProfileDns.INVALID
+    }
+
     @Test
     fun anUnrecognisedStoredTransportDecodesToInvalid() {
         val stored = """{"RemoteDNSType":"DoQ","RemoteDNSIP":"1.1.1.1"}"""

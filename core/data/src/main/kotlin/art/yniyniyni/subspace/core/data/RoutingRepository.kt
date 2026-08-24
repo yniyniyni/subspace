@@ -223,7 +223,22 @@ internal constructor(
         // the refresh cap "exists to stop a chatty profile hammering a CDN, not
         // to tell the device's owner no". This gate is what makes that true.
         if (existing.assetState != RuleSetAssetState.Ready.name) return UpdateDecision.Changed
-        if (existing.fingerprint == profile.fingerprint()) return UpdateDecision.Unchanged
+        // Recomputed from the stored row, never read from the `fingerprint` column.
+        //
+        // The column records whatever algorithm was current when the row was
+        // written, and M6.5 changed that algorithm: `fingerprint()` went from one
+        // `feed(dnsJson)` to a fold over the typed DNS projection, which moves the
+        // digest of every stored profile — a DNS-less one included, since
+        // `feed(null)` still writes a field separator. Comparing against the column
+        // would answer `Changed` for every row on the first sync after an upgrade,
+        // which is spec §4.3's "one unexplained review sheet per user", or `Stale`
+        // for a row carrying a timestamp, silently refusing a real update.
+        //
+        // Recomputing both sides with the same algorithm makes the comparison
+        // answer the question it is actually asking — "is the delivered content the
+        // content already applied?" — and makes any future change to the algorithm
+        // safe by construction rather than by remembering to write a migration.
+        if (existing.toProfile().fingerprint() == profile.fingerprint()) return UpdateDecision.Unchanged
         val incoming = profile.lastUpdated ?: return UpdateDecision.Changed
         val stored = existing.lastUpdated ?: return UpdateDecision.Changed
         return if (incoming > stored) UpdateDecision.Changed else UpdateDecision.Stale
@@ -385,6 +400,29 @@ private fun RoutingRuleSetEntity.toModel(): RoutingRuleSet =
         domainStrategy = domainStrategy.toDomainStrategy(),
         globalProxy = globalProxy,
     )
+
+/**
+ * The stored row as the profile it was published from, for fingerprinting.
+ *
+ * Every field [RoutingProfile.fingerprint] folds is a column on this table, so the
+ * projection is faithful; `lastUpdated` rides along for completeness even though
+ * the digest excludes it deliberately (it is the freshness gate, not content).
+ */
+private fun RoutingRuleSetEntity.toProfile(): RoutingProfile {
+    val model = toModel()
+    return RoutingProfile(
+        name = model.name,
+        buckets = model.buckets,
+        routeOrder = model.order,
+        domainStrategy = model.domainStrategy,
+        globalProxy = model.globalProxy,
+        geoIpUrl = geoIpUrl,
+        geoSiteUrl = geoSiteUrl,
+        lastUpdated = lastUpdated,
+        dns = ProfileDnsCodec.decode(dnsJson),
+        useChunkFiles = useChunkFiles,
+    )
+}
 
 private fun RoutingRuleSetEntity.toStored(): StoredRuleSet =
     StoredRuleSet(

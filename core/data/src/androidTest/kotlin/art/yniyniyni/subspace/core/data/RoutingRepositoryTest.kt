@@ -219,6 +219,24 @@ class RoutingRepositoryTest {
         stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.Unchanged
     }
 
+    /**
+     * Branch review finding 1, and spec §9's mandated case: M6.5 changed
+     * `fingerprint()` from one `feed(dnsJson)` to a fold over the typed DNS
+     * projection, which changes the digest of **every** stored profile — a
+     * DNS-less one included, because `feed(null)` still writes a separator.
+     * Comparing against the stored column therefore answered `Changed` (a
+     * spurious review sheet) or `Stale` (a real provider update silently
+     * refused) for every row on the first sync after upgrading.
+     */
+    @Test
+    fun aRowWhoseStoredFingerprintPredatesTheCurrentAlgorithmIsStillUnchanged() = runTest {
+        val profile = sampleProfile()
+        publish(profile)
+        stack.forgeStoredFingerprints("an-m6-era-digest-this-algorithm-would-never-produce")
+
+        stack.repository.decideFor(profile) shouldBe RoutingRepository.UpdateDecision.Unchanged
+    }
+
     @Test
     fun bumpingOnlyLastUpdatedIsStillUnchanged() = runTest {
         val profile = sampleProfile()

@@ -75,11 +75,7 @@ public object ProfileDnsCodec {
         val domestic = root.resolver("Domestic")
         if (remote === INVALID_RESOLVER || domestic === INVALID_RESOLVER) return ProfileDns.INVALID
 
-        val hosts =
-            (root["DnsHosts"] as? JsonObject)
-                ?.mapValues { (_, value) -> (value as? JsonPrimitive)?.content.orEmpty() }
-                ?.filterValues { it.isNotEmpty() }
-                .orEmpty()
+        val hosts = root.storedHosts() ?: return ProfileDns.INVALID
 
         return ProfileDns(
             remote = remote,
@@ -87,6 +83,35 @@ public object ProfileDnsCodec {
             hosts = hosts,
             fakeDns = (root["FakeDNS"] as? JsonPrimitive)?.content?.trim()?.lowercase()?.toBooleanOrNull(),
         )
+    }
+
+    /**
+     * `DnsHosts` as stored, or null when it is present and malformed.
+     *
+     * Branch review finding 3: this used to coerce every value with
+     * `content.orEmpty()` and drop the empties. An array value — legal upstream
+     * per research §1.2, and observed on a real panel — coerced to `""` and
+     * vanished, leaving the rest of the block applied. That is a half-applied
+     * block, which spec §5 makes all-or-nothing. The rules here are
+     * `RoutingProfileImport.dnsHostsOf`'s, one for one.
+     */
+    @Suppress("ReturnCount") // Each early return names one distinct malformed shape.
+    private fun JsonObject.storedHosts(): Map<String, String>? {
+        val value = this["DnsHosts"] ?: return emptyMap()
+        val obj = value as? JsonObject ?: return null
+        val out = mutableMapOf<String, String>()
+        for ((key, element) in obj) {
+            if (key.isBlank()) return null
+            val primitive = element as? JsonPrimitive ?: return null
+            if (!primitive.isString) return null
+            val mapped = primitive.content.trim()
+            if (mapped.isEmpty()) return null
+            if (!DnsValidation.isAddressLiteral(mapped) && DnsValidation.hostOf("https://$mapped") == null) {
+                return null
+            }
+            out[key.trim()] = mapped
+        }
+        return out
     }
 
     /** Marker for a resolver whose stored type or address this codec rejects. Never emitted. */
@@ -109,10 +134,18 @@ public object ProfileDnsCodec {
         val domain = (this["${prefix}DNSDomain"] as? JsonPrimitive)?.content?.takeIf(String::isNotBlank)
         val ip = (this["${prefix}DNSIP"] as? JsonPrimitive)?.content?.takeIf(String::isNotBlank)
         if (domain == null && ip == null) return null
+        // Branch review finding 2: completeness, not merely well-formedness. The
+        // parser's `resolverOf` requires the field the transport actually dials —
+        // a DoH URL, a DoU literal — and a partial resolver decoded here would
+        // have a null `xrayAddress()`, which `DnsPlanner` reads as "the profile
+        // named a resolver" while emitting no server at all.
+        val complete =
+            when (transport) {
+                DnsTransport.DOH -> domain != null && DnsValidation.isHttpsUrl(domain)
+                DnsTransport.DOU -> ip != null && DnsValidation.isAddressLiteral(ip)
+            }
+        if (!complete) return INVALID_RESOLVER
         if (ip != null && !DnsValidation.isAddressLiteral(ip)) return INVALID_RESOLVER
-        if (transport == DnsTransport.DOH && domain != null && !DnsValidation.isHttpsUrl(domain)) {
-            return INVALID_RESOLVER
-        }
         return DnsResolver(transport = transport, domain = domain, ip = ip)
     }
 

@@ -23,10 +23,28 @@ import javax.inject.Singleton
 import javax.net.ssl.SSLException
 
 private const val HTTP_NOT_FOUND = 404
+private const val HTTP_SUCCESS_FLOOR = 200
+private const val HTTP_SUCCESS_CEILING = 299
 private const val HTTP_CLIENT_ERROR_FLOOR = 400
 private const val HTTP_SERVER_ERROR_FLOOR = 500
 private const val MAX_REDIRECTS = 5
 private const val HEADER_TRUE = "true"
+
+private const val HTTP_MULTIPLE_CHOICES = 300
+private const val HTTP_MOVED_PERMANENTLY = 301
+private const val HTTP_FOUND = 302
+private const val HTTP_SEE_OTHER = 303
+private const val HTTP_TEMPORARY_REDIRECT = 307
+private const val HTTP_PERMANENT_REDIRECT = 308
+
+private val REDIRECT_STATUS_CODES = setOf(
+    HTTP_MULTIPLE_CHOICES,
+    HTTP_MOVED_PERMANENTLY,
+    HTTP_FOUND,
+    HTTP_SEE_OTHER,
+    HTTP_TEMPORARY_REDIRECT,
+    HTTP_PERMANENT_REDIRECT,
+)
 
 /** How long to wait before the single retry [SubscriptionFetcher.fetch] makes. */
 private const val RETRY_DELAY_MILLIS = 400L
@@ -68,18 +86,18 @@ internal fun safeRedirectTarget(
     currentUrl: HttpUrl,
     location: String,
     redirectsFollowed: Int,
-): HttpUrl? {
-    if (redirectsFollowed >= MAX_REDIRECTS) return null
-
-    val target = currentUrl.resolve(location) ?: return null
-    return target.takeIf {
-        currentUrl.isHttps &&
-            target.isHttps &&
-            target.scheme == currentUrl.scheme &&
-            target.host == currentUrl.host &&
-            target.port == currentUrl.port
+): HttpUrl? =
+    if (redirectsFollowed < MAX_REDIRECTS) {
+        currentUrl.resolve(location)?.takeIf { target ->
+            currentUrl.isHttps &&
+                target.isHttps &&
+                target.scheme == currentUrl.scheme &&
+                target.host == currentUrl.host &&
+                target.port == currentUrl.port
+        }
+    } else {
+        null
     }
-}
 
 /**
  * ARCHITECTURE.md §A.1's first pipeline stage.
@@ -273,7 +291,7 @@ private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
 
         code >= HTTP_CLIENT_ERROR_FLOOR -> FetchOutcome.Failed(FetchFailure.ClientError)
 
-        code in 200..299 -> body.readBounded(MAX_SUBSCRIPTION_BODY_BYTES)
+        code in HTTP_SUCCESS_FLOOR..HTTP_SUCCESS_CEILING -> body.readBounded(MAX_SUBSCRIPTION_BODY_BYTES)
             ?.let { FetchOutcome.Success(it, headers) }
             ?: FetchOutcome.Failed(FetchFailure.ServerError)
 
@@ -281,30 +299,31 @@ private fun Response.toOutcome(headers: Map<String, String>): FetchOutcome {
     }
 }
 
-private fun Int.isRedirectStatus(): Boolean =
-    this == 300 || this == 301 || this == 302 || this == 303 || this == 307 || this == 308
+private fun Int.isRedirectStatus(): Boolean = this in REDIRECT_STATUS_CODES
 
 private fun Interceptor.Chain.proceedWithSafeRedirects(): Response {
     var currentRequest = request()
     var redirectsFollowed = 0
+    var response = proceed(currentRequest)
 
-    while (true) {
-        val response = proceed(currentRequest)
-        if (!response.code.isRedirectStatus() || response.hasHwidFailureMarker()) return response
-
-        val location = response.header("location") ?: return response
-        val target = safeRedirectTarget(
-            currentUrl = response.request.url,
-            location = location,
-            redirectsFollowed = redirectsFollowed,
-        ) ?: return response
+    while (response.code.isRedirectStatus() && !response.hasHwidFailureMarker()) {
+        val target = response.header("location")?.let { location ->
+            safeRedirectTarget(
+                currentUrl = response.request.url,
+                location = location,
+                redirectsFollowed = redirectsFollowed,
+            )
+        } ?: break
 
         response.close()
         // Reusing the request retains subscription headers. This is safe only after the target
         // has passed the HTTPS same-origin check above; no rejected target ever reaches proceed.
         currentRequest = currentRequest.newBuilder().url(target).build()
         redirectsFollowed++
+        response = proceed(currentRequest)
     }
+
+    return response
 }
 
 private fun Response.hasHwidFailureMarker(): Boolean =

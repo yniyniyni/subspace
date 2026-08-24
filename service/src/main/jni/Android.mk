@@ -21,17 +21,18 @@
 #
 # The parent repository owns one reviewed HEV patch under
 # third_party/hev-patches/. Gradle verifies the outer and nested pins, exports
-# only their tracked indexes into service/build/generated/hev-socks5-tunnel,
-# verifies the complete pre/post-patch inventory and exact reviewed hashes, and
-# makes every native configure task depend on that output. This makefile
-# compiles only the generated tree. Upstream hev-jni.c is then the sole source
-# filtered out of that patched copy.
+# only their tracked indexes into immutable generated versions, verifies the
+# complete pre/post-patch inventory and exact reviewed hashes, and atomically
+# publishes the active version through generated/hev-socks5-tunnel/current.
+# Every native configure task depends on that locked publication. This makefile
+# compiles only the active generated tree. Upstream hev-jni.c is then the sole
+# source filtered out of that patched copy.
 #
 # §10.2: this bridge is load-bearing, not boilerplate. Do not refactor it for
 # elegance.
 
 SUBSPACE_JNI_PATH := $(call my-dir)
-HEV_REL := ../../../build/generated/hev-socks5-tunnel
+HEV_REL := ../../../build/generated/hev-socks5-tunnel/current
 HEV_DIR := $(SUBSPACE_JNI_PATH)/$(HEV_REL)
 
 ifeq ($(wildcard $(HEV_DIR)/src/hev-main.c),)

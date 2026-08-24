@@ -36,10 +36,100 @@ if [[ "$patch_file" != "$expected_patch" ]]; then
     echo "refusing unexpected HEV patch path: $patch_file" >&2
     exit 5
 fi
-if [[ -L "$output_dir" ]]; then
-    echo "refusing symlinked generated HEV path: $output_dir" >&2
+if [[ -L "$output_dir" || ( -e "$output_dir" && ! -d "$output_dir" ) ]]; then
+    echo "refusing non-directory generated HEV root: $output_dir" >&2
     exit 6
 fi
+
+output_parent="$(dirname "$output_dir")"
+lock_path="${output_dir}.prepare.lock"
+invocation_token="$$.$RANDOM.$(date +%s)"
+lock_claimed=0
+lock_claim="${lock_path}.claim.${invocation_token}"
+scratch_root=""
+published_version=""
+active_published=0
+active_link_tmp=""
+legacy_backup="${output_dir}.legacy.${invocation_token}"
+legacy_moved=0
+mkdir -p "$output_parent"
+
+release_lock() {
+    local recorded_token=""
+
+    if [[ "$lock_claimed" -eq 1 && -f "$lock_path" ]]; then
+        read -r recorded_token _ <"$lock_path" || true
+        if [[ "$recorded_token" == "$invocation_token" ]]; then
+            rm -f "$lock_path"
+        fi
+    fi
+    rm -f "$lock_claim"
+}
+
+cleanup() {
+    local status=$?
+
+    trap - EXIT INT TERM
+    if [[ -n "$active_link_tmp" && -L "$active_link_tmp" ]]; then
+        rm -f "$active_link_tmp"
+    fi
+    if [[ -n "$published_version" && "$active_published" -eq 0 &&
+        -d "$published_version" ]]; then
+        rm -rf "$published_version"
+    fi
+    if [[ "$legacy_moved" -eq 1 && -d "$legacy_backup" ]]; then
+        if [[ -L "$output_dir/current" ]]; then
+            rm -rf "$legacy_backup"
+        else
+            rm -rf "$output_dir"
+            mv "$legacy_backup" "$output_dir"
+        fi
+    fi
+    if [[ -n "$scratch_root" && -d "$scratch_root" ]]; then
+        rm -rf "$scratch_root"
+    fi
+    release_lock
+    exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+printf '%s %s %s\n' "$invocation_token" "$$" "$(date +%s)" >"$lock_claim"
+lock_deadline=$((SECONDS + 120))
+while ! ln "$lock_claim" "$lock_path" 2>/dev/null; do
+    owner_token=""
+    owner_pid=""
+    if [[ -f "$lock_path" ]]; then
+        read -r owner_token owner_pid _ <"$lock_path" || true
+    fi
+
+    stale=0
+    if [[ -n "$owner_token" && "$owner_pid" =~ ^[0-9]+$ ]]; then
+        if ! kill -0 "$owner_pid" 2>/dev/null; then
+            stale=1
+        fi
+    else
+        lock_mtime="$(stat -f %m "$lock_path" 2>/dev/null || stat -c %Y "$lock_path" 2>/dev/null || true)"
+        now="$(date +%s)"
+        if [[ "$lock_mtime" =~ ^[0-9]+$ && $((now - lock_mtime)) -ge 5 ]]; then
+            stale=1
+        fi
+    fi
+
+    if [[ "$stale" -eq 1 ]]; then
+        stale_lock="${lock_path}.stale.${invocation_token}"
+        if mv "$lock_path" "$stale_lock" 2>/dev/null; then
+            rm -f "$stale_lock"
+            continue
+        fi
+    fi
+
+    if [[ "$SECONDS" -ge "$lock_deadline" ]]; then
+        echo "timed out waiting for HEV preparation lock: $lock_path" >&2
+        exit 7
+    fi
+    sleep 0.05
+done
+lock_claimed=1
 
 parent_gitlink="$(
     git -C "$repo_root" ls-files --stage -- third_party/hev-socks5-tunnel |
@@ -47,13 +137,13 @@ parent_gitlink="$(
 )"
 if [[ "$parent_gitlink" != "$expected_commit" ]]; then
     echo "parent HEV gitlink must be $expected_commit, found ${parent_gitlink:-missing}" >&2
-    exit 7
+    exit 8
 fi
 
 actual_commit="$(git -C "$source_dir" rev-parse HEAD)"
 if [[ "$actual_commit" != "$expected_commit" ]]; then
     echo "hev-socks5-tunnel must be pinned at $expected_commit, found $actual_commit" >&2
-    exit 8
+    exit 9
 fi
 
 dirty="$(
@@ -132,8 +222,6 @@ for required in \
     fi
 done
 
-output_parent="$(dirname "$output_dir")"
-mkdir -p "$output_parent"
 scratch_root="$(mktemp -d "$output_parent/.hev-socks5-tunnel.XXXXXX")"
 staging_dir="$scratch_root/tree"
 expected_before_raw="$scratch_root/expected-before.raw"
@@ -143,25 +231,7 @@ expected_after="$scratch_root/expected-after"
 actual_manifest="$scratch_root/actual"
 expected_changed="$scratch_root/expected-changed"
 actual_changed="$scratch_root/actual-changed"
-previous_output="${output_dir}.previous"
-swap_started=0
 mkdir -p "$staging_dir"
-
-cleanup_scratch() {
-    local status=$?
-
-    trap - EXIT INT TERM
-    if [[ "$swap_started" -eq 1 && -e "$previous_output" ]]; then
-        if [[ -e "$output_dir" ]]; then
-            rm -rf "$previous_output"
-        else
-            mv "$previous_output" "$output_dir"
-        fi
-    fi
-    rm -rf "$scratch_root"
-    exit "$status"
-}
-trap cleanup_scratch EXIT INT TERM
 
 append_index_manifest() {
     local repo="$1"
@@ -255,19 +325,75 @@ fi
 
 rm -rf "$staging_dir/.git"
 
-rm -rf "$previous_output"
-swap_started=1
-if [[ -e "$output_dir" ]]; then
-    mv "$output_dir" "$previous_output"
+capture_inventory() {
+    local tree="$1"
+    local destination="$2"
+    local label="$3"
+    local metadata_dir="$scratch_root/inventory-$label"
+
+    git init -q "$metadata_dir"
+    git --git-dir="$metadata_dir/.git" --work-tree="$tree" add -f -A
+    git --git-dir="$metadata_dir/.git" --work-tree="$tree" ls-files --stage -z |
+        LC_ALL=C sort -z >"$destination"
+}
+
+if [[ -d "$output_dir" && ! -e "$output_dir/current" &&
+    ! -L "$output_dir/current" && ! -d "$output_dir/versions" ]]; then
+    mv "$output_dir" "$legacy_backup"
+    legacy_moved=1
+    mkdir -p "$output_dir"
+elif [[ ! -e "$output_dir" ]]; then
+    mkdir -p "$output_dir"
 fi
-if ! mv "$staging_dir" "$output_dir"; then
-    if [[ -e "$previous_output" ]]; then
-        mv "$previous_output" "$output_dir"
-    fi
-    echo "failed to install verified generated HEV tree" >&2
+
+if [[ -e "$output_dir/current" && ! -L "$output_dir/current" ]]; then
+    echo "generated HEV current path must be an atomic symlink" >&2
     exit 20
 fi
-rm -rf "$previous_output"
-swap_started=0
+mkdir -p "$output_dir/versions"
 
-echo "Prepared verified recursive HEV inventory $expected_commit with $(basename "$patch_file")"
+if [[ -L "$output_dir/current" && -d "$output_dir/current" ]]; then
+    active_manifest="$scratch_root/active-manifest"
+    capture_inventory "$output_dir/current" "$active_manifest" active
+    if cmp -s "$expected_after" "$active_manifest"; then
+        if [[ "$legacy_moved" -eq 1 ]]; then
+            rm -rf "$legacy_backup"
+            legacy_moved=0
+        fi
+        echo "Reused verified recursive HEV inventory $expected_commit with $(basename "$patch_file")"
+        exit 0
+    fi
+fi
+
+manifest_id="$(git hash-object "$expected_after")"
+publish_name="${manifest_id}.${invocation_token}"
+published_version="$output_dir/versions/$publish_name"
+mv "$staging_dir" "$published_version"
+
+active_link_tmp="$output_dir/.current.${invocation_token}"
+ln -s "versions/$publish_name" "$active_link_tmp"
+if [[ -L "$output_dir/current" ]]; then
+    case "$(uname -s)" in
+    Darwin)
+        mv -fh "$active_link_tmp" "$output_dir/current"
+        ;;
+    Linux)
+        mv -Tf "$active_link_tmp" "$output_dir/current"
+        ;;
+    *)
+        echo "unsupported platform for atomic HEV symlink replacement" >&2
+        exit 21
+        ;;
+    esac
+else
+    mv "$active_link_tmp" "$output_dir/current"
+fi
+active_link_tmp=""
+active_published=1
+
+if [[ "$legacy_moved" -eq 1 ]]; then
+    rm -rf "$legacy_backup"
+    legacy_moved=0
+fi
+
+echo "Published verified recursive HEV inventory $expected_commit with $(basename "$patch_file")"

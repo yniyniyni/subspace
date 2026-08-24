@@ -50,7 +50,7 @@ val preparePatchedHev =
 val testHevSourceIsolation =
     tasks.register<Exec>("testHevSourceIsolation") {
         group = "verification"
-        description = "Proves untracked and ignored outer/nested HEV C files cannot enter the build tree"
+        description = "Proves isolated HEV source filtering and concurrent atomic publication"
         dependsOn(preparePatchedHev)
 
         inputs.property("hevBaseCommit", hevBaseCommit)

@@ -130,6 +130,63 @@ class DnsPlannerTest {
         plan.hosts shouldBe mapOf("security.cloudflare-dns.com" to "1.1.1.2")
     }
 
+    /**
+     * Review finding 4: `hostsFor` inferred "this is DoH" from `domain != null`
+     * rather than from the transport, unlike its counterpart
+     * `RoutingProfileImport.bootstrapEntries`. `DnsResolver` permits a DoU value
+     * carrying a domain, and for that input the server emitted is the DoU literal
+     * while the bootstrap would pin a hostname the resolver never contacts.
+     */
+    @Test
+    fun `a DoU setting carrying a domain does not fabricate a bootstrap entry`() {
+        val setting =
+            DnsResolver(
+                DnsTransport.DOU,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+
+        val plan = requireNotNull(DnsPlanner.plan(null, setting, null, sniffingEnabled = true))
+
+        plan.hosts shouldBe emptyMap()
+    }
+
+    /**
+     * Review finding 7: D1's user-visible symptom was the TUN advertising the app
+     * default instead of the bootstrap IP, and every existing `tunAdvertisedAddress`
+     * test hand-builds a [DnsPlan] "so each case is isolated" — which is exactly how
+     * the defect survived a green build. This one composes `plan()` with it.
+     */
+    @Test
+    fun `an app-level DoH setting's bootstrap reaches the TUN advertised address`() {
+        val setting =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+
+        val plan = requireNotNull(DnsPlanner.plan(null, setting, null, sniffingEnabled = true))
+
+        plan.tunAdvertisedAddress() shouldBe "1.1.1.2"
+    }
+
+    @Test
+    fun `the setting's bootstrap is added alongside a profile's unrelated host entries`() {
+        val setting =
+            DnsResolver(
+                DnsTransport.DOH,
+                domain = "https://security.cloudflare-dns.com/dns-query",
+                ip = "1.1.1.2",
+            )
+        val profile = ProfileDns(hosts = mapOf("pinned.example" to "10.0.0.1"))
+
+        val plan = requireNotNull(DnsPlanner.plan(profile, setting, null, sniffingEnabled = true))
+
+        plan.hosts shouldBe
+            mapOf("pinned.example" to "10.0.0.1", "security.cloudflare-dns.com" to "1.1.1.2")
+    }
+
     @Test
     fun `a profile host entry for the setting's resolver hostname is not overwritten`() {
         val setting =

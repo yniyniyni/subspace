@@ -215,18 +215,24 @@ the one that actually reaches a misbehaving app:
   addressed to the ISP's own resolver comes back answered by the *configured*
   resolver; with no plan emitted, the same query is silently swallowed.
 
-The rules that claim the configured resolvers' own traffic must be
-**prepended ahead of** the port-53 hijack. A resolver's outbound query is
-itself UDP to port 53, so if nothing claims it first it matches the hijack
-and is fed straight back into the resolver that issued it.
+**The hijack is a loop hazard unless something claims the resolver's own
+traffic first.** The built-in resolver's query *to a DoU server* is itself
+UDP to port 53, so if nothing ahead of the hijack claims it, it matches the
+hijack and is fed straight back into the resolver that issued it. What
+guarantees that is the **unconditional catch-all** — one rule matching
+`inboundTag: ["dns-module"]` with no address filter, emitted on every plan,
+targeting `proxy` and never `direct`. The per-resolver rules above it are
+conditional (a plan often has neither) and exist to *split* domestic-direct
+from remote-proxy, not to provide this guarantee. §6 has the order.
 
 **A `+local` scheme bypasses the routing component, and therefore the
 tunnel.** `https+local://`, `h2c+local://`, `tcp+local://`, `quic+local://`
 and `localhost` are constructed without the dispatcher, so no routing rule
 can pull their queries back — for a remote resolver that is a leak by
-construction. Never emit one. Note there is no plain `quic://` at all: DoQ is
-local-only upstream, so it cannot be used for a remote resolver at any
-version we pin. Sourced in
+construction. Never emit one. Note there is no plain `quic://` at all at the
+pinned v26.7.11: DoQ is local-only there, so it cannot be used for a remote
+resolver — established by reading the scheme switch at that one tag, and not
+claimed beyond it. Sourced in
 `docs/agent/research/2026-08-23-xray-dns.md` §2.
 
 If only one lever is set you get a partial leak that works fine on Wi-Fi and
@@ -311,7 +317,8 @@ outbounds: [proxy (from profile), direct (freedom), block (blackhole)
             + dns-out (protocol "dns") when a DNS plan exists]
 routing:   [DNS rules, prepended] then rules referencing geoip.dat /
            geosite.dat, then user rules
-dns:       servers + per-domain overrides + hosts, tag "dns-module"
+dns:       servers (+ hosts, queryStrategy and tag "dns-module" only when
+           a DNS plan exists; the no-plan form is servers alone)
 stats/api: enabled when traffic counters are on
 ```
 
@@ -319,20 +326,31 @@ The DNS rules, when a plan exists, are prepended in this order — the order
 is load-bearing (§5.2):
 
 ```
-{ "inboundTag": ["dns-module"], "ip"|"domain": [<domestic>], "outboundTag": "direct" }
-{ "inboundTag": ["dns-module"], "ip"|"domain": [<remote>],   "outboundTag": "proxy"  }
-{ "inboundTag": ["dns-module"],                              "outboundTag": "proxy"  }
-{ "network": "tcp,udp", "port": 53,                          "outboundTag": "dns-out" }
+[if the plan has a domestic match]
+{ "type": "field", "inboundTag": ["dns-module"], "ip"|"domain": [<domestic>], "outboundTag": "direct" }
+[if the plan has a remote match]
+{ "type": "field", "inboundTag": ["dns-module"], "ip"|"domain": [<remote>],   "outboundTag": "proxy"  }
+[always]
+{ "type": "field", "inboundTag": ["dns-module"],                              "outboundTag": "proxy"  }
+{ "type": "field", "network": "tcp,udp", "port": 53,                          "outboundTag": "dns-out" }
 ```
 
-The first two claim each configured resolver's own traffic — matched by
-address, `ip` for a literal and `domain` for a DoH endpoint's hostname — and
-they exist so that resolver traffic is routed before the unconditional
-port-53 hijack can capture it. The third is the catch-all for everything else
-the DNS module emits. `dns-out` is emitted as bare
-`{ "tag": "dns-out", "protocol": "dns" }`: it carries no settings, so it
-touches neither the legacy nor the rewrite generation of `DNSOutboundConfig`
-and is stable across upstream's deprecation.
+The first two are **conditional** and are the *split*: they claim one named
+resolver's own traffic each — matched by address, `ip` for a literal and
+`domain` for a DoH endpoint's hostname — and send the domestic one direct and
+the remote one through the proxy. A plan frequently has neither, which is why
+they cannot be what makes the arrangement loop-safe.
+
+The third is **unconditional**, and it is the one that matters: it claims *all*
+remaining DNS-module traffic before the hijack below it can see it (§5.2).
+Its target is `proxy`, never `direct` — a resolver query sent `direct` leaves
+the tunnel, which is the exact leak the plan exists to prevent. Do not treat
+it as a residual case of the two above it; delete it and every plan without a
+named profile resolver loops.
+
+`dns-out` is emitted as bare `{ "tag": "dns-out", "protocol": "dns" }`: it
+carries no settings, so it touches neither the legacy nor the rewrite
+generation of `DNSOutboundConfig` and is stable across upstream's deprecation.
 
 When nothing asks for DNS — no profile block and the app-level setting at its
 default — **none of this is emitted**, and the config is byte-identical to the

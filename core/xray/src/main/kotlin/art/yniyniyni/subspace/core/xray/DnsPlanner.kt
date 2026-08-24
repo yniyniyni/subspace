@@ -2,6 +2,7 @@
 package art.yniyniyni.subspace.core.xray
 
 import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.DnsValidation
 import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
@@ -154,6 +155,13 @@ public object DnsPlanner {
      * resolver has already been through the parser — and only when the profile's own
      * `DnsHosts` does not already name that hostname, mirroring §5.1's precedence: an
      * author who wrote a different mapping meant it.
+     *
+     * That precedence check is an exact-key one, so an author who wrote the same
+     * hostname in a prefixed form (`full:`/`domain:`) is not detected and both
+     * entries end up in `hosts`. `RoutingProfileImport.bootstrapEntries` has the
+     * same gap and this deliberately mirrors it rather than diverging; closing it
+     * belongs with a shared bootstrap helper in `:core:model`, which both call
+     * sites could then use, not with two independent partial fixes.
      */
     private fun hostsFor(
         dns: ProfileDns?,
@@ -161,7 +169,7 @@ public object DnsPlanner {
     ): Map<String, String> {
         val profileHosts = dns?.hosts.orEmpty()
         val bootstrap =
-            if (dns?.hasResolver == true) {
+            if (!usesSetting(dns) || setting.transport != DnsTransport.DOH) {
                 null
             } else {
                 setting.domain
@@ -171,6 +179,20 @@ public object DnsPlanner {
             }
         return bootstrap?.let { profileHosts + it } ?: profileHosts
     }
+
+    /**
+     * Whether the app-level setting, rather than the profile, supplies the servers.
+     *
+     * [buildServers] and [hostsFor] must partition their inputs identically — the
+     * bootstrap entry has to accompany the server it bootstraps — so the rule has
+     * one definition here and one name to grep for.
+     *
+     * [buildServers] still writes its guard out as `dns == null || !dns.hasResolver`
+     * rather than calling this: the negation is what smart-casts `dns` to non-null
+     * for the rest of that function, and a call through here defeats it. The two
+     * must stay complementary, which is what this KDoc exists to say out loud.
+     */
+    private fun usesSetting(dns: ProfileDns?): Boolean = dns?.hasResolver != true
 
     private fun buildServers(
         dns: ProfileDns?,

@@ -7,11 +7,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 live_hev="$repo_root/third_party/hev-socks5-tunnel"
 scratch_root="$(mktemp -d /tmp/subspace-hev-isolation.XXXXXX)"
+scratch_root="$(cd -P "$scratch_root" && pwd -P)"
 fixture_repo="$scratch_root/repo"
 fixture_hev="$fixture_repo/third_party/hev-socks5-tunnel"
 fixture_lwip="$fixture_hev/third-part/lwip"
 fixture_prepare="$fixture_repo/scripts/prepare-hev-socks5-tunnel.sh"
-fixture_lock_runner="$fixture_repo/scripts/HevPrepareLock.java"
+fixture_locked_prepare="$fixture_repo/scripts/prepare-hev-socks5-tunnel-locked.sh"
+fixture_lock_wrapper="$fixture_repo/scripts/with-hev-prepare-lock.pl"
 fixture_patch="$fixture_repo/third_party/hev-patches/0001-nonblocking-pending-stop.patch"
 fixture_output="$fixture_repo/service/build/generated/hev-socks5-tunnel"
 expected_main_blob="4531e91976da4c57f596bb20eda5ed9f02747caf"
@@ -123,6 +125,63 @@ expect_malformed_output_rejected() {
     assert_no_scoped_debris
 }
 
+start_paused_preparation() {
+    local label="$1"
+
+    active_pause_fifo="$scratch_root/$label.fifo"
+    active_pause_ready="$scratch_root/$label.ready"
+    rm -f "$active_pause_fifo" "$active_pause_ready"
+    mkfifo "$active_pause_fifo"
+    SUBSPACE_HEV_PREPARE_TEST_PAUSE_FIFO="$active_pause_fifo" \
+    SUBSPACE_HEV_PREPARE_TEST_PAUSE_READY="$active_pause_ready" \
+        "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+        >"$scratch_root/$label-holder.log" 2>&1 &
+    runner_holder_pid=$!
+    for _ in {1..200}; do
+        [[ -e "$active_pause_ready" ]] && break
+        ! kill -0 "$runner_holder_pid" 2>/dev/null && break
+        sleep 0.05
+    done
+    if [[ ! -e "$active_pause_ready" ]]; then
+        wait "$runner_holder_pid" 2>/dev/null || true
+        runner_holder_pid=""
+        echo "real HEV preparation did not pause inside its critical section: $label" >&2
+        exit 1
+    fi
+}
+
+start_preparation_contender() {
+    local label="$1"
+
+    "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+        >"$scratch_root/$label-contender.log" 2>&1 &
+    runner_contender_pid=$!
+    sleep 0.25
+    if ! kill -0 "$runner_contender_pid" 2>/dev/null || [[ -e "$fixture_output" ]]; then
+        echo "HEV preparation contender entered while owner was paused: $label" >&2
+        exit 1
+    fi
+}
+
+wait_for_preparation_contender() {
+    local label="$1"
+
+    for _ in {1..400}; do
+        ! kill -0 "$runner_contender_pid" 2>/dev/null && break
+        sleep 0.05
+    done
+    if kill -0 "$runner_contender_pid" 2>/dev/null; then
+        echo "kernel lock was not released after real preparation owner exit: $label" >&2
+        exit 1
+    fi
+    wait "$runner_contender_pid"
+    runner_contender_pid=""
+    if [[ ! -L "$fixture_output/current" ]]; then
+        echo "contender did not publish after real preparation owner exit: $label" >&2
+        exit 1
+    fi
+}
+
 snapshot_live_metadata "$scratch_root/live-metadata-before"
 parent_commit="$(git -C "$repo_root" rev-parse HEAD)"
 clone_at "$repo_root" "$fixture_repo" "$parent_commit"
@@ -136,7 +195,46 @@ done
 # Exercise the working implementation while every repository and Git metadata
 # path it can mutate belongs to this disposable fixture.
 cp "$script_dir/prepare-hev-socks5-tunnel.sh" "$fixture_prepare"
-cp "$script_dir/HevPrepareLock.java" "$fixture_lock_runner"
+cp "$script_dir/prepare-hev-socks5-tunnel-locked.sh" "$fixture_locked_prepare"
+cp "$script_dir/with-hev-prepare-lock.pl" "$fixture_lock_wrapper"
+
+# The public entry point must reject a redirected build ancestor before it
+# creates the lock, output, scratch space, or any other external entry.
+reset_external_sentinel
+rm -rf "$fixture_repo/service/build"
+ln -s "$external_dir" "$fixture_repo/service/build"
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    >"$scratch_root/service-build-symlink.log" 2>&1; then
+    echo "preparation accepted a symlinked service/build ancestor" >&2
+    exit 1
+fi
+assert_external_sentinel_unchanged
+rm "$fixture_repo/service/build"
+
+reset_external_sentinel
+mkdir -p "$fixture_repo/service/build"
+ln -s "$external_dir" "$fixture_repo/service/build/generated"
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    >"$scratch_root/service-build-generated-symlink.log" 2>&1; then
+    echo "preparation accepted a symlinked service/build/generated ancestor" >&2
+    exit 1
+fi
+assert_external_sentinel_unchanged
+rm "$fixture_repo/service/build/generated"
+
+# Kill the real preparation process while its shell is paused inside the
+# inherited-lock critical section. The pause is a Bash builtin, so it creates
+# no child that could outlive the owner and mutate after the lock is released.
+clear_fixture_output
+start_paused_preparation production-sigkill
+start_preparation_contender production-sigkill
+kill -KILL "$runner_holder_pid"
+if wait "$runner_holder_pid" 2>/dev/null; then
+    echo "SIGKILLed real HEV preparation owner reported success" >&2
+    exit 1
+fi
+runner_holder_pid=""
+wait_for_preparation_contender production-sigkill
 
 outer_tracked="$fixture_hev/src/hev-main.c"
 nested_tracked="$fixture_lwip/Android.mk"
@@ -291,146 +389,36 @@ fi
 rmdir "$lock_path"
 "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch"
 
-# The OS lock must serialize contenders, terminate the holder's child on a
-# normal process termination, and become immediately acquirable afterward.
-runner_lock="$scratch_root/runner-lock"
-holder_ready="$scratch_root/holder-ready"
-holder_child_pid="$scratch_root/holder-child-pid"
-contender_acquired="$scratch_root/contender-acquired"
-# shellcheck disable=SC2016 # Positional parameters expand in the child shell.
-java "$fixture_lock_runner" "$runner_lock" /bin/sh -c \
-    'printf "%s\n" "$$" >"$2"; : >"$1"; trap "exit 143" TERM; while :; do sleep 1; done' \
-    hev-lock-holder "$holder_ready" "$holder_child_pid" \
-    >"$scratch_root/holder.log" 2>&1 &
-runner_holder_pid=$!
-for _ in {1..200}; do
-    [[ -e "$holder_ready" ]] && break
-    sleep 0.05
-done
-if [[ ! -e "$holder_ready" ]]; then
-    echo "OS lock holder did not become ready" >&2
+# The internal implementation is not a public bypass. It rejects a missing
+# descriptor, and a caller-opened but unlocked descriptor cannot pass while a
+# real owner holds the expected lock inode.
+if /bin/bash "$fixture_locked_prepare" \
+    "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    >"$scratch_root/direct-internal.log" 2>&1; then
+    echo "internal HEV preparation accepted a missing inherited lock" >&2
     exit 1
 fi
 
-# shellcheck disable=SC2016 # Positional parameter expands in the child shell.
-java "$fixture_lock_runner" "$runner_lock" /bin/sh -c ': >"$1"' \
-    hev-lock-contender "$contender_acquired" \
-    >"$scratch_root/contender.log" 2>&1 &
-runner_contender_pid=$!
-for _ in {1..10}; do
-    if [[ -e "$contender_acquired" ]]; then
-        echo "OS lock admitted a contender while the holder was live" >&2
-        exit 1
-    fi
-    sleep 0.05
-done
-
+clear_fixture_output
+start_paused_preparation production-term
+lock_path="${fixture_output}.prepare.lock"
+exec 9<>"$lock_path"
+if SUBSPACE_HEV_PREPARE_LOCK_FD=9 \
+    /bin/bash "$fixture_locked_prepare" \
+        "$fixture_hev" "$fixture_output" "$fixture_patch" \
+        >"$scratch_root/forged-lock-fd.log" 2>&1; then
+    echo "internal HEV preparation accepted an unlocked forged descriptor" >&2
+    exit 1
+fi
+exec 9>&-
+start_preparation_contender production-term
 kill -TERM "$runner_holder_pid"
-if wait "$runner_holder_pid"; then
-    echo "terminated OS lock holder reported success" >&2
-    exit 1
-fi
-runner_holder_pid=""
-for _ in {1..200}; do
-    ! kill -0 "$runner_contender_pid" 2>/dev/null && break
-    sleep 0.05
-done
-if kill -0 "$runner_contender_pid" 2>/dev/null; then
-    echo "OS lock was not released after holder termination" >&2
-    exit 1
-fi
-wait "$runner_contender_pid"
-runner_contender_pid=""
-holder_child="$(cat "$holder_child_pid")"
-if [[ ! -e "$contender_acquired" ]]; then
-    echo "holder termination did not recover the OS lock cleanly" >&2
-    exit 1
-fi
-if [[ "$holder_child" =~ ^[0-9]+$ ]] && kill -0 "$holder_child" 2>/dev/null; then
-    echo "OS lock runner left its terminated child alive" >&2
-    exit 1
-fi
-
-# A hard crash bypasses shutdown hooks. The kernel must nevertheless release
-# the lock immediately; this test child observes its original parent vanish and
-# then exits without leaving a process behind.
-crashed_holder_lock="$scratch_root/crashed-holder-lock"
-crashed_holder_ready="$scratch_root/crashed-holder-ready"
-crashed_holder_child_pid="$scratch_root/crashed-holder-child-pid"
-crashed_holder_acquired="$scratch_root/crashed-holder-acquired"
-# shellcheck disable=SC2016 # Positional parameters expand in the child shell.
-java "$fixture_lock_runner" "$crashed_holder_lock" /bin/sh -c \
-    'parent=$PPID; printf "%s\n" "$$" >"$2"; : >"$1"; while kill -0 "$parent" 2>/dev/null; do :; done' \
-    hev-lock-crashed-holder "$crashed_holder_ready" "$crashed_holder_child_pid" \
-    >"$scratch_root/crashed-holder.log" 2>&1 &
-runner_holder_pid=$!
-for _ in {1..200}; do
-    [[ -e "$crashed_holder_ready" ]] && break
-    sleep 0.05
-done
-if [[ ! -e "$crashed_holder_ready" ]]; then
-    echo "crashed OS lock holder did not become ready" >&2
-    exit 1
-fi
-
-# shellcheck disable=SC2016 # Positional parameter expands in the child shell.
-java "$fixture_lock_runner" "$crashed_holder_lock" /bin/sh -c ': >"$1"' \
-    hev-lock-crashed-holder-contender "$crashed_holder_acquired" \
-    >"$scratch_root/crashed-holder-contender.log" 2>&1 &
-runner_contender_pid=$!
-sleep 0.25
-if [[ -e "$crashed_holder_acquired" ]]; then
-    echo "OS lock admitted a contender before its holder crashed" >&2
-    exit 1
-fi
-
-kill -KILL "$runner_holder_pid"
 if wait "$runner_holder_pid" 2>/dev/null; then
-    echo "crashed OS lock holder reported success" >&2
+    echo "terminated real HEV preparation owner reported success" >&2
     exit 1
 fi
 runner_holder_pid=""
-for _ in {1..200}; do
-    ! kill -0 "$runner_contender_pid" 2>/dev/null && break
-    sleep 0.05
-done
-if kill -0 "$runner_contender_pid" 2>/dev/null; then
-    echo "OS lock was not released after holder crash" >&2
-    exit 1
-fi
-wait "$runner_contender_pid"
-runner_contender_pid=""
-crashed_holder_child="$(cat "$crashed_holder_child_pid")"
-for _ in {1..200}; do
-    ! kill -0 "$crashed_holder_child" 2>/dev/null && break
-    sleep 0.05
-done
-if [[ ! -e "$crashed_holder_acquired" ]]; then
-    echo "holder crash did not recover the lock" >&2
-    exit 1
-fi
-if [[ "$crashed_holder_child" =~ ^[0-9]+$ ]] &&
-    kill -0 "$crashed_holder_child" 2>/dev/null; then
-    echo "crashed OS lock holder left its child alive" >&2
-    exit 1
-fi
-
-# An abnormal child-command death must propagate as failure and release the
-# lock for the very next invocation without owner metadata or stale recovery.
-crash_lock="$scratch_root/crash-lock"
-crash_recovered="$scratch_root/crash-recovered"
-if java "$fixture_lock_runner" "$crash_lock" /bin/sh -c 'kill -ABRT $$' \
-    >"$scratch_root/crash.log" 2>&1; then
-    echo "crashed command under OS lock reported success" >&2
-    exit 1
-fi
-# shellcheck disable=SC2016 # Positional parameter expands in the child shell.
-java "$fixture_lock_runner" "$crash_lock" /bin/sh -c ': >"$1"' \
-    hev-lock-crash-recovery "$crash_recovered"
-if [[ ! -e "$crash_recovered" ]]; then
-    echo "OS lock was not immediately reusable after command crash" >&2
-    exit 1
-fi
+wait_for_preparation_contender production-term
 
 reader_stop="$scratch_root/reader.stop"
 reader_failure="$scratch_root/reader.failure"
@@ -495,4 +483,4 @@ if ! cmp -s "$scratch_root/live-metadata-before" "$scratch_root/live-metadata-af
     exit 1
 fi
 
-echo "Verified isolated tracked/non-tracked mutations and concurrent atomic HEV publication"
+echo "Verified isolated sources, inherited locking, strict paths, and concurrent HEV publication"

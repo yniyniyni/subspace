@@ -11,7 +11,8 @@ val hevDir = rootProject.file("third_party/hev-socks5-tunnel")
 val hevBaseCommit = "0a05221275a51a884d93328c55fc2fbc9e9b6974"
 val hevPatchFile = rootProject.file("third_party/hev-patches/0001-nonblocking-pending-stop.patch")
 val prepareHevScript = rootProject.file("scripts/prepare-hev-socks5-tunnel.sh")
-val prepareHevLockRunner = rootProject.file("scripts/HevPrepareLock.java")
+val prepareHevLockedScript = rootProject.file("scripts/prepare-hev-socks5-tunnel-locked.sh")
+val prepareHevLockWrapper = rootProject.file("scripts/with-hev-prepare-lock.pl")
 val testHevSourceIsolationScript = rootProject.file("scripts/test-hev-source-isolation.sh")
 val patchedHevDir = layout.buildDirectory.dir("generated/hev-socks5-tunnel")
 // Checks a NESTED submodule, not the outer one. `git submodule update --init`
@@ -33,7 +34,8 @@ val preparePatchedHev =
         inputs.property("hevBaseCommit", hevBaseCommit)
         inputs.file(hevPatchFile)
         inputs.file(prepareHevScript)
-        inputs.file(prepareHevLockRunner)
+        inputs.file(prepareHevLockedScript)
+        inputs.file(prepareHevLockWrapper)
         outputs.dir(patchedHevDir)
         // The parent gitlink lives in Git's index, outside the declared source
         // tree. Always re-run the verifier so an index-only pin change
@@ -58,7 +60,8 @@ val testHevSourceIsolation =
         inputs.property("hevBaseCommit", hevBaseCommit)
         inputs.file(hevPatchFile)
         inputs.file(prepareHevScript)
-        inputs.file(prepareHevLockRunner)
+        inputs.file(prepareHevLockedScript)
+        inputs.file(prepareHevLockWrapper)
         inputs.file(testHevSourceIsolationScript)
         outputs.upToDateWhen { false }
 

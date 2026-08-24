@@ -200,14 +200,39 @@ a stale reference silently stops protecting.
 
 ### 5.2 Route DNS through the tunnel
 
-DNS must not escape. Configure it in both places:
+DNS must not escape. There are **three** levers, not two, and the third is
+the one that actually reaches a misbehaving app:
 
-- `VpnService.Builder.addDnsServer(...)` for the TUN interface
-- A `dns` block in the Xray JSON config
+- `VpnService.Builder.addDnsServer(...)` for the TUN interface. This only
+  *advertises* a resolver; an app is free to ignore it.
+- A `dns` block in the Xray JSON config — the servers the built-in client
+  queries, and the per-domain scoping that splits them.
+- **A routing rule sending all port-53 traffic to a `dns` outbound** (M6.5).
+  `{ "network": "tcp,udp", "port": 53, "outboundTag": "dns-out" }`. This is
+  what catches an app that hardcodes a resolver instead of using the
+  advertised one, and without it such an app either reaches that resolver or
+  gets nothing at all. Verified on hardware: with the hijack in place a query
+  addressed to the ISP's own resolver comes back answered by the *configured*
+  resolver; with no plan emitted, the same query is silently swallowed.
 
-If only one is set you get a partial leak that works fine on Wi-Fi and
-breaks on mobile, or vice versa. Verify with a leak-test site, not by
-reasoning about the config.
+The rules that claim the configured resolvers' own traffic must be
+**prepended ahead of** the port-53 hijack. A resolver's outbound query is
+itself UDP to port 53, so if nothing claims it first it matches the hijack
+and is fed straight back into the resolver that issued it.
+
+**A `+local` scheme bypasses the routing component, and therefore the
+tunnel.** `https+local://`, `h2c+local://`, `tcp+local://`, `quic+local://`
+and `localhost` are constructed without the dispatcher, so no routing rule
+can pull their queries back — for a remote resolver that is a leak by
+construction. Never emit one. Note there is no plain `quic://` at all: DoQ is
+local-only upstream, so it cannot be used for a remote resolver at any
+version we pin. Sourced in
+`docs/agent/research/2026-08-23-xray-dns.md` §2.
+
+If only one lever is set you get a partial leak that works fine on Wi-Fi and
+breaks on mobile, or vice versa. Verify externally — a leak-test site, or a
+raw query aimed at the ISP's resolver whose answer you can attribute — never
+by reasoning about the config.
 
 ### 5.3 Never block the main thread
 
@@ -282,11 +307,37 @@ Shape:
 
 ```
 inbounds:  socks (127.0.0.1, loopback only) [+ optional http]
-outbounds: [proxy (from profile), direct (freedom), block (blackhole)]
-routing:   rules referencing geoip.dat / geosite.dat, then user rules
-dns:       servers + per-domain overrides
+outbounds: [proxy (from profile), direct (freedom), block (blackhole)
+            + dns-out (protocol "dns") when a DNS plan exists]
+routing:   [DNS rules, prepended] then rules referencing geoip.dat /
+           geosite.dat, then user rules
+dns:       servers + per-domain overrides + hosts, tag "dns-module"
 stats/api: enabled when traffic counters are on
 ```
+
+The DNS rules, when a plan exists, are prepended in this order — the order
+is load-bearing (§5.2):
+
+```
+{ "inboundTag": ["dns-module"], "ip"|"domain": [<domestic>], "outboundTag": "direct" }
+{ "inboundTag": ["dns-module"], "ip"|"domain": [<remote>],   "outboundTag": "proxy"  }
+{ "inboundTag": ["dns-module"],                              "outboundTag": "proxy"  }
+{ "network": "tcp,udp", "port": 53,                          "outboundTag": "dns-out" }
+```
+
+The first two claim each configured resolver's own traffic — matched by
+address, `ip` for a literal and `domain` for a DoH endpoint's hostname — and
+they exist so that resolver traffic is routed before the unconditional
+port-53 hijack can capture it. The third is the catch-all for everything else
+the DNS module emits. `dns-out` is emitted as bare
+`{ "tag": "dns-out", "protocol": "dns" }`: it carries no settings, so it
+touches neither the legacy nor the rewrite generation of `DNSOutboundConfig`
+and is stable across upstream's deprecation.
+
+When nothing asks for DNS — no profile block and the app-level setting at its
+default — **none of this is emitted**, and the config is byte-identical to the
+M1 shape that was proven on hardware. That is deliberate: the default resolver
+literal was chosen to make that identity possible.
 
 Rules:
 
@@ -790,9 +841,16 @@ app does not use.
 **Correction, 2026-07-26.** An earlier revision of this section also cited
 `SetDNS`/`ResetDNS` as a reason. **Those do not exist in v26.7.11** — there is
 not one DNS reference in the shipped Go source. The decision stands on its other
-two grounds, but do not go looking for that API. §5.2 is satisfied by
-`VpnService.Builder.addDnsServer()` plus the `dns` block in the generated config,
-and there is no third lever.
+two grounds, but do not go looking for that API.
+
+**Correction, 2026-08-24.** This section previously closed by saying §5.2 is
+satisfied by `addDnsServer()` plus the `dns` block and that *"there is no third
+lever"*. That was wrong twice over. The absence of a libXray DNS API says
+nothing about what the *config* can express, and M6.5 added the lever that
+matters most: a routing rule sending port-53 traffic to a `dns` outbound.
+There are three, and §5.2 names all of them. What remains true is the narrow
+original point — there is no libXray call that sets DNS, so the generated
+config is the only place it can be configured.
 
 The real API surface is a single JSON entry point, not the object-oriented form
 that earlier drafts of this document and the M1 plan assumed:
@@ -1090,7 +1148,19 @@ recorded in `docs/agent/research/2026-08-20-m6-device-verification.md`,
 including both mandatory exit criteria. Item 14's QR half and three optional
 regression rows were unreachable and are explicitly recorded as not run.
 The run cost three product defects, none of them visible to a green build —
-§10.1 again. The DNS half is M6.5; raw Xray JSON passthrough is M7.
+§10.1 again.
+
+**The DNS half is done in M6.5, verified on hardware 2026-08-24** (Pixel 8 /
+Android 17). Ten of the eleven rows in
+`docs/agent/specs/2026-08-23-m6.5-routing-profile-dns-design.md` §10 ran on
+both Wi-Fi and mobile data, and both mandatory exit criteria — no query
+reaching the ISP's resolver on either network, and a demonstrated
+domestic/remote split — are recorded in
+`docs/agent/research/2026-08-24-m6.5-device-verification.md`. Row 7 (FakeDNS
+with sniffing off) is unreachable in this build, because sniffing has no user
+setting, and is recorded as not run rather than as a pass. The run cost one
+product defect, again invisible to a green build. Raw Xray JSON passthrough
+is M7.
 
 This is what the user asked about specifically and it is the strongest idea
 in Happ. Routing configuration is a **shareable artifact**, not something
@@ -1158,9 +1228,11 @@ JSON booleans. A parser that reads them with a strict boolean decoder
 silently drops every one of them.
 
 M6 implements this surface for rules; the DNS half (`RemoteDNS*`,
-`DomesticDNS*`, `DnsHosts`, `FakeDNS`) is parsed and stored from day one
-but applied by M6.5. Until then the review sheet says so out loud on any
-profile carrying a DNS block, and the routing list repeats it on the row.
+`DomesticDNS*`, `DnsHosts`, `FakeDNS`) was parsed and stored from day one and
+is **applied as of M6.5**. A profile's valid DNS block wins wholesale over the
+app-level setting; a block this client cannot use is rejected whole rather
+than half-applied, and the row then says *"DNS block not understood — using
+your DNS setting"* while the profile's routing rules still apply.
 
 **Lifecycle rules worth copying verbatim** — these are well designed:
 

@@ -123,9 +123,13 @@ public class XrayController private constructor(
      * `init` block. §5.1 requires re-wiring whenever the service is recreated, and
      * a code path that *cannot* skip the wiring beats one that must remember to.
      *
-     * There is deliberately no DNS call: libXray v26.7.11 has no `setDNS`. §5.2 is
-     * satisfied entirely by the config's `dns` block and
-     * `VpnService.Builder.addDnsServer()`.
+     * There is deliberately no DNS call: libXray v26.7.11 has no `setDNS`, so the
+     * generated config is the only place DNS can be configured. §5.2 needs three
+     * levers, and this one carries two of them: the config's `dns` block and the
+     * **port-53 hijack** — a routing rule sending all port-53 traffic to the
+     * `dns-out` outbound, which is the lever that reaches an app ignoring the
+     * advertised resolver. `VpnService.Builder.addDnsServer()` is the third and
+     * lives in the service.
      *
      * Carries [env] on the same call as `configPath`, not a separate call before
      * it: `applyEnv` runs before `Invoke` dispatches on `method` (see the patch),

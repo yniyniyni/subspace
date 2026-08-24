@@ -24,8 +24,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import art.yniyniyni.subspace.core.model.DnsState
+import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.parser.routing.ImportProblem
@@ -93,7 +96,10 @@ internal data class ImportReviewState(
     val bucketCounts: Map<RouteOutcome, Int> = emptyMap(),
     val defaultRouteIsDirect: Boolean = false,
     val geoDownloads: List<GeoDownloadPreview> = emptyList(),
-    val hasDns: Boolean = false,
+    /** The profile DNS block disclosed to the user, never logged (§5.6). */
+    val dns: ProfileDns? = null,
+    /** Whether [dns] is effective or why it falls back to the app-level setting. */
+    val dnsState: DnsState = DnsState.None,
     val willActivate: Boolean = false,
     val problem: ImportProblem? = null,
     /** Why a confirmed import did not land. Non-null only with [Stage.Failed]. */
@@ -209,12 +215,7 @@ private fun ProfileBody(state: ImportReviewState) {
     state.geoDownloads.forEach { download ->
         GeoRow(download)
     }
-    if (state.hasDns) {
-        Text(
-            text = stringResource(R.string.import_review_dns_unapplied),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
+    state.dns?.let { dns -> DnsReviewRows(dns, state.dnsState) }
     Text(
         // Replacing the active profile changes the rules in force, so the
         // stored-only wording would be a false reassurance (device run,
@@ -229,6 +230,60 @@ private fun ProfileBody(state: ImportReviewState) {
         ),
         style = MaterialTheme.typography.bodyMedium,
     )
+}
+
+/**
+ * The DNS block shown for informed consent (§A.1).
+ *
+ * Resolver values are intentionally rendered only here; they are never logged
+ * and [ProfileDns.toString] redacts them under §5.6.
+ */
+@Composable
+private fun DnsReviewRows(
+    dns: ProfileDns,
+    dnsState: DnsState,
+) {
+    if (dnsState == DnsState.Invalid) {
+        Text(
+            text = stringResource(R.string.import_review_dns_invalid),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        return
+    }
+    dns.remote?.let { resolver ->
+        resolver.xrayAddress()?.let { address ->
+            Text(
+                text = stringResource(R.string.import_review_dns_remote, resolver.transport.wireValue, address),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+    dns.domestic?.let { resolver ->
+        resolver.xrayAddress()?.let { address ->
+            Text(
+                text = stringResource(R.string.import_review_dns_domestic, resolver.transport.wireValue, address),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+    if (dns.hosts.isNotEmpty()) {
+        Text(
+            text = pluralStringResource(R.plurals.import_review_dns_hosts, dns.hosts.size, dns.hosts.size),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+    if (dns.fakeDns == true) {
+        val fakeDnsMessage =
+            if (dnsState == DnsState.NeedsSniffing) {
+                R.string.import_review_dns_fakedns_needs_sniffing
+            } else {
+                R.string.import_review_dns_fakedns
+            }
+        Text(
+            text = stringResource(fakeDnsMessage),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
 }
 
 @Composable

@@ -8,6 +8,7 @@ import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.data.serialization.ProfileDnsCodec
 import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsState
 import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.DomainStrategy
 import art.yniyniyni.subspace.core.model.ProfileDns
@@ -87,9 +88,18 @@ class ImportReviewViewModelTest {
     }
 
     @Test
-    fun aDnsCarryingProfileFlagsItAsUnapplied() = runTest {
+    fun aValidDnsBlockIsShownAsApplied() = runTest {
         viewModel.offer(linkFor(sampleProfile()), RoutingSourceKind.Deeplink)
-        viewModel.state.value.hasDns shouldBe true
+        viewModel.state.value.dnsState shouldBe DnsState.Applied
+        viewModel.state.value.dns shouldBe sampleProfile().dns
+    }
+
+    @Test
+    fun anInvalidDnsBlockIsShownAsInvalid() = runTest {
+        viewModel.offer(invalidDnsLink(), RoutingSourceKind.Deeplink)
+
+        viewModel.state.value.dnsState shouldBe DnsState.Invalid
+        viewModel.state.value.dns shouldBe ProfileDns.INVALID
     }
 
     @Test
@@ -314,6 +324,13 @@ class ImportReviewViewModelTest {
 
     private fun linkFor(profile: RoutingProfile): String {
         val encoded = Base64.getEncoder().encodeToString(happJson(profile).toByteArray())
+        return "happ://routing/add/$encoded"
+    }
+
+    private fun invalidDnsLink(): String {
+        val withoutDns = happJson(sampleProfile().copy(dns = null)).removeSuffix("}")
+        val invalidDns = "$withoutDns,\"RemoteDNSType\":\"DoH\",\"RemoteDNSDomain\":\"not-a-url\"}"
+        val encoded = Base64.getEncoder().encodeToString(invalidDns.toByteArray())
         return "happ://routing/add/$encoded"
     }
 

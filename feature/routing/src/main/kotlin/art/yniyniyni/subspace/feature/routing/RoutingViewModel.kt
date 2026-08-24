@@ -180,7 +180,7 @@ private fun StoredRuleSet.toRow(
         subscriptionName = subscriptionName,
         assetState = assetState,
         assetFailure = assetFailure,
-        hasDns = hasDns,
+        dnsState = dnsStateOf(dns = dns, sniffingEnabled = true),
         downloadProgress = download?.let { GeoProgress(it.downloadedBytes, it.totalBytes) },
         requiresGeoFiles = required.isNotEmpty(),
     )

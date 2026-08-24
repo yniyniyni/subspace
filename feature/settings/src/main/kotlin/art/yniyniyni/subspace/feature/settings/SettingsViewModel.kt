@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.GeoInstallRequest
 import art.yniyniyni.subspace.core.data.GeoInstallResult
 import art.yniyniyni.subspace.core.data.ThemePreference
+import art.yniyniyni.subspace.core.model.DnsResolver
+import art.yniyniyni.subspace.core.model.DnsTransport
+import art.yniyniyni.subspace.core.model.DnsValidation
 import art.yniyniyni.subspace.core.model.GeoDataKind
 import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
@@ -49,6 +52,7 @@ constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState(appVersion = appVersionSource.version))
     val state: StateFlow<SettingsState> = _state.asStateFlow()
+    private var hasEditableDnsDraft = false
 
     init {
         settingsSource.theme
@@ -77,6 +81,23 @@ constructor(
 
         settingsSource.pingOnLaunchMetered
             .onEach { enabled -> _state.update { it.copy(pingOnLaunchMetered = enabled) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.dnsResolver
+            .onEach { resolver ->
+                if (!hasEditableDnsDraft) {
+                    _state.update {
+                        it.copy(
+                            dnsTransport = resolver.transport,
+                            dnsAddress = resolver.xrayAddress().orEmpty(),
+                            dnsBootstrapIp = if (resolver.transport == DnsTransport.DOH) resolver.ip.orEmpty() else "",
+                        )
+                    }
+                }
+            }.launchIn(viewModelScope)
+
+        settingsSource.dnsOverriddenByProfile
+            .onEach { overridden -> _state.update { it.copy(dnsOverriddenByProfile = overridden) } }
             .launchIn(viewModelScope)
 
         settingsSource.geoRefreshOnMetered
@@ -142,6 +163,38 @@ constructor(
 
     fun onPingOnLaunchMeteredChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setPingOnLaunchMetered(enabled) }
+    }
+
+    /** Starts a new local resolver draft; persistence waits for a complete valid resolver. */
+    fun onDnsTransportChanged(transport: DnsTransport) {
+        hasEditableDnsDraft = true
+        _state.update { current ->
+            if (current.dnsTransport == transport) {
+                current
+            } else {
+                current.copy(dnsTransport = transport, dnsAddress = "", dnsBootstrapIp = "")
+            }
+        }
+    }
+
+    fun onDnsAddressChanged(address: String) {
+        hasEditableDnsDraft = true
+        _state.update { it.copy(dnsAddress = address) }
+        persistDnsResolverIfValid()
+    }
+
+    fun onDnsBootstrapIpChanged(bootstrapIp: String) {
+        hasEditableDnsDraft = true
+        _state.update { it.copy(dnsBootstrapIp = bootstrapIp) }
+        persistDnsResolverIfValid()
+    }
+
+    private fun persistDnsResolverIfValid() {
+        val resolver = _state.value.dnsResolverOrNull() ?: return
+        viewModelScope.launch {
+            settingsSource.setDnsResolver(resolver)
+            hasEditableDnsDraft = false
+        }
     }
 
     /**
@@ -256,3 +309,21 @@ constructor(
         viewModelScope.launch { geoAssetSource.remove(fileName) }
     }
 }
+
+private fun SettingsState.dnsResolverOrNull(): DnsResolver? =
+    when (dnsTransport) {
+        DnsTransport.DOH ->
+            dnsAddress
+                .takeIf(DnsValidation::isHttpsUrl)
+                ?.takeIf { dnsBootstrapIp.isBlank() || DnsValidation.isAddressLiteral(dnsBootstrapIp) }
+                ?.let { domain ->
+                    DnsResolver(
+                        transport = DnsTransport.DOH,
+                        domain = domain,
+                        ip = dnsBootstrapIp.takeIf(String::isNotBlank),
+                    )
+                }
+
+        DnsTransport.DOU ->
+            dnsAddress.takeIf(DnsValidation::isAddressLiteral)?.let { ip -> DnsResolver(DnsTransport.DOU, ip = ip) }
+    }

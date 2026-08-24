@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.feature.settings
 
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class SettingsHwidTest {
@@ -23,5 +24,18 @@ class SettingsHwidTest {
     @Test
     fun hwidIsRedactedFromDiagnosticStringification() {
         SettingsState(hwid = "abc123").toString() shouldNotContain "abc123"
+    }
+
+    @Test
+    fun dnsEndpointsAreRedactedFromDiagnosticStringification() {
+        val state =
+            SettingsState(
+                dnsAddress = "https://resolver.example/dns-query",
+                dnsBootstrapIp = "192.0.2.12",
+            )
+        val diagnostic = state.toString()
+
+        assertFalse("DNS address leaked into diagnostic text", diagnostic.contains("resolver.example"))
+        assertFalse("DNS bootstrap IP leaked into diagnostic text", diagnostic.contains("192.0.2.12"))
     }
 }

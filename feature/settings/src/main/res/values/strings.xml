@@ -50,6 +50,15 @@
     <string name="settings_ping_on_launch_metered">Also on mobile data</string>
     <string name="settings_ping_on_launch_metered_summary">Off by default — testing a large list uses real data. Manual tests always work.</string>
 
+    <string name="settings_dns_title">DNS</string>
+    <string name="settings_dns_transport">Protocol</string>
+    <string name="settings_dns_address">Resolver</string>
+    <string name="settings_dns_bootstrap">Bootstrap IP</string>
+    <string name="settings_dns_invalid_https">Enter an https:// address</string>
+    <string name="settings_dns_invalid_ip">Enter an IP address</string>
+    <string name="settings_dns_bootstrap_summary">The resolver\'s own address, so its hostname can be looked up without querying itself</string>
+    <string name="settings_dns_overridden">The active routing profile sets its own DNS</string>
+
     <string name="settings_section_routing">Routing</string>
     <string name="settings_routing_row_label">Rule sets</string>
     <string name="settings_routing_row_summary">Block, proxy or route traffic directly by domain or address</string>

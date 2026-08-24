@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.IBinder
+import android.os.Message
+import android.os.Messenger
 import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
 import android.util.Log
@@ -70,6 +72,20 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
         intent.getParcelableExtra(EXTRA_PROFILE, ProfileParcel::class.java)
     } else {
         intent.getParcelableExtra(EXTRA_PROFILE)
+    }
+}
+
+/** Returns the same-UID debug-test callback only; release builds ignore this extra. */
+@Suppress("DEPRECATION")
+internal fun testConnectObserverFrom(
+    intent: Intent?,
+    debuggable: Boolean,
+): Messenger? {
+    if (!debuggable || intent?.action != ACTION_CONNECT) return null
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        intent.getParcelableExtra(EXTRA_TEST_CONNECT_OBSERVER, Messenger::class.java)
+    } else {
+        intent.getParcelableExtra(EXTRA_TEST_CONNECT_OBSERVER)
     }
 }
 
@@ -197,7 +213,14 @@ class TunnelService : VpnService() {
      * alone, but a stale non-null value here would still be a latent trap for
      * the next reader, not just a harmless one.
      */
-    private var liveSession: Pair<Profile, Long>? = null
+    private data class LiveSession(
+        val profile: Profile,
+        val rowId: Long,
+        val startId: Int,
+    )
+
+    private var liveSession: LiveSession? = null
+    private var activeStartId = 0
 
     /**
      * Commits a terminal outcome in an order teardown cannot interleave with — see
@@ -219,12 +242,15 @@ class TunnelService : VpnService() {
         TunnelCommandCoordinator(
             scope = scope,
             connect = ::connectFromCommand,
-            disconnect = {
+            rejectConnect = ::rejectConnectFromCommand,
+            disconnect = { startId ->
                 stopTunnel(ConnectionState.Disconnected)
-                stopSelf()
+                stopStartedService(startId)
             },
             reapplyPerApp = ::reapplyPerAppFromCommand,
+            observeConnect = ::observeConnectFromCommand,
         )
+    private val commandIngress = TunnelCommandIngress(commandCoordinator::enqueue)
 
     override fun onCreate() {
         super.onCreate()
@@ -268,25 +294,39 @@ class TunnelService : VpnService() {
         startId: Int,
     ): Int {
         val request = connectProfileFrom(intent)
-        if (request == null || request.toProfile() == null) {
-            rejectConnectRequest(request?.rowId ?: ProfileParcel.UNASSIGNED_ROW_ID)
-            return START_NOT_STICKY
-        }
-
-        if (!commandCoordinator.enqueue(TunnelCommand.Connect(request))) {
-            rejectConnectRequest(request.rowId)
+        val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+        val testObserver = testConnectObserverFrom(intent, debuggable)
+        if (!commandIngress.started(request, startId, testObserver)) {
+            Log.w(TAG, "connect request dropped: service command queue closed")
+            stopStartedService(startId)
         }
         return START_NOT_STICKY
     }
 
-    private fun rejectConnectRequest(rowId: Long) {
+    /** Reports actor receipt to a same-UID debug test without changing the connect path. */
+    @Suppress("SwallowedException")
+    private fun observeConnectFromCommand(command: TunnelCommand.Connect) {
+        val observer = command.testObserver ?: return
+        val message =
+            Message.obtain(null, TEST_CONNECT_RECEIVED).apply {
+                data = android.os.Bundle().apply { putParcelable(EXTRA_PROFILE, command.profile) }
+            }
+        try {
+            observer.send(message)
+        } catch (e: android.os.RemoteException) {
+            // The debug instrumentation process ended before actor receipt.
+        }
+    }
+
+    private suspend fun rejectConnectFromCommand(
+        startId: Int,
+        rowId: Long,
+    ) {
         Log.e(TAG, "connect request refused: ProfileDecodeFailed")
         val failed = failure(FailureReason.ProfileDecodeFailed, "connect request could not be decoded")
-        scope.launch {
-            stopTunnel(failed)
-            stopSelf()
-            connectionRecorder.record(rowId, failed)
-        }
+        stopTunnel(failed)
+        stopStartedService(startId)
+        connectionRecorder.record(rowId, failed)
     }
 
     private fun rejectInitialForegroundLifecycle(
@@ -294,8 +334,8 @@ class TunnelService : VpnService() {
         rowId: Long,
     ) {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
-        if (!stopTunnel(failed, expectedGeneration = gen)) return
-        stopSelf()
+        val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
+        stopStartedService(startId)
         scope.launch { connectionRecorder.record(rowId, failed) }
     }
 
@@ -304,8 +344,8 @@ class TunnelService : VpnService() {
         rowId: Long,
     ) {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
-        if (!stopTunnel(failed, expectedGeneration = gen)) return
-        stopSelf()
+        val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
+        stopStartedService(startId)
         connectionRecorder.record(rowId, failed)
     }
 
@@ -358,6 +398,7 @@ class TunnelService : VpnService() {
     private fun startTunnel(
         profile: Profile,
         rowId: Long,
+        startId: Int,
     ) {
         val gen =
             synchronized(lock) {
@@ -367,10 +408,13 @@ class TunnelService : VpnService() {
                 if (currentState !is ConnectionState.Disconnected &&
                     currentState !is ConnectionState.Failed
                 ) {
+                    activeStartId = startId
+                    liveSession = liveSession?.copy(startId = startId)
                     Log.w(TAG, "connect ignored: a session is already active")
                     return
                 }
-                liveSession = profile to rowId
+                activeStartId = startId
+                liveSession = LiveSession(profile, rowId, startId)
                 val nextGeneration = ++generation
                 // Claim the session before the coordinator accepts another
                 // command. Otherwise a second queued connect can observe the
@@ -736,8 +780,10 @@ class TunnelService : VpnService() {
                 configFile = null
                 controller = null
                 liveSession = null
+                val startId = activeStartId
+                activeStartId = 0
                 removeForegroundSafely()
-                stopSelf()
+                stopStartedService(startId)
                 true
             },
             persist = { connectionRecorder.record(rowId, failed) },
@@ -941,13 +987,14 @@ class TunnelService : VpnService() {
     private fun stopTunnel(
         finalState: ConnectionState,
         expectedGeneration: Int? = null,
-    ): Boolean {
+    ): Int? {
         val xray: XrayController?
         val fd: ParcelFileDescriptor?
         val cfg: File?
+        val startId: Int
 
         synchronized(lock) {
-            if (expectedGeneration != null && expectedGeneration != generation) return false
+            if (expectedGeneration != null && expectedGeneration != generation) return null
             // Supersede any in-flight start before taking ownership of its state.
             ++generation
             xray = controller
@@ -957,6 +1004,8 @@ class TunnelService : VpnService() {
             tunInterface = null
             configFile = null
             liveSession = null
+            startId = activeStartId
+            activeStartId = 0
             publishLocked(ConnectionState.Disconnecting)
         }
 
@@ -983,8 +1032,12 @@ class TunnelService : VpnService() {
 
         removeForegroundSafely()
         publish(finalState)
-        return true
+        return startId
     }
+
+    /** Stops only the started-service generation that owns the completed command. */
+    private fun stopStartedService(startId: Int): Boolean =
+        startId > 0 && stopSelfResult(startId)
 
     /**
      * §5.4: called when another VPN app takes over or the user revokes
@@ -996,8 +1049,8 @@ class TunnelService : VpnService() {
      * user needs. We stop explicitly instead.
      */
     override fun onRevoke() {
-        stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
-        stopSelf()
+        val startId = stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
+        if (startId != null) stopStartedService(startId)
     }
 
     override fun onDestroy() {
@@ -1092,11 +1145,11 @@ class TunnelService : VpnService() {
     private val binder =
         object : ITunnelService.Stub() {
             override fun disconnect() {
-                commandCoordinator.enqueue(TunnelCommand.Disconnect)
+                commandIngress.disconnect()
             }
 
             override fun reapplyPerApp() {
-                commandCoordinator.enqueue(TunnelCommand.ReapplyPerApp)
+                commandIngress.reapplyPerApp()
             }
 
             override fun getState(): ConnectionStateParcel =
@@ -1166,21 +1219,23 @@ class TunnelService : VpnService() {
         }
     }
 
-    private fun connectFromCommand(profile: ProfileParcel) {
+    private suspend fun connectFromCommand(
+        profile: ProfileParcel,
+        startId: Int,
+    ) {
         val decoded = profile.toProfile()
         if (decoded == null) {
-            rejectConnectRequest(profile.rowId)
+            rejectConnectFromCommand(startId, profile.rowId)
             return
         }
-        startTunnel(decoded, profile.rowId)
+        startTunnel(decoded, profile.rowId, startId)
     }
 
     private fun reapplyPerAppFromCommand() {
         // Sample only when this command reaches the service-owned consumer.
         val session = synchronized(lock) { liveSession.takeIf { ownTunnelActive() } } ?: return
-        val (profile, rowId) = session
         stopTunnel(ConnectionState.Disconnected)
-        startTunnel(profile, rowId)
+        startTunnel(session.profile, session.rowId, session.startId)
     }
 
     /**

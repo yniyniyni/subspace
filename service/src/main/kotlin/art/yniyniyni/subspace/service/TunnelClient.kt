@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.Messenger
 import android.util.Log
 import art.yniyniyni.subspace.core.model.ConnectionState
 import art.yniyniyni.subspace.core.model.LatencyOptions
@@ -24,6 +25,9 @@ import javax.inject.Singleton
 private const val TAG = "TunnelClient"
 internal const val ACTION_CONNECT = "art.yniyniyni.subspace.service.action.CONNECT"
 internal const val EXTRA_PROFILE = "art.yniyniyni.subspace.service.extra.PROFILE"
+internal const val EXTRA_TEST_CONNECT_OBSERVER =
+    "art.yniyniyni.subspace.service.extra.TEST_CONNECT_OBSERVER"
+internal const val TEST_CONNECT_RECEIVED = 1
 
 /**
  * `:main`'s handle on the tunnel.
@@ -38,9 +42,23 @@ internal const val EXTRA_PROFILE = "art.yniyniyni.subspace.service.extra.PROFILE
  * binder is for.
  */
 @Singleton
-public class TunnelClient @Inject constructor(
+public class TunnelClient private constructor(
     @ApplicationContext private val context: Context,
+    private val testObservation: TestObservation?,
 ) {
+    private data class TestObservation(val messenger: Messenger)
+
+    @Inject
+    public constructor(
+        @ApplicationContext context: Context,
+    ) : this(context, null)
+
+    /** Debug-instrumentation seam; release callers cannot supply an observer. */
+    internal constructor(
+        context: Context,
+        testConnectObserver: Messenger,
+    ) : this(context, TestObservation(testConnectObserver))
+
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
@@ -156,6 +174,7 @@ public class TunnelClient @Inject constructor(
             Intent(context, TunnelService::class.java)
                 .setAction(ACTION_CONNECT)
                 .putExtra(EXTRA_PROFILE, ProfileParcel.from(profile, rowId))
+        testObservation?.let { request.putExtra(EXTRA_TEST_CONNECT_OBSERVER, it.messenger) }
         context.startForegroundService(request)
     }
 

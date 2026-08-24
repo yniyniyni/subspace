@@ -22,6 +22,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "TunnelClient"
+internal const val ACTION_CONNECT = "art.yniyniyni.subspace.service.action.CONNECT"
+internal const val EXTRA_PROFILE = "art.yniyniyni.subspace.service.extra.PROFILE"
 
 /**
  * `:main`'s handle on the tunnel.
@@ -150,12 +152,11 @@ public class TunnelClient @Inject constructor(
         profile: Profile,
         rowId: Long,
     ) {
-        context.startForegroundService(Intent(context, TunnelService::class.java))
-        try {
-            service?.connect(ProfileParcel.from(profile, rowId))
-        } catch (e: android.os.RemoteException) {
-            Log.e(TAG, "connect failed: ${e.javaClass.simpleName}")
-        }
+        val request =
+            Intent(context, TunnelService::class.java)
+                .setAction(ACTION_CONNECT)
+                .putExtra(EXTRA_PROFILE, ProfileParcel.from(profile, rowId))
+        context.startForegroundService(request)
     }
 
     public fun disconnect() {

@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.data
 
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
+import art.yniyniyni.subspace.core.data.db.ProfileDao
 import art.yniyniyni.subspace.core.data.db.ProfileEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.model.Profile
@@ -11,7 +12,10 @@ import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -22,6 +26,14 @@ import org.junit.Before
 import org.junit.Test
 
 private const val REEMIT_TIMEOUT_MS = 5_000L
+private const val OLD_CONNECTION_AT = 1_700_000_000_000L
+private const val NEW_CONNECTION_AT = 1_800_000_000_000L
+private const val OLD_CONNECTION_ERROR = "oldFailure"
+private const val NEW_CONNECTION_ERROR = "newFailure"
+
+private enum class EditorConnectionOrdering { CONNECTION_BEFORE_EDITOR_WRITE, EDITOR_BEFORE_CONNECTION }
+
+private enum class ConnectionMutation { RECORD_CONNECTED, RECORD_ERROR }
 
 // Backtick names with spaces are avoided here for the same reason
 // SubspaceDatabaseTest avoids them: runTest {}'s lambda inherits the
@@ -317,6 +329,97 @@ class ProfileRepositoryTest {
             db.profileDao().profile(inGroupA.id)!!.groupId shouldBe groupA
         }
 
+    @Test
+    fun movingAProfilePreservesConnectionWritesInBothOrderings() =
+        runTest {
+            raceCases().forEachIndexed { index, (ordering, mutation) ->
+                val (stored, before) = seedProfile("198.51.100.${20 + index}")
+                val targetGroupId = repository.createGroup("Move target $index")
+                prepareConnectionState(stored.id)
+
+                runEditorAndConnection(
+                    profileId = stored.id,
+                    ordering = ordering,
+                    mutation = mutation,
+                ) { editor ->
+                    editor.move(stored.id, targetGroupId) shouldBe true
+                }
+
+                val after = db.profileDao().profile(stored.id)!!
+                after.groupId shouldBe targetGroupId
+                after.position shouldBe before.position
+                after.name shouldBe before.name
+                assertTypedPayloadPreserved(before, after)
+                assertDatabaseOwnedColumnsPreserved(before, after)
+                assertConnectionMutationSurvived(after, mutation)
+            }
+        }
+
+    @Test
+    fun renamingAProfilePreservesConnectionWritesInBothOrderings() =
+        runTest {
+            raceCases().forEachIndexed { index, (ordering, mutation) ->
+                val (stored, before) = seedProfile("198.51.100.${30 + index}")
+                val editedName = "Renamed $index"
+                prepareConnectionState(stored.id)
+
+                runEditorAndConnection(
+                    profileId = stored.id,
+                    ordering = ordering,
+                    mutation = mutation,
+                ) { editor ->
+                    editor.rename(stored.id, editedName)
+                }
+
+                val after = db.profileDao().profile(stored.id)!!
+                after.name shouldBe editedName
+                after.groupId shouldBe before.groupId
+                after.position shouldBe before.position
+                assertTypedPayloadPreserved(before, after)
+                assertDatabaseOwnedColumnsPreserved(before, after)
+                assertConnectionMutationSurvived(after, mutation)
+            }
+        }
+
+    @Test
+    fun updatingATypedProfilePreservesConnectionWritesInBothOrderings() =
+        runTest {
+            raceCases().forEachIndexed { index, (ordering, mutation) ->
+                val (stored, before) = seedProfile("198.51.100.${40 + index}")
+                val editedOutbound =
+                    VlessOutbound(
+                        address = "203.0.113.${40 + index}",
+                        port = 8_443,
+                        uuid = "1e0f2a2e-6b2b-4b9a-9a3b-00000000000$index",
+                        flow = null,
+                        stream = StreamSettings(network = "ws", security = Security.None),
+                    )
+                val editedName = "Edited $index"
+                prepareConnectionState(stored.id)
+
+                runEditorAndConnection(
+                    profileId = stored.id,
+                    ordering = ordering,
+                    mutation = mutation,
+                ) { editor ->
+                    editor.update(stored.id, editedName, editedOutbound) shouldBe true
+                }
+
+                val after = db.profileDao().profile(stored.id)!!
+                after.name shouldBe editedName
+                after.address shouldBe editedOutbound.address
+                after.port shouldBe 8_443
+                after.protocol shouldBe "vless"
+                after.transport shouldBe "ws · 8443"
+                after.identityHash shouldNotBe before.identityHash
+                repository.profile(stored.id)!!.outbound shouldBe editedOutbound
+                after.groupId shouldBe before.groupId
+                after.position shouldBe before.position
+                assertDatabaseOwnedColumnsPreserved(before, after)
+                assertConnectionMutationSurvived(after, mutation)
+            }
+        }
+
     // Fix round 2, Important finding 1: ProfileDao.upsertProfile used to overwrite the
     // whole row on a matching-identity re-import, including lastConnectedAt/lastError/
     // createdAt — columns the source never described in the first place. A user who
@@ -393,6 +496,105 @@ class ProfileRepositoryTest {
             rawRowAfter.rawJson shouldBe rawRowBefore.rawJson
         }
 
+    private suspend fun seedProfile(address: String): Pair<StoredProfile, ProfileEntity> {
+        val groupId = repository.defaultGroupId()
+        repository.import(listOf(sampleProfile(address)), groupId)
+        val stored =
+            repository.observeGroups().first().first { it.id == groupId }.profiles
+                .first { it.address == address }
+        return stored to db.profileDao().profile(stored.id)!!
+    }
+
+    private suspend fun prepareConnectionState(profileId: Long) {
+        repository.recordConnected(profileId, OLD_CONNECTION_AT)
+        repository.recordError(profileId, OLD_CONNECTION_ERROR)
+    }
+
+    private suspend fun runEditorAndConnection(
+        profileId: Long,
+        ordering: EditorConnectionOrdering,
+        mutation: ConnectionMutation,
+        editor: suspend (ProfileRepository) -> Unit,
+    ) {
+        when (ordering) {
+            EditorConnectionOrdering.CONNECTION_BEFORE_EDITOR_WRITE -> {
+                val pausingDao = PausingProfileDao(db.profileDao())
+                val editorRepository = ProfileRepository(pausingDao)
+                coroutineScope {
+                    val editorWrite = async { editor(editorRepository) }
+                    pausingDao.editorWriteStarted.await()
+                    try {
+                        applyConnectionMutation(profileId, mutation)
+                    } finally {
+                        pausingDao.releaseEditorWrite.complete(Unit)
+                    }
+                    editorWrite.await()
+                }
+            }
+
+            EditorConnectionOrdering.EDITOR_BEFORE_CONNECTION -> {
+                editor(repository)
+                applyConnectionMutation(profileId, mutation)
+            }
+        }
+    }
+
+    private suspend fun applyConnectionMutation(
+        profileId: Long,
+        mutation: ConnectionMutation,
+    ) {
+        when (mutation) {
+            ConnectionMutation.RECORD_CONNECTED -> repository.recordConnected(profileId, NEW_CONNECTION_AT)
+            ConnectionMutation.RECORD_ERROR -> repository.recordError(profileId, NEW_CONNECTION_ERROR)
+        }
+    }
+
+    private fun assertDatabaseOwnedColumnsPreserved(
+        before: ProfileEntity,
+        after: ProfileEntity,
+    ) {
+        after.id shouldBe before.id
+        after.kind shouldBe before.kind
+        after.rawJson shouldBe before.rawJson
+        after.createdAt shouldBe before.createdAt
+        after.subscriptionKey shouldBe before.subscriptionKey
+        after.droppedFromSubscriptionAt shouldBe before.droppedFromSubscriptionAt
+    }
+
+    private fun assertTypedPayloadPreserved(
+        before: ProfileEntity,
+        after: ProfileEntity,
+    ) {
+        after.protocol shouldBe before.protocol
+        after.address shouldBe before.address
+        after.port shouldBe before.port
+        after.transport shouldBe before.transport
+        after.outbound shouldBe before.outbound
+        after.identityHash shouldBe before.identityHash
+    }
+
+    private fun assertConnectionMutationSurvived(
+        after: ProfileEntity,
+        mutation: ConnectionMutation,
+    ) {
+        when (mutation) {
+            ConnectionMutation.RECORD_CONNECTED -> {
+                after.lastConnectedAt shouldBe NEW_CONNECTION_AT
+                after.lastError shouldBe null
+            }
+
+            ConnectionMutation.RECORD_ERROR -> {
+                after.lastConnectedAt shouldBe OLD_CONNECTION_AT
+                after.lastError shouldBe NEW_CONNECTION_ERROR
+            }
+        }
+    }
+
+    private fun raceCases(): List<Pair<EditorConnectionOrdering, ConnectionMutation>> =
+        EditorConnectionOrdering.entries.flatMap { ordering ->
+            ConnectionMutation.entries.map { mutation -> ordering to mutation }
+        }
+
     private fun sampleProfile(address: String = "198.51.100.1") =
         Profile(
             id = "unused",
@@ -406,4 +608,47 @@ class ProfileRepositoryTest {
                 stream = StreamSettings(network = "tcp", security = Security.None),
             ),
         )
+}
+
+private class PausingProfileDao(
+    private val delegate: ProfileDao,
+) : ProfileDao by delegate {
+    val editorWriteStarted = CompletableDeferred<Unit>()
+    val releaseEditorWrite = CompletableDeferred<Unit>()
+
+    private suspend fun pauseEditorWrite() {
+        editorWriteStarted.complete(Unit)
+        releaseEditorWrite.await()
+    }
+
+    override suspend fun moveProfile(
+        id: Long,
+        toGroupId: Long,
+    ) {
+        pauseEditorWrite()
+        delegate.moveProfile(id, toGroupId)
+    }
+
+    override suspend fun renameProfile(
+        id: Long,
+        name: String,
+    ) {
+        pauseEditorWrite()
+        delegate.renameProfile(id, name)
+    }
+
+    @Suppress("LongParameterList") // Mirrors the production DAO method exactly for interception.
+    override suspend fun updateTypedProfile(
+        id: Long,
+        name: String,
+        protocol: String,
+        address: String,
+        port: Int,
+        transport: String,
+        outbound: String,
+        identityHash: String,
+    ) {
+        pauseEditorWrite()
+        delegate.updateTypedProfile(id, name, protocol, address, port, transport, outbound, identityHash)
+    }
 }

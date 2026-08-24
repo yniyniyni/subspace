@@ -3,6 +3,7 @@ package art.yniyniyni.subspace.core.data
 
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
+import art.yniyniyni.subspace.core.data.db.ProfileEntity
 import art.yniyniyni.subspace.core.data.db.SubspaceDatabase
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
@@ -62,6 +63,35 @@ class ProfileRepositoryTest {
             repository.import(listOf(sampleProfile()), groupId)
 
             repository.observeGroups().first().single().profiles.size shouldBe 1
+        }
+
+    @Test
+    fun corruptProfileKindIsOmittedWithoutHidingValidRows() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            repository.import(listOf(sampleProfile()), groupId)
+            val corruptId =
+                db.profileDao().insertProfile(
+                    ProfileEntity(
+                        groupId = groupId,
+                        kind = "CORRUPT_KIND_TASK_9",
+                        identityHash = "corrupt-kind-task-9",
+                        name = "Corrupt",
+                        protocol = "vless",
+                        address = "must-not-be-decoded.invalid",
+                        port = 443,
+                        transport = "tcp",
+                        outbound = "not valid outbound json",
+                        rawJson = null,
+                        position = 1,
+                        lastConnectedAt = null,
+                        lastError = null,
+                        createdAt = 1L,
+                    ),
+                )
+
+            repository.observeGroups().first().single().profiles.map { it.name } shouldBe listOf("Test")
+            repository.profile(corruptId) shouldBe null
         }
 
     // The real bug this pins (element-provenance report): a real subscription document was

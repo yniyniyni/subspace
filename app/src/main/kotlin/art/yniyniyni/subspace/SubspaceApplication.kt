@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import art.yniyniyni.subspace.sync.GeoRefreshScheduler
@@ -17,6 +18,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
+
+private const val TAG = "SubspaceApplication"
 
 /**
  * The name of the process this code is executing in.
@@ -121,19 +124,21 @@ class SubspaceApplication : Application(), Configuration.Provider {
      * it did fire it could only suppress a refresh the interval trigger was already doing.
      * M4's device run reported it as "doesn't work at all", which was accurate.
      *
-     * reschedule() runs in a finally for the same reason [art.yniyniyni.subspace.sync.SubscriptionRefreshWorker]'s
-     * doWork() does: a crash mid-sync must not leave the one pending job unscheduled — that would
-     * silently strand the whole feature until the app is opened again. reschedule() is
-     * NonCancellable internally, so this holds even if [applicationScope] were cancelled
-     * mid-refresh.
+     * [runForegroundRefresh] always attempts reschedule for the same reason
+     * [art.yniyniyni.subspace.sync.SubscriptionRefreshWorker]'s doWork() uses a `finally`: a crash
+     * mid-sync must not leave the one pending job unscheduled — that would silently strand the
+     * whole feature until the app is opened again. Storage and scheduling failures are reported by
+     * class name only and contained here; cancellation still propagates after rescheduling.
      */
     private fun onMovedToForeground(scheduler: RefreshScheduler) {
         applicationScope.launch {
-            try {
-                scheduler.refreshDue(onOpen = true)
-            } finally {
-                scheduler.reschedule()
-            }
+            runForegroundRefresh(
+                refresh = { scheduler.refreshDue(onOpen = true) },
+                reschedule = scheduler::reschedule,
+                reportFailure = { errorClass ->
+                    Log.e(TAG, "foreground refresh failed: $errorClass")
+                },
+            )
         }
     }
 }

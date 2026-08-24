@@ -168,7 +168,7 @@ internal constructor(
                 ProfileGroup(
                     id = group.id,
                     name = group.name,
-                    profiles = profilesByGroup[group.id].orEmpty().map { it.toStoredProfile() },
+                    profiles = profilesByGroup[group.id].orEmpty().mapNotNull { it.toStoredProfile() },
                 )
             }
         }
@@ -429,11 +429,14 @@ internal constructor(
         redactedDetail: String,
     ): Unit = dao.recordError(profileId, redactedDetail)
 
-    private fun ProfileEntity.toStoredProfile(): StoredProfile =
-        StoredProfile(
+    private fun ProfileEntity.toStoredProfile(): StoredProfile? {
+        // Decode the discriminator first. A row with an unknown kind is corrupt, and returning
+        // here ensures no other persisted column — including outbound JSON — is parsed or guessed.
+        val decodedKind = decodeProfileKind(kind) ?: return null
+        return StoredProfile(
             id = id,
             groupId = groupId,
-            kind = ProfileKind.valueOf(kind),
+            kind = decodedKind,
             name = name,
             protocol = protocol,
             address = address,
@@ -445,7 +448,11 @@ internal constructor(
             lastError = lastError,
             droppedFromSubscriptionAt = droppedFromSubscriptionAt,
         )
+    }
 }
+
+private fun decodeProfileKind(value: String): ProfileKind? =
+    ProfileKind.entries.firstOrNull { it.name == value }
 
 /**
  * The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`).

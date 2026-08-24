@@ -793,18 +793,49 @@ class RoutingProfileImporterTest {
     }
 
     @Test
-    fun aForceFailureBlocksGenerationPublication() = runTest {
-        val forceFailingAssets =
+    fun aDataForceFailureBlocksGenerationPublication() = runTest {
+        assertGenerationPublicationBlocked(
+            StableFileForcer { throw IOException("injected data force failure") },
+        )
+    }
+
+    @Test
+    fun aMetadataForceFailureBlocksGenerationPublication() = runTest {
+        assertGenerationPublicationBlocked(
+            StableFileForcer { file ->
+                if (file.name.endsWith(".pending")) {
+                    throw IOException("injected metadata force failure")
+                }
+            },
+        )
+    }
+
+    @Test
+    fun anAtomicMetadataMoveFailureBlocksGenerationPublication() = runTest {
+        assertGenerationPublicationBlocked(
+            StableFileForcer { file ->
+                if (file.name.endsWith(".pending")) {
+                    File(file.parentFile, file.name.removeSuffix(".pending")).apply {
+                        mkdir()
+                        File(this, "obstruction").writeText("keep move fail-closed")
+                    }
+                }
+            },
+        )
+    }
+
+    private suspend fun assertGenerationPublicationBlocked(fileForcer: StableFileForcer) {
+        val publicationFailingAssets =
             RuleSetAssets(
                 root,
                 CooperativeRuleSetFileCopier(),
-                StableFileForcer { throw IOException("injected force failure") },
+                fileForcer,
             )
-        val forceFailingDeletion =
+        val publicationFailingDeletion =
             RoutingProfileDeletion(
                 database,
                 repository,
-                forceFailingAssets,
+                publicationFailingAssets,
                 settings,
                 ProfileRepository(database.profileDao()),
             )
@@ -813,12 +844,12 @@ class RoutingProfileImporterTest {
             RoutingProfileImporter(
                 database,
                 repository,
-                forceFailingAssets,
+                publicationFailingAssets,
                 geoAssets,
                 settings,
                 validator,
                 downloader,
-                forceFailingDeletion,
+                publicationFailingDeletion,
                 progress,
                 GEO_DOWNLOAD_TIMEOUT_MILLIS,
             ) { _, _ -> commitGenerationReached = true }

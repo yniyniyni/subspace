@@ -185,8 +185,9 @@ internal constructor(
     /**
      * Applies one profile after the caller's confirmation gate.
      *
-     * Early returns are intentional ordering barriers: unchanged/stale inputs
-     * cannot reach disk, and failed staging cannot reach the atomic publication.
+     * Early returns are intentional ordering barriers: unchanged inputs may update only the
+     * activation setting, never the rule row or its files; stale inputs cannot write anything;
+     * and failed staging cannot reach the atomic publication.
      */
     @Suppress(
         "CyclomaticComplexMethod", // Explicit gates prevent stale, partial, or failed assets from reaching publication.

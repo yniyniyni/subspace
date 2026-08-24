@@ -99,7 +99,11 @@ internal constructor(
         /** Meaningful content changed and passed the timestamp gate. */
         Changed,
 
-        /** The fingerprint is identical; callers must perform no later write or download. */
+        /**
+         * The fingerprint is identical: no rule-row, download, generation, or asset-file write.
+         *
+         * The importing verb may still update the separate active-rule-set setting.
+         */
         Unchanged,
 
         /** Meaningful content changed but its timestamp is not strictly newer. */

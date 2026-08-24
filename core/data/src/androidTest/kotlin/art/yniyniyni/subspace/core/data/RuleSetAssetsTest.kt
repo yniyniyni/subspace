@@ -507,11 +507,27 @@ class RuleSetAssetsTest {
     @Test
     fun validatedFileIsRecordedOnlyAfterDataAndPendingMetadataAreForced() = runTest {
         val forced = mutableListOf<String>()
+        val pendingName = ".subspace-validated-geoip.dat.sha256.pending"
+        val metadataName = pendingName.removeSuffix(".pending")
         val subject =
             RuleSetAssets(
                 temp.newFolder("forced-validation"),
                 CooperativeRuleSetFileCopier(),
-                StableFileForcer { file -> forced += file.name },
+                StableFileForcer { file ->
+                    val pending = File(file.parentFile, pendingName)
+                    val metadata = File(file.parentFile, metadataName)
+                    when (file.name) {
+                        "geoip.dat" -> {
+                            pending.exists() shouldBe false
+                            metadata.exists() shouldBe false
+                        }
+                        pendingName -> {
+                            pending.isFile shouldBe true
+                            metadata.exists() shouldBe false
+                        }
+                    }
+                    forced += file.name
+                },
             )
         val generation = subject.prepareGeneration(9, 1)
         File(generation, "geoip.dat").writeText("validated bytes")
@@ -521,9 +537,60 @@ class RuleSetAssetsTest {
         forced shouldBe
             listOf(
                 "geoip.dat",
-                ".subspace-validated-geoip.dat.sha256.pending",
+                pendingName,
             )
+        File(generation, pendingName).exists() shouldBe false
+        File(generation, metadataName).isFile shouldBe true
         subject.verifiedGenerationFile(9, 1, "geoip.dat").shouldNotBeNull()
+    }
+
+    @Test
+    fun secondForceFailureLeavesNoPublishedOrPendingMetadata() = runTest {
+        val pendingName = ".subspace-validated-geoip.dat.sha256.pending"
+        val metadataName = pendingName.removeSuffix(".pending")
+        val subject =
+            RuleSetAssets(
+                temp.newFolder("second-force-failure"),
+                CooperativeRuleSetFileCopier(),
+                StableFileForcer { file ->
+                    if (file.name == pendingName) throw IOException("injected metadata force failure")
+                },
+            )
+        val generation = subject.prepareGeneration(9, 1)
+        File(generation, "geoip.dat").writeText("validated bytes")
+
+        subject.recordValidatedFile(9, 1, "geoip.dat") shouldBe false
+
+        File(generation, pendingName).exists() shouldBe false
+        File(generation, metadataName).exists() shouldBe false
+        subject.verifiedGenerationFile(9, 1, "geoip.dat") shouldBe null
+    }
+
+    @Test
+    fun atomicMoveFailureLeavesNoPublishedOrPendingMetadata() = runTest {
+        val pendingName = ".subspace-validated-geoip.dat.sha256.pending"
+        val metadataName = pendingName.removeSuffix(".pending")
+        val subject =
+            RuleSetAssets(
+                temp.newFolder("atomic-move-failure"),
+                CooperativeRuleSetFileCopier(),
+                StableFileForcer { file ->
+                    if (file.name == pendingName) {
+                        File(file.parentFile, metadataName).apply {
+                            mkdir()
+                            File(this, "obstruction").writeText("keep move fail-closed")
+                        }
+                    }
+                },
+            )
+        val generation = subject.prepareGeneration(9, 1)
+        File(generation, "geoip.dat").writeText("validated bytes")
+
+        subject.recordValidatedFile(9, 1, "geoip.dat") shouldBe false
+
+        File(generation, pendingName).exists() shouldBe false
+        File(generation, metadataName).isDirectory shouldBe true
+        subject.verifiedGenerationFile(9, 1, "geoip.dat") shouldBe null
     }
 
     @Test

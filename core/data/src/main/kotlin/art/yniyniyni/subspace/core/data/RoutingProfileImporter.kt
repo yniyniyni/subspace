@@ -398,21 +398,36 @@ internal constructor(
         val original = repository.stored(id) ?: return null
         val copyId = repository.upsert(original.ruleSet.copy(id = 0L, name = name))
         if (!original.usesOwnGeneration) return copyId
-        val sourceDir = assets.generationDir(id, original.assetGeneration)
         val copied =
             runCatching {
-                val staged = assets.prepareGeneration(copyId, FIRST_GENERATION)
-                original.ruleSet.requiredGeoFiles().all { fileName ->
-                    assets.copyLocally(File(sourceDir, fileName), File(staged, fileName))
+                assets.prepareGeneration(copyId, FIRST_GENERATION)
+                when (
+                    val retained =
+                        assets.withResolvedAssetDir(id, original.assetGeneration, hasOwnSources = true) {
+                            original.ruleSet.requiredGeoFiles().all { fileName ->
+                                assets.copyValidatedFile(
+                                    sourceSetId = id,
+                                    sourceGeneration = original.assetGeneration,
+                                    targetSetId = copyId,
+                                    targetGeneration = FIRST_GENERATION,
+                                    fileName = fileName,
+                                )
+                            }
+                        }
+                ) {
+                    is ResolvedAssetUse.Used -> retained.value
+                    ResolvedAssetUse.GenerationUnavailable -> false
                 }
             }.getOrDefault(false)
         if (!copied) {
             // The row exists and is editable; it simply has no assets of its own
             // yet. Marking it Failed says that on the row rather than leaving a
             // copy that looks complete and cannot activate.
+            assets.removeSet(copyId)
             repository.markAssets(copyId, RuleSetAssetState.Failed, RuleSetAssetFailure.InstallFailed)
             return copyId
         }
+        beforeGenerationCommit(copyId, FIRST_GENERATION)
         repository.publishCopiedGeneration(copyId, FIRST_GENERATION)
         return copyId
     }

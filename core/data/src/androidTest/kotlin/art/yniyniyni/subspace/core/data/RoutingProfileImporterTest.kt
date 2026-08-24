@@ -1458,25 +1458,182 @@ class RoutingProfileImporterTest {
     // upsert path kept its geosite:/geoip: rules while silently switching them
     // to whatever the shared catalogue held under the same name.
     @Test
-    fun duplicatingAGenerationOwningProfileCopiesItsAssets() {
+    fun duplicatingAGenerationOwningProfileValidatesBothAssetsBeforePublication() {
         runBlocking {
-            val first = importer.apply(geoIpOnlyProfile(), RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+            val first = importer.apply(sampleProfile(), RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
             first.shouldBeInstanceOf<ImportOutcome.Activated>()
             val originalId = first.id
+            downloads.clear()
+            var publicationObserved = false
+            val publicationCheckingImporter =
+                RoutingProfileImporter(
+                    database,
+                    repository,
+                    assets,
+                    geoAssets,
+                    settings,
+                    validator,
+                    downloader,
+                    deletion,
+                    progress,
+                    GEO_DOWNLOAD_TIMEOUT_MILLIS,
+                ) { copiedId: Long, generation: Long ->
+                    generation shouldBe 1L
+                    assets.verifiedGenerationFile(copiedId, generation, "geoip.dat").shouldNotBeNull()
+                    assets.verifiedGenerationFile(copiedId, generation, "geosite.dat").shouldNotBeNull()
+                    repository.stored(copiedId).shouldNotBeNull().assetGeneration shouldBe 0L
+                    publicationObserved = true
+                }
 
-            val copyId = importer.duplicate(originalId, "copy").shouldNotBeNull()
+            val copyId = publicationCheckingImporter.duplicate(originalId, "copy").shouldNotBeNull()
 
+            publicationObserved shouldBe true
+            downloads.shouldBeEmpty()
             val copy = repository.stored(copyId).shouldNotBeNull()
             copy.sourceKind shouldBe null
             copy.usesOwnGeneration shouldBe true
             val copied = assets.generationDir(copyId, copy.assetGeneration)
             val source = assets.generationDir(originalId, 1L)
             copied.resolve("geoip.dat").readText() shouldBe source.resolve("geoip.dat").readText()
+            copied.resolve("geosite.dat").readText() shouldBe source.resolve("geosite.dat").readText()
+            settings.activeRoutingRuleSetId.first() shouldBe originalId
 
             // Survives deletion of the original: the copy owns its bytes.
             importer.delete(originalId)
             copied.resolve("geoip.dat").isFile shouldBe true
+            copied.resolve("geosite.dat").isFile shouldBe true
         }
+    }
+
+    @Test
+    fun duplicatingASingleAssetProfilePublishesOnlyTheRequiredAsset() {
+        runBlocking {
+            val original =
+                importer
+                    .apply(geoIpOnlyProfile(), RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+                    .shouldBeInstanceOf<ImportOutcome.Activated>()
+            downloads.clear()
+
+            val copyId = importer.duplicate(original.id, "single-asset-copy").shouldNotBeNull()
+
+            downloads.shouldBeEmpty()
+            val copied = assets.generationDir(copyId, 1L)
+            assets.verifiedGenerationFile(copyId, 1L, "geoip.dat").shouldNotBeNull()
+            copied.resolve("geosite.dat").exists() shouldBe false
+            repository.stored(copyId).shouldNotBeNull().assetGeneration shouldBe 1L
+            settings.activeRoutingRuleSetId.first() shouldBe original.id
+        }
+    }
+
+    @Test
+    fun duplicateRejectsCopiedTargetWhoseDigestDiffersFromValidatedSource() {
+        runBlocking {
+            assertDuplicatePublicationBlocked(
+                RuleSetAssets(
+                    root,
+                    CooperativeRuleSetFileCopier(
+                        afterCopy = { _, target -> target.writeText("corrupted after local copy") },
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun duplicateRejectsCopiedTargetWhenDataForceFails() {
+        runBlocking {
+            assertDuplicatePublicationBlocked(
+                RuleSetAssets(
+                    root,
+                    CooperativeRuleSetFileCopier(),
+                    StableFileForcer { throw IOException("injected duplicate data force failure") },
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun duplicateRejectsCopiedTargetWhenMetadataForceFails() {
+        runBlocking {
+            assertDuplicatePublicationBlocked(
+                RuleSetAssets(
+                    root,
+                    CooperativeRuleSetFileCopier(),
+                    StableFileForcer { file ->
+                        if (file.name.endsWith(".pending")) {
+                            throw IOException("injected duplicate metadata force failure")
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun duplicateRejectsCopiedTargetWhenMetadataAtomicMoveFails() {
+        runBlocking {
+            assertDuplicatePublicationBlocked(
+                RuleSetAssets(
+                    root,
+                    CooperativeRuleSetFileCopier(),
+                    StableFileForcer { file ->
+                        if (file.name.endsWith(".pending")) {
+                            File(file.parentFile, file.name.removeSuffix(".pending")).apply {
+                                mkdir()
+                                File(this, "obstruction").writeText("keep duplicate move fail-closed")
+                            }
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    private suspend fun assertDuplicatePublicationBlocked(failingAssets: RuleSetAssets) {
+        val original =
+            importer
+                .apply(geoIpOnlyProfile(), RoutingVerb.Add, RoutingSourceKind.Deeplink, null)
+                .shouldBeInstanceOf<ImportOutcome.Activated>()
+        downloads.clear()
+        val failingDeletion =
+            RoutingProfileDeletion(
+                database,
+                repository,
+                failingAssets,
+                settings,
+                ProfileRepository(database.profileDao()),
+            )
+        var publicationReached = false
+        val subject =
+            RoutingProfileImporter(
+                database,
+                repository,
+                failingAssets,
+                geoAssets,
+                settings,
+                validator,
+                downloader,
+                failingDeletion,
+                progress,
+                GEO_DOWNLOAD_TIMEOUT_MILLIS,
+            ) { _, _ -> publicationReached = true }
+
+        val copyId = subject.duplicate(original.id, "failing-copy").shouldNotBeNull()
+
+        publicationReached shouldBe false
+        downloads.shouldBeEmpty()
+        repository.stored(copyId).shouldNotBeNull().let { copy ->
+            copy.assetGeneration shouldBe 0L
+            copy.assetState shouldBe RuleSetAssetState.Failed
+            copy.assetFailure shouldBe RuleSetAssetFailure.InstallFailed
+        }
+        File(failingAssets.setsRoot(), copyId.toString()).exists() shouldBe false
+        settings.activeRoutingRuleSetId.first() shouldBe original.id
+        repository.stored(original.id).shouldNotBeNull().let { source ->
+            source.assetGeneration shouldBe 1L
+            source.assetState shouldBe RuleSetAssetState.Ready
+        }
+        failingAssets.verifiedGenerationFile(original.id, 1L, "geoip.dat").shouldNotBeNull()
     }
 
     // Spec §9: the row renders "Downloading 12 MB / 23 MB". The counts have to

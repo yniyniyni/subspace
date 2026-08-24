@@ -736,11 +736,13 @@ class RoutingRepositoryEditorSaveTest {
                 editorSnapshot.copy(
                     buckets =
                     editorSnapshot.buckets +
-                        (RouteOutcome.DIRECT to
-                            RuleBucket(
-                                sites = listOf("domain:edited-after-import.test"),
-                                ips = editorSnapshot.bucket(RouteOutcome.DIRECT).ips,
-                            )),
+                        (
+                            RouteOutcome.DIRECT to
+                                RuleBucket(
+                                    sites = listOf("domain:edited-after-import.test"),
+                                    ips = editorSnapshot.bucket(RouteOutcome.DIRECT).ips,
+                                )
+                            ),
                 ),
             )
 

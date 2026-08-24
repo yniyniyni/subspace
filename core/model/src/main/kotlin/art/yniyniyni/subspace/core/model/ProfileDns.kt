@@ -124,7 +124,7 @@ public object DnsValidation {
     public fun isAddressLiteral(value: String): Boolean {
         val trimmed = value.trim()
         if (trimmed.isEmpty()) return false
-        return IPV4.matches(trimmed) || IPV6.matches(trimmed)
+        return IPV4.matches(trimmed) || isIpv6Literal(trimmed)
     }
 
     /** True when [value] parses as an absolute `https://` URL with a host. */
@@ -138,5 +138,39 @@ public object DnsValidation {
         }.getOrNull()
 
     private val IPV4 = Regex("""^((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$""")
-    private val IPV6 = Regex("""^(?=.*:)[0-9A-Fa-f:]+$""")
+    private val IPV6_GROUP = Regex("""^[0-9A-Fa-f]{1,4}$""")
+
+    /** Strict IPv6 literal parser that deliberately does not resolve a hostname. */
+    private fun isIpv6Literal(value: String): Boolean {
+        if (!value.contains(':')) return false
+
+        val compression = value.indexOf("::")
+        val groupCount =
+            if (compression < 0) {
+                ipv6Groups(value)?.size
+            } else {
+                ipv6GroupCountWithCompression(value, compression)
+            }
+        return groupCount?.let { count ->
+            if (compression < 0) count == IPV6_GROUP_COUNT else count < IPV6_GROUP_COUNT
+        } ?: false
+    }
+
+    private fun ipv6GroupCountWithCompression(
+        value: String,
+        compression: Int,
+    ): Int? {
+        if (value.indexOf("::", compression + 2) >= 0) return null
+        val left = ipv6Groups(value.substring(0, compression))
+        val right = ipv6Groups(value.substring(compression + 2))
+        return if (left == null || right == null) null else left.size + right.size
+    }
+
+    private fun ipv6Groups(part: String): List<String>? {
+        if (part.isEmpty()) return emptyList()
+        val groups = part.split(':')
+        return groups.takeIf { values -> values.all(IPV6_GROUP::matches) }
+    }
+
+    private const val IPV6_GROUP_COUNT = 8
 }

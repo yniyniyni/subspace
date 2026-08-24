@@ -12,7 +12,7 @@ class DnsServerAdvertiserTest {
         val added = mutableListOf<String>()
         val plannedAddress =
             DnsPlan(
-                servers = listOf(DnsServerSpec("2001:db8:::1")),
+                servers = listOf(DnsServerSpec("2001:db8::1")),
                 hosts = emptyMap(),
                 fakeDns = false,
                 directMatch = null,
@@ -25,10 +25,10 @@ class DnsServerAdvertiserTest {
                 fallbackAddress = "1.1.1.1",
             ) { address ->
                 added += address
-                require(address != "2001:db8:::1") { "rejected" }
+                require(address != "2001:db8::1") { "rejected" }
             }
 
         usedFallback shouldBe true
-        added shouldBe listOf("2001:db8:::1", "1.1.1.1")
+        added shouldBe listOf("2001:db8::1", "1.1.1.1")
     }
 }

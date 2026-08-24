@@ -7,6 +7,16 @@ import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
+/** The three Room rows that make up one app-level DNS resolver. */
+internal data class DnsSettingSnapshot(
+    val transport: String?,
+    val domain: String?,
+    val ip: String?,
+) {
+    override fun toString(): String =
+        "DnsSettingSnapshot(transport=$transport, domain=<redacted>, ip=<redacted>)"
+}
+
 /**
  * Data access for [SettingEntity].
  *
@@ -20,6 +30,20 @@ internal interface SettingDao {
     @Query("SELECT value FROM settings WHERE `key` = :key")
     fun observe(key: String): Flow<String?>
 
+    /**
+     * Observes all DNS setting keys as one query result, never as independently
+     * invalidated rows that a collector could combine into a torn resolver.
+     */
+    @Query(
+        """
+        SELECT
+            (SELECT value FROM settings WHERE `key` = 'dns_transport') AS transport,
+            (SELECT value FROM settings WHERE `key` = 'dns_domain') AS domain,
+            (SELECT value FROM settings WHERE `key` = 'dns_ip') AS ip
+        """,
+    )
+    fun observeDnsSnapshot(): Flow<DnsSettingSnapshot>
+
     /** One-shot counterpart used by transactional compare-and-set operations. */
     @Query("SELECT value FROM settings WHERE `key` = :key")
     suspend fun value(key: String): String?
@@ -27,6 +51,18 @@ internal interface SettingDao {
     /** Inserts or overwrites a setting. */
     @Upsert
     suspend fun put(setting: SettingEntity)
+
+    /** Writes every DNS resolver field in one Room transaction. */
+    @Transaction
+    suspend fun putDnsSnapshot(
+        transport: String,
+        domain: String,
+        ip: String,
+    ) {
+        put(SettingEntity(key = "dns_transport", value = transport))
+        put(SettingEntity(key = "dns_domain", value = domain))
+        put(SettingEntity(key = "dns_ip", value = ip))
+    }
 
     /** Atomically claims an unset/null-reading numeric setting for [value]. */
     @Transaction

@@ -14,6 +14,8 @@ import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.isGeoFileName
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,7 +54,10 @@ constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState(appVersion = appVersionSource.version))
     val state: StateFlow<SettingsState> = _state.asStateFlow()
-    private var hasEditableDnsDraft = false
+    private val dnsWriteRequests = Channel<DnsWriteRequest>(Channel.CONFLATED)
+    private var dnsRevision = 0L
+    private var editableDnsRevision: Long? = null
+    private var latestPersistedDnsResolver = DnsResolver.DEFAULT
 
     init {
         settingsSource.theme
@@ -85,16 +90,17 @@ constructor(
 
         settingsSource.dnsResolver
             .onEach { resolver ->
-                if (!hasEditableDnsDraft) {
-                    _state.update {
-                        it.copy(
-                            dnsTransport = resolver.transport,
-                            dnsAddress = resolver.xrayAddress().orEmpty(),
-                            dnsBootstrapIp = if (resolver.transport == DnsTransport.DOH) resolver.ip.orEmpty() else "",
-                        )
-                    }
+                latestPersistedDnsResolver = resolver
+                if (editableDnsRevision == null) {
+                    _state.update { it.withDnsResolver(resolver) }
                 }
             }.launchIn(viewModelScope)
+
+        viewModelScope.launch {
+            for (request in dnsWriteRequests) {
+                persistDnsWrite(request)
+            }
+        }
 
         settingsSource.dnsOverriddenByProfile
             .onEach { overridden -> _state.update { it.copy(dnsOverriddenByProfile = overridden) } }
@@ -167,33 +173,46 @@ constructor(
 
     /** Starts a new local resolver draft; persistence waits for a complete valid resolver. */
     fun onDnsTransportChanged(transport: DnsTransport) {
-        hasEditableDnsDraft = true
-        _state.update { current ->
-            if (current.dnsTransport == transport) {
-                current
-            } else {
-                current.copy(dnsTransport = transport, dnsAddress = "", dnsBootstrapIp = "")
-            }
-        }
+        if (_state.value.dnsTransport == transport) return
+        updateDnsDraft { current -> current.copy(dnsTransport = transport, dnsAddress = "", dnsBootstrapIp = "") }
     }
 
     fun onDnsAddressChanged(address: String) {
-        hasEditableDnsDraft = true
-        _state.update { it.copy(dnsAddress = address) }
-        persistDnsResolverIfValid()
+        updateDnsDraft { current -> current.copy(dnsAddress = address) }
     }
 
     fun onDnsBootstrapIpChanged(bootstrapIp: String) {
-        hasEditableDnsDraft = true
-        _state.update { it.copy(dnsBootstrapIp = bootstrapIp) }
-        persistDnsResolverIfValid()
+        updateDnsDraft { current -> current.copy(dnsBootstrapIp = bootstrapIp) }
     }
 
-    private fun persistDnsResolverIfValid() {
-        val resolver = _state.value.dnsResolverOrNull() ?: return
-        viewModelScope.launch {
-            settingsSource.setDnsResolver(resolver)
-            hasEditableDnsDraft = false
+    private fun updateDnsDraft(transform: (SettingsState) -> SettingsState) {
+        val updated = transform(_state.value)
+        if (updated == _state.value) return
+
+        val revision = ++dnsRevision
+        editableDnsRevision = revision
+        _state.value = updated
+        updated.dnsResolverOrNull()?.let { resolver ->
+            dnsWriteRequests.trySend(DnsWriteRequest(revision = revision, resolver = resolver))
+        }
+    }
+
+    /** Serializes failure recovery with the revision that owns the visible DNS draft. */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun persistDnsWrite(request: DnsWriteRequest) {
+        try {
+            settingsSource.setDnsResolver(request.resolver)
+            if (editableDnsRevision == request.revision) {
+                editableDnsRevision = null
+                _state.update { it.withDnsResolver(request.resolver) }
+            }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (_: Throwable) {
+            if (editableDnsRevision == request.revision) {
+                editableDnsRevision = null
+                _state.update { it.withDnsResolver(latestPersistedDnsResolver) }
+            }
         }
     }
 
@@ -314,16 +333,33 @@ private fun SettingsState.dnsResolverOrNull(): DnsResolver? =
     when (dnsTransport) {
         DnsTransport.DOH ->
             dnsAddress
+                .trim()
                 .takeIf(DnsValidation::isHttpsUrl)
-                ?.takeIf { dnsBootstrapIp.isBlank() || DnsValidation.isAddressLiteral(dnsBootstrapIp) }
+                ?.takeIf { dnsBootstrapIp.trim().isBlank() || DnsValidation.isAddressLiteral(dnsBootstrapIp.trim()) }
                 ?.let { domain ->
                     DnsResolver(
                         transport = DnsTransport.DOH,
                         domain = domain,
-                        ip = dnsBootstrapIp.takeIf(String::isNotBlank),
+                        ip = dnsBootstrapIp.trim().takeIf(String::isNotBlank),
                     )
                 }
 
         DnsTransport.DOU ->
-            dnsAddress.takeIf(DnsValidation::isAddressLiteral)?.let { ip -> DnsResolver(DnsTransport.DOU, ip = ip) }
+            dnsAddress.trim().takeIf(DnsValidation::isAddressLiteral)?.let { ip ->
+                DnsResolver(DnsTransport.DOU, ip = ip)
+            }
     }
+
+private fun SettingsState.withDnsResolver(resolver: DnsResolver): SettingsState =
+    copy(
+        dnsTransport = resolver.transport,
+        dnsAddress = resolver.xrayAddress().orEmpty(),
+        dnsBootstrapIp = if (resolver.transport == DnsTransport.DOH) resolver.ip.orEmpty() else "",
+    )
+
+private data class DnsWriteRequest(
+    val revision: Long,
+    val resolver: DnsResolver,
+) {
+    override fun toString(): String = "DnsWriteRequest(revision=$revision, resolver=<redacted>)"
+}

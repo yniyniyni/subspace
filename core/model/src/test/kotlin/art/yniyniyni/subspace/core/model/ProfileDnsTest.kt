@@ -15,6 +15,27 @@ class ProfileDnsTest {
     }
 
     @Test
+    fun acceptsOnlyStrictIpv6LiteralsWithoutNetworkResolution() {
+        listOf(
+            "2001:0db8:0000:0000:0000:ff00:0042:8329",
+            "2606:4700:4700::1111",
+            "::1",
+        ).forEach { literal ->
+            DnsValidation.isAddressLiteral(literal) shouldBe true
+        }
+
+        listOf(
+            "::::",
+            "1:2:3:4:5:6:7:8:9",
+            "1::2::3",
+            "1:2:3:4:5:6:7:gggg",
+            "resolver.example.test",
+        ).forEach { invalid ->
+            DnsValidation.isAddressLiteral(invalid) shouldBe false
+        }
+    }
+
+    @Test
     fun recognisesHttpsUrlsOnly() {
         DnsValidation.isHttpsUrl("https://cloudflare-dns.com/dns-query") shouldBe true
         DnsValidation.isHttpsUrl("http://cloudflare-dns.com/dns-query") shouldBe false

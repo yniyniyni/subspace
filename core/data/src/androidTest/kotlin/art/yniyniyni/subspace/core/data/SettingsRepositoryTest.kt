@@ -11,17 +11,23 @@ import art.yniyniyni.subspace.core.model.PerAppMode
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
 // Backtick names with spaces are avoided for the same reason ProfileRepositoryTest
 // avoids them: runTest {}'s lambda inherits the enclosing method's JVM name, and
 // minSdk 26 makes D8 reject spaces in the synthetic class name below DEX 040.
+@OptIn(ExperimentalCoroutinesApi::class)
 class SettingsRepositoryTest {
     private lateinit var db: SubspaceDatabase
     private lateinit var repository: SettingsRepository
@@ -292,6 +298,36 @@ class SettingsRepositoryTest {
             db.settingDao().put(SettingEntity(key = "dns_transport", value = "DoQ"))
 
             repository.dnsResolver.first() shouldBe DnsResolver(DnsTransport.DOU, ip = "1.1.1.1")
+        }
+
+    @Test
+    fun dnsResolverNeverPublishesATornMultiRowProjection() =
+        runTest {
+            val expected =
+                DnsResolver(
+                    DnsTransport.DOH,
+                    domain = "https://dns.example.test/dns-query",
+                    ip = "2001:db8::1",
+                )
+            val observed = mutableListOf<DnsResolver>()
+            val reachedExpected = CompletableDeferred<Unit>()
+            val collection =
+                launch {
+                    repository.dnsResolver.collect { resolver ->
+                        observed += resolver
+                        if (resolver == expected) reachedExpected.complete(Unit)
+                    }
+                }
+            advanceUntilIdle()
+
+            repository.setDnsResolver(expected)
+            reachedExpected.await()
+            collection.cancel()
+
+            assertTrue(
+                "DNS resolver flow must publish only complete resolver snapshots",
+                observed.all { resolver -> resolver == DnsResolver.DEFAULT || resolver == expected },
+            )
         }
 
     private companion object {

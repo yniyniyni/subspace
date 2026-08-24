@@ -12,6 +12,7 @@ import art.yniyniyni.subspace.core.model.GeoSourceCatalogue
 import art.yniyniyni.subspace.core.model.PingMode
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -75,9 +76,29 @@ class SettingsViewModelTest {
 
         private val _dnsResolver = MutableStateFlow(initialDnsResolver)
         override val dnsResolver: Flow<DnsResolver> = _dnsResolver.asStateFlow()
+        private val dnsWriteGates = ArrayDeque<CompletableDeferred<Unit>>()
+        private var failNextDnsWrite = false
+
+        val dnsWriteCount: Int get() = dnsWriteRequests.size
+        private val dnsWriteRequests = mutableListOf<DnsResolver>()
 
         override suspend fun setDnsResolver(resolver: DnsResolver) {
+            dnsWriteRequests += resolver
+            val gate = if (dnsWriteGates.isEmpty()) null else dnsWriteGates.removeFirst()
+            gate?.await()
+            if (failNextDnsWrite) {
+                failNextDnsWrite = false
+                check(false) { "controlled DNS write failure" }
+            }
             _dnsResolver.value = resolver
+        }
+
+        fun pauseNextDnsWrite(gate: CompletableDeferred<Unit>) {
+            dnsWriteGates.addLast(gate)
+        }
+
+        fun failNextDnsWrite() {
+            failNextDnsWrite = true
         }
 
         fun publishDnsResolver(resolver: DnsResolver) {
@@ -361,6 +382,23 @@ class SettingsViewModelTest {
         }
 
     @Test
+    fun `selecting the active DNS transport does not claim a draft or write`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOU)
+            source.publishDnsResolver(DnsResolver(DnsTransport.DOH, domain = "https://dns.example.test/dns-query"))
+            advanceUntilIdle()
+
+            assertTrue("Selecting the current DNS transport must not write", source.dnsWriteCount == 0)
+            assertTrue(
+                "Selecting the current DNS transport must not claim the draft",
+                model.state.value.dnsTransport == DnsTransport.DOH,
+            )
+        }
+
+    @Test
     fun `a persisted resolver update does not discard an active DNS transport draft`() =
         runTest {
             val source = FakeSettingsSource()
@@ -401,6 +439,95 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             source.dnsResolver.first() shouldBe DnsResolver(DnsTransport.DOU, ip = "9.9.9.9")
+        }
+
+    @Test
+    fun `overlapping DNS writes persist the latest valid resolver`() =
+        runTest {
+            val firstWrite = CompletableDeferred<Unit>()
+            val source = FakeSettingsSource()
+            source.pauseNextDnsWrite(firstWrite)
+            val model = viewModel(source)
+
+            model.onDnsAddressChanged("9.9.9.9")
+            advanceUntilIdle()
+            model.onDnsAddressChanged("8.8.8.8")
+            firstWrite.complete(Unit)
+            advanceUntilIdle()
+
+            val latest = DnsResolver(DnsTransport.DOU, ip = "8.8.8.8")
+            assertTrue("DNS writes must be serialized", source.dnsWriteCount == 2)
+            val persisted = source.dnsResolver.first()
+            assertTrue("The latest DNS resolver must win", persisted == latest)
+            assertTrue(
+                "Successful DNS writes must normalize visible state",
+                model.state.value.dnsAddress == latest.ip,
+            )
+        }
+
+    @Test
+    fun `a failed latest DNS write releases the draft to the persisted resolver`() =
+        runTest {
+            val source = FakeSettingsSource()
+            source.failNextDnsWrite()
+            val model = viewModel(source)
+
+            model.onDnsAddressChanged("9.9.9.9")
+            advanceUntilIdle()
+
+            assertTrue(
+                "A failed DNS write must restore the persisted projection",
+                model.state.value.dnsAddress == DnsResolver.DEFAULT.ip,
+            )
+            model.onDnsAddressChanged("8.8.8.8")
+            advanceUntilIdle()
+
+            val persisted = source.dnsResolver.first()
+            assertTrue(
+                "A failed DNS write must release ownership for the next edit",
+                persisted == DnsResolver(DnsTransport.DOU, ip = "8.8.8.8"),
+            )
+        }
+
+    @Test
+    fun `DNS edits trim resolver and bootstrap fields before persistence`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsTransportChanged(DnsTransport.DOH)
+            model.onDnsAddressChanged(" https://dns.example.test/dns-query ")
+            model.onDnsBootstrapIpChanged(" 2001:db8::1 ")
+            advanceUntilIdle()
+
+            val persisted = source.dnsResolver.first()
+            assertTrue(
+                "DNS persistence must trim resolver fields",
+                persisted ==
+                    DnsResolver(
+                        DnsTransport.DOH,
+                        domain = "https://dns.example.test/dns-query",
+                        ip = "2001:db8::1",
+                    ),
+            )
+            assertTrue(
+                "DNS state must display normalized resolver fields",
+                model.state.value.dnsAddress == "https://dns.example.test/dns-query" &&
+                    model.state.value.dnsBootstrapIp == "2001:db8::1",
+            )
+        }
+
+    @Test
+    fun `a malformed IPv6 DNS address remains an unpersisted draft`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val model = viewModel(source)
+
+            model.onDnsAddressChanged("1:2:3:4:5:6:7:8:9")
+            advanceUntilIdle()
+
+            val persisted = source.dnsResolver.first()
+            assertTrue("Malformed IPv6 DNS input must not be persisted", persisted == DnsResolver.DEFAULT)
         }
 
     @Test

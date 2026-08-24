@@ -27,10 +27,12 @@
 // open, which is precisely the wedged-until-reboot state §5.4 exists to prevent.
 
 #include <jni.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <android/log.h>
 
@@ -52,6 +54,67 @@ static int running = 0;
 // nativeStop may be holding while joining it.
 static atomic_int worker_finished = 0;
 
+#ifndef NDEBUG
+// Deterministic device-test seam. The Android test pauses the worker before it
+// enters HEV at all (and therefore before event_task_init), then observes that
+// quit() returned without waiting for readiness. No production Kotlin class
+// exposes these controls, and release native builds compile them out.
+static pthread_mutex_t test_hook_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t test_hook_changed = PTHREAD_COND_INITIALIZER;
+static int test_pause_armed = 0;
+static int test_worker_paused = 0;
+static int test_worker_released = 0;
+static int test_quit_returned = 0;
+
+static int
+test_wait_for (int *value, long timeout_ms)
+{
+    struct timespec deadline;
+    int res = 0;
+
+    clock_gettime (CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (timeout_ms % 1000) * 1000000;
+    if (deadline.tv_nsec >= 1000000000) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000;
+    }
+
+    pthread_mutex_lock (&test_hook_lock);
+    while (!*value && res != ETIMEDOUT)
+        res = pthread_cond_timedwait (&test_hook_changed, &test_hook_lock,
+                                      &deadline);
+    int observed = *value;
+    pthread_mutex_unlock (&test_hook_lock);
+
+    return observed;
+}
+
+static void
+test_pause_before_hev_init (void)
+{
+    pthread_mutex_lock (&test_hook_lock);
+    if (test_pause_armed) {
+        test_worker_paused = 1;
+        pthread_cond_broadcast (&test_hook_changed);
+        while (!test_worker_released)
+            pthread_cond_wait (&test_hook_changed, &test_hook_lock);
+        test_pause_armed = 0;
+        test_worker_paused = 0;
+    }
+    pthread_mutex_unlock (&test_hook_lock);
+}
+
+static void
+test_note_quit_returned (void)
+{
+    pthread_mutex_lock (&test_hook_lock);
+    test_quit_returned = 1;
+    pthread_cond_broadcast (&test_hook_changed);
+    pthread_mutex_unlock (&test_hook_lock);
+}
+#endif
+
 struct start_args {
     unsigned char *config;
     unsigned int config_len;
@@ -62,6 +125,10 @@ static void *
 run_tunnel (void *arg)
 {
     struct start_args *args = arg;
+
+#ifndef NDEBUG
+    test_pause_before_hev_init ();
+#endif
 
     // Blocks until hev_socks5_tunnel_quit(), or returns early on a startup
     // failure (bad config, logger init, task system, tunnel init).
@@ -163,6 +230,9 @@ Java_art_yniyniyni_subspace_service_Tun2Socks_nativeStart (JNIEnv *env,
     args->tun_fd = tun_fd;
     (*env)->ReleaseStringUTFChars (env, config, cfg);
 
+    // Clear HEV's pending-stop state before creation. Doing this in the worker
+    // would lose a stop requested after pthread_create but before scheduling.
+    hev_socks5_tunnel_prepare ();
     if (pthread_create (&worker, NULL, run_tunnel, args) != 0) {
         free (args->config);
         free (args);
@@ -197,15 +267,14 @@ Java_art_yniyniyni_subspace_service_Tun2Socks_nativeStop (JNIEnv *env,
         return;
     }
 
-    // Skip quit() when the worker has already returned. Calling it then would
-    // busy-wait forever on an event fd that has already been torn down.
-    //
-    // Residual window, deliberately accepted: if the worker is mid-startup and
-    // is going to fail before upstream's event_task_init runs, quit() can spin.
-    // It is bounded in every other case. TunnelService must not call stop()
-    // before the state machine has observed a started tunnel.
+    // Skip quit() when the worker has already returned. Otherwise HEV records
+    // one pending stop before readiness, or signals the event fd exactly once
+    // after readiness. The request itself never waits for initialization.
     if (!atomic_load (&worker_finished)) {
         hev_socks5_tunnel_quit ();
+#ifndef NDEBUG
+        test_note_quit_returned ();
+#endif
     }
 
     reap_locked ();
@@ -228,3 +297,55 @@ Java_art_yniyniyni_subspace_service_Tun2Socks_nativeIsRunning (JNIEnv *env,
     pthread_mutex_unlock (&lock);
     return r ? JNI_TRUE : JNI_FALSE;
 }
+
+#ifndef NDEBUG
+JNIEXPORT void JNICALL
+Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeArmPause (
+    JNIEnv *env, jclass clazz)
+{
+    (void)env;
+    (void)clazz;
+
+    pthread_mutex_lock (&test_hook_lock);
+    test_pause_armed = 1;
+    test_worker_paused = 0;
+    test_worker_released = 0;
+    test_quit_returned = 0;
+    pthread_mutex_unlock (&test_hook_lock);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeAwaitPaused (
+    JNIEnv *env, jclass clazz, jlong timeout_ms)
+{
+    (void)env;
+    (void)clazz;
+
+    return test_wait_for (&test_worker_paused, timeout_ms) ? JNI_TRUE
+                                                           : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeAwaitQuitReturned (
+    JNIEnv *env, jclass clazz, jlong timeout_ms)
+{
+    (void)env;
+    (void)clazz;
+
+    return test_wait_for (&test_quit_returned, timeout_ms) ? JNI_TRUE
+                                                           : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeRelease (
+    JNIEnv *env, jclass clazz)
+{
+    (void)env;
+    (void)clazz;
+
+    pthread_mutex_lock (&test_hook_lock);
+    test_worker_released = 1;
+    pthread_cond_broadcast (&test_hook_changed);
+    pthread_mutex_unlock (&test_hook_lock);
+}
+#endif

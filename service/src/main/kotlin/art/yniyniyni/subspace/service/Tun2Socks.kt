@@ -42,11 +42,7 @@ internal object Tun2Socks {
     /**
      * Idempotent, and safe under the concurrent teardown §5.4 describes.
      *
-     * Two caveats for `TunnelService`:
-     *  - Do not call this before the state machine has observed a started
-     *    tunnel. Upstream's quit busy-waits, and in a narrow mid-startup-failure
-     *    window it can spin — see `docs/agent/research/hev-api.md` §4.
-     *  - If `System.loadLibrary` failed, touching this object throws
+     * If `System.loadLibrary` failed, touching this object throws
      *    `NoClassDefFoundError`, including from `onDestroy`. §5.4 requires
      *    teardown to finish anyway, so guard the call there.
      */

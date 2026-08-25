@@ -5,6 +5,7 @@ package art.yniyniyni.subspace.service
 import art.yniyniyni.subspace.core.xray.ComposeResult
 import art.yniyniyni.subspace.core.xray.RawConfigComposer
 import art.yniyniyni.subspace.core.xray.TunnelSettings
+import kotlinx.coroutines.CancellationException
 
 /**
  * Whether xray-core will actually run a stored config.
@@ -14,7 +15,14 @@ import art.yniyniyni.subspace.core.xray.TunnelSettings
  * depends on this module — the same seam `TunnelProxyLocator` uses.
  */
 public interface PassthroughValidator {
-    /** True when the composed form of [rawJson] is accepted by the core. Never throws. */
+    /**
+     * True when the composed form of [rawJson] is accepted by the core, or when the check could
+     * not be run at all (e.g. geo assets not installed yet, or a failure unrelated to the core's
+     * own verdict) — both leave a row's eligibility undetermined rather than rejected, which is
+     * what `true` means to every caller here (see [BoundPassthroughValidator]'s KDoc). Never
+     * throws for either of those outcomes; a `CancellationException` from a cancelled coroutine
+     * still propagates rather than being reported as any kind of verdict.
+     */
     public suspend fun validate(rawJson: String): Boolean
 }
 
@@ -32,20 +40,21 @@ private const val VALIDATION_PORT = 41080
  * constructor binding without inventing a qualifier type for it, so [ServiceModule] constructs
  * this directly in a `@Provides` function instead.
  *
- * @param testConfig calls the core's `testXray` on a config's text, returning
- *   whether it was accepted. Taken as a lambda rather than an injected
- *   `XrayController` directly: `:service` carries no mocking library, and a
- *   lambda is what makes this class's composition testable on the JVM
- *   ([PassthroughValidatorTest]). The real implementation — writing the text
- *   to a temp file, calling `XrayController.validate`, converting a thrown
- *   `XrayException` to `false` — lives in the Hilt binding
- *   ([ServiceModule.boundPassthroughValidator]) rather than here, per the same
- *   "adapter owns the throw-to-Boolean conversion" reasoning that keeps this
- *   class free of `File`/Android APIs.
+ * @param testConfig calls the core's `testXray` on a config's text, and reports whether the
+ *   *core itself* accepted it. Taken as a lambda rather than an injected `XrayController`
+ *   directly: `:service` carries no mocking library, and a lambda is what makes this class's
+ *   composition testable on the JVM ([PassthroughValidatorTest]). The real implementation —
+ *   writing the text to a temp file, calling `XrayController.validate`, converting a thrown
+ *   `XrayException` to `false` — lives in the Hilt binding ([ServiceModule.boundPassthroughValidator],
+ *   via [validateOnCore]) rather than here, per the same "adapter owns the throw-to-Boolean
+ *   conversion" reasoning that keeps this class free of `File`/Android APIs. It must never throw
+ *   for a real core refusal (that is what `false` means) — only for a genuine failure to run the
+ *   check at all, which [validate] below treats as "undetermined", not "rejected".
  */
 public class BoundPassthroughValidator(
     private val testConfig: suspend (String) -> Boolean,
 ) : PassthroughValidator {
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
     override suspend fun validate(rawJson: String): Boolean {
         val settings =
             TunnelSettings(
@@ -55,16 +64,38 @@ public class BoundPassthroughValidator(
             )
         val composed = RawConfigComposer.compose(rawJson, settings, ASSET_DIR_PLACEHOLDER, override = null)
         if (composed !is ComposeResult.Ok) return false
-        return runCatching { testConfig(composed.json) }.getOrDefault(false)
+        return try {
+            testConfig(composed.json)
+        } catch (e: CancellationException) {
+            // Structured concurrency: a cancelled import must not surface as "your config was
+            // rejected" (review Important 4). Propagate rather than treat as any kind of verdict.
+            throw e
+        } catch (e: Exception) {
+            // Review Important 2: `testConfig` converts a real core refusal (`XrayException`) to
+            // `false` without throwing (see its own KDoc). Anything that reaches here instead —
+            // e.g. `createTempFile`/`writeText` failing on a full cache — is a failure to run the
+            // check at all, not a verdict from the core. §10.4 forbids a reason that misdescribes
+            // the failure: recording CoreRejected for "we could not tell" would be a *permanent*
+            // wrong reason, since nothing re-checks a row once it is marked, so this is treated
+            // as "not rejected" and the caller leaves the row's verdict untouched.
+            true
+        }
     }
 
     private companion object {
         const val DNS_SERVER_DEFAULT = "1.1.1.1"
 
         /**
-         * The core does not read geo files during validation, only when a rule
-         * matches at runtime, so any existing directory serves. The Hilt binding
-         * passes the real one; this constant documents why it does not matter.
+         * The composed config's own placeholder asset path.
+         *
+         * This is inert, but not because the core skips geo files during validation — it does
+         * not: `docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md` §2b records
+         * `testXray` on a `geosite:` rule failing at `common/geodata: failed to open geosite.dat`
+         * when the asset location does not resolve. What actually protects this placeholder from
+         * mattering is that this text is not the channel the core reads asset location from at
+         * all: [ServiceModule.boundPassthroughValidator] feeds the *real* geo directory through
+         * `XrayController`'s own `geoAssetDir`, which travels on the libXray invoke envelope
+         * (`LibXrayInvoke`'s `env` parameter) and wins regardless of what this JSON text says.
          */
         const val ASSET_DIR_PLACEHOLDER = "/data/local/tmp"
     }

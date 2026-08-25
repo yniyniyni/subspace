@@ -361,31 +361,27 @@ internal constructor(
     }
 
     /**
-     * Overwrites the row [import] (or [art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer.sync])
-     * wrote for [rawJson] in [groupId] with the core's own verdict, or does nothing if no row
-     * currently occupies that identity slot.
+     * Overwrites [profileId]'s row with the core's own verdict — a thin, `id`-keyed wrapper over
+     * [ProfileDao.setPassthroughRejection].
      *
-     * Looked up by [rawJson]'s own identity rather than by row id, because the only callers —
-     * `:feature:profiles`' `ProfileSource`, after it asks `:service`'s `PassthroughValidator` —
-     * have the config's text in hand right after `import`/`sync` returns, not the id that write
-     * produced. [identityHashOfRaw] is guaranteed to be the identity that write actually used
-     * *only* for a [rawJson] whose structural [art.yniyniyni.subspace.core.parser.analysePassthrough]
-     * rejection was already null — see [import]'s own KDoc on the outbound-identity fallback a
-     * fanned-out raw element takes instead. Callers must restrict themselves to that case.
+     * Review fix (Important 1): an earlier version of this method took `(groupId, rawJson)` and
+     * re-derived the row via `identityHashOfRaw(rawJson)`, on the claim that a caller only ever
+     * has the config's text in hand, not the id. That claim was false — `:feature:profiles`'
+     * `ProfileSource` (Task 8's only caller) already iterates [StoredProfile]s pulled from
+     * [observeGroups], which carry [StoredProfile.id] directly — and the re-derivation was also
+     * provably wrong on its own terms: [import]'s own KDoc documents two byte-identical raw
+     * elements both falling to the outbound-identity fallback while each still analyses to a
+     * null structural rejection, a case `identityHashOfRaw` cannot distinguish. Taking the id
+     * directly removes both problems: no re-derivation, and no config material in the signature.
      *
      * [reason] is a [art.yniyniyni.subspace.core.parser.PassthroughRejection]'s `name`, not the
      * enum itself, matching [ProfileDao.setPassthroughRejection]'s own contract — see that
      * method's KDoc for why the DAO layer stays off `:core:parser`'s types.
      */
     public suspend fun setPassthroughRejection(
-        groupId: Long,
-        rawJson: String,
+        profileId: Long,
         reason: String?,
-    ) {
-        dao.findProfile(groupId, identityHashOfRaw(rawJson))?.let { row ->
-            dao.setPassthroughRejection(row.id, reason)
-        }
-    }
+    ): Unit = dao.setPassthroughRejection(profileId, reason)
 
     /**
      * Moves a profile to a different group. A no-op (returns `true`) if the profile no

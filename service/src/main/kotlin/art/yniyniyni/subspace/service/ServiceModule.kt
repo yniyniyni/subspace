@@ -5,13 +5,11 @@ package art.yniyniyni.subspace.service
 import android.content.Context
 import art.yniyniyni.subspace.core.data.GeoAssetRepository
 import art.yniyniyni.subspace.core.xray.XrayController
-import art.yniyniyni.subspace.core.xray.XrayException
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import java.io.File
 import javax.inject.Singleton
 
 /**
@@ -28,21 +26,33 @@ internal object ServiceModule {
     fun passthroughValidator(impl: BoundPassthroughValidator): PassthroughValidator = impl
 
     /**
-     * The real `testXray` adapter: writes the composed config to a temp file
-     * under `context.cacheDir`, calls [XrayController.validate], and converts a thrown
-     * [XrayException] to `false` — [BoundPassthroughValidator] never sees the exception, whose
-     * message can quote the config back (§5.6).
+     * Wires the real core into [BoundPassthroughValidator]'s `testConfig` lambda. The actual
+     * file lifecycle — write, call, delete, convert a real refusal to `false` — lives in
+     * [validateOnCore], which is a plain top-level `suspend fun` precisely so it can be unit
+     * tested on the JVM (review Important 5); this function's only job is supplying it the
+     * real collaborators.
      *
-     * Cache, not internal storage, unlike [TunnelService]'s own `writeConfig` (§5.6's reasoning
-     * there: a *running* tunnel's config sits on disk for the whole session). This file is
-     * deleted in the `finally` block below before `validate` even returns to its caller, so the
-     * exposure window is one native call, not a session.
+     * **Skips validation entirely when geo assets are not installed yet**, per review Important
+     * 3: [XrayController]'s own KDoc and `docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md`
+     * §2b both confirm `testXray` *does* resolve geo files for a `geosite:`/`geoip:` rule — it is
+     * not a runtime-only concern — so a config carrying routing rules, imported before the geo
+     * assets it needs are downloaded, would otherwise get refused by the core for a reason that
+     * has nothing to do with the config and resolves itself the moment the assets land. Recording
+     * that as [art.yniyniyni.subspace.core.parser.PassthroughRejection.CoreRejected] would be
+     * exactly the durable, wrong verdict §10.4 forbids — routing-heavy configs are precisely
+     * what M7 targets, so this is not a rare edge case. [BoundPassthroughValidator.validate]
+     * returning `true` here (via [GeoAssetRepository.installedFileNames] being empty) means "not
+     * determined" the same way an unexpected throwable does — the caller leaves the verdict null
+     * and the connect-time backstop (`FailureReason.PassthroughRejectedAtConnect`, Task 9) covers
+     * it if the core would in fact refuse it once assets are present. This is a coarse, whole-directory
+     * check, not a per-rule one: it does not inspect which specific `.dat` files [json]'s own
+     * rules reference, only whether *any* geo asset is installed at all.
      *
-     * [geoAssetRepository] supplies a real, existing asset directory for [XrayController]'s
-     * constructor. [BoundPassthroughValidator.validate]'s own composed config carries a
-     * placeholder asset path instead (see its KDoc) — the core does not read geo files during
-     * validation, only when a routing rule matches at runtime, so neither directory's exact
-     * contents matter here, only that both resolve to somewhere that exists.
+     * [geoAssetRepository] also supplies [XrayController]'s real `geoAssetDir`, which travels on
+     * the libXray invoke envelope (`LibXrayInvoke`'s `env` parameter) — the channel that actually
+     * resolves geo files during validation. [BoundPassthroughValidator]'s own composed config
+     * carries an inert placeholder instead; see that class's KDoc for why that channel does not
+     * matter.
      */
     @Provides
     @Singleton
@@ -51,16 +61,11 @@ internal object ServiceModule {
         geoAssetRepository: GeoAssetRepository,
     ): BoundPassthroughValidator =
         BoundPassthroughValidator { json ->
-            val controller = XrayController(geoAssetDir = geoAssetRepository.geoDirectory())
-            val file = File.createTempFile("passthrough-validate", ".json", context.cacheDir)
-            try {
-                file.writeText(json)
-                controller.validate(file)
+            if (geoAssetRepository.installedFileNames().isEmpty()) {
                 true
-            } catch (_: XrayException) {
-                false
-            } finally {
-                file.delete()
+            } else {
+                val controller = XrayController(geoAssetDir = geoAssetRepository.geoDirectory())
+                validateOnCore(context.cacheDir, controller::validate, json)
             }
         }
 }

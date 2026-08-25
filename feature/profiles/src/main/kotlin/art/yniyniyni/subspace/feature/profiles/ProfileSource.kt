@@ -5,7 +5,6 @@ package art.yniyniyni.subspace.feature.profiles
 import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
-import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
@@ -243,17 +242,17 @@ constructor(
     override suspend fun defaultGroupId(): Long = profileRepository.defaultGroupId()
 
     /**
-     * Imports, then asks `:service`'s [PassthroughValidator] to run every RAW_JSON row this
-     * group holds whose structural verdict is still eligible ([StoredProfile.passthroughRejection]
-     * null) through the real core — the manual paste/deeplink path's half of Task 8's wiring.
-     * See [validateCoreEligibility]'s KDoc for what this deliberately does not cover.
+     * Imports, then asks `:service`'s [PassthroughValidator] to run this call's own RAW_JSON
+     * documents through the real core — the manual paste/deeplink path's half of Task 8's
+     * wiring. Scoped to `profiles`' own `rawJson` values, not the whole group: see
+     * [validateCoreEligibility]'s KDoc for why, and for what this deliberately does not cover.
      */
     override suspend fun import(
         profiles: List<Profile>,
         groupId: Long,
     ): Int {
         val written = profileRepository.import(profiles, groupId)
-        validateCoreEligibility(groupId)
+        validateCoreEligibility(groupId, profiles.mapNotNull { it.rawJson }.toSet())
         return written
     }
 
@@ -292,13 +291,23 @@ constructor(
      * Runs only when [SyncResult.Synced] actually changed rows: a failed fetch or an
      * unchanged response has nothing new to validate, and re-running `testXray` against every
      * already-approved row on every sync would be pure waste.
+     *
+     * Scoped to what this sync actually changed via a before/after diff of the group's own
+     * eligible `rawJson` set — [SubscriptionSyncer.sync] reports only counts
+     * ([SyncResult.Synced.added]/[SyncResult.Synced.updated]), never which rows, so there is no
+     * cheaper way to name "this call's own documents" the way [import] can from its own
+     * `profiles` argument. See [validateCoreEligibility]'s KDoc for what this scoping does and
+     * does not catch.
      */
+    @Suppress("ReturnCount")
     override suspend fun syncSubscription(id: Long): SyncResult {
+        val subscription = subscriptionRepository.observeSubscriptions().first().firstOrNull { it.id == id }
+        val before = subscription?.let { eligibleRawJsons(it.groupId) }.orEmpty()
         val result = subscriptionSyncer.sync(id)
-        if (result is SyncResult.Synced && (result.added > 0 || result.updated > 0)) {
-            subscriptionRepository.observeSubscriptions().first().firstOrNull { it.id == id }?.let {
-                validateCoreEligibility(it.groupId)
-            }
+        if (subscription == null) return result
+        val synced = result as? SyncResult.Synced ?: return result
+        if (synced.added > 0 || synced.updated > 0) {
+            validateCoreEligibility(subscription.groupId, eligibleRawJsons(subscription.groupId) - before)
         }
         return result
     }
@@ -338,17 +347,23 @@ constructor(
     ) = subscriptionRepository.setUserAgentOverride(id, userAgent)
 
     /**
-     * Task 8: runs every RAW_JSON row in [groupId] whose structural verdict is still eligible
-     * ([StoredProfile.passthroughRejection] null — [art.yniyniyni.subspace.core.parser.analysePassthrough]'s
-     * own pass at import/sync time already wrote that) through [passthroughValidator], and
-     * records [PassthroughRejection.CoreRejected] for whichever ones the real core refuses.
+     * Task 8: runs [candidates] — a subset of [groupId]'s own `rawJson` values, supplied by
+     * [import]/[syncSubscription] — through [passthroughValidator] wherever the matching row's
+     * structural verdict is still eligible ([StoredProfile.runsAsWritten]), and records
+     * [PassthroughRejection.CoreRejected] for whichever ones the real core refuses.
      *
-     * Re-queries the group rather than working from the profiles just imported/synced: neither
-     * [import] nor [syncSubscription] gets back which rows the underlying write actually
-     * produced (`ProfileRepository.import` returns only a count, `SyncResult` names none), and
-     * a fresh [null][StoredProfile.passthroughRejection] is exactly "eligible, not yet given a
-     * core verdict" regardless of source — a row already marked [PassthroughRejection.CoreRejected]
-     * by an earlier pass is skipped rather than re-asked.
+     * [candidates] is what keeps this bounded to "what this call actually wrote", not the whole
+     * group: an accepted row keeps a null verdict forever (nothing ever confirms it positively),
+     * so re-scanning every eligible row in the group on every call would re-run `testXray` —
+     * a real native core start — against every already-approved row every single time, turning
+     * the Nth import into a group into N native-core spins on a suspend call the user is
+     * waiting on. Restricting to [candidates] means a row from an earlier call is only
+     * revisited if this call's own diff says its `rawJson` is new or changed.
+     *
+     * Re-queries the group for [StoredProfile]s (rather than working from whatever the callers
+     * hold) only to resolve each candidate's row id and current verdict — the write itself uses
+     * [StoredProfile.id] directly, never a re-derived identity hash. A row already marked
+     * [PassthroughRejection.CoreRejected] by an earlier pass is skipped rather than re-asked.
      *
      * Scope, per the M7 ruling this task is bound by: this method only ever runs from
      * [import] and [syncSubscription], both entry points `:feature:profiles` owns. The
@@ -356,17 +371,33 @@ constructor(
      * `SubscriptionSyncer.sync` directly and never reaches this class, so a config the core
      * would refuse is not caught there — it is caught at connect time instead
      * (`FailureReason.PassthroughRejectedAtConnect`, Task 9). Plumbing core validation through
-     * that path would require `:core:data` to depend on `:core:xray`, which §4 forbids.
+     * that path would require `:core:data` to depend on `:core:xray`, which §4 forbids. The
+     * same backstop also covers a row this method's [candidates] scoping never revisits (an
+     * unrelated earlier import, or one [passthroughValidator] left undetermined because geo
+     * assets were not installed yet) — it fails at connect with an accurate reason instead of
+     * silently staying unvalidated forever.
      */
-    private suspend fun validateCoreEligibility(groupId: Long) {
+    private suspend fun validateCoreEligibility(
+        groupId: Long,
+        candidates: Set<String>,
+    ) {
+        if (candidates.isEmpty()) return
         val group = profileRepository.observeGroups().first().firstOrNull { it.id == groupId } ?: return
         group.profiles
-            .filter { it.kind == ProfileKind.RAW_JSON && it.passthroughRejection == null }
+            .filter { it.runsAsWritten && it.rawJson in candidates }
             .forEach { profile ->
                 val rawJson = profile.rawJson ?: return@forEach
                 if (!passthroughValidator.validate(rawJson)) {
-                    profileRepository.setPassthroughRejection(groupId, rawJson, PassthroughRejection.CoreRejected.name)
+                    profileRepository.setPassthroughRejection(profile.id, PassthroughRejection.CoreRejected.name)
                 }
             }
     }
+
+    /** The group's own [StoredProfile.rawJson] values currently eligible ([StoredProfile.runsAsWritten]). */
+    private suspend fun eligibleRawJsons(groupId: Long): Set<String> =
+        profileRepository.observeGroups().first().firstOrNull { it.id == groupId }
+            ?.profiles.orEmpty()
+            .filter { it.runsAsWritten }
+            .mapNotNull { it.rawJson }
+            .toSet()
 }

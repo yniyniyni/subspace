@@ -2,7 +2,9 @@
 // Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.service
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -57,5 +59,28 @@ class PassthroughValidatorTest {
             validator.validate("not json") shouldBe false
 
             core.lastConfig shouldBe null
+        }
+
+    // Review Important 2: testConfig throwing anything other than the core's own refusal (which
+    // it reports by returning false, never by throwing) means the check could not run at all —
+    // a full cache failing the temp-file write, say. That is "undetermined", not "rejected": a
+    // permanent CoreRejected for a transient failure is exactly the §10.4 lie this guards against.
+    @Test
+    fun `a failure to even run the check is undetermined, not a rejection`() =
+        runTest {
+            val validator = BoundPassthroughValidator { throw java.io.IOException("cache full") }
+
+            validator.validate(ordinary) shouldBe true
+        }
+
+    // Review Important 4: the old `runCatching { testConfig(...) }.getOrDefault(false)` turned a
+    // cancelled import into a recorded rejection. Cancellation must propagate, never be reported
+    // as any kind of verdict.
+    @Test
+    fun `cancellation propagates rather than being reported as a verdict`() =
+        runTest {
+            val validator = BoundPassthroughValidator { throw CancellationException("navigated away") }
+
+            shouldThrow<CancellationException> { validator.validate(ordinary) }
         }
 }

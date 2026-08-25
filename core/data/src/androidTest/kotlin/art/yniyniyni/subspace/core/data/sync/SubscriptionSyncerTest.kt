@@ -97,7 +97,11 @@ private const val BALANCER_SUBSCRIPTION_BODY =
 
 /**
  * Two server outbounds, no balancer — [PassthroughRejection.SeveralServers]. Both profiles share
- * one document's bytes but neither is dropped: they stay as rows, ineligible.
+ * one document's bytes (a bare top-level object's `elementText` is the whole document, per
+ * `XrayJson.kt`) but neither is dropped: they stay as rows, ineligible. This is the fixture that
+ * actually exercises `buildUpserts`' `isBalancer` gate — its two outbounds are byte-identical
+ * `rawJson` the same way a balancer element's members are, so an ungated or mis-keyed collapse
+ * would wrongly eat one of them.
  */
 private const val SEVERAL_SERVERS_NO_BALANCER_SUBSCRIPTION_BODY =
     """{"outbounds":[""" +
@@ -109,8 +113,12 @@ private const val SEVERAL_SERVERS_NO_BALANCER_SUBSCRIPTION_BODY =
 
 /**
  * A top-level array of three *independent* one-server documents (device-fixes finding's array
- * shape) — the regression guard: no balancer, no shared rawJson between elements, so nothing here
- * should collapse. Each element's own single server is eligible.
+ * shape). Per `XrayJson.kt`, a top-level array's `elementText` is each entry's own text, so these
+ * three elements never share `rawJson` bytes with each other in the first place — the collapse
+ * mechanism is structurally unreachable for this fixture regardless of how (or whether) it is
+ * gated. This is an array-shape element-provenance guard, not a balancer-gate guard: each
+ * element's own single server must keep its own distinct `rawJson` and land as its own eligible
+ * row.
  */
 private const val THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY =
     """[""" +
@@ -610,6 +618,12 @@ class SubscriptionSyncerTest {
         db.profileDao().profile(row.id)!!.subscriptionKey shouldBe "proxy-auto"
     }
 
+    // This is the load-bearing guard for the brief's third bullet: two outbounds sharing one
+    // *byte-identical* rawJson document, with no balancer present, must be stored as rows and
+    // flagged ineligible, not collapsed. Deleting the isBalancer gate in buildUpserts (or wrongly
+    // keying the collapse on "any repeated rawJson" instead of isBalancer) fails exactly this
+    // test: the fixture's two outbounds share one document's bytes, so an ungated collapse would
+    // wrongly drop one of them the same way it correctly drops a balancer member.
     @Test
     fun severalServersWithoutABalancerAreStoredAndFlaggedIneligible() = runTest {
         val id = addSubscription()
@@ -626,11 +640,16 @@ class SubscriptionSyncerTest {
         }
     }
 
-    // The regression guard: three independent raw-JSON documents (no balancer, no shared bytes
-    // between them) must not be eaten by the collapse — it only ever removes fanout from the
-    // *same* document's bytes.
+    // NOT a balancer-gate test: per XrayJson.kt, a top-level array's elementText is each entry's
+    // own text, so these three elements never share rawJson bytes in the first place — the
+    // collapse mechanism is structurally unreachable here regardless of whether it exists or how
+    // it is keyed. This guards a different, narrower thing: array-shape element provenance. Each
+    // of the three independent one-server documents must keep its own distinct rawJson and land
+    // as its own row — nothing about parsing a top-level array should merge or share bytes across
+    // elements. (The real guard against an ungated/mis-keyed collapse eating a shared document is
+    // severalServersWithoutABalancerAreStoredAndFlaggedIneligible above.)
     @Test
-    fun independentRawJsonDocumentsAreNotCollapsed() = runTest {
+    fun independentArrayElementsKeepDistinctRawJsonAndRows() = runTest {
         val id = addSubscription()
         response = FetchOutcome.Success(THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY, emptyMap())
 

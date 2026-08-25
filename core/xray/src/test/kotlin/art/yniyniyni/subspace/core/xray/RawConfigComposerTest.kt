@@ -274,4 +274,50 @@ class RawConfigComposerTest {
 
         overrides shouldBe listOf("http", "tls", "quic")
     }
+
+    private val dnsPlanWithFakeDns =
+        DnsPlan(
+            servers = listOf(DnsServerSpec(address = "1.1.1.1")),
+            hosts = emptyMap(),
+            fakeDns = true,
+            directMatch = null,
+            proxyMatch = null,
+        )
+
+    // Important 3 (review round 1): overrideBlocks() itself had no test calling
+    // it and feeding the result through compose — every other override-branch
+    // test hand-constructs OverrideBlocks from literal JSON. This closes that
+    // gap by wiring the two functions together the way Task 9 will.
+    @Test
+    fun `overrideBlocks feeds straight into compose as a valid override`() {
+        val blocks = XrayConfigGenerator.overrideBlocks(settings)
+        val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", blocks)
+
+        result.shouldBeOk()
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val tags = (out["outbounds"] as JsonArray).map { (it as JsonObject)["tag"]!!.jsonPrimitive.content }
+        tags.contains("dns-out") shouldBe false
+    }
+
+    // Important 1 (review round 1): the override branch was silently dropping
+    // fakeDns from sniffing while overrideBlocks()'s own dnsJson still asked
+    // for it — a passthrough profile with fakeDns on would sniff nothing extra
+    // while xray's dns block expected synthetic IPs. Covers both the dns-out
+    // outbound and the sniffing fix through the same real wiring.
+    @Test
+    fun `overrideBlocks with a fakeDns plan produces dns-out and a fakedns-aware override`() {
+        val settingsWithFakeDns = settings.copy(dns = dnsPlanWithFakeDns)
+        val blocks = XrayConfigGenerator.overrideBlocks(settingsWithFakeDns)
+        val result = RawConfigComposer.compose(panelLike, settingsWithFakeDns, "/data/geo", blocks)
+
+        result.shouldBeOk()
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val tags = (out["outbounds"] as JsonArray).map { (it as JsonObject)["tag"]!!.jsonPrimitive.content }
+        tags.contains("dns-out") shouldBe true
+
+        val socks = (out["inbounds"] as JsonArray)[0] as JsonObject
+        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
+            .map { it.jsonPrimitive.content }
+        overrides.contains("fakedns") shouldBe true
+    }
 }

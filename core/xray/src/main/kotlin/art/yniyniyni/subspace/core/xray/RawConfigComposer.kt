@@ -139,7 +139,16 @@ public object RawConfigComposer {
 
         val sniffing =
             if (override != null) {
-                DEFAULT_SNIFFING
+                // The app already owns `dns` wholesale on this branch (just above), so
+                // adding the one destOverride entry that block's fakeDns requires is
+                // completing our own substitution, not second-guessing the config's
+                // sniffing choice — unlike the pure-passthrough branch below, which
+                // must never touch a config's own sniffing (spec §4.2, research §5b.5).
+                if (settings.dns?.fakeDns == true) {
+                    SniffingSettings(DEFAULT_SNIFFING.destOverride + "fakedns")
+                } else {
+                    DEFAULT_SNIFFING
+                }
             } else {
                 sniffingOf(root)
             }

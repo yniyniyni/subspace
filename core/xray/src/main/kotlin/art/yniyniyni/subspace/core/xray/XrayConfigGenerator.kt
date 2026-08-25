@@ -89,6 +89,19 @@ public sealed interface ConfigResult {
  * test. §10.5: agents confidently invent plausible Xray keys, and an unknown key
  * can be silently ignored or reject the entire config.
  */
+/**
+ * The three fixed outbound objects every generated config carries alongside
+ * `proxy`, shared between [XrayConfigGenerator.appendOutbounds] (which always
+ * emits `direct`/`block`, and `dns-out` when [TunnelSettings.dns] is set) and
+ * [XrayConfigGenerator.overrideBlocks] (which hands the same three to the
+ * passthrough path's override branch for outbounds the config lacks). One
+ * definition rather than two hand-typed copies, so the pinned wire shape has
+ * a single author (§10.5).
+ */
+private const val DIRECT_OUTBOUND_JSON = """{ "tag": "direct", "protocol": "freedom" }"""
+private const val BLOCK_OUTBOUND_JSON = """{ "tag": "block", "protocol": "blackhole" }"""
+private const val DNS_OUT_OUTBOUND_JSON = """{ "tag": "dns-out", "protocol": "dns" }"""
+
 @Suppress("TooManyFunctions") // One object per wire shape (§6); splitting it would scatter the shape's single author.
 public object XrayConfigGenerator {
     /**
@@ -200,9 +213,9 @@ public object XrayConfigGenerator {
             dnsJson = dnsObject(settings),
             extraOutboundsJson =
             buildList {
-                add("""{ "tag": "direct", "protocol": "freedom" }""")
-                add("""{ "tag": "block", "protocol": "blackhole" }""")
-                if (settings.dns != null) add("""{ "tag": "dns-out", "protocol": "dns" }""")
+                add(DIRECT_OUTBOUND_JSON)
+                add(BLOCK_OUTBOUND_JSON)
+                if (settings.dns != null) add(DNS_OUT_OUTBOUND_JSON)
             },
         )
 
@@ -257,16 +270,16 @@ public object XrayConfigGenerator {
         sb.appendLine("""      },""")
         appendStreamSettings(sb, out)
         sb.appendLine("""    },""")
-        sb.appendLine("""    { "tag": "direct", "protocol": "freedom" },""")
+        sb.appendLine("""    $DIRECT_OUTBOUND_JSON,""")
         val needsDnsOutbound = settings.dns != null
-        sb.appendLine("""    { "tag": "block", "protocol": "blackhole" }${if (needsDnsOutbound) "," else ""}""")
+        sb.appendLine("""    $BLOCK_OUTBOUND_JSON${if (needsDnsOutbound) "," else ""}""")
         if (needsDnsOutbound) {
             // No settings object: the modern (rewriteNetwork/rewriteAddress/rules)
             // and legacy (network/address/nonIPQuery) field sets both exist at
             // v26.7.11, and emitting neither is stable across the deprecation.
             // Research §4: A/AAAA queries default to hijack into the built-in
             // resolver, which is exactly what this config wants.
-            sb.appendLine("""    { "tag": "dns-out", "protocol": "dns" }""")
+            sb.appendLine("""    $DNS_OUT_OUTBOUND_JSON""")
         }
         sb.appendLine("""  ],""")
     }

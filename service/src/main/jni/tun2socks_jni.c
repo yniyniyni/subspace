@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 //
 // JNI bridge to hev-socks5-tunnel 2.16.0 (MIT). See THIRD_PARTY.md.
 //

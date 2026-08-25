@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 plugins {
     id("org.jetbrains.kotlin.jvm")
     id("org.jetbrains.kotlinx.kover")

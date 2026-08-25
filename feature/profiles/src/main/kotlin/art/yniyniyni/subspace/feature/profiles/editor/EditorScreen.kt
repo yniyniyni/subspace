@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule fires on the paddings/gaps below — all are
 // tokens/spacing.css's --space-* scale, already named by the val each
 // initializes. See core/ui's ConnectControl.kt for the same pattern.

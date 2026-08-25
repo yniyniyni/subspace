@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule fires on every dp value below. All are design
 // values transcribed from the design system's floating-chrome notes (26dp
 // gesture-bar gap, 104dp content reservation, 8dp inner padding, 1dp border,

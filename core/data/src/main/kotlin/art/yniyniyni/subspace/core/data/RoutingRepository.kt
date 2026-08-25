@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 @file:Suppress("TooManyFunctions") // Public repository contract plus its defensive row codecs stay together.
 
 package art.yniyniyni.subspace.core.data

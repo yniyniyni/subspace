@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // Enforces ARCHITECTURE.md §4 module rules at configuration time.
 // A violation here is cheap to fix; the same violation discovered in M6 is not.
 //

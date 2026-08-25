@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.feature.profiles.add
 
 import androidx.compose.ui.test.junit4.v2.createComposeRule

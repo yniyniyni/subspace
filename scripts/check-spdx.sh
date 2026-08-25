@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permission: see Stores Exception in LICENSE.
 # Verifies every Kotlin/Java source file carries the AGPL SPDX header.
 # ARCHITECTURE.md §12 / CLAUDE.md house rules.
 #
@@ -20,12 +21,16 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 expected="// SPDX-License-Identifier: AGPL-3.0-or-later"
+additional_notice="// Additional permission: see Stores Exception in LICENSE."
 missing=0
 
 while IFS= read -r file; do
     [ -z "$file" ] && continue
     if ! head -1 "$file" | grep -qF "$expected"; then
         echo "missing SPDX header: $file"
+        missing=1
+    elif ! sed -n '2p' "$file" | grep -qF "$additional_notice"; then
+        echo "missing Stores Exception notice: $file"
         missing=1
     fi
 done < <(
@@ -34,7 +39,7 @@ done < <(
 
 if [ "$missing" -ne 0 ]; then
     echo
-    echo "Add '$expected' as the first line of each file listed above."
+    echo "Add '$expected' and '$additional_notice' as the first two lines of each file listed above."
     exit 1
 fi
 

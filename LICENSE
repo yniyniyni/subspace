@@ -659,3 +659,55 @@ specific requirements.
 if any, to sign a "copyright disclaimer" for the program, if necessary.
 For more information on this, and how to apply and follow the GNU AGPL, see
 <https://www.gnu.org/licenses/>.
+
+=======================================================================
+
+                           STORES EXCEPTION
+
+      ADDITIONAL PERMISSION UNDER GNU AGPL VERSION 3 SECTION 7
+
+Copyright (C) 2026 yniyniyni
+
+As a special exception to the GNU Affero General Public License, version 3 or
+later (the "AGPL"), the copyright holder for the copyrightable material in
+this repository grants you permission to convey the Program, and any covered
+work based on it, through a Store and to enter into the distribution agreement
+needed to do so, even where that agreement imposes conditions on the
+store-delivered object code that would otherwise conflict with sections 3, 6,
+or 10 of the AGPL. This permission includes conditions relating to code
+signing, account-based delivery, digital rights management, authorization, or
+technical restrictions imposed by the Store on its delivered copy.
+
+"Store" means a third-party service that controls the listing, signing,
+licensing, or delivery of applications to end users, including but not limited
+to the Apple App Store and comparable official or commercial application
+stores.
+
+This exception is conditional on all of the following:
+
+1. You comply with every other applicable term of the AGPL, including its
+   requirements to provide Corresponding Source and, where applicable, source
+   for network interaction.
+2. The complete Corresponding Source for the exact covered work delivered
+   through the Store, including the scripts needed to build it, is available to
+   every recipient at no charge from a publicly accessible network server.
+3. The application's Store listing, its in-app legal notices, or both, clearly
+   identify the network location of that Corresponding Source.
+4. You do not claim that a Store's signing, digital-rights-management, or
+   other technical measure limits a recipient's rights under the AGPL with
+   respect to the covered work, and you do not use this exception to prohibit
+   lawful exercise of those rights.
+
+This exception grants permissions only under the copyright held by the
+copyright holder named above and by contributors who have expressly granted
+the same exception for their contributions. It does not grant rights in
+third-party material, a Store's software, trademarks, keys, services, or terms;
+it does not require any Store to accept an application; and it does not
+authorize circumvention of a Store's technical measures or a breach of a Store
+agreement.
+
+Contributors to this repository grant the same exception for their
+contributions as described in CONTRIBUTING.md. A fork that adds material whose
+copyright holder has not granted this exception may still use the exception for
+the material covered by it, but must obtain the necessary permission for its
+added material before distributing the combined work through a Store.

@@ -248,13 +248,13 @@ Agentic PRs are welcome — if you actually know what you're doing.
 
 Most bugs in a VPN client don't produce a stack trace. They produce "Connected, but no packets flow." Read [`ARCHITECTURE.md`](ARCHITECTURE.md) (§3, §5, §10) before writing any code.
 
-House rules: every file starts with `// SPDX-License-Identifier: AGPL-3.0-or-later`, package root is `art.yniyniyni.subspace`, no `androidx.datastore` (settings live in Room), check [`THIRD_PARTY.md`](THIRD_PARTY.md) before copying from any upstream project — license decides whether you may adapt or only learn.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the house rules, verification expectations, and the contributor license grant that keeps Store distribution available to the project and its forks.
 
 ---
 
 ## License
 
-**AGPL-3.0-or-later** — see [`LICENSE`](LICENSE). Every source file carries an SPDX header.
+**AGPL-3.0-or-later** — see [`LICENSE`](LICENSE), including its **Stores Exception**, an AGPL §7 additional permission that permits qualifying distribution through stores including, but not limited to, the Apple App Store while requiring public Corresponding Source. Every source file carries an SPDX header and a notice pointing to the exception.
 
 Upstream adaptations keep their original license and are attributed per [`THIRD_PARTY.md`](THIRD_PARTY.md).
 

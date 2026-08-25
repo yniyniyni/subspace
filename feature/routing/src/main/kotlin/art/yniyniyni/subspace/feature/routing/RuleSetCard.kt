@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule fires on the padding/size tokens this file reads —
 // all are declared in RoutingListScreen.kt alongside the rest of the scale.
 @file:Suppress("MagicNumber")

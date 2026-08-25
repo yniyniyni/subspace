@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule would otherwise flag the corner-scale dp values
 // and every coordinate in MaskBunShape's path (transcribed verbatim from the
 // source SVG — naming each control point would not make the path clearer).

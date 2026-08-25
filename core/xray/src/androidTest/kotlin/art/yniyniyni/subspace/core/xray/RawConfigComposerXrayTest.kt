@@ -95,9 +95,12 @@ class RawConfigComposerXrayTest {
      * tag, not a prefix (research §3.2), so it points at nothing.
      *
      * **Observed 2026-08-25, Pixel 8, `connectedDebugAndroidTest`:** xray-core
-     * accepts this at config build (`testXray` succeeds). A dangling
-     * `fallbackTag` is therefore not caught by validation at all — it only
-     * fails later, if and when the fallback actually fires. Recorded in
+     * accepts this at config build — `testXray` succeeds. `validate()` never
+     * dials or runs traffic (see the fixture comment above and
+     * `XrayController.validate`'s KDoc), so this test shows only that one bit:
+     * accepted-at-build, not rejected-at-build. What happens if and when the
+     * balancer's fallback actually fires was not exercised here and remains
+     * open. Recorded in
      * `docs/agent/research/2026-08-25-remnawave-xray-json-and-balancers.md` §6.
      */
     @Test

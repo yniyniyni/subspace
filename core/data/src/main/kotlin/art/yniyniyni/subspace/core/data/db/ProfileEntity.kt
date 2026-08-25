@@ -79,6 +79,17 @@ internal data class ProfileEntity(
     val createdAt: Long,
     val subscriptionKey: String? = null,
     val droppedFromSubscriptionAt: Long? = null,
+    /**
+     * Why this row cannot run as written, or null when it has never been analysed
+     * or is eligible.
+     *
+     * A [art.yniyniyni.subspace.core.parser.PassthroughRejection] name, never a
+     * message — §5.6 forbids persisting anything derived from config contents,
+     * and §10.4 wants a reason the UI can render in the user's own language.
+     *
+     * Meaningful only for `kind = RAW_JSON`. A `TYPED` row leaves it null.
+     */
+    val passthroughRejection: String? = null,
 ) {
     // §5.6, same structural guard the subscription entities carry: address, outbound and rawJson
     // are the server address, the serialized credential set (UUID, REALITY key material) and the

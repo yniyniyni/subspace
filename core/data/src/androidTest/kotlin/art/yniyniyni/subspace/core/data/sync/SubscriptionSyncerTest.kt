@@ -18,6 +18,7 @@ import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.HwidProvider
 import art.yniyniyni.subspace.core.network.SubscriptionRequest
 import art.yniyniyni.subspace.core.network.SubscriptionSource
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -71,6 +72,55 @@ private val ROUTING_HEADER_LINK =
         Base64.getUrlEncoder().withoutPadding().encodeToString(
             """{"Name":"FromHeader","DirectSites":["domain:header.example"]}""".toByteArray(),
         )
+
+// Task 7b fixtures. SubscriptionParser routes any body starting with `{`/`[` to parseXrayJson —
+// the same balancer-fanout producer Task 7 taught ProfileRepository.import to collapse — so a
+// subscription body can exercise the exact same passthrough-analysis and collapse behaviour as a
+// manually pasted raw config. Kept single-line (no embedded newlines) so DirectiveSplitter's
+// line-based scan never has to be reasoned about here.
+
+/**
+ * Research §5b: the target panel's auto-balancer entry. One `routing.balancers` element with two
+ * `vless` outbounds mints two profiles sharing one document's bytes — the load-bearing case this
+ * task exists for. Distinct tags ("proxy-auto", "proxy-auto-2") give each profile a distinct,
+ * unique name, so subscriptionKeysFor assigns each its bare name rather than an ordinal.
+ */
+private const val BALANCER_SUBSCRIPTION_BODY =
+    """{"routing":{"balancers":[{"tag":"Auto_Balancer","selector":["proxy"]}],""" +
+        """"rules":[{"network":"tcp,udp","balancerTag":"Auto_Balancer"}]},""" +
+        """"outbounds":[""" +
+        """{"tag":"proxy-auto","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.1",""" +
+        """"port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111"}]}]}},""" +
+        """{"tag":"proxy-auto-2","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.2",""" +
+        """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]}}""" +
+        """]}"""
+
+/**
+ * Two server outbounds, no balancer — [PassthroughRejection.SeveralServers]. Both profiles share
+ * one document's bytes but neither is dropped: they stay as rows, ineligible.
+ */
+private const val SEVERAL_SERVERS_NO_BALANCER_SUBSCRIPTION_BODY =
+    """{"outbounds":[""" +
+        """{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.3",""" +
+        """"port":443,"users":[{"id":"33333333-3333-3333-3333-333333333333"}]}]}},""" +
+        """{"tag":"proxy-2","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.4",""" +
+        """"port":443,"users":[{"id":"44444444-4444-4444-4444-444444444444"}]}]}}""" +
+        """]}"""
+
+/**
+ * A top-level array of three *independent* one-server documents (device-fixes finding's array
+ * shape) — the regression guard: no balancer, no shared rawJson between elements, so nothing here
+ * should collapse. Each element's own single server is eligible.
+ */
+private const val THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY =
+    """[""" +
+        """{"outbounds":[{"tag":"proxy-a","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.10",""" +
+        """"port":443,"users":[{"id":"55555555-5555-5555-5555-555555555555"}]}]}}]},""" +
+        """{"outbounds":[{"tag":"proxy-b","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.11",""" +
+        """"port":443,"users":[{"id":"66666666-6666-6666-6666-666666666666"}]}]}}]},""" +
+        """{"outbounds":[{"tag":"proxy-c","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.12",""" +
+        """"port":443,"users":[{"id":"77777777-7777-7777-7777-777777777777"}]}]}}]}""" +
+        """]"""
 
 class SubscriptionSyncerTest {
     private lateinit var db: SubspaceDatabase
@@ -535,5 +585,76 @@ class SubscriptionSyncerTest {
 
         (result as SyncResult.Synced).rejectedDirectives shouldBe 2
         subscriptions.effective(id, "profile-update-interval", null).providerValue shouldBe null
+    }
+
+    // Task 7b. Task 7's review found that SubscriptionSyncer — the path a subscription actually
+    // takes, on first add and on every periodic refresh — never ran the passthrough analysis or
+    // the balancer collapse ProfileRepository.import already had. Without this, a user adding the
+    // target panel's auto-balancer entry *as a subscription* (the panel's normal distribution
+    // mechanism) got seven duplicate rows all left eligible, even ones that could never run as
+    // written.
+    @Test
+    fun aBalancerSubscriptionCollapsesToASingleEligibleRow() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(BALANCER_SUBSCRIPTION_BODY, emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        row.passthroughRejection shouldBe null
+        row.runsAsWritten shouldBe true
+        // The surviving row must carry the key of the profile that actually survived the
+        // collapse (the first one, "proxy-auto") — the alignment trap this task is named for:
+        // filtering profiles before mapping would shift every subscriptionKey by one.
+        db.profileDao().profile(row.id)!!.subscriptionKey shouldBe "proxy-auto"
+    }
+
+    @Test
+    fun severalServersWithoutABalancerAreStoredAndFlaggedIneligible() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SEVERAL_SERVERS_NO_BALANCER_SUBSCRIPTION_BODY, emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
+        rows.map { it.name }.toSet() shouldBe setOf("proxy", "proxy-2")
+        rows.forEach {
+            it.passthroughRejection shouldBe PassthroughRejection.SeveralServers
+            it.runsAsWritten shouldBe false
+        }
+    }
+
+    // The regression guard: three independent raw-JSON documents (no balancer, no shared bytes
+    // between them) must not be eaten by the collapse — it only ever removes fanout from the
+    // *same* document's bytes.
+    @Test
+    fun independentRawJsonDocumentsAreNotCollapsed() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY, emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
+        rows.size shouldBe 3
+        rows.forEach { it.passthroughRejection shouldBe null }
+    }
+
+    @Test
+    fun aTypedSubscriptionNeverBecomesIneligible() = runTest {
+        // Share links carry no rawJson, so they are ProfileKind.TYPED and must never be handed to
+        // analysePassthrough at all — passthroughRejection is meaningless for a kind that never
+        // runs as written in the first place.
+        val id = addSubscription()
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
+        rows.size shouldBe 2
+        rows.forEach { it.passthroughRejection shouldBe null }
     }
 }

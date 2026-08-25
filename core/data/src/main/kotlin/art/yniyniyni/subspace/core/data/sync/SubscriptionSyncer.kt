@@ -24,7 +24,9 @@ import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.SubscriptionRequest
 import art.yniyniyni.subspace.core.network.SubscriptionSource
 import art.yniyniyni.subspace.core.parser.ParseFailure
+import art.yniyniyni.subspace.core.parser.PassthroughAnalysis
 import art.yniyniyni.subspace.core.parser.SubscriptionParser
+import art.yniyniyni.subspace.core.parser.analysePassthrough
 import art.yniyniyni.subspace.core.parser.directive.DirectiveSplitter
 import art.yniyniyni.subspace.core.parser.directive.DirectiveValidator
 import kotlinx.coroutines.Dispatchers
@@ -290,6 +292,15 @@ internal constructor(
                 // Counts only — never a name, never an address (§5.6).
                 Log.w(TAG, "sync dropped ${built.duplicatesDropped} duplicate-outbound server(s) — see spec §4.3")
             }
+            if (built.balancerMembersCollapsed > 0) {
+                // Deliberately a separate count and a separate line from duplicatesDropped above:
+                // these were never colliding outbounds. They are a balancer element's other
+                // destinations (research §5b) collapsing into the one row that already represents
+                // that logical server — folding this into "duplicate-outbound" would misdescribe
+                // why the row count is lower than the parsed count (§10.4). Counts only (§5.6).
+                val collapsed = built.balancerMembersCollapsed
+                Log.i(TAG, "sync collapsed $collapsed balancer-member profile(s) into their surviving row")
+            }
 
             SyncResult.Synced(
                 added = added,
@@ -319,21 +330,58 @@ private data class ParsedResponse(
     val now: Long,
 )
 
-/** [buildUpserts]'s output: the write set, plus how many parsed profiles it declined to include. */
+/**
+ * [buildUpserts]'s output: the write set, plus how many parsed profiles it declined to include,
+ * split by *why* (§10.1/§10.4: a count that folds two different reasons into one number
+ * misdescribes whichever one it hides).
+ *
+ * @property duplicatesDropped spec §4.3's byte-identical-outbound collisions only — see
+ *   [SyncResult.Synced]'s KDoc.
+ * @property balancerMembersCollapsed how many profiles were a balancer element's non-surviving
+ *   destinations (research §5b), collapsed into the one row that already represents that logical
+ *   server. These were never colliding outbounds, so they are never counted as
+ *   [duplicatesDropped].
+ */
 private data class UpsertBuildResult(
     val entities: List<ProfileEntity>,
     val duplicatesDropped: Int,
+    val balancerMembersCollapsed: Int,
 )
 
 /**
- * Builds this sync's write set, one [ProfileEntity] per parsed profile that does not collide, in
- * response order.
+ * Builds this sync's write set, one [ProfileEntity] per parsed profile that survives the balancer
+ * collapse below and does not collide, in response order.
  *
- * Identity mirrors [art.yniyniyni.subspace.core.data.ProfileRepository.import]'s: a profile with
- * no [Profile.rawJson] is `TYPED` and identified by its outbound; one with `rawJson` unique to it
- * within this batch is `RAW_JSON` and identified by those exact bytes; one whose `rawJson` is
- * shared by several profiles (one raw element fanning out into several outbounds) falls back to
- * outbound identity, same as `import`.
+ * Mirrors [art.yniyniyni.subspace.core.data.ProfileRepository.import] in full, not just its
+ * identity rule (Task 7b — `import` is the manual-paste path; this is the subscription path,
+ * which is the one a subscription actually takes on first add and on every periodic refresh, so
+ * the two must agree):
+ *
+ * - A profile with no [Profile.rawJson] is `TYPED` and identified by its outbound; one with
+ *   `rawJson` unique to it within this batch is `RAW_JSON` and identified by those exact bytes;
+ *   one whose `rawJson` is shared by several profiles (one raw element fanning out into several
+ *   outbounds) falls back to outbound identity, same as `import`.
+ * - Each distinct `rawJson` is run through [analysePassthrough] once (memoised locally) and the
+ *   verdict is stored as [ProfileEntity.passthroughRejection] — `null` means the row is eligible
+ *   to run as written.
+ * - When that analysis reports [PassthroughAnalysis.isBalancer], the element's outbounds are
+ *   balancer members, not several servers the user picks between, so only the *first* profile
+ *   carrying that element's bytes is kept; the rest are dropped before the identity/upsert logic
+ *   below ever sees them — same collapse `import` performs, for the same reason.
+ *
+ * **Index alignment.** The collapse above decides which of [profiles]' *original* positions
+ * survive; that decision is made once, then this function maps over the original list and skips
+ * the non-survivors, rather than filtering first and mapping second. Filtering first would shift
+ * every later element's index and misalign it against [keys], which is looked up by the
+ * profile's original position (`keys[index]`) — every `subscriptionKey` after the first collapsed
+ * member would silently attach to the wrong profile.
+ *
+ * **Fanout over survivors.** [rawJsonFanoutCounts] is computed over the post-collapse survivors,
+ * not over all of [profiles]: a balancer element's dropped members still share the surviving
+ * member's `rawJson`, and counting them would report a fanout of more than one for the surviving
+ * row, sending it down the outbound-identity fallback instead of [identityHashOfRaw] — the
+ * content-based identity that makes the *document*, not one arbitrarily-chosen destination
+ * outbound, the thing this row's identity is pinned to.
  *
  * Resolves spec §4.3's documented, bounded duplicate-outbound collision **before** any DB write
  * (Task 11 review fix, Critical 1 and Important 2): a computed `identityHash` already claimed —
@@ -343,6 +391,13 @@ private data class UpsertBuildResult(
  * where an `ABORT` conflict would fail the whole transaction and a `REPLACE` one would silently
  * delete whichever row lost the race. The caller counts and logs what this drops instead of
  * inferring it from a post-write re-read.
+ *
+ * `position` stays the profile's *original* index, gaps and all, once members are collapsed out —
+ * unlike `import`, which renumbers its own survivors from zero. The two are not required to
+ * agree: [ProfileDao]'s only ordering read is `ORDER BY position, id`, which cares about relative
+ * order, not contiguity, and the original index already preserves the surviving rows' relative
+ * order exactly as the response gave it. Renumbering here would buy nothing and would cost the
+ * simplicity of reusing the same `index` this function already needs for `keys[index]`.
  */
 private fun buildUpserts(
     profiles: List<Profile>,
@@ -351,12 +406,33 @@ private fun buildUpserts(
     now: Long,
     protectedHashes: Set<String>,
 ): UpsertBuildResult {
-    val rawJsonFanoutCounts = profiles.mapNotNull { it.rawJson }.groupingBy { it }.eachCount()
+    val analysisCache = mutableMapOf<String, PassthroughAnalysis>()
+    fun analysisFor(rawJson: String) = analysisCache.getOrPut(rawJson) { analysePassthrough(rawJson) }
+
+    // Decided once, over the original list's positions, before anything below maps over it — see
+    // "Index alignment" in this function's KDoc.
+    val seenBalancerRawJson = mutableSetOf<String>()
+    val survivorIndices =
+        profiles.indices.filterTo(mutableSetOf()) { index ->
+            val rawJson = profiles[index].rawJson
+            rawJson == null || !analysisFor(rawJson).isBalancer || seenBalancerRawJson.add(rawJson)
+        }
+
+    // Over survivors only — see "Fanout over survivors" in this function's KDoc.
+    val rawJsonFanoutCounts =
+        survivorIndices.asSequence().mapNotNull { profiles[it].rawJson }.groupingBy { it }.eachCount()
+
     val claimedHashes = protectedHashes.toMutableSet()
     var duplicatesDropped = 0
+    var balancerMembersCollapsed = 0
 
     val entities =
         profiles.mapIndexedNotNull { index, profile ->
+            if (index !in survivorIndices) {
+                balancerMembersCollapsed++
+                return@mapIndexedNotNull null
+            }
+
             val rawJson = profile.rawJson
             val kind = if (rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON
             val identityHash =
@@ -387,10 +463,11 @@ private fun buildUpserts(
                 lastError = null,
                 createdAt = now,
                 subscriptionKey = keys[index],
+                passthroughRejection = rawJson?.let { analysisFor(it).rejection?.name },
             )
         }
 
-    return UpsertBuildResult(entities, duplicatesDropped)
+    return UpsertBuildResult(entities, duplicatesDropped, balancerMembersCollapsed)
 }
 
 /** The first failure's redacted reason (§5.6) — never the body. [ParseFailure]'s fields are closed vocabulary. */

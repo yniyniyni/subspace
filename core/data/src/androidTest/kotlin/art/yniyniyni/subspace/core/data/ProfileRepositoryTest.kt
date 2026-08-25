@@ -11,6 +11,7 @@ import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.CompletableDeferred
@@ -495,6 +496,97 @@ class ProfileRepositoryTest {
             val rawRowAfter = db.profileDao().profile(rawStored.id)!!
             rawRowAfter.kind shouldBe ProfileKind.RAW_JSON.name
             rawRowAfter.rawJson shouldBe rawRowBefore.rawJson
+        }
+
+    // Research §5b: the target panel's auto entry. Seven vless outbounds selected
+    // by a balancer are ONE logical server, not seven the user picks between.
+    @Test
+    fun aBalancerElementCollapsesToASingleRow() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            val balancerElement =
+                """
+                {
+                  "routing": {
+                    "balancers": [ { "tag": "Auto_Balancer", "selector": ["proxy"] } ],
+                    "rules": [ { "network": "tcp,udp", "balancerTag": "Auto_Balancer" } ]
+                  },
+                  "outbounds": [
+                    { "tag": "proxy-auto", "protocol": "vless" },
+                    { "tag": "proxy-auto-2", "protocol": "vless" }
+                  ]
+                }
+                """.trimIndent()
+            val twoFromOneElement =
+                (1..2).map { i ->
+                    sampleProfile(address = "198.51.100.$i").copy(rawJson = balancerElement)
+                }
+
+            val stored = repository.import(twoFromOneElement, groupId)
+
+            stored shouldBe 1
+            val rows = repository.observeGroups().first().single().profiles
+            rows.single().passthroughRejection shouldBe null
+            rows.single().runsAsWritten shouldBe true
+        }
+
+    // Several servers and NO balancer: all rows would carry the same document, so
+    // "run as written" would ignore which row was tapped. They stay, ineligible.
+    @Test
+    fun severalServersWithoutABalancerStayAsRowsAndAreIneligible() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            val element =
+                """
+                {
+                  "outbounds": [
+                    { "tag": "proxy", "protocol": "vless" },
+                    { "tag": "proxy-2", "protocol": "vless" }
+                  ]
+                }
+                """.trimIndent()
+            val two = (1..2).map { i -> sampleProfile(address = "198.51.100.$i").copy(rawJson = element) }
+
+            repository.import(two, groupId) shouldBe 2
+
+            val rows = repository.observeGroups().first().single().profiles
+            rows.size shouldBe 2
+            rows.forEach {
+                it.passthroughRejection shouldBe PassthroughRejection.SeveralServers
+                it.runsAsWritten shouldBe false
+            }
+        }
+
+    @Test
+    fun anOrdinarySingleServerConfigIsEligible() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+            val element =
+                """
+                {
+                  "outbounds": [
+                    { "tag": "proxy", "protocol": "vless" },
+                    { "tag": "direct", "protocol": "freedom" }
+                  ]
+                }
+                """.trimIndent()
+
+            repository.import(listOf(sampleProfile().copy(rawJson = element)), groupId)
+
+            repository.observeGroups().first().single().profiles.single()
+                .passthroughRejection shouldBe null
+        }
+
+    // A TYPED row has no bytes to run, so the verdict never applies to it.
+    @Test
+    fun aTypedProfileIsNeverMarkedPassthroughEligible() =
+        runTest {
+            val groupId = repository.defaultGroupId()
+
+            repository.import(listOf(sampleProfile()), groupId)
+
+            repository.observeGroups().first().single().profiles.single()
+                .runsAsWritten shouldBe false
         }
 
     private suspend fun seedProfile(address: String): Pair<StoredProfile, ProfileEntity> {

@@ -234,4 +234,20 @@ internal interface ProfileDao {
         id: Long,
         error: String,
     )
+
+    /**
+     * Records why a `RAW_JSON` row cannot run as written, or clears the verdict
+     * with `null`.
+     *
+     * [reason] is a [art.yniyniyni.subspace.core.parser.PassthroughRejection]'s
+     * `name`, not the enum itself: this module owns no dependency on
+     * `:core:parser`'s call sites outside `ProfileRepository`, and `:service`
+     * (Task 8) writes here after the real core refuses a config without
+     * otherwise depending on that module.
+     */
+    @Query("UPDATE profiles SET passthroughRejection = :reason WHERE id = :id")
+    suspend fun setPassthroughRejection(
+        id: Long,
+        reason: String?,
+    )
 }

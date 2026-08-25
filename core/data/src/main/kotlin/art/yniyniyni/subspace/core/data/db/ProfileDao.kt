@@ -240,10 +240,11 @@ internal interface ProfileDao {
      * with `null`.
      *
      * [reason] is a [art.yniyniyni.subspace.core.parser.PassthroughRejection]'s
-     * `name`, not the enum itself: this module owns no dependency on
-     * `:core:parser`'s call sites outside `ProfileRepository`, and `:service`
-     * (Task 8) writes here after the real core refuses a config without
-     * otherwise depending on that module.
+     * `name`, not the enum itself: the `db` package stays off `:core:parser`'s
+     * types, the same way [ProfileEntity.passthroughRejection] already does.
+     * `:feature:profiles`' `ProfileSource` is Task 8's caller, through
+     * [art.yniyniyni.subspace.core.data.ProfileRepository.setPassthroughRejection]
+     * — after `:service`'s `PassthroughValidator` asks the real core.
      */
     @Query("UPDATE profiles SET passthroughRejection = :reason WHERE id = :id")
     suspend fun setPassthroughRejection(

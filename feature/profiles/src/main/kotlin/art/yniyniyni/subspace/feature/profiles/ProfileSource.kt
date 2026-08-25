@@ -5,6 +5,7 @@ package art.yniyniyni.subspace.feature.profiles
 import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
 import art.yniyniyni.subspace.core.data.ProfileGroup
+import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.SettingsRepository
 import art.yniyniyni.subspace.core.data.StoredProfile
@@ -14,7 +15,10 @@ import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import art.yniyniyni.subspace.core.data.sync.SyncResult
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
+import art.yniyniyni.subspace.service.PassthroughValidator
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -212,6 +216,7 @@ constructor(
     private val settingsRepository: SettingsRepository,
     private val subscriptionRepository: SubscriptionRepository,
     private val subscriptionSyncer: SubscriptionSyncer,
+    private val passthroughValidator: PassthroughValidator,
 ) : ProfileSource {
     override fun observeGroups(
         query: String,
@@ -237,10 +242,20 @@ constructor(
 
     override suspend fun defaultGroupId(): Long = profileRepository.defaultGroupId()
 
+    /**
+     * Imports, then asks `:service`'s [PassthroughValidator] to run every RAW_JSON row this
+     * group holds whose structural verdict is still eligible ([StoredProfile.passthroughRejection]
+     * null) through the real core — the manual paste/deeplink path's half of Task 8's wiring.
+     * See [validateCoreEligibility]'s KDoc for what this deliberately does not cover.
+     */
     override suspend fun import(
         profiles: List<Profile>,
         groupId: Long,
-    ): Int = profileRepository.import(profiles, groupId)
+    ): Int {
+        val written = profileRepository.import(profiles, groupId)
+        validateCoreEligibility(groupId)
+        return written
+    }
 
     override suspend fun profile(id: Long): StoredProfile? = profileRepository.profile(id)
 
@@ -265,7 +280,28 @@ constructor(
         name: String,
     ): AddedSubscription = subscriptionRepository.add(url, name)
 
-    override suspend fun syncSubscription(id: Long): SyncResult = subscriptionSyncer.sync(id)
+    /**
+     * Syncs, then runs the same core-eligibility pass [import] does over the subscription's
+     * group — Task 8's other entry point. This is also what a first `addSubscription` call
+     * runs through (`ImportViewModel.addSubscription` calls this immediately after adding), so
+     * that path gets core validation without its own wiring. The **periodic** refresh path
+     * (`SubscriptionRefreshWorker` via `RefreshScheduler` in `:app`) never calls this method —
+     * it cannot reach `:core:xray` under §4 — so it stays on the structural verdict alone,
+     * backstopped by `FailureReason.PassthroughRejectedAtConnect` at connect time.
+     *
+     * Runs only when [SyncResult.Synced] actually changed rows: a failed fetch or an
+     * unchanged response has nothing new to validate, and re-running `testXray` against every
+     * already-approved row on every sync would be pure waste.
+     */
+    override suspend fun syncSubscription(id: Long): SyncResult {
+        val result = subscriptionSyncer.sync(id)
+        if (result is SyncResult.Synced && (result.added > 0 || result.updated > 0)) {
+            subscriptionRepository.observeSubscriptions().first().firstOrNull { it.id == id }?.let {
+                validateCoreEligibility(it.groupId)
+            }
+        }
+        return result
+    }
 
     override suspend fun deleteSubscription(id: Long) = subscriptionRepository.delete(id)
 
@@ -300,4 +336,37 @@ constructor(
         id: Long,
         userAgent: String?,
     ) = subscriptionRepository.setUserAgentOverride(id, userAgent)
+
+    /**
+     * Task 8: runs every RAW_JSON row in [groupId] whose structural verdict is still eligible
+     * ([StoredProfile.passthroughRejection] null — [art.yniyniyni.subspace.core.parser.analysePassthrough]'s
+     * own pass at import/sync time already wrote that) through [passthroughValidator], and
+     * records [PassthroughRejection.CoreRejected] for whichever ones the real core refuses.
+     *
+     * Re-queries the group rather than working from the profiles just imported/synced: neither
+     * [import] nor [syncSubscription] gets back which rows the underlying write actually
+     * produced (`ProfileRepository.import` returns only a count, `SyncResult` names none), and
+     * a fresh [null][StoredProfile.passthroughRejection] is exactly "eligible, not yet given a
+     * core verdict" regardless of source — a row already marked [PassthroughRejection.CoreRejected]
+     * by an earlier pass is skipped rather than re-asked.
+     *
+     * Scope, per the M7 ruling this task is bound by: this method only ever runs from
+     * [import] and [syncSubscription], both entry points `:feature:profiles` owns. The
+     * periodic subscription refresh (`SubscriptionRefreshWorker` in `:app`) calls
+     * `SubscriptionSyncer.sync` directly and never reaches this class, so a config the core
+     * would refuse is not caught there — it is caught at connect time instead
+     * (`FailureReason.PassthroughRejectedAtConnect`, Task 9). Plumbing core validation through
+     * that path would require `:core:data` to depend on `:core:xray`, which §4 forbids.
+     */
+    private suspend fun validateCoreEligibility(groupId: Long) {
+        val group = profileRepository.observeGroups().first().firstOrNull { it.id == groupId } ?: return
+        group.profiles
+            .filter { it.kind == ProfileKind.RAW_JSON && it.passthroughRejection == null }
+            .forEach { profile ->
+                val rawJson = profile.rawJson ?: return@forEach
+                if (!passthroughValidator.validate(rawJson)) {
+                    profileRepository.setPassthroughRejection(groupId, rawJson, PassthroughRejection.CoreRejected.name)
+                }
+            }
+    }
 }

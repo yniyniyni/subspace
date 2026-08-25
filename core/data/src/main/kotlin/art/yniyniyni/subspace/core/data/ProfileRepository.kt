@@ -361,6 +361,33 @@ internal constructor(
     }
 
     /**
+     * Overwrites the row [import] (or [art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer.sync])
+     * wrote for [rawJson] in [groupId] with the core's own verdict, or does nothing if no row
+     * currently occupies that identity slot.
+     *
+     * Looked up by [rawJson]'s own identity rather than by row id, because the only callers —
+     * `:feature:profiles`' `ProfileSource`, after it asks `:service`'s `PassthroughValidator` —
+     * have the config's text in hand right after `import`/`sync` returns, not the id that write
+     * produced. [identityHashOfRaw] is guaranteed to be the identity that write actually used
+     * *only* for a [rawJson] whose structural [art.yniyniyni.subspace.core.parser.analysePassthrough]
+     * rejection was already null — see [import]'s own KDoc on the outbound-identity fallback a
+     * fanned-out raw element takes instead. Callers must restrict themselves to that case.
+     *
+     * [reason] is a [art.yniyniyni.subspace.core.parser.PassthroughRejection]'s `name`, not the
+     * enum itself, matching [ProfileDao.setPassthroughRejection]'s own contract — see that
+     * method's KDoc for why the DAO layer stays off `:core:parser`'s types.
+     */
+    public suspend fun setPassthroughRejection(
+        groupId: Long,
+        rawJson: String,
+        reason: String?,
+    ) {
+        dao.findProfile(groupId, identityHashOfRaw(rawJson))?.let { row ->
+            dao.setPassthroughRejection(row.id, reason)
+        }
+    }
+
+    /**
      * Moves a profile to a different group. A no-op (returns `true`) if the profile no
      * longer exists.
      *

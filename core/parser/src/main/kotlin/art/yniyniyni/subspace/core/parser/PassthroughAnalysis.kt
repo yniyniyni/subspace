@@ -17,9 +17,10 @@ import kotlinx.serialization.json.JsonPrimitive
  * derived from config contents, and §10.4 wants the reason to be actionable
  * rather than descriptive. The UI maps each member to a string resource.
  *
- * This is not the whole vocabulary: a later task adds a member for the
- * `testXray` check (design §6.1), so this enum is written to grow rather than
- * be restructured.
+ * [CoreRejected] is the one member [analysePassthrough] never returns (design
+ * §6.1): it is written by `:service` after `testXray`, not by structural
+ * analysis, and lives in this same enum only so the UI renders one vocabulary
+ * of reasons rather than two.
  */
 public enum class PassthroughRejection {
     /** The stored text does not parse as a JSON object at all. */
@@ -37,6 +38,15 @@ public enum class PassthroughRejection {
      * exception and is handled as [PassthroughAnalysis.isBalancer].
      */
     SeveralServers,
+
+    /**
+     * xray-core refused the composed config.
+     *
+     * Set by `:service`, not by [analysePassthrough] — the analyser is
+     * structural and never calls the core. It lives in this enum because the UI
+     * renders one vocabulary of reasons, not two.
+     */
+    CoreRejected,
 }
 
 /**

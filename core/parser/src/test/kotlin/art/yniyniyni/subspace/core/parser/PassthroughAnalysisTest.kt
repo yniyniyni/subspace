@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.core.parser
 
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.Test
 
 class PassthroughAnalysisTest {
@@ -171,5 +172,41 @@ class PassthroughAnalysisTest {
         analysePassthrough("""{ "outbounds": "not-an-array" }""").rejection shouldBe
             PassthroughRejection.NoOutbounds
         analysePassthrough("").rejection shouldBe PassthroughRejection.NotJson
+    }
+
+    // Task 8: CoreRejected is xray-core's own verdict, written by `:service` after `testXray` —
+    // never this analyser's, which is structural only and never calls the core. One sample per
+    // branch of analysePassthrough's own logic, so a future edit that starts returning
+    // CoreRejected from in here gets caught rather than silently blurring the boundary.
+    @Test
+    fun `the structural analyser never returns CoreRejected — only the core can`() {
+        val samples =
+            listOf(
+                ordinary,
+                "vless://not-json",
+                """{ "inbounds": [] }""",
+                """
+                {
+                  "outbounds": [
+                    { "tag": "proxy", "protocol": "vless" },
+                    { "tag": "proxy-2", "protocol": "vless" }
+                  ]
+                }
+                """.trimIndent(),
+                """
+                {
+                  "routing": { "balancers": [ { "tag": "Auto_Balancer", "selector": ["proxy"] } ] },
+                  "outbounds": [
+                    { "tag": "proxy-auto", "protocol": "vless" },
+                    { "tag": "proxy-auto-2", "protocol": "vless" }
+                  ]
+                }
+                """.trimIndent(),
+                "",
+            )
+
+        samples.forEach { json ->
+            analysePassthrough(json).rejection shouldNotBe PassthroughRejection.CoreRejected
+        }
     }
 }

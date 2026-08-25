@@ -137,7 +137,13 @@ public object RawConfigComposer {
             kept["outbounds"] = JsonArray(outbounds + parsedOverride.extraOutbounds)
         }
 
-        val inbounds = inboundsJson(settings, sniffingOf(root))
+        val sniffing =
+            if (override != null) {
+                DEFAULT_SNIFFING
+            } else {
+                sniffingOf(root)
+            }
+        val inbounds = inboundsJson(settings, sniffing)
         return ComposeResult.Ok(render(kept, inbounds))
     }
 

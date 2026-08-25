@@ -89,6 +89,7 @@ public sealed interface ConfigResult {
  * test. §10.5: agents confidently invent plausible Xray keys, and an unknown key
  * can be silently ignored or reject the entire config.
  */
+@Suppress("TooManyFunctions") // One object per wire shape (§6); splitting it would scatter the shape's single author.
 public object XrayConfigGenerator {
     /**
      * Dispatches on the profile's protocol.
@@ -163,37 +164,7 @@ public object XrayConfigGenerator {
         sb: StringBuilder,
         settings: TunnelSettings,
     ) {
-        val plan = settings.dns
-        sb.appendLine("""  "dns": {""")
-        if (plan == null) {
-            sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
-            sb.appendLine("""  },""")
-            return
-        }
-        if (plan.hosts.isNotEmpty()) {
-            sb.appendLine("""    "hosts": {""")
-            // Sorted: a Map's iteration order is a property of its implementation
-            // rather than of its contents, and §6 requires byte-determinism.
-            val hosts = plan.hosts.toSortedMap().entries.toList()
-            hosts.forEachIndexed { index, (host, address) ->
-                val comma = if (index == hosts.size - 1) "" else ","
-                sb.appendLine("""      ${jsonString(host)}: ${jsonString(address)}$comma""")
-            }
-            sb.appendLine("""    },""")
-        }
-        sb.appendLine("""    "servers": [""")
-        val entries = buildList {
-            if (plan.fakeDns) add(""""fakedns"""")
-            plan.servers.forEach { add(it.render()) }
-        }
-        entries.forEachIndexed { index, entry ->
-            val comma = if (index == entries.size - 1) "" else ","
-            sb.appendLine("""      $entry$comma""")
-        }
-        sb.appendLine("""    ],""")
-        sb.appendLine("""    "queryStrategy": "UseIP",""")
-        sb.appendLine("""    "tag": "dns-module"""")
-        sb.appendLine("""  },""")
+        sb.appendLine("""  "dns": ${dnsObject(settings)},""")
     }
 
     /**
@@ -212,23 +183,28 @@ public object XrayConfigGenerator {
         routing: RoutingRuleSet?,
         dns: DnsPlan?,
     ) {
-        val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
-        val rules = dnsRuleLines(dns) + routing?.let(::routingRuleLines).orEmpty()
-
-        sb.appendLine("""  "routing": {""")
-        sb.appendLine("""    "domainStrategy": ${jsonString(strategy.wireValue)},""")
-        if (rules.isEmpty()) {
-            sb.appendLine("""    "rules": []""")
-        } else {
-            sb.appendLine("""    "rules": [""")
-            rules.forEachIndexed { index, rule ->
-                val comma = if (index == rules.size - 1) "" else ","
-                sb.appendLine("""      $rule$comma""")
-            }
-            sb.appendLine("""    ]""")
-        }
-        sb.appendLine("""  }""")
+        sb.appendLine("""  "routing": ${routingObject(routing, dns)}""")
     }
+
+    /**
+     * The `routing` and `dns` objects the typed path writes, for the passthrough
+     * path's override branch.
+     *
+     * Exposed rather than duplicated so a rule's shape has one author. The
+     * passthrough path splices these in place of a config's own blocks; the two
+     * paths therefore agree on what an app rule looks like by construction.
+     */
+    public fun overrideBlocks(settings: TunnelSettings): OverrideBlocks =
+        OverrideBlocks(
+            routingJson = routingObject(settings.routing, settings.dns),
+            dnsJson = dnsObject(settings),
+            extraOutboundsJson =
+            buildList {
+                add("""{ "tag": "direct", "protocol": "freedom" }""")
+                add("""{ "tag": "block", "protocol": "blackhole" }""")
+                if (settings.dns != null) add("""{ "tag": "dns-out", "protocol": "dns" }""")
+            },
+        )
 
     private fun appendInbounds(
         sb: StringBuilder,
@@ -470,4 +446,78 @@ private fun resolverRule(
     val field = if (DnsValidation.isAddressLiteral(match)) "ip" else "domain"
     return """{ "type": "field", "inboundTag": ["dns-module"], "$field": [${jsonString(match)}], """ +
         """"outboundTag": "$outboundTag" }"""
+}
+
+/**
+ * The `dns` object's text, without the surrounding key or trailing comma —
+ * [XrayConfigGenerator.appendDns] supplies both for the typed path;
+ * [XrayConfigGenerator.overrideBlocks] hands the bare object to the
+ * passthrough path's override branch. Top-level rather than a member so it
+ * does not count against the object's function budget.
+ */
+private fun dnsObject(settings: TunnelSettings): String {
+    val plan = settings.dns
+    val sb = StringBuilder()
+    sb.append("{\n")
+    if (plan == null) {
+        sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
+        sb.append("""  }""")
+        return sb.toString()
+    }
+    if (plan.hosts.isNotEmpty()) {
+        sb.appendLine("""    "hosts": {""")
+        // Sorted: a Map's iteration order is a property of its implementation
+        // rather than of its contents, and §6 requires byte-determinism.
+        val hosts = plan.hosts.toSortedMap().entries.toList()
+        hosts.forEachIndexed { index, (host, address) ->
+            val comma = if (index == hosts.size - 1) "" else ","
+            sb.appendLine("""      ${jsonString(host)}: ${jsonString(address)}$comma""")
+        }
+        sb.appendLine("""    },""")
+    }
+    sb.appendLine("""    "servers": [""")
+    val entries = buildList {
+        if (plan.fakeDns) add(""""fakedns"""")
+        plan.servers.forEach { add(it.render()) }
+    }
+    entries.forEachIndexed { index, entry ->
+        val comma = if (index == entries.size - 1) "" else ","
+        sb.appendLine("""      $entry$comma""")
+    }
+    sb.appendLine("""    ],""")
+    sb.appendLine("""    "queryStrategy": "UseIP",""")
+    sb.appendLine("""    "tag": "dns-module"""")
+    sb.append("""  }""")
+    return sb.toString()
+}
+
+/**
+ * The `routing` object's text, without the surrounding key —
+ * [XrayConfigGenerator.appendRouting] supplies it for the typed path;
+ * [XrayConfigGenerator.overrideBlocks] hands the bare object to the
+ * passthrough path's override branch. Top-level rather than a member so it
+ * does not count against the object's function budget.
+ */
+private fun routingObject(
+    routing: RoutingRuleSet?,
+    dns: DnsPlan?,
+): String {
+    val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
+    val rules = dnsRuleLines(dns) + routing?.let(::routingRuleLines).orEmpty()
+
+    val sb = StringBuilder()
+    sb.append("{\n")
+    sb.appendLine("""    "domainStrategy": ${jsonString(strategy.wireValue)},""")
+    if (rules.isEmpty()) {
+        sb.appendLine("""    "rules": []""")
+    } else {
+        sb.appendLine("""    "rules": [""")
+        rules.forEachIndexed { index, rule ->
+            val comma = if (index == rules.size - 1) "" else ","
+            sb.appendLine("""      $rule$comma""")
+        }
+        sb.appendLine("""    ]""")
+    }
+    sb.append("""  }""")
+    return sb.toString()
 }

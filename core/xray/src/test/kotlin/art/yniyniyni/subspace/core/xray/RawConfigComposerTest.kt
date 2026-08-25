@@ -214,4 +214,64 @@ class RawConfigComposerTest {
 
         socks["sniffing"] shouldBe null
     }
+
+    private val override =
+        OverrideBlocks(
+            routingJson =
+            """{ "domainStrategy": "IPIfNonMatch", """ +
+                """"rules": [ { "type": "field", "domain": ["geosite:cn"], "outboundTag": "direct" } ] }""",
+            dnsJson = """{ "servers": ["1.1.1.1"] }""",
+            extraOutboundsJson = emptyList(),
+        )
+
+    @Test
+    fun `the override branch replaces the config's routing and dns wholesale`() {
+        val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+
+        val routing = out["routing"] as JsonObject
+        routing["balancers"] shouldBe null
+        routing["domainMatcher"] shouldBe null
+        (routing["domainStrategy"]!!.jsonPrimitive.content) shouldBe "IPIfNonMatch"
+        ((out["dns"] as JsonObject)["servers"] as JsonArray).size shouldBe 1
+    }
+
+    @Test
+    fun `the override branch leaves the config's outbounds in place`() {
+        val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+
+        (out["outbounds"] as JsonArray).size shouldBe 3
+    }
+
+    @Test
+    fun `the override branch appends outbounds the config lacks`() {
+        val proxyOnly =
+            """{ "outbounds": [ { "tag": "proxy", "protocol": "vless" } ] }"""
+        val withExtras =
+            override.copy(
+                extraOutboundsJson =
+                listOf(
+                    """{ "tag": "direct", "protocol": "freedom" }""",
+                    """{ "tag": "block", "protocol": "blackhole" }""",
+                ),
+            )
+        val result = RawConfigComposer.compose(proxyOnly, settings, "/data/geo", withExtras)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val tags = (out["outbounds"] as JsonArray).map { (it as JsonObject)["tag"]!!.jsonPrimitive.content }
+
+        tags shouldBe listOf("proxy", "direct", "block")
+    }
+
+    // Spec §4.2: our own rules are what run, so our sniffing defaults are correct here.
+    @Test
+    fun `the override branch uses our sniffing defaults, not the config's`() {
+        val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val socks = (out["inbounds"] as JsonArray)[0] as JsonObject
+        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
+            .map { it.jsonPrimitive.content }
+
+        overrides shouldBe listOf("http", "tls", "quic")
+    }
 }

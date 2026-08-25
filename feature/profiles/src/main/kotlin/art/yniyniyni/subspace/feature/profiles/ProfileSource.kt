@@ -246,13 +246,23 @@ constructor(
      * documents through the real core — the manual paste/deeplink path's half of Task 8's
      * wiring. Scoped to `profiles`' own `rawJson` values, not the whole group: see
      * [validateCoreEligibility]'s KDoc for why, and for what this deliberately does not cover.
+     *
+     * Matched by content (`it.rawJson in candidates`), not by id — unlike [syncSubscription],
+     * which must match by id (see that method's KDoc for why a content match is unsafe there).
+     * Safe here because [candidates] is the literal, exact set of `rawJson` values *this call*
+     * passed to [profileRepository]`.import`: every row [validateCoreEligibility] considers is
+     * therefore either a row this call wrote, or a pre-existing row that merely happens to share
+     * byte-identical text with one — validating that extra row too is redundant, never wrong.
      */
     override suspend fun import(
         profiles: List<Profile>,
         groupId: Long,
     ): Int {
         val written = profileRepository.import(profiles, groupId)
-        validateCoreEligibility(groupId, profiles.mapNotNull { it.rawJson }.toSet())
+        val candidates = profiles.mapNotNull { it.rawJson }.toSet()
+        if (candidates.isNotEmpty()) {
+            validateCoreEligibility(groupId) { it.rawJson in candidates }
+        }
         return written
     }
 
@@ -293,7 +303,16 @@ constructor(
      * already-approved row on every sync would be pure waste.
      *
      * Scoped to what this sync actually changed via a before/after diff of the group's own
-     * eligible `rawJson` set — [SubscriptionSyncer.sync] reports only counts
+     * eligible rows, keyed by **id**, not by `rawJson` text (review round 2, Important 6): a
+     * plain `Set<String>` diff is blind to identity — if a row this sync genuinely adds or
+     * updates carries `rawJson` text byte-identical to an already-eligible row elsewhere in the
+     * group (`SubscriptionSyncer`'s own outbound-identity fallback for a fanned-out raw element
+     * exists precisely because two rows can share identical `rawJson` under distinct
+     * `identityHash`es), a content-set difference silently drops it and that row is never
+     * validated — not now, and not on any later sync, since the same diff repeats the same miss.
+     * [changedProfileIds] fixes this by comparing *per id*, so a row is a candidate exactly when
+     * its id is new or its `rawJson` at that id changed, never merely because its text collides
+     * with something already present. [SubscriptionSyncer.sync] reports only counts
      * ([SyncResult.Synced.added]/[SyncResult.Synced.updated]), never which rows, so there is no
      * cheaper way to name "this call's own documents" the way [import] can from its own
      * `profiles` argument. See [validateCoreEligibility]'s KDoc for what this scoping does and
@@ -302,12 +321,16 @@ constructor(
     @Suppress("ReturnCount")
     override suspend fun syncSubscription(id: Long): SyncResult {
         val subscription = subscriptionRepository.observeSubscriptions().first().firstOrNull { it.id == id }
-        val before = subscription?.let { eligibleRawJsons(it.groupId) }.orEmpty()
+        val before = subscription?.let { eligibleRawJsonsById(it.groupId) }.orEmpty()
         val result = subscriptionSyncer.sync(id)
         if (subscription == null) return result
         val synced = result as? SyncResult.Synced ?: return result
         if (synced.added > 0 || synced.updated > 0) {
-            validateCoreEligibility(subscription.groupId, eligibleRawJsons(subscription.groupId) - before)
+            val after = eligibleRawJsonsById(subscription.groupId)
+            val candidateIds = changedProfileIds(before, after)
+            if (candidateIds.isNotEmpty()) {
+                validateCoreEligibility(subscription.groupId) { it.id in candidateIds }
+            }
         }
         return result
     }
@@ -347,23 +370,26 @@ constructor(
     ) = subscriptionRepository.setUserAgentOverride(id, userAgent)
 
     /**
-     * Task 8: runs [candidates] — a subset of [groupId]'s own `rawJson` values, supplied by
-     * [import]/[syncSubscription] — through [passthroughValidator] wherever the matching row's
-     * structural verdict is still eligible ([StoredProfile.runsAsWritten]), and records
-     * [PassthroughRejection.CoreRejected] for whichever ones the real core refuses.
+     * Task 8: runs every [StoredProfile] in [groupId] for which [isCandidate] is true through
+     * [passthroughValidator], provided its structural verdict is still eligible
+     * ([StoredProfile.runsAsWritten]), and records [PassthroughRejection.CoreRejected] for
+     * whichever ones the real core refuses.
      *
-     * [candidates] is what keeps this bounded to "what this call actually wrote", not the whole
+     * [isCandidate] is what keeps this bounded to "what this call actually wrote", not the whole
      * group: an accepted row keeps a null verdict forever (nothing ever confirms it positively),
      * so re-scanning every eligible row in the group on every call would re-run `testXray` —
      * a real native core start — against every already-approved row every single time, turning
      * the Nth import into a group into N native-core spins on a suspend call the user is
-     * waiting on. Restricting to [candidates] means a row from an earlier call is only
-     * revisited if this call's own diff says its `rawJson` is new or changed.
+     * waiting on. [import] and [syncSubscription] each supply a predicate suited to what they
+     * actually know (see their own KDocs for why those differ — content match is safe for one
+     * and unsafe for the other), so a row from an earlier call is only revisited when this
+     * call's own predicate says so.
      *
      * Re-queries the group for [StoredProfile]s (rather than working from whatever the callers
-     * hold) only to resolve each candidate's row id and current verdict — the write itself uses
-     * [StoredProfile.id] directly, never a re-derived identity hash. A row already marked
-     * [PassthroughRejection.CoreRejected] by an earlier pass is skipped rather than re-asked.
+     * hold) to evaluate [isCandidate] and resolve each match's row id and current verdict — the
+     * write itself uses [StoredProfile.id] directly, never a re-derived identity hash. A row
+     * already marked [PassthroughRejection.CoreRejected] by an earlier pass is skipped rather
+     * than re-asked.
      *
      * Scope, per the M7 ruling this task is bound by: this method only ever runs from
      * [import] and [syncSubscription], both entry points `:feature:profiles` owns. The
@@ -372,19 +398,18 @@ constructor(
      * would refuse is not caught there — it is caught at connect time instead
      * (`FailureReason.PassthroughRejectedAtConnect`, Task 9). Plumbing core validation through
      * that path would require `:core:data` to depend on `:core:xray`, which §4 forbids. The
-     * same backstop also covers a row this method's [candidates] scoping never revisits (an
+     * same backstop also covers a row this method's [isCandidate] scoping never revisits (an
      * unrelated earlier import, or one [passthroughValidator] left undetermined because geo
      * assets were not installed yet) — it fails at connect with an accurate reason instead of
      * silently staying unvalidated forever.
      */
     private suspend fun validateCoreEligibility(
         groupId: Long,
-        candidates: Set<String>,
+        isCandidate: (StoredProfile) -> Boolean,
     ) {
-        if (candidates.isEmpty()) return
         val group = profileRepository.observeGroups().first().firstOrNull { it.id == groupId } ?: return
         group.profiles
-            .filter { it.runsAsWritten && it.rawJson in candidates }
+            .filter { it.runsAsWritten && isCandidate(it) }
             .forEach { profile ->
                 val rawJson = profile.rawJson ?: return@forEach
                 if (!passthroughValidator.validate(rawJson)) {
@@ -393,11 +418,30 @@ constructor(
             }
     }
 
-    /** The group's own [StoredProfile.rawJson] values currently eligible ([StoredProfile.runsAsWritten]). */
-    private suspend fun eligibleRawJsons(groupId: Long): Set<String> =
+    /** The group's own eligible ([StoredProfile.runsAsWritten]) rows, by id, with their `rawJson`. */
+    private suspend fun eligibleRawJsonsById(groupId: Long): Map<Long, String> =
         profileRepository.observeGroups().first().firstOrNull { it.id == groupId }
             ?.profiles.orEmpty()
             .filter { it.runsAsWritten }
-            .mapNotNull { it.rawJson }
-            .toSet()
+            .mapNotNull { profile -> profile.rawJson?.let { profile.id to it } }
+            .toMap()
 }
+
+/**
+ * Row ids in [after] that are new (absent from [before]) or whose `rawJson` changed, comparing
+ * **per id** rather than as two content sets.
+ *
+ * Review round 2, Important 6: the version this replaced computed `after - before` on
+ * `Set<String>`, which is blind to identity. Two distinct rows can legitimately share
+ * byte-identical `rawJson` (`SubscriptionSyncer`'s outbound-identity fallback for a fanned-out
+ * raw element is exactly this shape), and under a plain set difference, a newly added row whose
+ * text happens to match an already-eligible row elsewhere in the group vanishes from the
+ * difference — it is silently never validated, on this sync or any later one. Comparing the
+ * value at each id instead — new id, or same id with different text — cannot make that mistake:
+ * an id present in both [before] and [after] with unchanged text is excluded regardless of what
+ * any other id's `rawJson` looks like.
+ */
+internal fun changedProfileIds(
+    before: Map<Long, String>,
+    after: Map<Long, String>,
+): Set<Long> = after.filterKeys { rowId -> before[rowId] != after[rowId] }.keys

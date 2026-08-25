@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-
 # Subspace
 
 > **A native Android VPN client for Xray-core. Bring your own server — no bundles, no middlemen, no telemetry.**
@@ -23,7 +21,7 @@ Built for the [Remnawave](https://github.com/remnawave/panel) / Happ ecosystem: 
 
 No open-source Android client currently combines all three of:
 
-1. **Native Android** (not Flutter)
+1. **Native Android** (Kotlin for now as MVP, move to KMP in future)
 2. **Xray-core** (not Clash/mihomo)
 3. **Happ/Remnawave header compatibility** (HWID, directives, response rules)
 
@@ -41,11 +39,11 @@ That gap is why Subspace exists.
 | **HWID** | ✅ | Hashed `ANDROID_ID`, on by default. Distinct errors for `max-devices-reached` vs `hwid-not-supported` |
 | **Latency & sorting** | ✅ | `tcp` + `proxy-head` modes, per-group sort (as-delivered / ping / alphabetical / last-used) |
 | **Raw JSON profiles** | ✅ (typed projection) | Stored byte-for-byte; true passthrough deferred (see Architecture) |
-| **Routing rules** | 🚧 M5 | geoip/geosite/domain/IP → direct/proxy/block |
-| **Per-app proxy** | 🚧 M5 | Allow-list / deny-list via `VpnService` |
-| **Tunnel hardening** | 🚧 M7 | Always-on VPN, boot autostart, `NetworkCallback`, kill switch |
-| **Censorship resistance** | 🚧 M8 | Fragmentation, noises, fronting, fallback URL, DoH pre-resolution |
-| **UI** | ✅ | Jetpack Compose + Material 3, light/dark, MVI |
+| **Routing rules** | ✅ | geoip/geosite/domain/IP → direct/proxy/block |
+| **Per-app proxy** | ✅ | Allow-list / deny-list via `VpnService` |
+| **Tunnel hardening** | 🚧 WIP | Always-on VPN, boot autostart, `NetworkCallback`, kill switch |
+| **Censorship resistance** | 🚧 WIP | Fragmentation, noises, fronting, fallback URL, DoH pre-resolution |
+| **UI** | Technically - yes, practically - no | Jetpack Compose + Material 3, light/dark, MVI |
 
 > 📖 The full feature map is a Happ parity analysis in [`ARCHITECTURE.md` Appendix A](ARCHITECTURE.md#appendix-a-feature-goals-happ-parity-analysis).
 
@@ -224,12 +222,13 @@ This is the one thing that is expensive to retrofit — it shapes the settings, 
 
 Core capabilities on the way:
 
-- **Routing & per-app proxy** — geoip/geosite/domain/IP rules (direct / proxy / block), allow-list & deny-list per app via `VpnService`
-- **Routing deeplinks** — `happ://routing/add|onadd|off` shareable routing profiles with atomic geo-file swaps
 - **Platform hardening** — always-on VPN, boot autostart, `NetworkCallback` for Wi-Fi ↔ cellular, kill switch, `onRevoke` handling, traffic stats
 - **Censorship resistance** — fragmentation, noises, subscription fronting, fallback URL, DoH pre-resolution
 - **More protocols** — beyond Xray-core: **AmneziaWG** and **OlcRtc** support is planned alongside the existing VLESS/VMess/Trojan/Shadowsocks/SOCKS/Hysteria2 lineup
-- **Polish & release** — RU + EN localization, subscription metadata surface (`profile-title`, `subscription-userinfo`, `announce`…), signing, [IzzyOnDroid](https://apt.izzysoft.de) distribution
+- **Polish & release** — RU, CN, FA + EN localization, subscription metadata surface (`profile-title`, `subscription-userinfo`, `announce`…), signing, [IzzyOnDroid](https://apt.izzysoft.de) and Google Play distribution
+
+Also:
+- **KMP rewrite** — Bringing Linux and Windows targets, and maybe macOS (likely) + iOS (if I suddenly decide to make Apple $100 richer each year) in the far future
 
 ---
 

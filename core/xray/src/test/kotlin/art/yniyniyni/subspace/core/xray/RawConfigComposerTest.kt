@@ -181,4 +181,37 @@ class RawConfigComposerTest {
         json shouldNotContain "10809"
         json shouldContain "41080"
     }
+
+    // A Remnawave XRAY_JSON subscription delivers a JSON array at the root, not
+    // an object — the most likely real-world malformed-for-us input.
+    @Test
+    fun `a JSON array root is reported as not JSON`() {
+        RawConfigComposer.compose(
+            """[{"outbounds":[{"protocol":"vless"}]}]""",
+            settings,
+            "/data/geo",
+            null,
+        ) shouldBe ComposeResult.Failed(ComposeFailure.NotJson)
+    }
+
+    // Controller ruling: running the config as written means honouring an
+    // explicit sniffing:false too. Re-enabling it because our settings ask for
+    // sniffing would be the app second-guessing an author's own choice, even
+    // though it means the config's own domain/geosite rules stop matching
+    // under tun2socks.
+    @Test
+    fun `sniffing explicitly disabled by the config is not silently re-enabled`() {
+        val disabled =
+            """
+            {
+              "inbounds": [
+                { "tag": "socks", "port": 10808, "protocol": "socks", "sniffing": { "enabled": false } }
+              ],
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ]
+            }
+            """.trimIndent()
+        val socks = (composed(disabled)["inbounds"] as JsonArray)[0] as JsonObject
+
+        socks["sniffing"] shouldBe null
+    }
 }

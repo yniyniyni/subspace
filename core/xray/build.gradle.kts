@@ -3,7 +3,6 @@
 plugins {
     id("subspace.android.library")
     id("subspace.android.hilt")
-    alias(libs.plugins.kotlin.serialization)
 }
 
 android {

@@ -12,11 +12,27 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** Why a stored config could not be composed into something runnable. */
-public enum class ComposeFailure { NotJson, NoOutbounds }
+public enum class ComposeFailure {
+    NotJson,
+    NoOutbounds,
+
+    /**
+     * [OverrideBlocks]'s `routingJson`/`dnsJson`/`extraOutboundsJson` did not
+     * parse. Task 4's callers are expected to hand `compose` well-formed text
+     * of its own making, but `compose` must not throw regardless of who built
+     * [OverrideBlocks] — distinct from [NotJson] because that failure describes
+     * the stored config itself, not the app's own override text.
+     */
+    InvalidOverride,
+}
 
 /** The outcome of composing a stored config. */
 public sealed interface ComposeResult {
-    public data class Ok(val json: String) : ComposeResult
+    public data class Ok(val json: String) : ComposeResult {
+        // §5.6: this is the whole composed config — server UUID, REALITY
+        // private key, the user's routing/dns text, all of it.
+        override fun toString(): String = "Ok(<redacted, ${json.length} bytes>)"
+    }
 
     public data class Failed(val reason: ComposeFailure) : ComposeResult
 }
@@ -103,11 +119,22 @@ public object RawConfigComposer {
         kept["env"] = buildJsonObject { put("xray.location.asset", assetDir) }
 
         if (override != null) {
-            kept["routing"] = LENIENT.parseToJsonElement(override.routingJson)
-            kept["dns"] = LENIENT.parseToJsonElement(override.dnsJson)
-            kept["outbounds"] = JsonArray(
-                outbounds + override.extraOutboundsJson.map(LENIENT::parseToJsonElement),
-            )
+            val parsedOverride =
+                try {
+                    ParsedOverride(
+                        routing = LENIENT.parseToJsonElement(override.routingJson),
+                        dns = LENIENT.parseToJsonElement(override.dnsJson),
+                        extraOutbounds = override.extraOutboundsJson.map(LENIENT::parseToJsonElement),
+                    )
+                } catch (_: SerializationException) {
+                    null
+                } catch (_: IllegalArgumentException) {
+                    null
+                } ?: return ComposeResult.Failed(ComposeFailure.InvalidOverride)
+
+            kept["routing"] = parsedOverride.routing
+            kept["dns"] = parsedOverride.dns
+            kept["outbounds"] = JsonArray(outbounds + parsedOverride.extraOutbounds)
         }
 
         val inbounds = inboundsJson(settings, sniffingOf(root))
@@ -116,6 +143,13 @@ public object RawConfigComposer {
 
     /** Keys removed outright before anything is added back. */
     private val STRIPPED = setOf("inbounds", "log", "env", "stats", "policy", "metrics")
+
+    /** [OverrideBlocks], once its three JSON strings have parsed successfully. */
+    private data class ParsedOverride(
+        val routing: JsonElement,
+        val dns: JsonElement,
+        val extraOutbounds: List<JsonElement>,
+    )
 
     /**
      * The config's own sniffing block, or the app's default when it has none.

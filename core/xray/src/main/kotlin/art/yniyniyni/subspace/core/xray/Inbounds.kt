@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+@file:Suppress("MatchingDeclarationName") // File groups the whole inbound pair, not just SniffingSettings.
+
+package art.yniyniyni.subspace.core.xray
+
+/**
+ * A SOCKS inbound's `sniffing` block.
+ *
+ * Traffic reaches the inbound from tun2socks addressed to an **IP**; without
+ * sniffing no domain is ever recovered, and every `domain`/`geosite:` rule —
+ * ours or a passthrough config's own — matches nothing. The config still runs
+ * and the tunnel still carries traffic, which is why this is §10's category
+ * rather than an obvious bug.
+ */
+internal data class SniffingSettings(val destOverride: List<String>)
+
+/** What the typed path has always emitted. `fakedns` is appended when a DNS plan asks for it. */
+internal val DEFAULT_SNIFFING = SniffingSettings(listOf("http", "tls", "quic"))
+
+/**
+ * The loopback SOCKS inbound, emitted identically by both config paths.
+ *
+ * §6: loopback only. Never `0.0.0.0` — that turns the phone into an open proxy
+ * for anyone on the same Wi-Fi.
+ *
+ * [sniffing] is null when the caller wants no `sniffing` block at all. The
+ * passthrough path passes the *config's own* block rather than
+ * [DEFAULT_SNIFFING], because substituting ours changes which of the config's
+ * rules match (spec §4.2).
+ *
+ * Returns the inbound object with no trailing comma and no surrounding array;
+ * the caller places it.
+ */
+internal fun socksInboundJson(
+    port: Int,
+    sniffing: SniffingSettings?,
+): String {
+    val sb = StringBuilder()
+    sb.appendLine("""    {""")
+    sb.appendLine("""      "tag": "socks-in",""")
+    sb.appendLine("""      "protocol": "socks",""")
+    sb.appendLine("""      "listen": "127.0.0.1",""")
+    sb.appendLine("""      "port": $port,""")
+    sb.appendLine("""      "settings": {""")
+    sb.appendLine("""        "udp": true""")
+    sb.appendLine("""      }${if (sniffing != null) "," else ""}""")
+    if (sniffing != null) {
+        val overrides = sniffing.destOverride.joinToString(", ") { jsonString(it) }
+        sb.appendLine("""      "sniffing": {""")
+        sb.appendLine("""        "enabled": true,""")
+        sb.appendLine("""        "destOverride": [$overrides]""")
+        sb.appendLine("""      }""")
+    }
+    sb.append("""    }""")
+    return sb.toString()
+}
+
+/**
+ * The inbound `:core:network` dials so app fetches travel through the tunnel.
+ *
+ * Same loopback rule, and it matters more here: an HTTP proxy reachable from the
+ * LAN is usable directly from any browser on the network. No `sniffing` block —
+ * an HTTP `CONNECT` states its destination, so there is nothing to sniff.
+ *
+ * Returns the inbound object with no trailing comma and no surrounding array;
+ * the caller places it.
+ */
+internal fun httpInboundJson(port: Int): String {
+    val sb = StringBuilder()
+    sb.appendLine("""    {""")
+    sb.appendLine("""      "tag": "http-in",""")
+    sb.appendLine("""      "protocol": "http",""")
+    sb.appendLine("""      "listen": "127.0.0.1",""")
+    sb.appendLine("""      "port": $port,""")
+    sb.appendLine("""      "settings": {}""")
+    sb.append("""    }""")
+    return sb.toString()
+}

@@ -234,9 +234,20 @@ public object XrayConfigGenerator {
         sb: StringBuilder,
         settings: TunnelSettings,
     ) {
+        val sniffing =
+            if (!settings.enableSniffing) {
+                null
+            } else if (settings.dns?.fakeDns == true) {
+                SniffingSettings(DEFAULT_SNIFFING.destOverride + "fakedns")
+            } else {
+                DEFAULT_SNIFFING
+            }
         sb.appendLine("""  "inbounds": [""")
-        appendSocksInbound(sb, settings, trailingComma = settings.httpPort != null)
-        settings.httpPort?.let { port -> appendHttpInbound(sb, port) }
+        sb.append(socksInboundJson(settings.socksPort, sniffing))
+        sb.appendLine(if (settings.httpPort != null) "," else "")
+        settings.httpPort?.let { port ->
+            sb.appendLine(httpInboundJson(port))
+        }
         sb.appendLine("""  ],""")
     }
 
@@ -404,73 +415,6 @@ public object XrayConfigGenerator {
         }
         sb.appendLine("""        }""")
     }
-}
-
-/**
- * The SOCKS inbound M1's tunnel has always carried. Byte-identical whether or
- * not [appendHttpInbound] follows it — only [trailingComma] changes with that.
- *
- * A top-level function rather than a member of [XrayConfigGenerator], same
- * reason as [appendHttpInbound]: neither needs the object's other members, and
- * splitting the single inbound-emitting function into two for the optional
- * HTTP inbound pushed the object over detekt's function-count threshold.
- */
-private fun appendSocksInbound(
-    sb: StringBuilder,
-    settings: TunnelSettings,
-    trailingComma: Boolean,
-) {
-    sb.appendLine("""    {""")
-    sb.appendLine("""      "tag": "socks-in",""")
-    sb.appendLine("""      "protocol": "socks",""")
-    // §6: loopback only. Never 0.0.0.0 — that turns the phone into an open
-    // proxy for anyone on the same Wi-Fi.
-    sb.appendLine("""      "listen": "127.0.0.1",""")
-    sb.appendLine("""      "port": ${settings.socksPort},""")
-    sb.appendLine("""      "settings": {""")
-    sb.appendLine("""        "udp": true""")
-    sb.appendLine("""      }${if (settings.enableSniffing) "," else ""}""")
-    if (settings.enableSniffing) {
-        val overrides =
-            if (settings.dns?.fakeDns == true) {
-                """"http", "tls", "quic", "fakedns""""
-            } else {
-                """"http", "tls", "quic""""
-            }
-        sb.appendLine("""      "sniffing": {""")
-        sb.appendLine("""        "enabled": true,""")
-        sb.appendLine("""        "destOverride": [$overrides]""")
-        sb.appendLine("""      }""")
-    }
-    sb.appendLine("""    }${if (trailingComma) "," else ""}""")
-}
-
-/**
- * The inbound `:core:network` dials so app fetches travel through the tunnel.
- *
- * Same loopback rule as the SOCKS inbound, and it matters more here: an HTTP
- * proxy reachable from the LAN is usable directly from any browser on the
- * network.
- *
- * No `sniffing` block: the destination is already known — an HTTP `CONNECT`
- * states it — so there is nothing to sniff.
- *
- * A top-level function rather than a member of [XrayConfigGenerator]: it needs
- * none of the object's other members, and keeping it out is what keeps that
- * object under detekt's function-count threshold now that the SOCKS inbound
- * emission was split out too.
- */
-private fun appendHttpInbound(
-    sb: StringBuilder,
-    port: Int,
-) {
-    sb.appendLine("""    {""")
-    sb.appendLine("""      "tag": "http-in",""")
-    sb.appendLine("""      "protocol": "http",""")
-    sb.appendLine("""      "listen": "127.0.0.1",""")
-    sb.appendLine("""      "port": $port,""")
-    sb.appendLine("""      "settings": {}""")
-    sb.appendLine("""    }""")
 }
 
 /**

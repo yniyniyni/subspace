@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule fires on the halo's breath duration and the
 // control's diameter — both are transcribed design-token values (184dp
 // diameter, 28dp blur, .5 opacity, 3.2s breath), already named by the val/

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.core.model
 
 /** Which half of a [RuleBucket] an entry belongs to. Decides which prefixes are legal. */

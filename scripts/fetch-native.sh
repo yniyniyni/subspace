@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permission: see Stores Exception in LICENSE.
 # Fetches pinned native artifacts. The binaries are gitignored (§10.7);
 # this script is the committed, reproducible way to obtain them.
 set -euo pipefail

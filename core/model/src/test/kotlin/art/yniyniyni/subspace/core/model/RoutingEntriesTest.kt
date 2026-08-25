@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 @file:Suppress("Indentation") // KtLint's required continuation indentation conflicts with detekt's style rule.
 
 package art.yniyniyni.subspace.core.model

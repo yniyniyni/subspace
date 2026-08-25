@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule would otherwise flag every ARGB literal below.
 // These are the ported design tokens themselves — the ARGB hex *is* the
 // value, already named by the val it's assigned to; extracting each into a

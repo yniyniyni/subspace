@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // Every size below is a measured byte count from a specific date, one row per
 // source in docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md §7.
 // detekt's MagicNumber rule fires on each of them; naming them individually

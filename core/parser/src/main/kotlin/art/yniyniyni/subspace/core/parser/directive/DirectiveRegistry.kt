@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule fires on every range bound and length cap below —
 // this file *is* a table of ~90 documented numbers (spec D7), one source per
 // row in docs/agent/research/2026-08-06-m4-directive-surface.md. Naming each

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permission: see Stores Exception in LICENSE.
 #
 # Builds a patched libXray Android AAR.
 #

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // The file is named for ServersDialogs, the entry point every other file in
 // this package calls — detekt's MatchingDeclarationName instead wants it
 // named after ServersDialogActions, the one *class* here, ignoring that the

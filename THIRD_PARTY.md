@@ -1,8 +1,11 @@
 # Third-party components and attribution
 
 Subspace is licensed under the GNU Affero General Public License v3.0 or later
-(see `LICENSE`). This file records every upstream component the project depends
-on or adapts code from, and the obligations that come with each.
+(see `LICENSE`), including the Stores Exception for distribution through stores
+including, but not limited to, the Apple App Store. That exception applies only
+to material whose copyright holder grants it; this file records every upstream
+component the project depends on or adapts code from, and the obligations that
+come with each.
 
 Per ARCHITECTURE.md §10.8: **code adapted from a copyleft-licensed client keeps
 its original license.** When adapting non-trivial logic, add a comment at the

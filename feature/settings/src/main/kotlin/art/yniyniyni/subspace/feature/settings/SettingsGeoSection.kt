@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // The section's composables (row, picker, custom-source form) plus the pure row-assembly
 // functions SettingsGeoTest exercises directly (geoRowFor, geoRowsFor, its private helpers, the
 // two string-resource mappers) push this past the file-level function-count threshold. Splitting

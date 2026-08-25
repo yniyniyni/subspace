@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.core.parser
 
 // A base64-encoded subscription is many characters wide even for a single

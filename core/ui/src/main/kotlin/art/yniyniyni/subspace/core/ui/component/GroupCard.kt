@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 // detekt's MagicNumber rule fires on the padding/rotation values below — all
 // are tokens/spacing.css's --space-* scale or a plain 0/180 degree rotation
 // pair, already named by the val/const each initializes. See ConnectControl.kt

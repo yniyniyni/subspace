@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permission: see Stores Exception in LICENSE.
 # Enforces the ARCHITECTURE.md §12 bans that detekt cannot enforce here:
 #
 #   - no runBlocking outside tests

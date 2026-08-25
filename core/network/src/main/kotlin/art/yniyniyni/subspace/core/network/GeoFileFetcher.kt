@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
 @file:Suppress("ImportOrdering") // Detekt's custom layout conflicts with the project-wide Kotlin import order.
 
 package art.yniyniyni.subspace.core.network

@@ -31,7 +31,9 @@ import androidx.compose.ui.unit.dp
 import art.yniyniyni.subspace.core.model.DnsState
 import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingProfile
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
+import art.yniyniyni.subspace.core.parser.routing.ConversionDrop
 import art.yniyniyni.subspace.core.parser.routing.ImportProblem
 import art.yniyniyni.subspace.core.ui.component.SubspaceBottomSheet
 
@@ -105,6 +107,22 @@ internal data class ImportReviewState(
     val problem: ImportProblem? = null,
     /** Why a confirmed import did not land. Non-null only with [Stage.Failed]. */
     val failure: RuleSetAssetFailure? = null,
+    /**
+     * The profile under review, for callers that need more than [bucketCounts].
+     *
+     * Task 14: a converted config's own [RoutingProfile.bucket] contents are
+     * asserted on directly, since [bucketCounts] only carries totals.
+     */
+    val profile: RoutingProfile? = null,
+    /**
+     * What a config-routing-to-rule-set conversion (Task 13) could not carry, by
+     * kind and count. Empty for every ordinary deeplink/QR/clipboard/subscription
+     * import — only [ImportReviewViewModel.startConversionReview] ever populates
+     * this, and honestly: a nonempty map here is the entire reason Task 13's
+     * drop-counting exists (see its KDoc) rather than the conversion silently
+     * discarding what it could not express.
+     */
+    val drops: Map<ConversionDrop, Int> = emptyMap(),
 )
 
 /**
@@ -213,6 +231,9 @@ private fun ProfileBody(state: ImportReviewState) {
         ),
         style = MaterialTheme.typography.bodyMedium,
     )
+    if (state.drops.isNotEmpty()) {
+        ConversionDropsSection(state.drops)
+    }
     state.geoDownloads.forEach { download ->
         GeoRow(download)
     }
@@ -232,6 +253,44 @@ private fun ProfileBody(state: ImportReviewState) {
         style = MaterialTheme.typography.bodyMedium,
     )
 }
+
+/**
+ * Task 14: what a config-routing-to-rule-set conversion (Task 13) could not
+ * carry — the entire point of counting drops in the first place.
+ *
+ * Iterates [ConversionDrop.entries] rather than [drops]'s own iteration order
+ * so the section always renders in the enum's declared order regardless of
+ * which kinds a given conversion happened to hit.
+ */
+@Composable
+private fun ConversionDropsSection(drops: Map<ConversionDrop, Int>) {
+    Text(text = stringResource(R.string.routing_conversion_drops_title), style = MaterialTheme.typography.titleSmall)
+    ConversionDrop.entries.forEach { kind ->
+        val count = drops[kind] ?: return@forEach
+        Text(
+            text = stringResource(kind.messageRes(), count),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+/**
+ * One string per [ConversionDrop] member, exhaustive with no `else` — an
+ * eighth member must fail this compile rather than render as nothing (§10.4).
+ * [ConversionDrop.UnsupportedMatcher] and [ConversionDrop.UnconditionalRule]
+ * get distinct wording on purpose: one names an unsupported key, the other had
+ * no key to name.
+ */
+private fun ConversionDrop.messageRes(): Int =
+    when (this) {
+        ConversionDrop.UnsupportedMatcher -> R.string.routing_conversion_drop_unsupported_matcher
+        ConversionDrop.UnconditionalRule -> R.string.routing_conversion_drop_unconditional
+        ConversionDrop.BalancerRule -> R.string.routing_conversion_drop_balancer
+        ConversionDrop.DomainAndIpInOneRule -> R.string.routing_conversion_drop_domain_and_ip
+        ConversionDrop.UnknownOutbound -> R.string.routing_conversion_drop_unknown_outbound
+        ConversionDrop.OrderNotRepresentable -> R.string.routing_conversion_drop_order
+        ConversionDrop.MultiAddressHost -> R.string.routing_conversion_drop_multi_address_host
+    }
 
 /**
  * The DNS block shown for informed consent (§A.1).

@@ -69,9 +69,16 @@ internal interface ProfileSource {
      * non-default [SettingsRepository.dnsResolver], each replace a passthrough
      * profile's own `routing`/`dns` blocks wholesale. Collapses `:service`'s own
      * `passthroughPlanFor`'s `routingActive || dnsPlanPresent` to a settings-only
-     * check — tracing `dnsPlanPresent`'s construction shows a *profile*-carried DNS
-     * plan (`RoutingResolution.Active.dns`) requires routing to already be active,
-     * so the wider condition never fires without routing already covering it here.
+     * check, and both disjuncts here are load-bearing on their own: `dnsPlanPresent`
+     * is [DnsPlanner.plan] returning non-null, which happens either because an active
+     * *routing profile* carries its own DNS block (`RoutingResolution.Active.dns` —
+     * that half genuinely does require routing to be active) **or** because
+     * [SettingsRepository.dnsResolver] alone is non-default, per `DnsPlanner.kt`'s
+     * `nothingToDo = effective == null && setting == DEFAULT_SETTING` — a case that
+     * fires with routing fully off. `resolver != DnsResolver.DEFAULT` below is what
+     * catches that second case; dropping it on the theory that the first term
+     * subsumes it would silently stop the warning firing for a routing-off session
+     * running a non-default resolver.
      *
      * Defaulted to `flowOf(false)` — unlike [activeProfileId]/[globalHwidEnabled]
      * above, only [art.yniyniyni.subspace.feature.profiles.editor.EditorViewModel]

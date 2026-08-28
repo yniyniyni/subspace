@@ -179,6 +179,62 @@ class XrayRoutingConversionTest {
         result.profile.routeOrder.first() shouldBe RouteOutcome.PROXY
     }
 
+    // A rule dropped for an unrelated reason (here: UnsupportedMatcher) must not count
+    // toward order-representability — it never populated a bucket, so it cannot be the
+    // thing that broke the order. Real result: PROXY:[a.com, b.com], one populated
+    // outcome, trivially representable.
+    @Test
+    fun `a fully dropped rule between same-outcome rules does not trigger OrderNotRepresentable`() {
+        val json =
+            """
+            {
+              "routing": {
+                "rules": [
+                  { "domain": ["a.com"], "outboundTag": "proxy" },
+                  { "ip": ["8.8.8.8"], "port": "53", "outboundTag": "direct" },
+                  { "domain": ["b.com"], "outboundTag": "proxy" }
+                ]
+              },
+              "outbounds": [
+                { "tag": "proxy", "protocol": "vless" },
+                { "tag": "direct", "protocol": "freedom" }
+              ]
+            }
+            """.trimIndent()
+
+        val result = convert(json)!!
+
+        result.drops[ConversionDrop.UnsupportedMatcher] shouldBe 1
+        result.drops.containsKey(ConversionDrop.OrderNotRepresentable) shouldBe false
+        result.profile.bucket(RouteOutcome.PROXY).sites shouldContainExactly listOf("a.com", "b.com")
+    }
+
+    // A bare rule with no domain/ip and none of UnsupportedMatcher's keys is an
+    // ordinary Xray catch-all, not a rule "keyed on" an unsupported matcher — it has
+    // no key at all. It gets its own drop reason so the label doesn't misdescribe why
+    // the rule was dropped (§10.4).
+    @Test
+    fun `a bare rule with no matcher at all is dropped as UnconditionalRule, not UnsupportedMatcher`() {
+        val json =
+            """
+            {
+              "routing": {
+                "rules": [
+                  { "domain": ["a.com"], "outboundTag": "direct" },
+                  { "outboundTag": "direct" }
+                ]
+              },
+              "outbounds": [ { "tag": "direct", "protocol": "freedom" } ]
+            }
+            """.trimIndent()
+
+        val result = convert(json)!!
+
+        result.drops[ConversionDrop.UnconditionalRule] shouldBe 1
+        result.drops.containsKey(ConversionDrop.UnsupportedMatcher) shouldBe false
+        result.profile.bucket(RouteOutcome.DIRECT).sites shouldContainExactly listOf("a.com")
+    }
+
     // Research §5b.6: ProfileDns.hosts is Map<String, String>.
     @Test
     fun `a hosts entry mapping to several addresses is dropped`() {

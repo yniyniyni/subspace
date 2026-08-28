@@ -21,8 +21,16 @@ import kotlinx.serialization.json.JsonPrimitive
  * then switches routing on would otherwise lose rules with no indication.
  */
 public enum class ConversionDrop {
-    /** Keyed on `port`, `network`, `protocol`, `source`, `user`, `inboundTag` or `attrs`. */
+    /** Keyed on `port`, `network`, `protocol`, `source`, `sourcePort`, `user`, `inboundTag` or `attrs`. */
     UnsupportedMatcher,
+
+    /**
+     * Carries no `domain`/`ip` matcher and none of [UnsupportedMatcher]'s keys either — an
+     * ordinary Xray catch-all that matches unconditionally. Distinct from [UnsupportedMatcher]:
+     * that member names a key `RuleBucket` cannot express, but a bare rule has no key at all,
+     * so describing it as "keyed on" anything would misstate why it was dropped (§10.4).
+     */
+    UnconditionalRule,
 
     /** Routed to a balancer. No balancer concept exists in the app's rule model. */
     BalancerRule,
@@ -96,11 +104,14 @@ public fun convertXrayRouting(
 
     val sites = mutableMapOf<RouteOutcome, MutableList<String>>()
     val ips = mutableMapOf<RouteOutcome, MutableList<String>>()
-    val appearance = mutableListOf<RouteOutcome>()
 
-    rules.forEach { rule -> classifyRule(rule, outcomeByTag, ::drop, sites, ips, appearance) }
+    // The one source of truth for "which rules actually landed in a bucket": both
+    // `appearance` (routeOrder) and the order-representability check below are derived
+    // from this same list, so a rule dropped for any reason cannot inflate either.
+    val outcomes = rules.mapNotNull { rule -> classifyRule(rule, outcomeByTag, ::drop, sites, ips) }
+    val appearance = outcomes.distinct()
 
-    if (!isRepresentableOrder(rules, outcomeByTag)) drop(ConversionDrop.OrderNotRepresentable)
+    if (!isRepresentableOrder(outcomes)) drop(ConversionDrop.OrderNotRepresentable)
 
     val buckets =
         RouteOutcome.entries
@@ -130,35 +141,51 @@ private fun parseRoot(rawJson: String): JsonObject? =
     }
 
 /**
- * Classifies one rule: records its entries under the resolved outcome, or counts
- * why it could not be carried. Kept separate from [convertXrayRouting] so the
- * per-rule branching stays the readable part of each function.
+ * Classifies one rule: records its entries under the resolved outcome and returns it, or
+ * counts why the rule could not be carried and returns null. Kept separate from
+ * [convertXrayRouting] so the per-rule branching stays the readable part of each function.
+ *
+ * The return value is deliberately the only signal callers use for "did this rule land
+ * somewhere" — a dropped rule (for any [ConversionDrop] reason) always returns null, so
+ * appearance order and order-representability can both be derived from it without drifting
+ * apart from what actually got dropped.
  */
-@Suppress("LongParameterList") // Each parameter is a distinct accumulator; bundling them would obscure the branches.
 private fun classifyRule(
     rule: JsonObject,
     outcomeByTag: Map<String, RouteOutcome>,
     drop: (ConversionDrop) -> Unit,
     sites: MutableMap<RouteOutcome, MutableList<String>>,
     ips: MutableMap<RouteOutcome, MutableList<String>>,
-    appearance: MutableList<RouteOutcome>,
-) {
+): RouteOutcome? {
     val domain = rule["domain"] as? JsonArray
     val ip = rule["ip"] as? JsonArray
-    when {
-        rule["balancerTag"] != null -> drop(ConversionDrop.BalancerRule)
-        rule.keys.any { it in UNSUPPORTED_MATCHERS } -> drop(ConversionDrop.UnsupportedMatcher)
-        domain != null && ip != null -> drop(ConversionDrop.DomainAndIpInOneRule)
-        domain == null && ip == null -> drop(ConversionDrop.UnsupportedMatcher)
+    return when {
+        rule["balancerTag"] != null -> {
+            drop(ConversionDrop.BalancerRule)
+            null
+        }
+        rule.keys.any { it in UNSUPPORTED_MATCHERS } -> {
+            drop(ConversionDrop.UnsupportedMatcher)
+            null
+        }
+        domain != null && ip != null -> {
+            drop(ConversionDrop.DomainAndIpInOneRule)
+            null
+        }
+        domain == null && ip == null -> {
+            drop(ConversionDrop.UnconditionalRule)
+            null
+        }
         else -> {
             val tag = (rule["outboundTag"] as? JsonPrimitive)?.content
             val outcome = outcomeByTag[tag]
             if (outcome == null) {
                 drop(ConversionDrop.UnknownOutbound)
+                null
             } else {
-                if (outcome !in appearance) appearance += outcome
                 domain?.let { sites.getOrPut(outcome, ::mutableListOf) += it.strings() }
                 ip?.let { ips.getOrPut(outcome, ::mutableListOf) += it.strings() }
+                outcome
             }
         }
     }
@@ -193,18 +220,15 @@ private fun domainStrategyOf(routing: JsonObject): DomainStrategy =
         else -> DomainStrategy.IP_IF_NON_MATCH
     }
 
-/** True when each outcome's rules form one contiguous run, which is what a permutation can express. */
-private fun isRepresentableOrder(
-    rules: List<JsonObject>,
-    outcomeByTag: Map<String, RouteOutcome>,
-): Boolean {
-    val sequence =
-        rules.mapNotNull { rule ->
-            if (rule["balancerTag"] != null) return@mapNotNull null
-            outcomeByTag[(rule["outboundTag"] as? JsonPrimitive)?.content]
-        }
+/**
+ * True when each outcome's rules form one contiguous run, which is what a permutation can
+ * express. [outcomes] must already exclude any rule that was dropped for any reason — it is
+ * the same list [convertXrayRouting] derives `appearance` from, so a dropped rule cannot be
+ * reported as breaking an order it never contributed to.
+ */
+private fun isRepresentableOrder(outcomes: List<RouteOutcome>): Boolean {
     val collapsed =
-        sequence.fold(mutableListOf<RouteOutcome>()) { acc, o ->
+        outcomes.fold(mutableListOf<RouteOutcome>()) { acc, o ->
             if (acc.lastOrNull() != o) acc += o
             acc
         }

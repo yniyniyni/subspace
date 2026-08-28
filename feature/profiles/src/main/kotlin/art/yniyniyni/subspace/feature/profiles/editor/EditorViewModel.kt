@@ -177,12 +177,16 @@ constructor(
                     .observeGroups(query = "", protocol = null)
                     .first()
                     .map { EditorGroupOption(it.id, it.name) }
+            // Task 10 review, Critical 2: a snapshot at load time, same as [groups] above —
+            // this screen has no reason to recompose mid-edit if the user flips routing in
+            // another tab, and every other settings-derived value here is read the same way.
+            val routingOverridesThisConfig = profileSource.routingOverridesPassthrough.first()
             val profile = profileSource.profile(profileId)
             _state.value =
                 if (profile == null) {
                     EditorState(loading = false, exists = false, id = profileId, availableGroups = groups)
                 } else {
-                    profile.toEditorState(groups)
+                    profile.toEditorState(groups).copy(routingOverridesThisConfig = routingOverridesThisConfig)
                 }
         }
     }

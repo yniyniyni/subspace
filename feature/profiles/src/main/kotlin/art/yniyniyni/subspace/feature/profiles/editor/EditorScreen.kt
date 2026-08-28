@@ -595,8 +595,16 @@ private fun RawJsonFields(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(FIELD_GAP)) {
+        // Task 10 review, Critical 1: the "runs as written" claim and a rejection
+        // string must never render together — StoredProfile.runsAsWritten is
+        // `kind == RAW_JSON && passthroughRejection == null`, so every ineligible
+        // row would otherwise show both. Gated here on the same boolean instead
+        // of on `passthroughRejection == null` so the two conditions cannot drift.
         Text(
-            text = stringResource(R.string.editor_raw_json_notice),
+            text =
+            stringResource(
+                if (state.runsAsWritten) R.string.editor_raw_json_notice else R.string.editor_raw_json_read_only_notice,
+            ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

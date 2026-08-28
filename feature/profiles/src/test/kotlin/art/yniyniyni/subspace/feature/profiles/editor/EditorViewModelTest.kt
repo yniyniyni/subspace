@@ -111,6 +111,14 @@ class EditorViewModelTest {
          * default so every pre-existing test keeps its original "every write lands" shape.
          */
         private val rejectWritesFor: Set<Long> = emptySet(),
+        /**
+         * Backs [routingOverridesPassthrough] below — Task 10 review, Critical 2: the real
+         * value comes from `SettingsRepository.activeRoutingRuleSetId`/`.dnsResolver` combined
+         * (see `ProfileSource.BoundProfileSource`'s own override), which this fake stands in
+         * for as a plain constructor flag since [EditorViewModel.load] only ever reads one
+         * snapshot of it via `.first()`.
+         */
+        private val routingOverridesPassthroughValue: Boolean = false,
     ) : ProfileSource {
         private val stored = profiles.associateBy { it.id }.toMutableMap()
 
@@ -128,6 +136,8 @@ class EditorViewModelTest {
 
         override val activeProfileId: StateFlow<Long?> = MutableStateFlow<Long?>(null).asStateFlow()
         override val globalHwidEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
+        override val routingOverridesPassthrough: Flow<Boolean> =
+            MutableStateFlow(routingOverridesPassthroughValue).asStateFlow()
 
         override suspend fun setActiveProfile(id: Long?) = Unit
 
@@ -265,6 +275,39 @@ class EditorViewModelTest {
 
             viewModel.state.value.fieldsEditable shouldBe false
             viewModel.state.value.rawJson shouldBe originalPastedText
+        }
+
+    // Task 10 review, Critical 2: EditorState.runsAsWritten/passthroughRejection come
+    // straight off the loaded StoredProfile (unchanged this round), but
+    // routingOverridesThisConfig is new wiring — load() now reads
+    // ProfileSource.routingOverridesPassthrough rather than defaulting to false forever.
+    @Test
+    fun `an eligible raw json profile carries runsAsWritten and no rejection`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val viewModel = EditorViewModel(source)
+
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.runsAsWritten shouldBe true
+            viewModel.state.value.passthroughRejection shouldBe null
+        }
+
+    @Test
+    fun `load reads routingOverridesThisConfig from the routing-overrides signal`() =
+        runTest {
+            val overridingSource = FakeProfileSource(listOf(rawJsonProfile), routingOverridesPassthroughValue = true)
+            val overridingViewModel = EditorViewModel(overridingSource)
+            overridingViewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+            overridingViewModel.state.value.routingOverridesThisConfig shouldBe true
+
+            val quietSource = FakeProfileSource(listOf(rawJsonProfile), routingOverridesPassthroughValue = false)
+            val quietViewModel = EditorViewModel(quietSource)
+            quietViewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+            quietViewModel.state.value.routingOverridesThisConfig shouldBe false
         }
 
     @Test

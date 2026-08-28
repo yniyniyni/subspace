@@ -214,23 +214,35 @@
 
     <string name="editor_save_button">Save</string>
 
-    <!-- M7: this config's own bytes now reach the core. The old wording said
-         Subspace runs "a parsed copy of it, not the file itself", which is no
-         longer true. Read-only stays a deliberate choice — §6 stores the exact
-         bytes because extraction is lossy, and a half-validating text box would
-         put that at risk. -->
+    <!-- M7: this config's own bytes now reach the core, when eligible. The old
+         wording said Subspace runs "a parsed copy of it, not the file itself",
+         which is no longer universally true — this claim is now shown only when
+         EditorState.runsAsWritten is true (Task 10 review, Critical 1): an
+         ineligible row gets editor_raw_json_read_only_notice below instead, so
+         this claim and a rejection string are never on screen together. -->
     <string name="editor_raw_json_notice">
         This server was added from a pasted config file, and Subspace runs that file as written.
         Only the name can be changed — editing the text would risk breaking a config the app
         cannot re-derive.
     </string>
 
-    <!-- Shown only when this profile runs as written AND an app rule set or DNS
-         resolver is configured. Deliberately in the user's terms: no tag names,
-         no mention of routing blocks. -->
+    <!-- Shown instead of editor_raw_json_notice when this row is not eligible to
+         run as written — same read-only/rename explanation, minus the "runs as
+         written" claim that would contradict the rejection string shown with it. -->
+    <string name="editor_raw_json_read_only_notice">
+        This server was added from a pasted config file. Only the name can be changed — editing
+        the text would risk breaking a config the app cannot re-derive.
+    </string>
+
+    <!-- Shown only when this profile runs as written AND an app rule set or a
+         custom DNS resolver is active. Task 10 review ruling: names both
+         replaced blocks (spec §3 swaps both routing and dns wholesale, not just
+         routing rules) and gives a remedy covering both switches, since either
+         one alone can trigger this. Deliberately in the user's terms: no tag
+         names, no mention of routing/dns blocks as such. -->
     <string name="editor_raw_json_override_warning">
-        Routing rules are on, so this server\'s own rules are replaced by yours. Turn routing off
-        to run the config exactly as written.
+        Your routing and DNS settings replace this file\'s own, so it does not run as written.
+        Turn routing off and set DNS back to default to run it exactly as written.
     </string>
 
     <!-- One per PassthroughRejection member. Closed vocabulary, same shape as

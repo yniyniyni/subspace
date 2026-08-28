@@ -53,6 +53,10 @@ class EditorScreenTest {
             primaryCredential = "11111111-1111-1111-1111-111111111111",
         )
 
+    // Task 10 review, Minor: runsAsWritten = true by default — StoredProfile.runsAsWritten is
+    // `kind == RAW_JSON && passthroughRejection == null`, so a real row can never be
+    // (runsAsWritten = false, passthroughRejection = null) the way the old default combined
+    // them. Tests that need the ineligible state set both fields together explicitly instead.
     private val rawJsonState =
         EditorState(
             loading = false,
@@ -62,6 +66,7 @@ class EditorScreenTest {
             protocol = "vless",
             name = "Raw server",
             rawJson = """{  "outbounds" : [ { "protocol":"vless" } ]  }""",
+            runsAsWritten = true,
         )
 
     @Suppress("LongParameterList")
@@ -279,6 +284,10 @@ class EditorScreenTest {
         composeRule.onNodeWithText(
             context.getString(R.string.editor_raw_json_notice),
         ).assertExists()
+        // Symmetric with anIneligibleRawProfileSaysWhichCheckItFailed's own assertions below:
+        // an eligible row shows the "runs as written" claim and never the neutral read-only
+        // notice that replaces it when ineligible.
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_read_only_notice)).assertDoesNotExist()
     }
 
     @Test
@@ -305,5 +314,43 @@ class EditorScreenTest {
         composeRule.onNodeWithText(
             context.getString(R.string.editor_raw_json_rejected_several_servers),
         ).assertExists()
+        // Task 10 review, Critical 1: the "runs as written" claim and a rejection string must
+        // never render together — an ineligible row is exactly the state that used to show both.
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_notice)).assertDoesNotExist()
+        // The neutral read-only notice takes its place — this is not just "the claim is gone",
+        // the row still needs the "only the name is editable" explanation.
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_read_only_notice)).assertExists()
+    }
+
+    // Task 10 review, Minor: the exhaustive `when` in EditorScreen.kt's messageRes() catches a
+    // *missing* branch for a future fifth PassthroughRejection member, but not a mis-mapping
+    // between two existing ones — CoreRejected in particular had zero rendering before this
+    // task, which is exactly the kind of gap a compiler check alone would not have caught here
+    // either. One assertion per remaining member pins each string to its own rejection.
+    @Test
+    fun anIneligibleRawProfileSaysNotJsonWhenTheFileIsNotJson() {
+        setContent(
+            state = rawJsonState.copy(runsAsWritten = false, passthroughRejection = PassthroughRejection.NotJson),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_rejected_not_json)).assertExists()
+    }
+
+    @Test
+    fun anIneligibleRawProfileSaysNoOutboundsWhenTheFileListsNoServers() {
+        setContent(
+            state = rawJsonState.copy(runsAsWritten = false, passthroughRejection = PassthroughRejection.NoOutbounds),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_rejected_no_outbounds)).assertExists()
+    }
+
+    @Test
+    fun anIneligibleRawProfileSaysCoreRejectedWhenXrayRefusedIt() {
+        setContent(
+            state = rawJsonState.copy(runsAsWritten = false, passthroughRejection = PassthroughRejection.CoreRejected),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_rejected_core_rejected)).assertExists()
     }
 }

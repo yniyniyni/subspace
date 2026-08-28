@@ -12,12 +12,15 @@ import art.yniyniyni.subspace.core.data.StoredSubscription
 import art.yniyniyni.subspace.core.data.SubscriptionRepository
 import art.yniyniyni.subspace.core.data.sync.SubscriptionSyncer
 import art.yniyniyni.subspace.core.data.sync.SyncResult
+import art.yniyniyni.subspace.core.model.DnsResolver
 import art.yniyniyni.subspace.core.model.Outbound
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.service.PassthroughValidator
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -59,6 +62,25 @@ internal interface ProfileSource {
 
     /** Whether the Settings-level Device ID gate permits any subscription to send its ID. */
     val globalHwidEnabled: Flow<Boolean>
+
+    /**
+     * Whether the app's own routing rule set or DNS resolver is active right now — the
+     * signal Task 10's editor warning needs (spec §9): an active rule set, or a
+     * non-default [SettingsRepository.dnsResolver], each replace a passthrough
+     * profile's own `routing`/`dns` blocks wholesale. Collapses `:service`'s own
+     * `passthroughPlanFor`'s `routingActive || dnsPlanPresent` to a settings-only
+     * check — tracing `dnsPlanPresent`'s construction shows a *profile*-carried DNS
+     * plan (`RoutingResolution.Active.dns`) requires routing to already be active,
+     * so the wider condition never fires without routing already covering it here.
+     *
+     * Defaulted to `flowOf(false)` — unlike [activeProfileId]/[globalHwidEnabled]
+     * above, only [art.yniyniyni.subspace.feature.profiles.editor.EditorViewModel]
+     * reads this today, so the other three fakes of this interface
+     * (`ServersViewModelTest`, `ImportViewModelTest`, `SubscriptionDetailViewModelTest`)
+     * need not implement it.
+     */
+    val routingOverridesPassthrough: Flow<Boolean>
+        get() = flowOf(false)
 
     /** Sets the active profile, or clears it when [id] is `null`. */
     suspend fun setActiveProfile(id: Long?)
@@ -206,6 +228,19 @@ internal interface ProfileSource {
     )
 }
 
+/**
+ * The rule behind [ProfileSource.routingOverridesPassthrough], extracted to a standalone
+ * top-level function for the same reason `TunnelService.kt`'s own `passthroughPlanFor` is: a
+ * rule inlined into a `combine { ... }` lambda inside [BoundProfileSource]'s constructor can
+ * only be exercised by constructing real (Room-backed, `internal`-constructor) repositories,
+ * which no JVM test in this module can do — see this file's own KDoc. Pulled out here, it is
+ * two plain values in and a `Boolean` out, testable without either.
+ */
+internal fun routingOverridesPassthroughFor(
+    activeRuleSetId: Long?,
+    resolver: DnsResolver,
+): Boolean = activeRuleSetId != null || resolver != DnsResolver.DEFAULT
+
 @Suppress("TooManyFunctions") // Implements ProfileSource — see that interface's own identical call.
 @Singleton
 internal class BoundProfileSource
@@ -225,6 +260,13 @@ constructor(
     override val activeProfileId: Flow<Long?> = settingsRepository.activeProfileId
 
     override val globalHwidEnabled: Flow<Boolean> = settingsRepository.hwidEnabled
+
+    override val routingOverridesPassthrough: Flow<Boolean> =
+        combine(
+            settingsRepository.activeRoutingRuleSetId,
+            settingsRepository.dnsResolver,
+            ::routingOverridesPassthroughFor,
+        )
 
     override suspend fun setActiveProfile(id: Long?) = settingsRepository.setActiveProfile(id)
 

@@ -54,6 +54,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.core.parser.SHADOWSOCKS_METHODS
 import art.yniyniyni.subspace.feature.profiles.R
 import art.yniyniyni.subspace.feature.profiles.add.labelRes
@@ -599,14 +600,26 @@ private fun RawJsonFields(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // The specific cost of running a converted copy, not a restatement of
-        // the notice above: this config's own routing and dns blocks are
-        // discarded silently, and until M7 nothing else says so.
-        Text(
-            text = stringResource(R.string.editor_raw_json_not_passthrough),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Shown only when this config runs as written AND the app's own routing
+        // would otherwise replace its rules (§9) — never for an ineligible row,
+        // which already gets the more specific rejection text below instead.
+        if (state.runsAsWritten && state.routingOverridesThisConfig) {
+            Text(
+                text = stringResource(R.string.editor_raw_json_override_warning),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // §6: one message per PassthroughRejection member — never a generic
+        // "not eligible" line, and never anything derived from the config's
+        // own text (§5.6).
+        state.passthroughRejection?.let { rejection ->
+            Text(
+                text = stringResource(rejection.messageRes()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         Text(text = stringResource(R.string.editor_raw_json_label), style = MaterialTheme.typography.labelLarge)
         Text(
             text = state.rawJson.orEmpty(),
@@ -618,6 +631,20 @@ private fun RawJsonFields(
         )
     }
 }
+
+/**
+ * One string per [PassthroughRejection] member — deliberately no `else` branch, so a fifth
+ * member added later fails the build here rather than rendering nothing (the gap [CoreRejected]
+ * left before this task: it reached [art.yniyniyni.subspace.core.data.StoredProfile] but had no
+ * string and no `when` branch anywhere in the app).
+ */
+private fun PassthroughRejection.messageRes(): Int =
+    when (this) {
+        PassthroughRejection.NotJson -> R.string.editor_raw_json_rejected_not_json
+        PassthroughRejection.NoOutbounds -> R.string.editor_raw_json_rejected_no_outbounds
+        PassthroughRejection.SeveralServers -> R.string.editor_raw_json_rejected_several_servers
+        PassthroughRejection.CoreRejected -> R.string.editor_raw_json_rejected_core_rejected
+    }
 
 // One shared text-field primitive, reused for every field in the form —
 // label/value/callback/modifier are the composable-parameter baseline every

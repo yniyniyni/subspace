@@ -214,23 +214,42 @@
 
     <string name="editor_save_button">Save</string>
 
-    <!-- ARCHITECTURE.md §6: passthrough execution (running a RAW_JSON profile's
-         own bytes instead of the typed projection) is not implemented. This
-         notice is the one place the editor says so out loud, so a user does
-         not read "read-only" as an unfinished feature rather than a deliberate
-         one — see EditorViewModel.kt's own KDoc for the full reasoning. -->
+    <!-- M7: this config's own bytes now reach the core. The old wording said
+         Subspace runs "a parsed copy of it, not the file itself", which is no
+         longer true. Read-only stays a deliberate choice — §6 stores the exact
+         bytes because extraction is lossy, and a half-validating text box would
+         put that at risk. -->
     <string name="editor_raw_json_notice">
-        This server was added from a pasted config file. Subspace runs a parsed copy of it, not
-        the file itself, so editing the text here would show you something the app does not
-        actually use yet. Only the name can be changed — everything else is shown for reference.
+        This server was added from a pasted config file, and Subspace runs that file as written.
+        Only the name can be changed — editing the text would risk breaking a config the app
+        cannot re-derive.
     </string>
-    <!-- §6: a RAW_JSON profile connects through the typed projection, so its own
-         routing and dns blocks never reach the core. The notice above says the
-         file is not run; this says what that costs, which is the question a
-         user asks once M6 lets them import a routing profile on purpose. M7 —
-         raw config passthrough — is what will remove this string. -->
-    <string name="editor_raw_json_not_passthrough">
-        Routing and DNS settings inside this config are not applied.
+
+    <!-- Shown only when this profile runs as written AND an app rule set or DNS
+         resolver is configured. Deliberately in the user's terms: no tag names,
+         no mention of routing blocks. -->
+    <string name="editor_raw_json_override_warning">
+        Routing rules are on, so this server\'s own rules are replaced by yours. Turn routing off
+        to run the config exactly as written.
+    </string>
+
+    <!-- One per PassthroughRejection member. Closed vocabulary, same shape as
+         import_failure_* — the stored value is an enum name, never a message
+         derived from config contents (§5.6). -->
+    <string name="editor_raw_json_rejected_not_json">
+        This file is not valid JSON, so it cannot be run as written. The server details below were
+        recovered from it and are used instead.
+    </string>
+    <string name="editor_raw_json_rejected_no_outbounds">
+        This file lists no servers, so it cannot be run as written.
+    </string>
+    <string name="editor_raw_json_rejected_several_servers">
+        This file describes several servers without a rule for choosing between them, so it cannot
+        be run as written. Each server was imported separately instead.
+    </string>
+    <string name="editor_raw_json_rejected_core_rejected">
+        Xray rejected this file, so it cannot be run as written. The server details below were
+        recovered from it and are used instead.
     </string>
 
     <string name="editor_raw_json_label">Pasted config (read-only)</string>

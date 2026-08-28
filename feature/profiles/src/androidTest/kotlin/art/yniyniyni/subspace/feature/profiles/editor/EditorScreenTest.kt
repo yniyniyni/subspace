@@ -2,16 +2,21 @@
 // Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.feature.profiles.editor
 
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
+import art.yniyniyni.subspace.feature.profiles.R
 import io.kotest.matchers.shouldBe
 import org.junit.Rule
 import org.junit.Test
@@ -30,6 +35,8 @@ import org.junit.Test
 class EditorScreenTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     private val typedState =
         EditorState(
@@ -99,11 +106,26 @@ class EditorScreenTest {
         state: EditorState,
         actions: EditorActions = noOpActions(),
     ) {
+        setContent(mutableStateOf(state), actions)
+    }
+
+    /**
+     * The [MutableState] overload, for the one test that needs the state to *change* after the
+     * first assertion — same reason [AddServerSheetSubscriptionTest][
+     * art.yniyniyni.subspace.feature.profiles.add.AddServerSheetSubscriptionTest] has one: v2's
+     * `createComposeRule` rejects a second `composeRule.setContent` call on the same activity, so
+     * a single composition driven by mutable state is how one test observes two states.
+     */
+    private fun setContent(
+        state: MutableState<EditorState>,
+        actions: EditorActions = noOpActions(),
+    ): MutableState<EditorState> {
         composeRule.setContent {
             SubspaceTheme {
-                EditorContent(state = state, actions = actions)
+                EditorContent(state = state.value, actions = actions)
             }
         }
+        return state
     }
 
     @Test
@@ -242,35 +264,46 @@ class EditorScreenTest {
         setContent(state = rawJsonState)
 
         composeRule.onNodeWithText(
-            "This server was added from a pasted config file. Subspace runs a parsed copy of it, not " +
-                "the file itself, so editing the text here would show you something the app does not " +
-                "actually use yet. Only the name can be changed — everything else is shown for reference.",
+            "This server was added from a pasted config file, and Subspace runs that file as " +
+                "written. Only the name can be changed — editing the text would risk breaking a " +
+                "config the app cannot re-derive.",
         ).assertExists()
     }
 
-    // M6 Task 15 / spec §6. The notice above says the file is not run; it does
-    // not say what that costs. Now that a user can import a routing profile
-    // deliberately, "my config's own routing block does nothing" is a question
-    // they will actually ask, and the app must answer it before they ask.
+    // M7: passthrough execution lands, so the editor no longer claims this config's own
+    // routing and dns blocks go unused.
     @Test
-    fun aRawJsonProfileSaysItsOwnRoutingAndDnsAreNotApplied() {
-        setContent(state = rawJsonState)
+    fun aRawJsonProfileNoLongerSaysItsRoutingIsUnapplied() {
+        setContent(state = rawJsonState.copy(runsAsWritten = true))
 
         composeRule.onNodeWithText(
-            "Routing and DNS settings inside this config are not applied.",
-            substring = true,
+            context.getString(R.string.editor_raw_json_notice),
         ).assertExists()
     }
 
-    // A typed profile has no config of its own to discard, so the marker would
-    // be a warning about nothing.
     @Test
-    fun aTypedProfileDoesNotClaimAnythingIsDiscarded() {
-        setContent(state = rawJsonState.copy(kind = ProfileKind.TYPED, rawJson = null))
+    fun theOverrideWarningAppearsOnlyWhenRoutingWouldReplaceTheConfig() {
+        val state =
+            setContent(
+                mutableStateOf(rawJsonState.copy(runsAsWritten = true, routingOverridesThisConfig = true)),
+            )
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_override_warning)).assertExists()
+
+        state.value = rawJsonState.copy(runsAsWritten = true, routingOverridesThisConfig = false)
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_override_warning)).assertDoesNotExist()
+    }
+
+    @Test
+    fun anIneligibleRawProfileSaysWhichCheckItFailed() {
+        setContent(
+            state = rawJsonState.copy(
+                runsAsWritten = false,
+                passthroughRejection = PassthroughRejection.SeveralServers,
+            ),
+        )
 
         composeRule.onNodeWithText(
-            "Routing and DNS settings inside this config are not applied.",
-            substring = true,
-        ).assertDoesNotExist()
+            context.getString(R.string.editor_raw_json_rejected_several_servers),
+        ).assertExists()
     }
 }

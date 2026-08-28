@@ -17,6 +17,7 @@ import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.core.parser.validatePort
 import art.yniyniyni.subspace.core.parser.validateRealityPublicKey
 import art.yniyniyni.subspace.core.parser.validateShadowsocksMethod
@@ -43,15 +44,16 @@ internal enum class EditorSecurityKind { None, Reality, Tls }
 /**
  * What [EditorScreen] renders.
  *
- * ARCHITECTURE.md §6: a [ProfileKind.RAW_JSON] profile is stored byte-for-byte and runs
- * through the typed projection, not the pasted bytes (passthrough execution is not
- * implemented — see [StoredProfile.compatibilityMode]'s own KDoc). Letting the editor turn
- * that JSON into a form and re-serialize it on save is exactly the lossy round trip §6 exists
- * to prevent: unmodelled fields (fragmentation, custom headers, anything this app's
- * [Outbound] has no property for) would silently vanish the moment a user hit Save. So
- * [fieldsEditable] is `false` for [ProfileKind.RAW_JSON] and stays `true` only for
- * [ProfileKind.TYPED] — [rawJson] is shown read-only, and the one write [EditorViewModel.save]
- * performs for a RAW_JSON profile is a rename, never a reconstruction of the JSON.
+ * ARCHITECTURE.md §6/§9: a [ProfileKind.RAW_JSON] profile is stored byte-for-byte, and — since
+ * M7 — an eligible one ([StoredProfile.runsAsWritten]) runs those exact bytes rather than a
+ * typed projection reconstructed from them. That does not make the editor a text box: letting
+ * it turn the JSON into a form and re-serialize it on save is exactly the lossy round trip §6
+ * exists to prevent regardless of which branch actually connects — unmodelled fields
+ * (fragmentation, custom headers, anything this app's [Outbound] has no property for) would
+ * silently vanish the moment a user hit Save. So [fieldsEditable] is `false` for
+ * [ProfileKind.RAW_JSON] and stays `true` only for [ProfileKind.TYPED] — [rawJson] is shown
+ * read-only, and the one write [EditorViewModel.save] performs for a RAW_JSON profile is a
+ * rename, never a reconstruction of the JSON.
  *
  * Every editable field below is a plain [String] (or the narrow [EditorSecurityKind]/
  * [EditorGroupOption] enums), not the typed [Outbound] value it will become — the same
@@ -85,6 +87,12 @@ internal data class EditorState(
     val availableGroups: List<EditorGroupOption> = emptyList(),
     /** Non-null only for [ProfileKind.RAW_JSON] — the exact pasted bytes, shown read-only. */
     val rawJson: String? = null,
+    /** True when this profile's own bytes reach the core rather than a typed projection. */
+    val runsAsWritten: Boolean = false,
+    /** Why the bytes cannot be run, or null when they can (or the row is TYPED). */
+    val passthroughRejection: PassthroughRejection? = null,
+    /** True when [runsAsWritten] and an app rule set or DNS resolver would replace this config's blocks. */
+    val routingOverridesThisConfig: Boolean = false,
     val address: String = "",
     val port: String = "",
     /** UUID (vless/vmess), password (trojan/shadowsocks), or username (socks — see [secondaryCredential]). */
@@ -294,6 +302,8 @@ private fun StoredProfile.toEditorState(groups: List<EditorGroupOption>): Editor
             loadedGroupId = groupId,
             availableGroups = groups,
             rawJson = rawJson,
+            runsAsWritten = runsAsWritten,
+            passthroughRejection = passthroughRejection,
             address = address,
             port = port.toString(),
         )

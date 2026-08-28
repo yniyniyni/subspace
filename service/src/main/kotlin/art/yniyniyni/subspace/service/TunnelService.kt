@@ -28,11 +28,13 @@ import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
+import art.yniyniyni.subspace.core.xray.ComposeResult
 import art.yniyniyni.subspace.core.xray.ConfigResult
 import art.yniyniyni.subspace.core.xray.DnsPlan
 import art.yniyniyni.subspace.core.xray.DnsPlanner
 import art.yniyniyni.subspace.core.xray.LibXrayPingApi
 import art.yniyniyni.subspace.core.xray.ProxyHeadProbe
+import art.yniyniyni.subspace.core.xray.RawConfigComposer
 import art.yniyniyni.subspace.core.xray.SocketProtector
 import art.yniyniyni.subspace.core.xray.TcpProbe
 import art.yniyniyni.subspace.core.xray.TcpSocketProtector
@@ -49,6 +51,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONException
+import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
 
@@ -90,6 +94,60 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
         intent.getParcelableExtra(EXTRA_PROFILE)
     }
 }
+
+/**
+ * Spec §4.3: the geo asset directory a passthrough config's `env` block names
+ * follows the routing state alone, never which composer branch produced the
+ * config. A routing-off session with a non-default DNS plan still takes the
+ * override branch in [TunnelService.composePassthrough] (an override applies
+ * whenever routing is active *or* a DNS plan exists), but it must resolve here
+ * to [flatRoot] all the same — keying this off "is there an override" instead
+ * of off [routingActive] is the one bug in this area that produces no error at
+ * all, just geo rules that silently stop resolving.
+ *
+ * Extracted as a standalone function, rather than inlined where it is used, so
+ * this one rule is testable on the JVM without constructing a
+ * [RoutingResolution] or a `GeoAssetRepository`.
+ */
+internal fun assetDirFor(
+    routingActive: Boolean,
+    assetDir: String,
+    flatRoot: String,
+): String = if (routingActive) assetDir else flatRoot
+
+/**
+ * The tags already on a stored config's own `outbounds`, so
+ * [TunnelService.composePassthrough] can keep the override's stock
+ * `direct`/`block`/`dns-out` outbounds from colliding with one the config
+ * already names — `RawConfigComposer` only ever appends outbounds, so an
+ * unfiltered duplicate tag is a config the core is not obliged to accept.
+ *
+ * Malformed input (should not reach here: `runsAsWritten` implies this row
+ * passed structural analysis at import) yields an empty set rather than
+ * throwing — the worst case is then an unfiltered append, which is exactly
+ * today's behaviour absent this filter, not a crash.
+ */
+@Suppress("SwallowedException") // Malformed JSON here degrades to "no known tags", not a crash — see above.
+private fun existingOutboundTags(rawJson: String): Set<String> =
+    try {
+        val outbounds = JSONObject(rawJson).optJSONArray("outbounds") ?: return emptySet()
+        buildSet {
+            for (i in 0 until outbounds.length()) {
+                outbounds.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotEmpty() }?.let(::add)
+            }
+        }
+    } catch (e: JSONException) {
+        emptySet()
+    }
+
+/** This outbound literal's own `tag`, or null if it has none this can read. */
+@Suppress("SwallowedException") // A literal this can't parse is treated as untagged, not a crash.
+private fun String.tagOf(): String? =
+    try {
+        JSONObject(this).optString("tag").takeIf { it.isNotEmpty() }
+    } catch (e: JSONException) {
+        null
+    }
 
 /** Returns the same-UID debug-test callback only; release builds ignore this extra. */
 @Suppress("DEPRECATION")
@@ -577,17 +635,10 @@ class TunnelService : VpnService() {
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck
         // "Connecting" notification, same as every other branch in this function.
-        val json =
-            when (val config = XrayConfigGenerator.generate(profile, settings)) {
-                is ConfigResult.Unsupported ->
-                    return failStart(
-                        gen,
-                        FailureReason.ProtocolNotSupported,
-                        IllegalArgumentException("${config.protocol} is not supported yet"),
-                        rowId,
-                    )
-
-                is ConfigResult.Ok -> config.json
+        val (json, runsAsWritten) =
+            when (val outcome = resolveConfigJson(profile, settings, routing, dnsPlan, rowId)) {
+                is ConfigJsonOutcome.Ok -> outcome.json to outcome.runsAsWritten
+                is ConfigJsonOutcome.Failed -> return failStart(gen, outcome.reason, outcome.cause, rowId)
             }
         val file =
             try {
@@ -606,7 +657,14 @@ class TunnelService : VpnService() {
         try {
             xray.validate(file)
         } catch (e: XrayException) {
-            return failStart(gen, FailureReason.ConfigRejected, e, rowId)
+            // A stored config that passed import can still be refused here —
+            // the core, the environment, or the row's own bytes changed since.
+            // §10.4: that is a different, user-actionable fact from "our own
+            // typed generation produced something the core dislikes"
+            // (ConfigRejected), and §6 forbids silently falling back to the
+            // typed projection instead of naming it.
+            val reason = if (runsAsWritten) FailureReason.PassthroughRejectedAtConnect else FailureReason.ConfigRejected
+            return failStart(gen, reason, e, rowId)
         }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingCore))) return null
@@ -617,6 +675,116 @@ class TunnelService : VpnService() {
         }
 
         return StartedPorts(socksPort, httpPort)
+    }
+
+    /** [resolveConfigJson]'s outcome — a JSON string ready for [writeConfig], or a named failure. */
+    private sealed interface ConfigJsonOutcome {
+        /** @property runsAsWritten Whether [json] is the row's own composed bytes, not a typed generation. */
+        data class Ok(val json: String, val runsAsWritten: Boolean) : ConfigJsonOutcome
+
+        data class Failed(val reason: FailureReason, val cause: Exception) : ConfigJsonOutcome
+    }
+
+    /**
+     * Produces the config text [startCore] hands to [writeConfig] — the row's
+     * own bytes for a `runsAsWritten` profile, or a typed generation otherwise.
+     *
+     * The raw bytes come from Room, not the Parcel: `ProfileParcel` carries
+     * typed columns only (§5.6 — a Binder transaction is capped near 1MB and a
+     * pasted config has no bound), so whether this row runs as written is read
+     * fresh here, the same way the latency path already reads a row by id
+     * (`loadProfile = { id -> profileRepository.profile(id) }`).
+     */
+    @Suppress("ReturnCount") // One early return per distinct outcome, same reasoning as startCore's own.
+    private suspend fun resolveConfigJson(
+        profile: Profile,
+        settings: TunnelSettings,
+        routing: RoutingResolution,
+        dnsPlan: DnsPlan?,
+        rowId: Long,
+    ): ConfigJsonOutcome {
+        val stored = profileRepository.profile(rowId)
+        if (stored?.runsAsWritten == true) {
+            // Invariant, not expected to be reachable: `runsAsWritten` only
+            // reads true for a RAW_JSON row (StoredProfile.runsAsWritten),
+            // which always carries its bytes. Fail loudly rather than fall
+            // back to the typed `profile` argument — §6 forbids running a
+            // config this row was never validated as, silently, behind the
+            // one state the user can see.
+            val rawJson =
+                stored.rawJson ?: return ConfigJsonOutcome.Failed(
+                    FailureReason.ConfigGenerationFailed,
+                    IllegalStateException("a runsAsWritten row stored no bytes"),
+                )
+            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan)) {
+                is ComposeResult.Ok -> ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true)
+                // Distinct from PassthroughRejectedAtConnect, which startCore uses when the
+                // *core* refuses a well-formed config (§10.4): this means composition itself
+                // failed — a condition import already screens for structurally, so reaching
+                // it here is an environment or data change, not a core verdict.
+                is ComposeResult.Failed ->
+                    ConfigJsonOutcome.Failed(
+                        FailureReason.ConfigGenerationFailed,
+                        IllegalStateException("stored config did not compose: ${composed.reason}"),
+                    )
+            }
+        }
+        return when (val config = XrayConfigGenerator.generate(profile, settings)) {
+            is ConfigResult.Unsupported ->
+                ConfigJsonOutcome.Failed(
+                    FailureReason.ProtocolNotSupported,
+                    IllegalArgumentException("${config.protocol} is not supported yet"),
+                )
+
+            is ConfigResult.Ok -> ConfigJsonOutcome.Ok(config.json, runsAsWritten = false)
+        }
+    }
+
+    /**
+     * Composes a `runsAsWritten` row's own bytes, in place of
+     * [XrayConfigGenerator.generate].
+     *
+     * The override — the app's own `routing`/`dns` replacing the config's own —
+     * applies exactly when typed generation would have baked routing or a DNS
+     * plan into a config: an active rule set, or a DNS plan even with routing
+     * off (a non-default DNS setting is still an override branch). Its stock
+     * `direct`/`block`/`dns-out` outbounds are filtered against the stored
+     * config's own tags first: `RawConfigComposer` only ever appends, so an
+     * unfiltered duplicate tag (a `direct` freedom outbound is common) would be
+     * a config the core is not obliged to accept.
+     *
+     * The asset directory is resolved from [routing] alone via [assetDirFor]
+     * (spec §4.3), never from whether the override built above ends up
+     * non-null: a routing-off session with a non-default DNS plan still takes
+     * the override branch but must still resolve to the curated flat root, not
+     * a rule set's generation directory — the two questions are independent,
+     * and conflating them loses geo resolution with no error at all.
+     */
+    private fun composePassthrough(
+        rawJson: String,
+        settings: TunnelSettings,
+        routing: RoutingResolution,
+        dnsPlan: DnsPlan?,
+    ): ComposeResult {
+        val assetDir =
+            assetDirFor(
+                routingActive = routing is RoutingResolution.Active,
+                assetDir = (routing as? RoutingResolution.Active)?.assetDir?.absolutePath.orEmpty(),
+                flatRoot = geoAssetRepository.geoDirectory().absolutePath,
+            )
+        val override =
+            if (routing is RoutingResolution.Active || dnsPlan != null) {
+                val existingTags = existingOutboundTags(rawJson)
+                XrayConfigGenerator.overrideBlocks(settings)
+                    .let { blocks ->
+                        blocks.copy(
+                            extraOutboundsJson = blocks.extraOutboundsJson.filter { it.tagOf() !in existingTags },
+                        )
+                    }
+            } else {
+                null
+            }
+        return RawConfigComposer.compose(rawJson, settings, assetDir, override)
     }
 
     /** The per-app gate keeps "off" distinct from "resolution failed" for [attachTun]. */

@@ -437,4 +437,5 @@ private fun FailureReason.labelRes(): Int =
         FailureReason.ProfileDecodeFailed -> R.string.failure_profile_decode
         FailureReason.GeoDataMissing -> R.string.failure_geo_data_missing
         FailureReason.PerAppAllowListEmpty -> R.string.failure_per_app_allow_list_empty
+        FailureReason.PassthroughRejectedAtConnect -> R.string.failure_passthrough_rejected_at_connect
     }

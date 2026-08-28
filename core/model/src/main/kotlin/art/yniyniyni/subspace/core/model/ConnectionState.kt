@@ -136,6 +136,16 @@ public enum class FailureReason {
      * per-app screen and one who goes looking for a broken server.
      */
     PerAppAllowListEmpty,
+
+    /**
+     * A stored raw config passed validation at import and the core refuses it now.
+     *
+     * Deliberately not a fallback to the typed projection. §6 permits that
+     * fallback only as a visible state, and two different tunnels behind one tap
+     * is not a state a user can act on — this reason tells them the stored bytes
+     * or their environment changed.
+     */
+    PassthroughRejectedAtConnect,
 }
 
 /**

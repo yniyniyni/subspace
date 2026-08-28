@@ -85,6 +85,14 @@ public enum class StartupStage {
 }
 
 public enum class FailureReason {
+    /**
+     * No runnable config bytes could be produced at all — a typed model failed
+     * to generate, a stored config failed to compose, or writing either to
+     * disk failed. Distinct from [ConfigRejected] and
+     * [PassthroughRejectedAtConnect], which both mean the core saw
+     * well-formed bytes and refused them; this one means the core was never
+     * shown anything.
+     */
     ConfigGenerationFailed,
     ConfigRejected,
     PortAllocationFailed,

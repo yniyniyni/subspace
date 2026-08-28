@@ -2,6 +2,7 @@
 // Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.service
 
+import art.yniyniyni.subspace.core.model.FailureReason
 import art.yniyniyni.subspace.core.xray.ComposeResult
 import art.yniyniyni.subspace.core.xray.OverrideBlocks
 import art.yniyniyni.subspace.core.xray.RawConfigComposer
@@ -52,12 +53,63 @@ class PassthroughStartTest {
         json shouldContain "1.1.1.1"
     }
 
-    // Spec §4.3: the directory follows the ROUTING state, never the branch.
-    // Routing off + a non-default DNS setting is an override that must still
-    // resolve to the curated flat root.
+    // Spec §4.3, the precise silent bug the brief warns about: routing off
+    // with a non-default DNS plan is an override (our routing/dns replace the
+    // config's own) that must still resolve to the curated flat root, not the
+    // rule set's own generation directory. A version of passthroughPlanFor
+    // that (wrongly) keyed the asset dir off "does an override apply" instead
+    // of off routingActive would return "/gen/7" here instead of "/geo", and
+    // this is the only thing in the suite that would catch it.
     @Test
-    fun `asset directory follows the routing state, not the override branch`() {
-        assetDirFor(routingActive = false, assetDir = "/gen/7", flatRoot = "/geo") shouldBe "/geo"
-        assetDirFor(routingActive = true, assetDir = "/gen/7", flatRoot = "/geo") shouldBe "/gen/7"
+    fun `routing off with a dns plan overrides but still resolves the flat root`() {
+        val plan =
+            passthroughPlanFor(
+                routingActive = false,
+                dnsPlanPresent = true,
+                activeAssetDir = "/gen/7",
+                flatRoot = "/geo",
+            )
+
+        plan.assetDir shouldBe "/geo"
+        plan.overrideApplies shouldBe true
+    }
+
+    @Test
+    fun `active routing overrides and resolves its own asset dir`() {
+        val plan =
+            passthroughPlanFor(
+                routingActive = true,
+                dnsPlanPresent = false,
+                activeAssetDir = "/gen/7",
+                flatRoot = "/geo",
+            )
+
+        plan.assetDir shouldBe "/gen/7"
+        plan.overrideApplies shouldBe true
+    }
+
+    @Test
+    fun `no routing and no dns plan means no override and the flat root`() {
+        val plan =
+            passthroughPlanFor(
+                routingActive = false,
+                dnsPlanPresent = false,
+                activeAssetDir = null,
+                flatRoot = "/geo",
+            )
+
+        plan.assetDir shouldBe "/geo"
+        plan.overrideApplies shouldBe false
+    }
+
+    // This mapping is the backstop two accepted M7 limitations rest on
+    // (core validation skipped on the periodic subscription-refresh path, and
+    // when geo assets are not yet installed) — both are acceptable only
+    // because a core refusal names PassthroughRejectedAtConnect rather than
+    // the generic ConfigRejected. Nothing else in the suite pins this.
+    @Test
+    fun `a core refusal is named for a passthrough row and generic otherwise`() {
+        validationFailureReason(runsAsWritten = true) shouldBe FailureReason.PassthroughRejectedAtConnect
+        validationFailureReason(runsAsWritten = false) shouldBe FailureReason.ConfigRejected
     }
 }

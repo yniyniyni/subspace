@@ -95,25 +95,64 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
     }
 }
 
+/** [passthroughPlanFor]'s answer: what a passthrough compose call should do about routing/DNS. */
+internal data class PassthroughPlan(
+    /** Spec §4.3: what `xray.location.asset` must name — see [passthroughPlanFor]. */
+    val assetDir: String,
+    /** Whether the app's own `routing`/`dns` should replace the stored config's own. */
+    val overrideApplies: Boolean,
+)
+
 /**
- * Spec §4.3: the geo asset directory a passthrough config's `env` block names
- * follows the routing state alone, never which composer branch produced the
- * config. A routing-off session with a non-default DNS plan still takes the
- * override branch in [TunnelService.composePassthrough] (an override applies
- * whenever routing is active *or* a DNS plan exists), but it must resolve here
- * to [flatRoot] all the same — keying this off "is there an override" instead
- * of off [routingActive] is the one bug in this area that produces no error at
- * all, just geo rules that silently stop resolving.
+ * Spec §4.3, and the one override-branch decision this file must not make
+ * twice with two different conditions.
+ *
+ * The asset directory a passthrough config's `env` block names follows the
+ * routing state alone — [routingActive] — never whether an override applies.
+ * An override, in turn, applies whenever routing is active *or* a DNS plan
+ * exists ([dnsPlanPresent]), which is a strictly wider condition than
+ * [routingActive] alone: a routing-off session with a non-default DNS plan
+ * takes the override branch but must still resolve to [flatRoot], not
+ * [activeAssetDir]. Deriving both answers from the same two booleans in one
+ * function — rather than, say, keying the asset dir off "is there an
+ * override" — is what makes the wrong wiring structurally unavailable rather
+ * than merely undesirable; a `PassthroughStartTest` case pins exactly the
+ * routing-off-plus-DNS-plan combination this guards.
+ *
+ * [activeAssetDir] is nullable so "routing is active but its own asset
+ * directory is unknown" cannot be silently misread as "use the empty
+ * string" — it is read only when [routingActive] is true, and even then
+ * falls back to [flatRoot] rather than writing an empty
+ * `xray.location.asset`.
  *
  * Extracted as a standalone function, rather than inlined where it is used, so
  * this one rule is testable on the JVM without constructing a
  * [RoutingResolution] or a `GeoAssetRepository`.
  */
-internal fun assetDirFor(
+internal fun passthroughPlanFor(
     routingActive: Boolean,
-    assetDir: String,
+    dnsPlanPresent: Boolean,
+    activeAssetDir: String?,
     flatRoot: String,
-): String = if (routingActive) assetDir else flatRoot
+): PassthroughPlan =
+    PassthroughPlan(
+        assetDir = activeAssetDir.takeIf { routingActive } ?: flatRoot,
+        overrideApplies = routingActive || dnsPlanPresent,
+    )
+
+/**
+ * Which [FailureReason] a core refusal at `xray.validate` names.
+ *
+ * The backstop two accepted M7 limitations depend on: core validation at
+ * import does not run on the periodic subscription-refresh path, and is
+ * skipped when geo assets are not yet installed. Both are acceptable only
+ * because a stored config the core later refuses fails visibly, with this
+ * accurate reason, at connect time — a `ConfigRejected` here would read as
+ * "our own generation is broken" instead of "your stored config no longer
+ * runs", sending the user looking for the wrong kind of fix.
+ */
+internal fun validationFailureReason(runsAsWritten: Boolean): FailureReason =
+    if (runsAsWritten) FailureReason.PassthroughRejectedAtConnect else FailureReason.ConfigRejected
 
 /**
  * The tags already on a stored config's own `outbounds`, so
@@ -663,8 +702,7 @@ class TunnelService : VpnService() {
             // typed generation produced something the core dislikes"
             // (ConfigRejected), and §6 forbids silently falling back to the
             // typed projection instead of naming it.
-            val reason = if (runsAsWritten) FailureReason.PassthroughRejectedAtConnect else FailureReason.ConfigRejected
-            return failStart(gen, reason, e, rowId)
+            return failStart(gen, validationFailureReason(runsAsWritten), e, rowId)
         }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingCore))) return null
@@ -703,8 +741,17 @@ class TunnelService : VpnService() {
         dnsPlan: DnsPlan?,
         rowId: Long,
     ): ConfigJsonOutcome {
-        val stored = profileRepository.profile(rowId)
-        if (stored?.runsAsWritten == true) {
+        // A row that vanished between connect and here — a subscription sync
+        // racing a mid-flight connect can delete or re-key it — is not "assume
+        // typed": §6 forbids silently running the typed projection behind a
+        // profile the user may have imported as passthrough, and once the row
+        // is gone there is no way to ask Room which this was.
+        val stored =
+            profileRepository.profile(rowId) ?: return ConfigJsonOutcome.Failed(
+                FailureReason.ConfigGenerationFailed,
+                IllegalStateException("profile row is gone"),
+            )
+        if (stored.runsAsWritten) {
             // Invariant, not expected to be reachable: `runsAsWritten` only
             // reads true for a RAW_JSON row (StoredProfile.runsAsWritten),
             // which always carries its bytes. Fail loudly rather than fall
@@ -744,21 +791,15 @@ class TunnelService : VpnService() {
      * Composes a `runsAsWritten` row's own bytes, in place of
      * [XrayConfigGenerator.generate].
      *
-     * The override — the app's own `routing`/`dns` replacing the config's own —
-     * applies exactly when typed generation would have baked routing or a DNS
-     * plan into a config: an active rule set, or a DNS plan even with routing
-     * off (a non-default DNS setting is still an override branch). Its stock
+     * [passthroughPlanFor] decides, from the same two booleans, both whether
+     * the app's own `routing`/`dns` replaces the config's own and which geo
+     * asset directory the composed config's `env` block names (spec §4.3) —
+     * see its KDoc for why those two answers come from one function rather
+     * than two independently-wired conditions. The override's stock
      * `direct`/`block`/`dns-out` outbounds are filtered against the stored
      * config's own tags first: `RawConfigComposer` only ever appends, so an
      * unfiltered duplicate tag (a `direct` freedom outbound is common) would be
      * a config the core is not obliged to accept.
-     *
-     * The asset directory is resolved from [routing] alone via [assetDirFor]
-     * (spec §4.3), never from whether the override built above ends up
-     * non-null: a routing-off session with a non-default DNS plan still takes
-     * the override branch but must still resolve to the curated flat root, not
-     * a rule set's generation directory — the two questions are independent,
-     * and conflating them loses geo resolution with no error at all.
      */
     private fun composePassthrough(
         rawJson: String,
@@ -766,14 +807,15 @@ class TunnelService : VpnService() {
         routing: RoutingResolution,
         dnsPlan: DnsPlan?,
     ): ComposeResult {
-        val assetDir =
-            assetDirFor(
+        val plan =
+            passthroughPlanFor(
                 routingActive = routing is RoutingResolution.Active,
-                assetDir = (routing as? RoutingResolution.Active)?.assetDir?.absolutePath.orEmpty(),
+                dnsPlanPresent = dnsPlan != null,
+                activeAssetDir = (routing as? RoutingResolution.Active)?.assetDir?.absolutePath,
                 flatRoot = geoAssetRepository.geoDirectory().absolutePath,
             )
         val override =
-            if (routing is RoutingResolution.Active || dnsPlan != null) {
+            if (plan.overrideApplies) {
                 val existingTags = existingOutboundTags(rawJson)
                 XrayConfigGenerator.overrideBlocks(settings)
                     .let { blocks ->
@@ -784,7 +826,7 @@ class TunnelService : VpnService() {
             } else {
                 null
             }
-        return RawConfigComposer.compose(rawJson, settings, assetDir, override)
+        return RawConfigComposer.compose(rawJson, settings, plan.assetDir, override)
     }
 
     /** The per-app gate keeps "off" distinct from "resolution failed" for [attachTun]. */

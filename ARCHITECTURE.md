@@ -361,22 +361,20 @@ sniffing defaults.
 
 **Eligibility is decided at import, against the real core**, not discovered at
 connect. `testXray` runs against the composed form — the same bytes with the
-same inbound pair a connect would inject — plus a check that an outbound
-tagged `proxy` exists with every tag non-empty and unique (needed only by the
-override branch, since only its rules reference that tag), plus a check that
-the element produced exactly one profile or is a `routing.balancers` entry (an
+same inbound pair a connect would inject — plus a check that the element
+produced exactly one profile or is a `routing.balancers` entry (an
 "auto/best server" document, which collapses into one passthrough row rather
 than being read as several servers to choose from — reading it as several
-would run the same tunnel under every row). A profile failing any check keeps
-today's typed-projection behaviour, with the failed check named in the editor
-rather than left to guess. A profile that passes and later fails `testXray` at
-connect — the stored bytes or the environment changed since import — fails
-visibly with `FailureReason.PassthroughRejectedAtConnect` rather than falling
-back to the typed projection; a silent fallback would be two different tunnels
-behind one tap.
+would run the same tunnel under every row). A profile failing either check
+keeps today's typed-projection behaviour, with the failed check named in the
+editor rather than left to guess. A profile that passes and later fails
+`testXray` at connect — the stored bytes or the environment changed since
+import — fails visibly with `FailureReason.PassthroughRejectedAtConnect`
+rather than falling back to the typed projection; a silent fallback would be
+two different tunnels behind one tap.
 
-**Two gaps in that import-time check are accepted, not oversights, and both
-lean on the same connect-time backstop:**
+**Three gaps in that import-time check are accepted, not oversights, and all
+three lean on the same connect-time backstop:**
 
 - **The periodic subscription-refresh path skips core validation.**
   `SubscriptionRefreshWorker` runs from `:app` via `RefreshScheduler` straight
@@ -399,6 +397,22 @@ lean on the same connect-time backstop:**
   against, and routing-heavy configs are exactly what this milestone targets.
   Same backstop: an unvalidated row that the core would in fact refuse fails at
   connect instead of at import.
+- **A config with no `proxy` tag, or with duplicate/blank outbound tags, is
+  not gated at import.** `PassthroughAnalysis` computes exactly this
+  (`overrideBlocker`, distinct from `rejection`: `NoProxyTag` /
+  `AmbiguousOutboundTags`), but only `.rejection` is ever persisted or read —
+  `overrideBlocker` is computed and unit-tested, with no consumer anywhere in
+  the app. Such a config stays eligible and runs as written in the pure
+  branch, where this is harmless: nothing of ours references its outbound
+  tags there. It matters only in the override branch, whose substituted
+  `routing` rules name `proxy`, `direct` and `block` — a config missing one of
+  those may then carry a rule referencing an outbound that does not exist.
+  The same backstop covers it regardless: the override-composed bytes still
+  go through `testXray` at connect. Whether xray-core rejects a `routing` rule
+  naming a missing outbound at config build, or accepts the config and simply
+  never matches that rule, is not established — §10.5 forbids asserting it —
+  and is on the §11 device checklist alongside the dangling-`fallbackTag`
+  question Task 5 already answered the same way for a related case.
 
 It is per-kind, not a migration: `TYPED` profiles generate from the typed form
 permanently, and only `RAW_JSON` switches. The typed columns stay either way —

@@ -70,7 +70,7 @@ internal interface ProfileSource {
      * profile's own `routing`/`dns` blocks wholesale. Collapses `:service`'s own
      * `passthroughPlanFor`'s `routingActive || dnsPlanPresent` to a settings-only
      * check, and both disjuncts here are load-bearing on their own: `dnsPlanPresent`
-     * is [DnsPlanner.plan] returning non-null, which happens either because an active
+     * is `DnsPlanner.plan` returning non-null, which happens either because an active
      * *routing profile* carries its own DNS block (`RoutingResolution.Active.dns` —
      * that half genuinely does require routing to be active) **or** because
      * [SettingsRepository.dnsResolver] alone is non-default, per `DnsPlanner.kt`'s

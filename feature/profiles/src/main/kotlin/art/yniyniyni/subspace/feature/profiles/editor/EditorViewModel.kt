@@ -19,6 +19,7 @@ import art.yniyniyni.subspace.core.model.VmessOutbound
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
 import art.yniyniyni.subspace.core.parser.PassthroughRejection
+import art.yniyniyni.subspace.core.parser.routing.RoutingConversion
 import art.yniyniyni.subspace.core.parser.routing.convertXrayRouting
 import art.yniyniyni.subspace.core.parser.validatePort
 import art.yniyniyni.subspace.core.parser.validateRealityPublicKey
@@ -26,12 +27,15 @@ import art.yniyniyni.subspace.core.parser.validateShadowsocksMethod
 import art.yniyniyni.subspace.core.parser.validateUuid
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** One group the group picker can move a TYPED profile into. */
@@ -97,11 +101,19 @@ internal data class EditorState(
     val routingOverridesThisConfig: Boolean = false,
     /**
      * True when this profile [runsAsWritten] and its own `routing` block converts into a rule
-     * set — [art.yniyniyni.subspace.core.parser.routing.convertXrayRouting] returns non-null for
-     * [rawJson]/[name]. Gates the "Use this config's routing rules" action
-     * ([EditorActions.onConvertRouting]): shown only when there is something for it to actually
-     * convert (spec §8 — a config with no `routing` block, or none of its rules recognisable,
-     * offers nothing).
+     * set carrying **at least one entry** — [art.yniyniyni.subspace.core.parser.routing.convertXrayRouting]
+     * returns non-null for [rawJson]/[name] *and* the resulting profile's
+     * [art.yniyniyni.subspace.core.model.RoutingProfile.entryCount] is greater than zero. Gates
+     * the "Use this file's routing rules" action ([EditorActions.onConvertRouting]): shown only
+     * when there is something for it to actually convert. `convertXrayRouting` returning non-null
+     * is not enough on its own — a config whose `rules` array is non-empty but whose every rule
+     * is dropped (an unsupported matcher, a balancer rule, an unknown outbound tag) still
+     * produces a non-null [art.yniyniyni.subspace.core.parser.routing.RoutingConversion] with an
+     * empty bucket map, and offering the action there would hand the review sheet a profile that
+     * replaces this config's routing with nothing once activated — the exact loss this feature
+     * exists to prevent. A conversion that keeps *some* but not all rules still offers the
+     * action; only the all-dropped case hides it, since the review sheet (Task 14) is what
+     * discloses a partial loss.
      */
     val canConvertRouting: Boolean = false,
     val address: String = "",
@@ -182,6 +194,21 @@ constructor(
     private val _state = MutableStateFlow(EditorState())
     val state: StateFlow<EditorState> = _state.asStateFlow()
 
+    /**
+     * Where [load]'s `canConvertRouting` parse actually runs. `Dispatchers.Default` in
+     * production (fix round 1, Minor: keeps a large pasted config's JSON parse off Main).
+     *
+     * A plain internal `var` rather than a constructor parameter: this codebase has no existing
+     * qualified `CoroutineDispatcher` Hilt binding, and adding one is a bigger DI change than one
+     * off-main hop warrants. [art.yniyniyni.subspace.feature.profiles.editor.EditorViewModelTest]'s
+     * own `editorViewModel` helper pins this to [kotlinx.coroutines.Dispatchers.Unconfined]
+     * after construction, so `load()` stays synchronous under that file's
+     * `UnconfinedTestDispatcher` + `advanceUntilIdle()` pattern — every other suspend call
+     * `load()` makes already runs against a trivial [ProfileSource] fake with no real
+     * suspension, and this is the one call that would otherwise escape that determinism.
+     */
+    internal var conversionDispatcher: CoroutineDispatcher = Dispatchers.Default
+
     fun load(profileId: Long) {
         viewModelScope.launch {
             val groups =
@@ -200,7 +227,11 @@ constructor(
                 } else {
                     val loaded =
                         profile.toEditorState(groups).copy(routingOverridesThisConfig = routingOverridesThisConfig)
-                    loaded.copy(canConvertRouting = loaded.canConvertRoutingNow())
+                    // Off Main: convertibleRouting() is a full JSON parse of the pasted config
+                    // (convertXrayRouting), and load() otherwise runs on Main.immediate — a large
+                    // config would add a frame hitch on every RAW_JSON editor open.
+                    val canConvertRouting = withContext(conversionDispatcher) { loaded.convertibleRouting() != null }
+                    loaded.copy(canConvertRouting = canConvertRouting)
                 }
         }
     }
@@ -314,14 +345,12 @@ constructor(
      * whatever produced [EditorState.canConvertRouting] at load time, so a rename made after
      * loading (RAW_JSON's one editable field, §6) is reflected in the profile the review sheet
      * names. The `!canConvertRouting` guard is defensive — the action is only ever shown when it
-     * is already true — so this can never offer a stale or absent conversion.
+     * is already true — so this can never offer a stale, absent, or all-dropped conversion.
      */
-    @Suppress("ReturnCount") // Each early return names one distinct reason there is nothing to offer.
     fun convertRouting() {
         val current = _state.value
         if (!current.canConvertRouting) return
-        val rawJson = current.rawJson ?: return
-        val conversion = convertXrayRouting(rawJson, current.name) ?: return
+        val conversion = current.convertibleRouting() ?: return
         pendingRoutingConversion.offer(conversion)
     }
 
@@ -330,9 +359,25 @@ constructor(
     }
 }
 
-/** [EditorState.canConvertRouting], computed fresh from this state's own [EditorState.rawJson]/[EditorState.name]. */
-private fun EditorState.canConvertRoutingNow(): Boolean =
-    runsAsWritten && rawJson != null && convertXrayRouting(rawJson, name) != null
+/**
+ * The conversion [EditorState.canConvertRouting] gates, recomputed fresh from this state's own
+ * [EditorState.rawJson]/[EditorState.name] — or null when there is nothing worth offering.
+ *
+ * "Worth offering" is stricter than `convertXrayRouting`'s own null check: a config whose
+ * `routing.rules` array is non-empty but whose every rule is dropped (an unsupported matcher, a
+ * balancer rule, an unknown outbound tag — see [art.yniyniyni.subspace.core.parser.routing.ConversionDrop])
+ * still produces a non-null [art.yniyniyni.subspace.core.parser.routing.RoutingConversion] with an
+ * empty bucket map. Offering the action for that config would hand the review sheet a profile
+ * that replaces this config's own routing with nothing once activated, which is the loss this
+ * feature exists to prevent — see [EditorState.canConvertRouting]'s own KDoc.
+ */
+@Suppress("ReturnCount") // Each early return names one distinct reason there is nothing to offer.
+private fun EditorState.convertibleRouting(): RoutingConversion? {
+    if (!runsAsWritten) return null
+    val json = rawJson ?: return null
+    val conversion = convertXrayRouting(json, name) ?: return null
+    return conversion.takeIf { it.profile.entryCount > 0 }
+}
 
 /** Populates [EditorState] from a freshly loaded [StoredProfile]. */
 private fun StoredProfile.toEditorState(groups: List<EditorGroupOption>): EditorState {

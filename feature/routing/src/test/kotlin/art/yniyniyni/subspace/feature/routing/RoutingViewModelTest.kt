@@ -9,11 +9,13 @@ import art.yniyniyni.subspace.core.model.DnsState
 import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
+import art.yniyniyni.subspace.core.model.RoutingProfile
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
 import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
+import art.yniyniyni.subspace.core.parser.routing.RoutingConversion
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +70,7 @@ class RoutingViewModelTest {
         val names: MutableStateFlow<Map<Long, String>> = MutableStateFlow(emptyMap()),
         val downloads: MutableStateFlow<Map<Long, GeoDownloadProgress>> = MutableStateFlow(emptyMap()),
         val pending: MutableStateFlow<RoutingImportOffer?> = MutableStateFlow(null),
+        val pendingConversionFlow: MutableStateFlow<RoutingConversion?> = MutableStateFlow(null),
     ) : RoutingSource {
         override val ruleSets = sets
         override val activeRuleSetId = activeId
@@ -95,6 +98,12 @@ class RoutingViewModelTest {
 
         override fun consumePendingOffer(offer: RoutingImportOffer) {
             if (pending.value == offer) pending.value = null
+        }
+
+        override val pendingConversion = pendingConversionFlow
+
+        override fun consumePendingConversion(conversion: RoutingConversion) {
+            if (pendingConversionFlow.value == conversion) pendingConversionFlow.value = null
         }
 
         override suspend fun duplicate(
@@ -445,6 +454,31 @@ class RoutingViewModelTest {
         viewModel.consumePendingOffer(first)
 
         source.pending.value shouldBe second
+    }
+
+    // Task 15, fix round 1 (Important 2): pendingConversion/consumePendingConversion had no
+    // coverage in this module at all — RoutingSource's silent defaults meant every existing test
+    // here would pass whether or not this wiring existed, which is exactly the gap a future
+    // refactor could delete ApplyPendingRoutingConversion's LaunchedEffect through undetected.
+    @Test
+    fun `a pending routing conversion is exposed for review`() = runTest {
+        val conversion = RoutingConversion(profile = RoutingProfile(name = "From a config"), drops = emptyMap())
+        val source =
+            FakeSource(MutableStateFlow(emptyList()), pendingConversionFlow = MutableStateFlow(conversion))
+
+        RoutingViewModel(source).pendingConversion.value shouldBe conversion
+    }
+
+    @Test
+    fun `consuming a pending routing conversion forwards to the source`() = runTest {
+        val conversion = RoutingConversion(profile = RoutingProfile(name = "From a config"), drops = emptyMap())
+        val source =
+            FakeSource(MutableStateFlow(emptyList()), pendingConversionFlow = MutableStateFlow(conversion))
+        val viewModel = RoutingViewModel(source)
+
+        viewModel.consumePendingConversion(conversion)
+
+        source.pendingConversionFlow.value shouldBe null
     }
 
     // Regression, P1: the list used to subtract every row's requirements from

@@ -246,9 +246,9 @@
     </string>
 
     <!-- Offered on a raw profile whose own routing block can become an app rule
-         set. Turning routing on replaces this config's rules (see
+         set. Turning routing on replaces this file's rules (see
          editor_raw_json_override_warning); this is how a user keeps them. -->
-    <string name="editor_raw_json_convert_routing">Use this config\'s routing rules</string>
+    <string name="editor_raw_json_convert_routing">Use this file\'s routing rules</string>
 
     <!-- One per PassthroughRejection member. Closed vocabulary, same shape as
          import_failure_* — the stored value is an enum name, never a message

@@ -108,7 +108,7 @@ private val STREAM_PROTOCOLS = setOf("vless", "vmess", "trojan")
  * button / not-found screen, so the caller (`SubspaceNavHost`) can pop the back stack either
  * way without this screen knowing anything about navigation itself.
  *
- * @param onConvertRouting Task 15: the "Use this config's routing rules" action
+ * @param onConvertRouting Task 15: the "Use this file's routing rules" action
  *   ([EditorState.canConvertRouting]) fires this after
  *   [EditorViewModel.convertRouting] has already stored the conversion in
  *   [art.yniyniyni.subspace.core.data.PendingRoutingConversion] — same split as [onDone]: this
@@ -208,7 +208,7 @@ internal data class EditorActions(
     val onXhttpHostChanged: (String) -> Unit,
     val onXhttpModeChanged: (String) -> Unit,
     val onSave: () -> Unit,
-    /** The "Use this config's routing rules" action — see [EditorScreen]'s own KDoc. */
+    /** The "Use this file's routing rules" action — see [EditorScreen]'s own KDoc. */
     val onConvertRouting: () -> Unit,
 )
 

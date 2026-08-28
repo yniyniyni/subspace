@@ -174,7 +174,7 @@ fun RoutingListScreen(
  * `SubspaceNavHost` — adding this pushed the caller past detekt's `LongMethod` line budget, and
  * this is purely an extraction, not a behaviour change.
  *
- * The editor's "Use this config's routing rules" action stored a conversion in
+ * The editor's "Use this file's routing rules" action stored a conversion in
  * `PendingRoutingConversion` and navigated here; this is where it actually reaches the review
  * sheet. Unlike [RoutingViewModel.pendingOffer], `startConversionReview` always accepts what it is
  * given — there is no provider directive to reconcile against on a rejected offer — so this

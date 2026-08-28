@@ -152,6 +152,8 @@ fun RoutingListScreen(
         }
     }
 
+    ApplyPendingRoutingConversion(viewModel, importViewModel)
+
     ImportReviewSheet(
         state = importState,
         actions =
@@ -162,6 +164,34 @@ fun RoutingListScreen(
             onRetry = importViewModel::retry,
         ),
     )
+}
+
+/**
+ * Sends a pending routing conversion (Task 15) to the review sheet.
+ *
+ * Extracted out of [RoutingListScreen] itself, the same reason
+ * [art.yniyniyni.subspace.navigation.NavigateToRoutingOnDeeplink] was pulled out of
+ * `SubspaceNavHost` — adding this pushed the caller past detekt's `LongMethod` line budget, and
+ * this is purely an extraction, not a behaviour change.
+ *
+ * The editor's "Use this config's routing rules" action stored a conversion in
+ * `PendingRoutingConversion` and navigated here; this is where it actually reaches the review
+ * sheet. Unlike [RoutingViewModel.pendingOffer], `startConversionReview` always accepts what it is
+ * given — there is no provider directive to reconcile against on a rejected offer — so this
+ * consumes unconditionally rather than checking a return value.
+ */
+@Composable
+private fun ApplyPendingRoutingConversion(
+    viewModel: RoutingViewModel,
+    importViewModel: ImportReviewViewModel,
+) {
+    val pendingConversion by viewModel.pendingConversion.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingConversion) {
+        pendingConversion?.let { conversion ->
+            importViewModel.startConversionReview(conversion)
+            viewModel.consumePendingConversion(conversion)
+        }
+    }
 }
 
 /** This screen's callbacks, grouped for the same reason [art.yniyniyni.subspace.feature.home.HomeActions] is. */

@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.editor
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -76,6 +77,7 @@ class EditorScreenTest {
         onAddressChanged: (String) -> Unit = {},
         onPortChanged: (String) -> Unit = {},
         onSave: () -> Unit = {},
+        onConvertRouting: () -> Unit = {},
     ): EditorActions =
         EditorActions(
             onBack = onBack,
@@ -105,6 +107,7 @@ class EditorScreenTest {
             onXhttpHostChanged = {},
             onXhttpModeChanged = {},
             onSave = onSave,
+            onConvertRouting = onConvertRouting,
         )
 
     private fun setContent(
@@ -352,5 +355,63 @@ class EditorScreenTest {
         )
 
         composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_rejected_core_rejected)).assertExists()
+    }
+
+    // Task 15: the entry point that makes Task 13's convertXrayRouting and Task 14's
+    // startConversionReview reachable in production — a config whose own routing rules the
+    // conversion can carry offers to keep them.
+    @Test
+    fun aRawProfileThatRunsAsWrittenOffersToConvertItsRouting() {
+        setContent(
+            state = rawJsonState.copy(
+                runsAsWritten = true,
+                rawJson = """{"routing":{"rules":[{"domain":["a.com"],"outboundTag":"direct"}]},""" +
+                    """"outbounds":[{"tag":"direct","protocol":"freedom"}]}""",
+                canConvertRouting = true,
+            ),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_convert_routing))
+            .assertExists()
+            .assertIsEnabled()
+    }
+
+    @Test
+    fun aConfigWithNoRoutingRulesOffersNothingToConvert() {
+        setContent(state = rawJsonState.copy(runsAsWritten = true, canConvertRouting = false))
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_convert_routing))
+            .assertDoesNotExist()
+    }
+
+    // Completeness: canConvertRouting = false must also hide the action on an ineligible
+    // (runsAsWritten = false) row — the state EditorViewModel.load() actually produces for a
+    // rejected passthrough, since canConvertRouting there is always false whenever runsAsWritten
+    // is (see EditorViewModel.canConvertRoutingNow()).
+    @Test
+    fun anIneligibleRawProfileOffersNothingToConvertEither() {
+        setContent(
+            state = rawJsonState.copy(
+                runsAsWritten = false,
+                passthroughRejection = PassthroughRejection.SeveralServers,
+                canConvertRouting = false,
+            ),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_convert_routing))
+            .assertDoesNotExist()
+    }
+
+    @Test
+    fun tappingConvertRoutingInvokesOnConvertRouting() {
+        var convertCalled = false
+        setContent(
+            state = rawJsonState.copy(runsAsWritten = true, canConvertRouting = true),
+            actions = noOpActions(onConvertRouting = { convertCalled = true }),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_convert_routing)).performClick()
+
+        convertCalled shouldBe true
     }
 }

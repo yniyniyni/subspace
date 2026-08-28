@@ -162,13 +162,7 @@ fun SubspaceNavHost(
                     onNavigateToPerApp = { navController.navigate(PerApp) },
                 )
             }
-            composable<Editor> { entry ->
-                // Task 21: EditorScreen replaces the placeholder outright — the same
-                // "no later task owns this" treatment ServersScreen (Task 18 fix round 1)
-                // and QrScanScreen (Task 20 fix round 1) already got.
-                val editor: Editor = entry.toRoute()
-                EditorScreen(profileId = editor.profileId, onDone = { navController.popBackStack() })
-            }
+            editorDestination(navController)
             composable<QrScan> { entry ->
                 // Task 20 fix round 1: QrScanScreen was built, tested and
                 // left unreachable — this closes that gap. QrScanRoute
@@ -315,6 +309,28 @@ internal fun NavHostController.navigateToTopLevel(value: String) {
  * deeplink effect pushed [SubspaceNavHost] past detekt's `LongMethod` budget.
  * Purely an extraction; the body below is unmodified.
  */
+/**
+ * [Editor] — extracted for the same reason [routingDestinations] was: this destination's own
+ * comment history (Task 21, then Task 15 of M7 Part 2) pushed [SubspaceNavHost] past detekt's
+ * `LongMethod` budget again.
+ */
+private fun NavGraphBuilder.editorDestination(navController: NavHostController) {
+    composable<Editor> { entry ->
+        // Task 21: EditorScreen replaces the placeholder outright — the same "no later task
+        // owns this" treatment ServersScreen (Task 18 fix round 1) and QrScanScreen (Task 20
+        // fix round 1) already got.
+        val editor: Editor = entry.toRoute()
+        // Task 15 (M7 Part 2): EditorScreen already stored the conversion in
+        // PendingRoutingConversion by the time onConvertRouting fires — RoutingListScreen picks
+        // it up itself, same as a deeplinked PendingRoutingImport.
+        EditorScreen(
+            profileId = editor.profileId,
+            onDone = { navController.popBackStack() },
+            onConvertRouting = { navController.navigate(RoutingList) },
+        )
+    }
+}
+
 private fun NavGraphBuilder.topLevelDestinations(
     navController: NavHostController,
     onRequestConsent: (onGranted: () -> Unit) -> Unit,

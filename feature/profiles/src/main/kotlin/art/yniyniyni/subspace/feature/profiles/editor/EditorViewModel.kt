@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.editor
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import art.yniyniyni.subspace.core.data.PendingRoutingConversion
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
 import art.yniyniyni.subspace.core.model.Outbound
@@ -18,6 +19,7 @@ import art.yniyniyni.subspace.core.model.VmessOutbound
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
 import art.yniyniyni.subspace.core.parser.PassthroughRejection
+import art.yniyniyni.subspace.core.parser.routing.convertXrayRouting
 import art.yniyniyni.subspace.core.parser.validatePort
 import art.yniyniyni.subspace.core.parser.validateRealityPublicKey
 import art.yniyniyni.subspace.core.parser.validateShadowsocksMethod
@@ -93,6 +95,15 @@ internal data class EditorState(
     val passthroughRejection: PassthroughRejection? = null,
     /** True when [runsAsWritten] and an app rule set or DNS resolver would replace this config's blocks. */
     val routingOverridesThisConfig: Boolean = false,
+    /**
+     * True when this profile [runsAsWritten] and its own `routing` block converts into a rule
+     * set — [art.yniyniyni.subspace.core.parser.routing.convertXrayRouting] returns non-null for
+     * [rawJson]/[name]. Gates the "Use this config's routing rules" action
+     * ([EditorActions.onConvertRouting]): shown only when there is something for it to actually
+     * convert (spec §8 — a config with no `routing` block, or none of its rules recognisable,
+     * offers nothing).
+     */
+    val canConvertRouting: Boolean = false,
     val address: String = "",
     val port: String = "",
     /** UUID (vless/vmess), password (trojan/shadowsocks), or username (socks — see [secondaryCredential]). */
@@ -166,6 +177,7 @@ internal class EditorViewModel
 @Inject
 constructor(
     private val profileSource: ProfileSource,
+    private val pendingRoutingConversion: PendingRoutingConversion,
 ) : ViewModel() {
     private val _state = MutableStateFlow(EditorState())
     val state: StateFlow<EditorState> = _state.asStateFlow()
@@ -186,7 +198,9 @@ constructor(
                 if (profile == null) {
                     EditorState(loading = false, exists = false, id = profileId, availableGroups = groups)
                 } else {
-                    profile.toEditorState(groups).copy(routingOverridesThisConfig = routingOverridesThisConfig)
+                    val loaded =
+                        profile.toEditorState(groups).copy(routingOverridesThisConfig = routingOverridesThisConfig)
+                    loaded.copy(canConvertRouting = loaded.canConvertRoutingNow())
                 }
         }
     }
@@ -287,10 +301,38 @@ constructor(
         }
     }
 
+    /**
+     * Converts this RAW_JSON profile's own `routing` block into a rule set and offers it to
+     * [pendingRoutingConversion] for the routing import review sheet — the entry point that
+     * makes `:core:parser`'s `convertXrayRouting` (Task 13) and
+     * `ImportReviewViewModel.startConversionReview` (Task 14) reachable in production. See
+     * [EditorState.canConvertRouting]'s KDoc for the gate this backs, and
+     * [PendingRoutingConversion]'s own KDoc for why the result travels through that holder
+     * rather than a navigation argument.
+     *
+     * Recomputes from the current [EditorState.rawJson]/[EditorState.name] rather than reusing
+     * whatever produced [EditorState.canConvertRouting] at load time, so a rename made after
+     * loading (RAW_JSON's one editable field, §6) is reflected in the profile the review sheet
+     * names. The `!canConvertRouting` guard is defensive — the action is only ever shown when it
+     * is already true — so this can never offer a stale or absent conversion.
+     */
+    @Suppress("ReturnCount") // Each early return names one distinct reason there is nothing to offer.
+    fun convertRouting() {
+        val current = _state.value
+        if (!current.canConvertRouting) return
+        val rawJson = current.rawJson ?: return
+        val conversion = convertXrayRouting(rawJson, current.name) ?: return
+        pendingRoutingConversion.offer(conversion)
+    }
+
     private inline fun update(transform: (EditorState) -> EditorState) {
         _state.update(transform)
     }
 }
+
+/** [EditorState.canConvertRouting], computed fresh from this state's own [EditorState.rawJson]/[EditorState.name]. */
+private fun EditorState.canConvertRoutingNow(): Boolean =
+    runsAsWritten && rawJson != null && convertXrayRouting(rawJson, name) != null
 
 /** Populates [EditorState] from a freshly loaded [StoredProfile]. */
 private fun StoredProfile.toEditorState(groups: List<EditorGroupOption>): EditorState {

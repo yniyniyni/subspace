@@ -107,11 +107,19 @@ private val STREAM_PROTOCOLS = setOf("vless", "vmess", "trojan")
  * [EditorViewModel.save] actually persists (`state.saved`), or immediately for the back
  * button / not-found screen, so the caller (`SubspaceNavHost`) can pop the back stack either
  * way without this screen knowing anything about navigation itself.
+ *
+ * @param onConvertRouting Task 15: the "Use this config's routing rules" action
+ *   ([EditorState.canConvertRouting]) fires this after
+ *   [EditorViewModel.convertRouting] has already stored the conversion in
+ *   [art.yniyniyni.subspace.core.data.PendingRoutingConversion] — same split as [onDone]: this
+ *   screen owns storing the conversion, the caller owns where the back stack goes next (the
+ *   routing import review destination).
  */
 @Composable
 fun EditorScreen(
     profileId: Long,
     onDone: () -> Unit,
+    onConvertRouting: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: EditorViewModel = hiltViewModel()
@@ -151,6 +159,16 @@ fun EditorScreen(
             onXhttpHostChanged = viewModel::onXhttpHostChanged,
             onXhttpModeChanged = viewModel::onXhttpModeChanged,
             onSave = viewModel::save,
+            // Task 15: stores the conversion in the M6-style in-memory holder
+            // ([art.yniyniyni.subspace.core.data.PendingRoutingConversion]) first,
+            // then lets the caller (`SubspaceNavHost`) navigate to the routing
+            // import review destination — the same split [onBack]/[onDone] make
+            // between "this screen's own state" and "where the back stack goes
+            // next".
+            onConvertRouting = {
+                viewModel.convertRouting()
+                onConvertRouting()
+            },
         ),
         modifier = modifier,
     )
@@ -190,6 +208,8 @@ internal data class EditorActions(
     val onXhttpHostChanged: (String) -> Unit,
     val onXhttpModeChanged: (String) -> Unit,
     val onSave: () -> Unit,
+    /** The "Use this config's routing rules" action — see [EditorScreen]'s own KDoc. */
+    val onConvertRouting: () -> Unit,
 )
 
 /**
@@ -289,7 +309,7 @@ private fun EditorForm(
         if (state.fieldsEditable) {
             TypedFields(state = state, actions = actions)
         } else {
-            RawJsonFields(state = state)
+            RawJsonFields(state = state, actions = actions)
         }
 
         if (state.duplicateIdentity) {
@@ -592,6 +612,7 @@ private fun RealityFields(
 @Composable
 private fun RawJsonFields(
     state: EditorState,
+    actions: EditorActions,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(FIELD_GAP)) {
@@ -617,6 +638,15 @@ private fun RawJsonFields(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        // Task 15: offered whenever this config's own routing survives conversion into an app
+        // rule set — state.canConvertRouting already folds in runsAsWritten (see its own KDoc),
+        // so no separate gate is needed here. Not conditioned on routingOverridesThisConfig
+        // above: the config's rules are worth keeping before the user ever turns routing on.
+        if (state.canConvertRouting) {
+            Button(onClick = actions.onConvertRouting) {
+                Text(stringResource(R.string.editor_raw_json_convert_routing))
+            }
         }
         // §6: one message per PassthroughRejection member — never a generic
         // "not eligible" line, and never anything derived from the config's

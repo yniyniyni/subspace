@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.GeoDownloadProgress
 import art.yniyniyni.subspace.core.data.StoredRuleSet
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
+import art.yniyniyni.subspace.core.parser.routing.RoutingConversion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -126,6 +127,26 @@ constructor(
     /** Clears [offer] once the sheet has taken it. */
     fun consumePendingOffer(offer: RoutingImportOffer) {
         source.consumePendingOffer(offer)
+    }
+
+    /**
+     * A config's `routing` converted (Task 13) into a rule set by the editor's "Use this
+     * config's routing rules" action (Task 15), awaiting review — see [RoutingSource.pendingConversion]'s
+     * own KDoc.
+     *
+     * Exposed rather than acted on here for the same reason [pendingOffer] is: starting the
+     * review is `ImportReviewViewModel.startConversionReview`'s job, and this ViewModel does not
+     * own that sheet.
+     */
+    val pendingConversion: StateFlow<RoutingConversion?> =
+        // Eagerly, not WhileSubscribed: the same reasoning as pendingOffer above — a conversion
+        // offered between this ViewModel's creation and the screen's first composition must
+        // still be observed.
+        source.pendingConversion.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Clears [conversion] once the sheet has taken it. */
+    fun consumePendingConversion(conversion: RoutingConversion) {
+        source.consumePendingConversion(conversion)
     }
 
     /** Stops the download [id] is running, leaving its previous generation live. */

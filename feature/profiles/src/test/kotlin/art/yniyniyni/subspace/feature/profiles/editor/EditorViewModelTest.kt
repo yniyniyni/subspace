@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.editor
 
 import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
+import art.yniyniyni.subspace.core.data.PendingRoutingConversion
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
@@ -78,6 +79,11 @@ class EditorViewModelTest {
 
     private val originalPastedText = """{  "outbounds" : [ { "protocol":"vless" } ]  }"""
 
+    /** A raw config whose own `routing` block `convertXrayRouting` (Task 13) can carry. */
+    private val routableRawJson =
+        """{"routing":{"rules":[{"domain":["a.com"],"outboundTag":"direct"}]},""" +
+            """"outbounds":[{"tag":"direct","protocol":"freedom"}]}"""
+
     private val rawJsonProfile =
         StoredProfile(
             id = 2L,
@@ -100,6 +106,9 @@ class EditorViewModelTest {
             lastConnectedAt = null,
             lastError = null,
         )
+
+    /** Same shape as [rawJsonProfile], but its own `routing` block converts (Task 15). */
+    private val routableRawJsonProfile = rawJsonProfile.copy(id = 3L, rawJson = routableRawJson)
 
     private class FakeProfileSource(
         profiles: List<StoredProfile>,
@@ -248,7 +257,7 @@ class EditorViewModelTest {
     fun `editing a typed profile rewrites its identity hash`() =
         runTest {
             val source = FakeProfileSource(listOf(typedProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
 
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
@@ -268,7 +277,7 @@ class EditorViewModelTest {
     fun `a raw json profile is not field-editable`() =
         runTest {
             val source = FakeProfileSource(listOf(rawJsonProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
 
             viewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
@@ -285,7 +294,7 @@ class EditorViewModelTest {
     fun `an eligible raw json profile carries runsAsWritten and no rejection`() =
         runTest {
             val source = FakeProfileSource(listOf(rawJsonProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
 
             viewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
@@ -298,13 +307,13 @@ class EditorViewModelTest {
     fun `load reads routingOverridesThisConfig from the routing-overrides signal`() =
         runTest {
             val overridingSource = FakeProfileSource(listOf(rawJsonProfile), routingOverridesPassthroughValue = true)
-            val overridingViewModel = EditorViewModel(overridingSource)
+            val overridingViewModel = EditorViewModel(overridingSource, PendingRoutingConversion())
             overridingViewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
             overridingViewModel.state.value.routingOverridesThisConfig shouldBe true
 
             val quietSource = FakeProfileSource(listOf(rawJsonProfile), routingOverridesPassthroughValue = false)
-            val quietViewModel = EditorViewModel(quietSource)
+            val quietViewModel = EditorViewModel(quietSource, PendingRoutingConversion())
             quietViewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
             quietViewModel.state.value.routingOverridesThisConfig shouldBe false
@@ -314,7 +323,7 @@ class EditorViewModelTest {
     fun `renaming a raw json profile leaves its bytes untouched`() =
         runTest {
             val source = FakeProfileSource(listOf(rawJsonProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
 
             viewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
@@ -327,11 +336,65 @@ class EditorViewModelTest {
             source.lastUpdate shouldBe null
         }
 
+    // Task 15: the entry point that makes Task 13's convertXrayRouting and Task 14's
+    // startConversionReview reachable in production.
+    @Test
+    fun `canConvertRouting is true when the config's own routing block converts`() =
+        runTest {
+            val source = FakeProfileSource(listOf(routableRawJsonProfile))
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
+
+            viewModel.load(routableRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.canConvertRouting shouldBe true
+        }
+
+    @Test
+    fun `canConvertRouting is false when the config has nothing convertXrayRouting can carry`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
+
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.canConvertRouting shouldBe false
+        }
+
+    @Test
+    fun `convertRouting offers the converted profile to the pending holder`() =
+        runTest {
+            val source = FakeProfileSource(listOf(routableRawJsonProfile))
+            val pending = PendingRoutingConversion()
+            val viewModel = EditorViewModel(source, pending)
+            viewModel.load(routableRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.convertRouting()
+
+            pending.conversion.value?.profile?.name shouldBe routableRawJsonProfile.name
+        }
+
+    @Test
+    fun `convertRouting does nothing when there is nothing to convert`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val pending = PendingRoutingConversion()
+            val viewModel = EditorViewModel(source, pending)
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.convertRouting()
+
+            pending.conversion.value shouldBe null
+        }
+
     @Test
     fun `loading an unknown profile id reports not found, not a crash`() =
         runTest {
             val source = FakeProfileSource(emptyList())
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
 
             viewModel.load(999L)
             advanceUntilIdle()
@@ -344,7 +407,7 @@ class EditorViewModelTest {
     fun `saving a typed profile with an invalid port does not persist and reports an error`() =
         runTest {
             val source = FakeProfileSource(listOf(typedProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 
@@ -369,7 +432,7 @@ class EditorViewModelTest {
                         ProfileGroup(20L, "Other", emptyList()),
                     ),
                 )
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 
@@ -391,7 +454,7 @@ class EditorViewModelTest {
     fun `saving a typed profile into a colliding identity reports duplicate identity, not a crash`() =
         runTest {
             val source = FakeProfileSource(listOf(typedProfile), rejectWritesFor = setOf(typedProfile.id))
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 
@@ -423,7 +486,7 @@ class EditorViewModelTest {
                     ),
                     rejectWritesFor = setOf(typedProfile.id),
                 )
-            val viewModel = EditorViewModel(source)
+            val viewModel = EditorViewModel(source, PendingRoutingConversion())
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 

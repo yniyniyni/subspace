@@ -31,6 +31,9 @@
     <string name="routing_source_deeplink">From a link</string>
     <string name="routing_source_qr">From a QR code</string>
     <string name="routing_source_clipboard">From the clipboard</string>
+    <!-- Task 14/15: the rule set came from converting another profile's own
+         routing block, not from pasted text — see RoutingSourceKind.Conversion. -->
+    <string name="routing_source_conversion">From a config\'s routing rules</string>
     <string name="routing_source_subscription">From \"%1$s\"</string>
     <!-- A provider-delivered profile whose subscription group has no name yet.
          Naming the subscription id instead would be worse than saying nothing. -->

@@ -294,10 +294,11 @@ constructor(
      * reaching [ImportReviewState], which is the whole reason Task 13 counted
      * them: a drop nobody sees is a drop that might as well not be reported.
      *
-     * [RoutingSourceKind.Clipboard] is the least-inaccurate provenance for a
-     * profile the app derived from a config the user already has open in the
-     * editor, rather than one that arrived over a deeplink, QR code or
-     * subscription — none of which describe this profile's origin.
+     * [RoutingSourceKind.Conversion] names this provenance precisely — the user
+     * did not paste this rule set's contents, the app derived them from a
+     * config's own `routing` block, and the badge is the one place the user
+     * learns where a rule set came from (§9). [RoutingSourceKind.Clipboard]
+     * would say something that did not happen.
      */
     suspend fun startConversionReview(conversion: RoutingConversion) {
         val profile = conversion.profile
@@ -307,7 +308,7 @@ constructor(
             _state.value = ImportReviewState(stage = Stage.Done)
             return
         }
-        pending = PendingImport.Profile(profile, RoutingVerb.Add, RoutingSourceKind.Clipboard, subscriptionId = null)
+        pending = PendingImport.Profile(profile, RoutingVerb.Add, RoutingSourceKind.Conversion, subscriptionId = null)
         _state.value =
             reviewState(
                 profile = profile,

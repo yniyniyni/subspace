@@ -29,9 +29,26 @@ public interface PassthroughValidator {
 /**
  * Validation port for the placeholder inbound.
  *
- * Not allocated, because nothing binds it — `testXray` parses and builds the
- * config without listening. A literal is acceptable here and only here; §10.6's
- * rule is about the port a running tunnel *binds*.
+ * Final review I10: whether `testXray` actually binds this port is **not
+ * established** — the previous wording here ("nothing binds it — `testXray`
+ * parses and builds the config without listening") was an unsourced claim
+ * about xray-core's internal behaviour (§10.5), and it is contradicted by
+ * `XrayController.validate`'s own KDoc, which documents `testXray` as
+ * building a real core (`StartXray` under the hood, research §4) — not
+ * something guaranteed to stop short of listening. A literal is used here
+ * anyway: §10.6's rule against hardcoded ports is about a port a *running
+ * tunnel* binds and that a real other proxy app could collide with, and
+ * this port is used only for one-shot, sequential validation calls, never
+ * left listening. But if `testXray` does bind it even briefly, two
+ * validations landing on this same literal (or a validation racing a live
+ * tunnel — see `docs/agent/research/2026-08-25-m7-device-verification.md`,
+ * Question 2) would collide for a reason that has nothing to do with the
+ * config being checked — and
+ * [BoundPassthroughValidator] cannot tell that collision apart from a real
+ * core refusal, so it would be written as a **permanent** `CoreRejected`
+ * for a config the core never actually evaluated (§10.4). Tracked as an
+ * open question on the §11 device checklist rather than asserted either way:
+ * `docs/agent/research/2026-08-25-m7-device-verification.md`, Question 4.
  */
 private const val VALIDATION_PORT = 41080
 

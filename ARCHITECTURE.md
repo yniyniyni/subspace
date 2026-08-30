@@ -215,15 +215,29 @@ the one that actually reaches a misbehaving app:
   addressed to the ISP's own resolver comes back answered by the *configured*
   resolver; with no plan emitted, the same query is silently swallowed.
 
-**These three levers describe a config this app generates.** A `RAW_JSON`
-profile running in passthrough (§6) carries its own `dns` and `routing`, and
-the app imposes none of the above on it — a config that sends its resolver's
-traffic to a `freedom` outbound will leak, and nothing here stops it. The
-guarantee returns the moment a rule set or a DNS resolver is configured, which
-replaces those blocks wholesale (§6). Verified against the target panel's own
-template, not assumed to hold generally: its rules send every DNS query through
-the proxy except a vestigial `223.5.5.5:53 → direct`, so that particular
-config does not leak — but that is a property of that config, not of this app.
+**These three levers describe a config this app generates, and a `RAW_JSON`
+profile running in passthrough (§6) does not get all three.** It carries its
+own `dns` and `routing`, so levers 2 and 3 — the config's `dns` block and the
+port-53 hijack rule — are whatever that config's author wrote, not ours: a
+config that sends its resolver's traffic to a `freedom` outbound will leak,
+and nothing here stops it. **Lever 1 still fires, unconditionally, regardless
+of passthrough**: `TunnelService.establishTun` calls
+`builder.addDnsServerOrFallback(dnsPlan)` on every connect, and in the pure
+passthrough branch (no rule set, no custom resolver) `dnsPlan` is null, which
+falls back to advertising `DNS_SERVER` (`1.1.1.1`) on the TUN interface to
+every app on the device — while the config's own `dns` block governs only
+what xray's *internal* client resolves. So a passthrough connection leaves
+the device with two DNS opinions at once: the TUN says 1.1.1.1, the config
+says whatever it says, and neither is enforced against the other. This is
+exactly the lever-inconsistency this section says must not happen; the code
+has not been changed to close it, and this paragraph no longer claims that it
+has. The guarantee is restored (all three levers coherent again) the moment a
+rule set or a DNS resolver is configured, which replaces the config's `dns`
+and `routing` blocks wholesale (§6). Verified against the target panel's own
+template, not assumed to hold generally: its rules send every DNS query
+through the proxy except a vestigial `223.5.5.5:53 → direct`, so that
+particular config does not leak *its own* traffic — but the TUN-level
+1.1.1.1 advertisement above is independent of what any given config does.
 Source: `docs/agent/research/2026-08-25-remnawave-xray-json-and-balancers.md`.
 
 **The hijack is a loop hazard unless something claims the resolver's own
@@ -318,8 +332,8 @@ carries that this design does not name — `burstObservatory`, `reverse`, an
 opaque `fakedns` object. Four rewrites apply regardless of which branch below
 is taken:
 
-- `inbounds` replaced with the SOCKS + HTTP pair `appendSocksInbound`/
-  `appendHttpInbound` already emit for a typed profile — moved into a shared
+- `inbounds` replaced with the SOCKS + HTTP pair `socksInboundJson`/
+  `httpInboundJson` already emit for a typed profile — moved into a shared
   `Inbounds.kt` so both paths call one definition rather than two that can
   drift apart silently.
 - `env` set to the resolved geo asset directory — Go cannot see a Java
@@ -378,13 +392,18 @@ three lean on the same connect-time backstop:**
 
 - **The periodic subscription-refresh path skips core validation.**
   `SubscriptionRefreshWorker` runs from `:app` via `RefreshScheduler` straight
-  into `SubscriptionSyncer`, never through `ProfileSource` — and `:core:data`
-  cannot depend on `:core:xray` (§4), so it cannot call `testXray` itself. A
-  refreshed row still gets the full *structural* verdict (`analysePassthrough`,
-  the same balancer collapse the first import gets) — only the real-core check
-  is missing. `FailureReason.PassthroughRejectedAtConnect` is what makes a core
-  refusal on such a row fail visibly at connect with an accurate reason,
-  instead of connecting into an untested config.
+  into `SubscriptionSyncer`, never through `ProfileSource`. This is a scope
+  decision, not a structural one: `:core:data` (where `SubscriptionSyncer`
+  lives) genuinely cannot depend on `:core:xray` (§4), but `RefreshScheduler`
+  itself lives in `:app`, and `app/build.gradle.kts` already declares
+  `:service` — nothing in §4's graph stops `RefreshScheduler` from taking a
+  `PassthroughValidator` dependency today. It was left out of M7's scope
+  rather than ruled out by the module boundary. A refreshed row still gets the
+  full *structural* verdict (`analysePassthrough`, the same balancer collapse
+  the first import gets) — only the real-core check is missing.
+  `FailureReason.PassthroughRejectedAtConnect` is what makes a core refusal on
+  such a row fail visibly at connect with an accurate reason, instead of
+  connecting into an untested config.
 - **Core validation is skipped entirely when geo assets are not installed.**
   `testXray` genuinely resolves geo files at config-build time — confirmed on
   hardware, not assumed:
@@ -405,14 +424,44 @@ three lean on the same connect-time backstop:**
   the app. Such a config stays eligible and runs as written in the pure
   branch, where this is harmless: nothing of ours references its outbound
   tags there. It matters only in the override branch, whose substituted
-  `routing` rules name `proxy`, `direct` and `block` — a config missing one of
-  those may then carry a rule referencing an outbound that does not exist.
-  The same backstop covers it regardless: the override-composed bytes still
-  go through `testXray` at connect. Whether xray-core rejects a `routing` rule
-  naming a missing outbound at config build, or accepts the config and simply
-  never matches that rule, is not established — §10.5 forbids asserting it —
-  and is on the §11 device checklist alongside the dangling-`fallbackTag`
-  question Task 5 already answered the same way for a related case.
+  `routing` rules name `proxy`, `direct` and `block` — a config missing one
+  of those may then carry a rule referencing an outbound that does not
+  exist. **The same backstop covers it regardless: the override-composed
+  bytes still go through `testXray` at connect** — note this is
+  `TunnelService.startCore`'s `xray.validate(file)` call before
+  `xray.start`, on the *fully resolved* config (real override, real
+  routing). It is not the import-time `PassthroughValidator` check above:
+  that one hardcodes `override = null` (`BoundPassthroughValidator.validate`),
+  so it only ever exercises the pure-passthrough branch and never sees an
+  override's routing rules at all — the overrideBlocker gap is entirely
+  unguarded at import regardless of geo-asset state or refresh path. But
+  whether the connect-time backstop actually catches a dangling `outboundTag`
+  is now established rather than assumed:
+  `RawConfigComposerXrayTest.theCoreRejectsTheOverrideBranchWithADangling-
+  ProxyOutboundTag` composes exactly this shape — the target panel's balancer
+  fixture, overridden with a `RoutingRuleSet` that produces an
+  `outboundTag: "proxy"` rule the composed config never defines — and hands
+  it to the real core via `XrayController.validate`. Observed 2026-08-30 on a
+  Pixel 8: xray-core **rejects it at config build** with an `XrayException`,
+  the opposite answer from the dangling-`fallbackTag` question Task 5
+  answered for a related case (accepted at build; only the fallback firing is
+  unvalidated). So a config missing a `proxy` tag fails visibly at connect —
+  `FailureReason.PassthroughRejectedAtConnect` — rather than running with a
+  routing rule that silently never matches. Same dead-analysis shape as
+  `overrideBlocker`, recorded here rather than wired for the same
+  closing-milestone reason (a consumer is a UI task with its own copy and its
+  own tests): `PassthroughAnalysis.advisories` (a `List<PassthroughAdvisory>`)
+  and the `serverOutboundCount`/`outboundTags` fields it sits alongside are
+  likewise computed and unit-tested with no consumer anywhere in the app.
+  Worth naming specifically because one of the conditions it can detect is
+  `SniffingCannotServeOwnRules` — a config whose domain/geosite routing rules
+  can never match because its own sniffing settings do not surface the
+  destination those rules need. That is not a config that fails to connect;
+  it is one that connects, passes traffic, and silently ignores its own
+  routing the whole time — §10.1's signature failure, already detected by
+  code in this tree, told to nobody. A future contributor should be able to
+  find that by reading this paragraph rather than by grepping for
+  `PassthroughAdvisory` and wondering why it exists.
 
 It is per-kind, not a migration: `TYPED` profiles generate from the typed form
 permanently, and only `RAW_JSON` switches. The typed columns stay either way —
@@ -1217,8 +1266,9 @@ Mandatory rules:
       DNS opinion of its own; the moment a rule set is active or a resolver is
       configured, the app's routing and DNS blocks replace the config's
       wholesale instead, in the same way §5.2 already does for a generated
-      config. M7 built this (tasks 1–10 on `feat/m7-raw-json-passthrough`);
-      left unchecked because the §11 device checklist has not run — §10.1)
+      config. M7 built this (tasks 1–16, plus a controller-added 7b, on
+      `feat/m7-raw-json-passthrough`); left unchecked because the §11 device
+      checklist has not run — §10.1)
 - [ ] Multi-subscription, multi-profile management, grouping, collapse/expand
 - [x] Latency testing with selectable mode: **`tcp` and `proxy-head`**, and a
       configurable check URL.

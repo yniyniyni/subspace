@@ -8,6 +8,11 @@ import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.model.RuleBucket
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -78,6 +83,48 @@ class RawConfigComposerXrayTest {
         return runCatching { controller.validate(file) }
     }
 
+    /**
+     * Every `tag` on the composed config's top-level `outbounds`, in array order and with
+     * duplicates kept (a `List`, not a `Set`) — the whole point is to be able to tell a config
+     * with one `direct` outbound from a config with two.
+     *
+     * §10.5 correction pass: the guard this replaces, `"\"tag\": \"proxy\"" !in composed.json`,
+     * searched for a space after the colon that `RawConfigComposer.render`'s compact
+     * `JsonElement.toString()` output never has, so it could never fire — parsing and reading the
+     * tags directly is the fix the review asked for.
+     */
+    private fun outboundTagsOf(composedJson: String): List<String> =
+        (Json.parseToJsonElement(composedJson).jsonObject["outbounds"] as JsonArray)
+            .filterIsInstance<JsonObject>()
+            .mapNotNull { (it["tag"] as? JsonPrimitive)?.content }
+
+    /**
+     * Mirrors `TunnelService.composePassthrough`'s dedup filter (`existingOutboundTags`/
+     * `String.tagOf()`, `service/src/main/kotlin/.../TunnelService.kt`) by hand: `:core:xray`
+     * cannot depend on `:service` (§4), so this is the same rule restated rather than imported —
+     * drop any of [override]'s stock `direct`/`block`/`dns-out` outbounds whose tag the raw
+     * config's own `outbounds` already carries, exactly as the real passthrough path does before
+     * composing. Only this filtered shape is what a device ever actually sends to the core; an
+     * unfiltered [OverrideBlocks] (below) is a shape `composePassthrough` never produces.
+     */
+    private fun filteredForProductionShape(
+        rawJson: String,
+        override: OverrideBlocks,
+    ): OverrideBlocks {
+        val existingTags =
+            (Json.parseToJsonElement(rawJson).jsonObject["outbounds"] as JsonArray)
+                .filterIsInstance<JsonObject>()
+                .mapNotNull { (it["tag"] as? JsonPrimitive)?.content }
+                .toSet()
+        fun String.tagOf(): String? =
+            (Json.parseToJsonElement(this) as? JsonObject)
+                ?.get("tag")
+                ?.let { (it as? JsonPrimitive)?.content }
+        return override.copy(
+            extraOutboundsJson = override.extraOutboundsJson.filter { it.tagOf() !in existingTags },
+        )
+    }
+
     @Test
     fun theCoreAcceptsAComposedBalancerConfig() =
         runTest {
@@ -120,50 +167,75 @@ class RawConfigComposerXrayTest {
         }
 
     /**
-     * Final review I9. Both existing cases above compose with `override = null` — the pure
-     * passthrough branch. The override branch, which splices the app's own routing/dns/extra
-     * outbounds into someone else's config, had never been handed to the real core.
+     * A [RoutingRuleSet] whose only bucket is PROXY, so
+     * `XrayConfigGenerator.overrideBlocks(routingSettings).routingJson` carries a rule naming
+     * `outboundTag: "proxy"` — the tag [balancerConfig] itself never defines (its own outbounds are
+     * `proxy-auto`/`proxy-auto-2`, plus `direct`/`block`).
+     */
+    private val routingSettings =
+        settings.copy(
+            routing =
+            RoutingRuleSet(
+                name = "device-test",
+                buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("example.com"))),
+            ),
+        )
+
+    /** [balancerConfig] with an extra outbound tagged `"proxy"`, prepended to its own list. */
+    private val balancerConfigWithProxyOutbound =
+        balancerConfig.replaceFirst(
+            "\"outbounds\": [",
+            "\"outbounds\": [\n            { \"tag\": \"proxy\", \"protocol\": \"freedom\" },",
+        )
+
+    /**
+     * Final review I9, then a correction pass on it (§10.5).
      *
-     * This also answers the open question ARCHITECTURE.md §6 and the §11 device checklist
-     * recorded: does xray-core reject a `routing` rule whose `outboundTag` names an outbound the
-     * config does not define, at config build — or accept it and simply never match?
+     * Both cases above compose with `override = null` — the pure passthrough branch. This exercises
+     * the override branch, which splices the app's own routing/dns/extra outbounds into someone
+     * else's config, for the first time.
      *
-     * [balancerConfig]'s own outbounds are tagged `proxy-auto`/`proxy-auto-2` (plus `direct` and
-     * `block`, which it also defines itself). `XrayConfigGenerator.overrideBlocks` never emits a
-     * `proxy`-tagged outbound — that tag exists only in the app's own `XrayConfigGenerator.generate`
-     * output, built from a *typed* profile's own outbound, which has nothing to do with a
-     * passthrough config's outbounds. So a [RoutingRuleSet] with a PROXY bucket produces an
-     * override routing rule naming `outboundTag: "proxy"`, and the composed config — the balancer
-     * config's own outbounds plus the override's `direct`/`block` — never defines that tag.
+     * **This test does NOT answer, on its own, whether xray-core rejects a dangling
+     * `outboundTag`.** The original version of this test claimed it did; that claim did not survive
+     * re-review, and the composed config it hands the core has *two* defects at once, not one:
      *
-     * **Observed 2026-08-30, Pixel 8, `connectedDebugAndroidTest`:** xray-core REJECTS this at
-     * config build — `testXray` throws `XrayException`. This is the opposite answer from
-     * [theCoreAcceptsAConfigWithADanglingFallbackTagAtBuild]'s dangling `fallbackTag`: a balancer's
-     * `fallbackTag` is validated lazily (only checked when the fallback fires), but a `routing`
-     * rule's `outboundTag` is validated eagerly, at config build. Import-time `testXray`
-     * (`PassthroughValidator`) therefore *does* catch this class of mistake before connect, unlike
-     * the fallbackTag case.
+     * 1. The dangling reference itself — [routingSettings]'s override rule names `outboundTag:
+     *    "proxy"`, which [balancerConfig] never defines.
+     * 2. `XrayConfigGenerator.overrideBlocks` unconditionally emits stock `direct`/`block`
+     *    outbounds, and [RawConfigComposer.compose] appends them unconditionally
+     *    (`RawConfigComposer.kt`) — but [balancerConfig] already defines its own `direct` and
+     *    `block`. The composed config this test used to hand the core therefore also carries
+     *    **duplicate `direct` and `block` tags**, which `TunnelService.composePassthrough`'s dedup
+     *    filter exists specifically to prevent in production (`existingOutboundTags`/`tagOf()`,
+     *    `TunnelService.kt`) — this test never applied that filter, so it never composed the shape
+     *    a device actually sends.
+     *
+     * A core rejection here is consistent with either defect, or both — it cannot isolate which one
+     * the core is reacting to. [theCoreAcceptsAFilteredOverrideWithOnlyADanglingProxyOutboundTag]
+     * and [theCoreRejectsAnUnfilteredOverrideWithOnlyDuplicateDirectAndBlockOutboundTags] below
+     * compose each defect alone; **those two, not this one, are the source for what
+     * ARCHITECTURE.md and the research doc now say.** The isolated pair settled it: the rejection
+     * observed here is driven entirely by the duplicate `direct`/`block` tags — a config with the
+     * dangling `outboundTag` alone and no duplicates is *accepted* at config build.
+     *
+     * Kept as a regression guard on the unfiltered/naive shape specifically (a shape
+     * `composePassthrough` itself never produces, since it always filters first) — not as an answer
+     * to the dangling-tag question.
      */
     @Test
-    fun theCoreRejectsTheOverrideBranchWithADanglingProxyOutboundTag() =
+    fun theCoreRejectsTheUnfilteredOverrideBranchWithBothDanglingTagAndDuplicateOutbounds() =
         runTest {
-            val routingSettings =
-                settings.copy(
-                    routing =
-                    RoutingRuleSet(
-                        name = "device-test",
-                        buckets = mapOf(RouteOutcome.PROXY to RuleBucket(sites = listOf("example.com"))),
-                    ),
-                )
             val override = XrayConfigGenerator.overrideBlocks(routingSettings)
 
-            // Confirm the fixture actually poses the question before asking the core: the
-            // composed config's outbounds must NOT include a "proxy" tag, while the override's
-            // routing rule must reference exactly that tag.
+            // Confirm the fixture actually poses both defects at once before asking the core.
             val composed = RawConfigComposer.compose(balancerConfig, routingSettings, "/data/geo", override)
             check(composed is ComposeResult.Ok) { "composer refused the fixture: $composed" }
-            check("\"tag\": \"proxy\"" !in composed.json) {
-                "fixture defines a \"proxy\" outbound after all — no longer exercises the dangling tag"
+            val tags = outboundTagsOf(composed.json)
+            check("proxy" !in tags) {
+                "fixture defines a \"proxy\" outbound after all — no longer exercises the dangling tag: $tags"
+            }
+            check(tags.count { it == "direct" } == 2 && tags.count { it == "block" } == 2) {
+                "fixture no longer carries duplicate direct/block tags — no longer exercises that defect: $tags"
             }
             check("\"outboundTag\": \"proxy\"" in override.routingJson) {
                 "override routing did not reference outboundTag \"proxy\" — fixture is not testing what it claims"
@@ -172,11 +244,110 @@ class RawConfigComposerXrayTest {
             val outcome = validate(balancerConfig, override)
 
             check(outcome.isFailure) {
-                "expected the core to reject a routing rule naming an undefined outboundTag " +
+                "expected the core to reject this two-defect config " +
                     "(observed 2026-08-30 on Pixel 8) but it was accepted"
             }
             // §5.6: only the exception's class name is safe to surface (see the other tests'
             // comment above `theCoreAcceptsAComposedBalancerConfig`).
+            check(outcome.exceptionOrNull() is XrayException) {
+                "core rejected the config for an unexpected reason: " +
+                    "${outcome.exceptionOrNull()?.javaClass?.simpleName}"
+            }
+        }
+
+    /**
+     * Isolates the dangling-`outboundTag` defect alone, by composing the shape
+     * `TunnelService.composePassthrough` actually produces in production: the override's stock
+     * `direct`/`block` outbounds filtered against [balancerConfig]'s own tags first
+     * ([filteredForProductionShape], mirroring `existingOutboundTags`/`tagOf()`), so neither
+     * survives the append — [balancerConfig] already carries both. The composed config's only
+     * remaining defect is the routing rule's `outboundTag: "proxy"`, which nothing in the composed
+     * `outbounds` defines.
+     *
+     * **Observed 2026-08-30, Pixel 8, `connectedDebugAndroidTest`:** xray-core **ACCEPTS** this at
+     * config build — `testXray` succeeds. This is the opposite of what the confounded original
+     * version of this test concluded, and it flips the answer to ARCHITECTURE.md §6 and the
+     * research doc's Question 3: a dangling `outboundTag` alone does *not* fail visibly at
+     * `testXray`. [theCoreRejectsTheUnfilteredOverrideBranchWithBothDanglingTagAndDuplicateOutbounds]'s
+     * rejection was driven entirely by the duplicate-tag defect below, not by this one — confirmed
+     * by [theCoreRejectsAnUnfilteredOverrideWithOnlyDuplicateDirectAndBlockOutboundTags], which
+     * reproduces the rejection with the dangling reference removed and only duplicates left. The
+     * `overrideBlocker` gap this was meant to settle (`ARCHITECTURE.md` §6, `NoProxyTag`/
+     * `AmbiguousOutboundTags`) is therefore real, not cosmetic, for this specific failure mode: a
+     * config missing a `proxy` tag can pass both import-time and connect-time `testXray` and then
+     * simply never match the rule that names it — exactly the silent-no-match risk the "go one step
+     * further" half of Question 3's procedure describes, and which this test does not itself run
+     * (it stops at config build, per its own name).
+     */
+    @Test
+    fun theCoreAcceptsAFilteredOverrideWithOnlyADanglingProxyOutboundTag() =
+        runTest {
+            val override =
+                filteredForProductionShape(
+                    balancerConfig,
+                    XrayConfigGenerator.overrideBlocks(routingSettings),
+                )
+
+            val composed = RawConfigComposer.compose(balancerConfig, routingSettings, "/data/geo", override)
+            check(composed is ComposeResult.Ok) { "composer refused the fixture: $composed" }
+            val tags = outboundTagsOf(composed.json)
+            val expectedTags = setOf("proxy-auto", "proxy-auto-2", "direct", "block")
+            check(tags.toSet() == expectedTags && tags.size == tags.toSet().size) {
+                "fixture does not isolate the dangling-tag defect alone — composed tags: $tags"
+            }
+            check("\"outboundTag\": \"proxy\"" in override.routingJson) {
+                "override routing did not reference outboundTag \"proxy\" — fixture is not testing what it claims"
+            }
+
+            val outcome = validate(balancerConfig, override)
+
+            check(outcome.isSuccess) {
+                val exceptionName = outcome.exceptionOrNull()?.javaClass?.simpleName
+                "expected the core to accept a dangling outboundTag alone, isolated from the " +
+                    "duplicate-tag defect (observed 2026-08-30 on Pixel 8) but it was rejected: $exceptionName"
+            }
+        }
+
+    /**
+     * Isolates the duplicate-outbound-tag defect alone, as a control: [balancerConfigWithProxyOutbound]
+     * defines its own `"proxy"` outbound, so the override routing rule naming `outboundTag: "proxy"`
+     * resolves — no dangling reference. The override is left **unfiltered**
+     * (`XrayConfigGenerator.overrideBlocks` as-is), so its stock `direct`/`block` outbounds append
+     * on top of [balancerConfigWithProxyOutbound]'s own `direct`/`block`, producing duplicate tags —
+     * the one remaining defect. Between this test and
+     * [theCoreAcceptsAFilteredOverrideWithOnlyADanglingProxyOutboundTag] above, each defect the
+     * confounded original test conflated is now isolated on its own.
+     *
+     * **Observed 2026-08-30, Pixel 8, `connectedDebugAndroidTest`:** xray-core **REJECTS** this at
+     * config build — `testXray` throws `XrayException`. Combined with the acceptance observed above,
+     * this settles it: the duplicate `direct`/`block` tags, not the dangling `outboundTag`, are what
+     * the core actually objects to.
+     */
+    @Test
+    fun theCoreRejectsAnUnfilteredOverrideWithOnlyDuplicateDirectAndBlockOutboundTags() =
+        runTest {
+            val override = XrayConfigGenerator.overrideBlocks(routingSettings)
+
+            val composed =
+                RawConfigComposer.compose(balancerConfigWithProxyOutbound, routingSettings, "/data/geo", override)
+            check(composed is ComposeResult.Ok) { "composer refused the fixture: $composed" }
+            val tags = outboundTagsOf(composed.json)
+            check("proxy" in tags) {
+                "fixture does not define a \"proxy\" outbound — the dangling-tag defect is not resolved: $tags"
+            }
+            check(tags.count { it == "direct" } == 2 && tags.count { it == "block" } == 2) {
+                "fixture does not carry duplicate direct/block tags — no longer exercises that defect: $tags"
+            }
+            check("\"outboundTag\": \"proxy\"" in override.routingJson) {
+                "override routing did not reference outboundTag \"proxy\" — fixture is not testing what it claims"
+            }
+
+            val outcome = validate(balancerConfigWithProxyOutbound, override)
+
+            check(outcome.isFailure) {
+                "expected the core to reject duplicate direct/block outbound tags, in isolation from " +
+                    "the dangling-tag defect (observed 2026-08-30 on Pixel 8) but it was accepted"
+            }
             check(outcome.exceptionOrNull() is XrayException) {
                 "core rejected the config for an unexpected reason: " +
                     "${outcome.exceptionOrNull()?.javaClass?.simpleName}"

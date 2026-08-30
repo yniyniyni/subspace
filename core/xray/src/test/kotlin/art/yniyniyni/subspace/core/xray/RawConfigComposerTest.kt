@@ -161,6 +161,34 @@ class RawConfigComposerTest {
         overrides shouldBe listOf("http", "tls")
     }
 
+    // Correction pass: `JsonNull` is itself a `JsonPrimitive`, so the fix above's
+    // `(it as? JsonPrimitive)?.content` let a JSON `null` element through as the literal string
+    // "null" instead of dropping it — the one case `PassthroughAnalysis.stringOrNull()` (the parity
+    // this code claims) explicitly excludes.
+    @Test
+    fun `a JSON null destOverride entry is dropped, not admitted as the string null`() {
+        val withNull =
+            """
+            {
+              "inbounds": [
+                {
+                  "tag": "socks",
+                  "port": 10808,
+                  "protocol": "socks",
+                  "sniffing": { "enabled": true, "destOverride": ["http", null, "tls"] }
+                }
+              ],
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ]
+            }
+            """.trimIndent()
+
+        val socks = (composed(withNull)["inbounds"] as JsonArray)[0] as JsonObject
+        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
+            .map { it.jsonPrimitive.content }
+
+        overrides shouldBe listOf("http", "tls")
+    }
+
     // §5.6: the device-found logcat leak — one line per destination the user reaches.
     @Test
     fun `log is forced to a redacting shape`() {

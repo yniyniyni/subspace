@@ -6,6 +6,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -189,9 +190,14 @@ public object RawConfigComposer {
         // override branch; this call site was missed). compose() must never throw on untrusted
         // config bytes — mapNotNull silently drops a malformed entry instead, same safety level
         // PassthroughAnalysis already applies to this same untrusted field via stringOrNull().
+        //
+        // Correction pass: `JsonNull` is itself a `JsonPrimitive`, so `(it as? JsonPrimitive)?.content`
+        // let a JSON `null` element through as the literal string `"null"` — parity with
+        // `PassthroughAnalysis.stringOrNull()` (which this comment already claimed) requires
+        // excluding it explicitly, not just non-primitives.
         val overrides =
             (sniffing["destOverride"] as? JsonArray)
-                ?.mapNotNull { (it as? JsonPrimitive)?.content }
+                ?.mapNotNull { if (it is JsonNull) null else (it as? JsonPrimitive)?.content }
                 ?: return DEFAULT_SNIFFING
         return SniffingSettings(overrides)
     }

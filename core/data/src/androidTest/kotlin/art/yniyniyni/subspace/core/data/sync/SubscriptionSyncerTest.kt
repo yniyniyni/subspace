@@ -718,6 +718,37 @@ class SubscriptionSyncerTest {
         profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.CoreRejected
     }
 
+    // Correction pass on final review C1: the original fix carried over *any* stored verdict on
+    // unchanged bytes, not just CoreRejected — so a row a stale/buggy analysePassthrough once
+    // rejected structurally would stay frozen at that verdict forever, since buildUpserts's freshly
+    // recomputed structural verdict (here: null, this body is normally eligible) was always
+    // discarded in favour of the old one. Narrowed to carry over only CoreRejected specifically
+    // (SubscriptionDao.upsertBySubscriptionKey) so a structural verdict keeps tracking the
+    // analyser on every refresh, the same as a row that was never flagged at all.
+    @Test
+    fun aStaleStructuralVerdictIsRederivedRatherThanFrozenOnAnUnchangedRefresh() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        row.passthroughRejection shouldBe null
+        // Simulate a structural verdict an earlier (possibly buggy) analysePassthrough recorded for
+        // these exact bytes — buildUpserts itself never writes SeveralServers for a single-server
+        // body, so this stands in for "the analyser used to reject this and no longer does".
+        profiles.setPassthroughRejection(row.id, PassthroughRejection.SeveralServers.name)
+        profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.SeveralServers
+
+        // Same bytes come back on the next refresh. Unlike CoreRejected, a structural verdict must
+        // NOT survive unconditionally — buildUpserts recomputes it from the (unchanged) bytes every
+        // time, and that fresh computation is the one that should win.
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        profiles.profile(row.id)!!.passthroughRejection shouldBe null
+    }
+
     @Test
     fun aRecordedCoreRejectionDoesNotSurviveARefreshThatChangesTheBytes() = runTest {
         val id = addSubscription()

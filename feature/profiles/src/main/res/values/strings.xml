@@ -226,9 +226,13 @@
         cannot re-derive.
     </string>
 
-    <!-- Shown instead of editor_raw_json_notice when this row is not eligible to
-         run as written — same read-only/rename explanation, minus the "runs as
-         written" claim that would contradict the rejection string shown with it. -->
+    <!-- Shown instead of editor_raw_json_notice whenever the "runs as written" claim would not
+         hold for what actually reaches the core: either this row is not eligible to run as
+         written (rejection string shown with it), or the row IS eligible but an app rule set or
+         DNS plan is overriding its routing/dns (I2 fix — editor_raw_json_override_warning shown
+         with it instead, which contradicts "runs that file as written" if the notice above were
+         used). Same read-only/rename explanation in both cases, minus the "runs as written"
+         claim. -->
     <string name="editor_raw_json_read_only_notice">
         This server was added from a pasted config file. Only the name can be changed — editing
         the text would risk breaking a config the app cannot re-derive.

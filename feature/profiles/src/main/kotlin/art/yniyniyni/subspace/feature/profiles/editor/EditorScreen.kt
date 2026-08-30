@@ -165,6 +165,16 @@ fun EditorScreen(
             // import review destination — the same split [onBack]/[onDone] make
             // between "this screen's own state" and "where the back stack goes
             // next".
+            //
+            // Deliberate: viewModel.convertRouting() runs synchronously on Main
+            // (unlike load()'s canConvertRouting check, which hops to
+            // conversionDispatcher). These two calls must execute back to back —
+            // if convertRouting() returned before storing the conversion, the
+            // caller could navigate to the routing list first, and
+            // ApplyPendingRoutingConversion there would find nothing to consume
+            // (an intermittent race, since it would depend on which coroutine
+            // wins). See [EditorViewModel.convertRouting]'s KDoc for why the
+            // parse itself is cheap enough that this is a fine trade.
             onConvertRouting = {
                 viewModel.convertRouting()
                 onConvertRouting()

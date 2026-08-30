@@ -283,11 +283,16 @@ class EditorViewModelTest {
      * [ProfileSource] fake with no real suspension; this dispatcher is the one exception, so it
      * gets the one override, keeping this file's `advanceUntilIdle()`-then-assert pattern intact
      * for every test rather than rewriting the file's synchronisation style.
+     *
+     * Fix round 2: [EditorViewModel.conversionDispatcher] gained `private set`, so this goes
+     * through [EditorViewModel.setConversionDispatcherForTesting] rather than a direct
+     * assignment — see that function's KDoc.
      */
     private fun editorViewModel(
         source: ProfileSource,
         pending: PendingRoutingConversion = PendingRoutingConversion(),
-    ): EditorViewModel = EditorViewModel(source, pending).apply { conversionDispatcher = Dispatchers.Unconfined }
+    ): EditorViewModel =
+        EditorViewModel(source, pending).apply { setConversionDispatcherForTesting(Dispatchers.Unconfined) }
 
     @Test
     fun `editing a typed profile rewrites its identity hash`() =

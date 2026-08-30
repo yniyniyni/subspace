@@ -2,6 +2,7 @@
 // Additional permission: see Stores Exception in LICENSE.
 package art.yniyniyni.subspace.feature.profiles.editor
 
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import art.yniyniyni.subspace.core.data.PendingRoutingConversion
@@ -198,16 +199,32 @@ constructor(
      * Where [load]'s `canConvertRouting` parse actually runs. `Dispatchers.Default` in
      * production (fix round 1, Minor: keeps a large pasted config's JSON parse off Main).
      *
-     * A plain internal `var` rather than a constructor parameter: this codebase has no existing
-     * qualified `CoroutineDispatcher` Hilt binding, and adding one is a bigger DI change than one
-     * off-main hop warrants. [art.yniyniyni.subspace.feature.profiles.editor.EditorViewModelTest]'s
-     * own `editorViewModel` helper pins this to [kotlinx.coroutines.Dispatchers.Unconfined]
-     * after construction, so `load()` stays synchronous under that file's
-     * `UnconfinedTestDispatcher` + `advanceUntilIdle()` pattern — every other suspend call
-     * `load()` makes already runs against a trivial [ProfileSource] fake with no real
-     * suspension, and this is the one call that would otherwise escape that determinism.
+     * A plain internal property rather than a constructor parameter: this codebase has no
+     * existing qualified `CoroutineDispatcher` Hilt binding, and adding one is a bigger DI
+     * change than one off-main hop warrants. `private set` keeps this a read-only seam from
+     * every other production call site in `:feature:profiles` — the only way to change it is
+     * [setConversionDispatcherForTesting], which exists so nothing but a test can retarget it
+     * at runtime. [art.yniyniyni.subspace.feature.profiles.editor.EditorViewModelTest]'s own
+     * `editorViewModel` helper calls that function to pin this to
+     * [kotlinx.coroutines.Dispatchers.Unconfined] after construction, so `load()` stays
+     * synchronous under that file's `UnconfinedTestDispatcher` + `advanceUntilIdle()` pattern —
+     * every other suspend call `load()` makes already runs against a trivial [ProfileSource]
+     * fake with no real suspension, and this is the one call that would otherwise escape that
+     * determinism.
      */
     internal var conversionDispatcher: CoroutineDispatcher = Dispatchers.Default
+        private set
+
+    /**
+     * Test-only seam for [conversionDispatcher] — see that property's KDoc. Not called from
+     * any production code path; exists so the dispatcher can be pinned to
+     * [kotlinx.coroutines.Dispatchers.Unconfined] under a test scheduler without leaving the
+     * property itself publicly settable.
+     */
+    @VisibleForTesting
+    internal fun setConversionDispatcherForTesting(dispatcher: CoroutineDispatcher) {
+        conversionDispatcher = dispatcher
+    }
 
     fun load(profileId: Long) {
         viewModelScope.launch {
@@ -346,6 +363,11 @@ constructor(
      * loading (RAW_JSON's one editable field, §6) is reflected in the profile the review sheet
      * names. The `!canConvertRouting` guard is defensive — the action is only ever shown when it
      * is already true — so this can never offer a stale, absent, or all-dropped conversion.
+     *
+     * Deliberately synchronous on Main, unlike [load]'s own `canConvertRouting` parse: `EditorScreen`
+     * calls this and then navigates in the same click handler, and the conversion must already be
+     * sitting in [pendingRoutingConversion] before that navigation lands — see the call site's own
+     * comment for the race an async hop here would open.
      */
     fun convertRouting() {
         val current = _state.value

@@ -72,11 +72,9 @@ public data class RoutingConversion(
     override fun toString(): String = "RoutingConversion(profile=$profile, drops=$drops)"
 }
 
-private val LENIENT =
-    Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-    }
+// ignoreUnknownKeys governs typed decodeFromString; the only use below is parseToJsonElement,
+// which it never affects, so it is left out rather than left looking load-bearing.
+private val LENIENT = Json { isLenient = true }
 
 /** Rule keys `RuleBucket` cannot express. Any of these on a rule forces a drop. */
 private val UNSUPPORTED_MATCHERS =

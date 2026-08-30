@@ -12,7 +12,13 @@ import kotlinx.coroutines.CancellationException
  *
  * Declared here rather than in `:core:data` or `:feature:profiles` because
  * neither may depend on `:core:xray` (§4), and `:feature:profiles` already
- * depends on this module — the same seam `TunnelProxyLocator` uses.
+ * depends on this module. The shape is the same one `TunnelProxyLocator`
+ * uses — an interface in a module the consumer may reach, implemented where
+ * the forbidden dependency is legal — but not the same seam: that interface
+ * is declared in `:core:model` and implemented in `:app`
+ * ([art.yniyniyni.subspace.tunnel.TunnelProxyBinding]), whereas this one is
+ * declared and implemented both in `:service` ([BoundPassthroughValidator]
+ * below, wired by [ServiceModule.boundPassthroughValidator]).
  */
 public interface PassthroughValidator {
     /**

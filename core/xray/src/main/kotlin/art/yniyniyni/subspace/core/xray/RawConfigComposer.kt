@@ -79,11 +79,9 @@ public data class OverrideBlocks(
  * `dns` as written; non-null deletes both and substitutes the app's.
  */
 public object RawConfigComposer {
-    private val LENIENT =
-        Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        }
+    // ignoreUnknownKeys governs typed decodeFromString; every use below is parseToJsonElement,
+    // which it never affects, so it is left out rather than left looking load-bearing.
+    private val LENIENT = Json { isLenient = true }
 
     /**
      * @param assetDir what `xray.location.asset` must name — the active rule

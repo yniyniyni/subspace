@@ -504,6 +504,35 @@ three lean on the same connect-time backstop:**
   contributor should be able to find that by reading this paragraph rather
   than by grepping for `PassthroughAdvisory` and wondering why it exists.
 
+**Two more edges live in the `LENIENT` JSON parser itself** (`RawConfigComposer`,
+`PassthroughAnalysis`, `XrayRoutingConversion` — each its own `Json { isLenient = true }`
+instance, same shape, no shared object), not in the eligibility check above. Both are parser
+edges, not design positions — nothing here chose these behaviors on purpose:
+
+- **A non-standard unquoted literal round-trips into invalid JSON.** `isLenient` accepts an
+  unquoted scalar on parse (e.g. `mode: auto` rather than `"mode": "auto"`), producing a JSON
+  element whose `isString` is `false`; that element's own `toString()` re-emits the literal
+  unquoted, so text `RawConfigComposer.render` produces from it can itself fail to parse as JSON,
+  even though `compose` returned `ComposeResult.Ok`. This is backstopped, not silent:
+  `BoundPassthroughValidator` hands the composed text to `testXray` before an import is accepted,
+  so the failure surfaces as `PassthroughRejection.CoreRejected` — "Xray rejected this file"
+  (`editor_raw_json_rejected_core_rejected`) — which is true but imprecise about which side
+  actually produced the invalid bytes.
+- **`//` line comments make a config `NotJson` here.** kotlinx.serialization's lenient mode
+  relaxes quoting rules, not comment syntax — no `Json { }` option enables comment parsing — so a
+  stored config using them fails to parse in this app before the balancer/eligibility check or
+  `testXray` ever runs. Whether xray-core's own JSON loader accepts such comments is **not
+  established from anything in this codebase** (§10.5):
+  `docs/agent/research/2026-07-27-m2-residuals-for-m3.md` records the claim and flags it
+  explicitly as unverified against Xray-core source. If it turns out to be true, a config that
+  would run correctly on-device is rejected here first, and the user is told `NotJson` for a file
+  the core itself would have accepted.
+
+Related: `ignoreUnknownKeys = true` was present in all three `LENIENT` blocks above but is inert
+in every one of them — it governs typed deserialization (`decodeFromString`), and all three call
+sites only ever use `parseToJsonElement`, which never consults it. Removed rather than left
+looking load-bearing.
+
 It is per-kind, not a migration: `TYPED` profiles generate from the typed form
 permanently, and only `RAW_JSON` switches. The typed columns stay either way —
 they are what the UI filters and sorts on.

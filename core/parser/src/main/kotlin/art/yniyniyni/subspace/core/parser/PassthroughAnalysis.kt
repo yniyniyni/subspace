@@ -102,11 +102,9 @@ public data class PassthroughAnalysis(
 /** Protocols that are infrastructure rather than a server the user chose. */
 private val NON_SERVER_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
-private val LENIENT =
-    Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-    }
+// ignoreUnknownKeys governs typed decodeFromString; the only use below is parseToJsonElement,
+// which it never affects, so it is left out rather than left looking load-bearing.
+private val LENIENT = Json { isLenient = true }
 
 /**
  * Decides, from structure alone, whether a stored config can run as written.

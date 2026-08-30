@@ -319,15 +319,15 @@ internal constructor(
         // not several a user picks between. Keep only the first profile carrying that element's
         // bytes; the rest would otherwise land as extra rows all pointing at the same document.
         val seenBalancerRawJson = mutableSetOf<String>()
-        val eligibleProfiles =
+        val survivingProfiles =
             profiles.filter { profile ->
                 val rawJson = profile.rawJson
                 rawJson == null || !analysisFor(rawJson).isBalancer || seenBalancerRawJson.add(rawJson)
             }
 
-        val rawJsonFanoutCounts = eligibleProfiles.mapNotNull { it.rawJson }.groupingBy { it }.eachCount()
+        val rawJsonFanoutCounts = survivingProfiles.mapNotNull { it.rawJson }.groupingBy { it }.eachCount()
         val identityHashes = mutableSetOf<String>()
-        eligibleProfiles.forEachIndexed { index, profile ->
+        survivingProfiles.forEachIndexed { index, profile ->
             val rawJson = profile.rawJson
             val kind = if (rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON
             val identityHash =

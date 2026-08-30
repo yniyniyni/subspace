@@ -133,6 +133,34 @@ class RawConfigComposerTest {
         overrides shouldBe listOf("http", "tls", "quic")
     }
 
+    // Final review I1: an earlier review fixed this exact contract violation in the override
+    // branch (`ParsedOverride`'s try/catch); this call site was missed. `compose` must never
+    // throw on untrusted config bytes, so a non-string destOverride element (JsonObject/JsonArray)
+    // must be skipped, not crash `.jsonPrimitive.content` with IllegalArgumentException.
+    @Test
+    fun `a malformed destOverride entry is dropped rather than crashing compose`() {
+        val malformed =
+            """
+            {
+              "inbounds": [
+                {
+                  "tag": "socks",
+                  "port": 10808,
+                  "protocol": "socks",
+                  "sniffing": { "enabled": true, "destOverride": ["http", {"not": "a string"}, "tls"] }
+                }
+              ],
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ]
+            }
+            """.trimIndent()
+
+        val socks = (composed(malformed)["inbounds"] as JsonArray)[0] as JsonObject
+        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
+            .map { it.jsonPrimitive.content }
+
+        overrides shouldBe listOf("http", "tls")
+    }
+
     // §5.6: the device-found logcat leak — one line per destination the user reaches.
     @Test
     fun `log is forced to a redacting shape`() {

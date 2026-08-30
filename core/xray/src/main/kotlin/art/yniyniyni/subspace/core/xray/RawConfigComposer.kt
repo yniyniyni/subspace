@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /** Why a stored config could not be composed into something runnable. */
@@ -185,9 +184,14 @@ public object RawConfigComposer {
                 ?: return DEFAULT_SNIFFING
         val sniffing = inbound["sniffing"] as? JsonObject ?: return DEFAULT_SNIFFING
         if ((sniffing["enabled"] as? JsonPrimitive)?.content != "true") return null
+        // Final review I1: `.map { it.jsonPrimitive.content }` throws IllegalArgumentException on
+        // any non-string element (an earlier review fixed this exact contract violation in the
+        // override branch; this call site was missed). compose() must never throw on untrusted
+        // config bytes — mapNotNull silently drops a malformed entry instead, same safety level
+        // PassthroughAnalysis already applies to this same untrusted field via stringOrNull().
         val overrides =
             (sniffing["destOverride"] as? JsonArray)
-                ?.map { it.jsonPrimitive.content }
+                ?.mapNotNull { (it as? JsonPrimitive)?.content }
                 ?: return DEFAULT_SNIFFING
         return SniffingSettings(overrides)
     }

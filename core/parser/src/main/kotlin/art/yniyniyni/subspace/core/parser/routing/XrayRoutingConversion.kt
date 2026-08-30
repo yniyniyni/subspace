@@ -41,6 +41,17 @@ public enum class ConversionDrop {
     /** Names an `outboundTag` the config does not define. */
     UnknownOutbound,
 
+    /**
+     * Names an `outboundTag` the config *does* define, but whose protocol is `dns` or
+     * `loopback` — [art.yniyniyni.subspace.core.parser.PassthroughAnalysis]'s
+     * `NON_SERVER_PROTOCOLS`, alongside `freedom`/`blackhole`. Unlike those two, neither maps
+     * onto a [RouteOutcome]: it is not proxied, not sent direct, and not blocked, so folding it
+     * into [RouteOutcome.PROXY] (this file's previous behaviour) silently misconverted the rule
+     * into one that proxies domains the config never intended to proxy at all. Distinct from
+     * [UnknownOutbound]: the tag is real, the protocol just is not one this model can route.
+     */
+    NonServerOutbound,
+
     /** The rule order is not a permutation of the three outcomes. Entries are kept; order is approximated. */
     OrderNotRepresentable,
 
@@ -152,7 +163,7 @@ private fun parseRoot(rawJson: String): JsonObject? =
  */
 private fun classifyRule(
     rule: JsonObject,
-    outcomeByTag: Map<String, RouteOutcome>,
+    outcomeByTag: Map<String, RouteOutcome?>,
     drop: (ConversionDrop) -> Unit,
     sites: MutableMap<RouteOutcome, MutableList<String>>,
     ips: MutableMap<RouteOutcome, MutableList<String>>,
@@ -177,28 +188,52 @@ private fun classifyRule(
             null
         }
         else -> {
-            val tag = (rule["outboundTag"] as? JsonPrimitive)?.content
-            val outcome = outcomeByTag[tag]
-            if (outcome == null) {
-                drop(ConversionDrop.UnknownOutbound)
-                null
-            } else {
-                domain?.let { sites.getOrPut(outcome, ::mutableListOf) += it.strings() }
-                ip?.let { ips.getOrPut(outcome, ::mutableListOf) += it.strings() }
-                outcome
-            }
+            val outcome = resolveOutcome(rule, outcomeByTag, drop) ?: return null
+            domain?.let { sites.getOrPut(outcome, ::mutableListOf) += it.strings() }
+            ip?.let { ips.getOrPut(outcome, ::mutableListOf) += it.strings() }
+            outcome
         }
     }
 }
 
 /**
- * Maps each outbound tag to the outcome it represents, **by protocol**.
+ * The `outboundTag`-resolution half of [classifyRule], split out to keep that function's
+ * cyclomatic complexity under detekt's threshold — this is the sub-branching for exactly one
+ * of [classifyRule]'s `when` arms, not a separately reusable concept.
+ */
+private fun resolveOutcome(
+    rule: JsonObject,
+    outcomeByTag: Map<String, RouteOutcome?>,
+    drop: (ConversionDrop) -> Unit,
+): RouteOutcome? {
+    val tag = (rule["outboundTag"] as? JsonPrimitive)?.content
+    return when {
+        tag == null || tag !in outcomeByTag -> {
+            drop(ConversionDrop.UnknownOutbound)
+            null
+        }
+        outcomeByTag.getValue(tag) == null -> {
+            drop(ConversionDrop.NonServerOutbound)
+            null
+        }
+        else -> outcomeByTag.getValue(tag) ?: error("checked non-null above")
+    }
+}
+
+/**
+ * Maps each outbound tag the config defines to the outcome it represents, **by protocol**.
  *
  * Not by tag name: the target panel tags its server outbounds `proxy-auto`,
  * `proxy-auto-2`, … (research §5b.1), so a name-based mapping would fail on
  * exactly the config this feature exists to serve.
+ *
+ * A tag maps to `null` when its protocol is `dns` or `loopback` — present in the config
+ * (so [ConversionDrop.UnknownOutbound] would misdescribe it) but not one of the three
+ * [RouteOutcome]s (so [ConversionDrop.NonServerOutbound] is used instead). Callers must use
+ * `containsKey`/`getValue` rather than plain `get` to tell "tag absent" from "tag present but
+ * non-routable" apart — both would otherwise read as the same `null`.
  */
-private fun outcomeByTag(root: JsonObject): Map<String, RouteOutcome> =
+private fun outcomeByTag(root: JsonObject): Map<String, RouteOutcome?> =
     (root["outbounds"] as? JsonArray)
         .orEmpty()
         .filterIsInstance<JsonObject>()
@@ -208,6 +243,9 @@ private fun outcomeByTag(root: JsonObject): Map<String, RouteOutcome> =
                 when ((outbound["protocol"] as? JsonPrimitive)?.content) {
                     "freedom" -> RouteOutcome.DIRECT
                     "blackhole" -> RouteOutcome.BLOCK
+                    // PassthroughAnalysis.NON_SERVER_PROTOCOLS: neither proxied, sent direct,
+                    // nor blocked — no RouteOutcome represents these two.
+                    "dns", "loopback" -> null
                     else -> RouteOutcome.PROXY
                 }
             tag to outcome

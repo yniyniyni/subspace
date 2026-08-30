@@ -151,6 +151,42 @@ class XrayRoutingConversionTest {
         convert(json)!!.drops[ConversionDrop.UnknownOutbound] shouldBe 1
     }
 
+    // M3, final review. A `dns` (or `loopback`) outbound is a real, defined outbound —
+    // PassthroughAnalysis.NON_SERVER_PROTOCOLS treats it as non-server the same way it treats
+    // freedom/blackhole — but neither maps onto a RouteOutcome. Before this fix, outcomeByTag's
+    // `else -> PROXY` silently proxied domains the config routed at its internal DNS resolver,
+    // with no ConversionDrop counted anywhere: a wrong rule, not a disclosed loss.
+    @Test
+    fun `a rule naming a dns outbound is dropped as NonServerOutbound, not folded into PROXY`() {
+        val json =
+            """
+            {
+              "routing": { "rules": [ { "domain": ["example.com"], "outboundTag": "dns-out" } ] },
+              "outbounds": [ { "tag": "dns-out", "protocol": "dns" } ]
+            }
+            """.trimIndent()
+
+        val result = convert(json)!!
+
+        result.drops[ConversionDrop.NonServerOutbound] shouldBe 1
+        result.drops[ConversionDrop.UnknownOutbound] shouldBe null
+        result.profile.bucket(RouteOutcome.PROXY).sites shouldContainExactly emptyList()
+        result.profile.entryCount shouldBe 0
+    }
+
+    @Test
+    fun `a rule naming a loopback outbound is dropped as NonServerOutbound`() {
+        val json =
+            """
+            {
+              "routing": { "rules": [ { "domain": ["example.com"], "outboundTag": "loop" } ] },
+              "outbounds": [ { "tag": "loop", "protocol": "loopback" } ]
+            }
+            """.trimIndent()
+
+        convert(json)!!.drops[ConversionDrop.NonServerOutbound] shouldBe 1
+    }
+
     // routeOrder is a permutation; proxy → direct → proxy is not one.
     @Test
     fun `an order no permutation can express is reported`() {

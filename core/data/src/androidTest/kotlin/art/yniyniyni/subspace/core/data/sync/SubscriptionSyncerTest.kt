@@ -130,6 +130,24 @@ private const val THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY =
         """"port":443,"users":[{"id":"77777777-7777-7777-7777-777777777777"}]}]}}]}""" +
         """]"""
 
+/**
+ * Final review C1. A single eligible server, tagged "proxy" so its `subscriptionKey` is stable
+ * across a refresh regardless of which address/port variant is in play — the update branch of
+ * `SubscriptionDao.upsertBySubscriptionKey` keys on `subscriptionKey`, not on `rawJson`.
+ */
+private const val SINGLE_SERVER_SUBSCRIPTION_BODY =
+    """{"outbounds":[""" +
+        """{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.20",""" +
+        """"port":443,"users":[{"id":"88888888-8888-8888-8888-888888888888"}]}]}}""" +
+        """]}"""
+
+/** Same tag as [SINGLE_SERVER_SUBSCRIPTION_BODY] (same `subscriptionKey`), different bytes. */
+private const val SINGLE_SERVER_SUBSCRIPTION_BODY_CHANGED =
+    """{"outbounds":[""" +
+        """{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.21",""" +
+        """"port":443,"users":[{"id":"88888888-8888-8888-8888-888888888888"}]}]}}""" +
+        """]}"""
+
 class SubscriptionSyncerTest {
     private lateinit var db: SubspaceDatabase
     private lateinit var subscriptions: SubscriptionRepository
@@ -675,5 +693,46 @@ class SubscriptionSyncerTest {
         val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
         rows.size shouldBe 2
         rows.forEach { it.passthroughRejection shouldBe null }
+    }
+
+    // Final review C1. buildUpserts never writes CoreRejected — only ProfileSource's import-time
+    // PassthroughValidator does, via ProfileRepository.setPassthroughRejection — so a periodic
+    // refresh must not silently erase a verdict a previous import recorded for these exact bytes.
+    @Test
+    fun aRecordedCoreRejectionSurvivesARefreshThatDoesNotChangeTheBytes() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        row.passthroughRejection shouldBe null
+        profiles.setPassthroughRejection(row.id, PassthroughRejection.CoreRejected.name)
+        profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.CoreRejected
+
+        // Same bytes come back on the next refresh — the verdict is about those exact bytes and
+        // must not be reset to eligible just because a refresh ran.
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.CoreRejected
+    }
+
+    @Test
+    fun aRecordedCoreRejectionDoesNotSurviveARefreshThatChangesTheBytes() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        profiles.setPassthroughRejection(row.id, PassthroughRejection.CoreRejected.name)
+
+        // The provider changes the config's own bytes under the same tag (same subscriptionKey):
+        // the old verdict described a config that no longer exists and must not survive onto it.
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY_CHANGED, emptyMap())
+        syncer().sync(id)
+
+        profiles.profile(row.id)!!.passthroughRejection shouldBe null
     }
 }

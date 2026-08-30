@@ -305,6 +305,21 @@ class EditorScreenTest {
         composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_override_warning)).assertDoesNotExist()
     }
 
+    // Final review C1/I2: an eligible row whose routing/DNS is overridden used to render both
+    // editor_raw_json_notice ("Subspace runs that file as written") and
+    // editor_raw_json_override_warning ("so it does not run as written") at once — no existing
+    // case asserted both flags together against the top notice. This one does.
+    @Test
+    fun aRawJsonProfileWithRoutingOverrideDoesNotClaimToRunAsWritten() {
+        setContent(
+            state = rawJsonState.copy(runsAsWritten = true, routingOverridesThisConfig = true),
+        )
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_notice)).assertDoesNotExist()
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_read_only_notice)).assertExists()
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_override_warning)).assertExists()
+    }
+
     @Test
     fun anIneligibleRawProfileSaysWhichCheckItFailed() {
         setContent(

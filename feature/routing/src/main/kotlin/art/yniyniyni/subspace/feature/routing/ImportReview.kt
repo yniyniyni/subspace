@@ -288,6 +288,7 @@ private fun ConversionDrop.messageRes(): Int =
         ConversionDrop.BalancerRule -> R.string.routing_conversion_drop_balancer
         ConversionDrop.DomainAndIpInOneRule -> R.string.routing_conversion_drop_domain_and_ip
         ConversionDrop.UnknownOutbound -> R.string.routing_conversion_drop_unknown_outbound
+        ConversionDrop.NonServerOutbound -> R.string.routing_conversion_drop_non_server_outbound
         ConversionDrop.OrderNotRepresentable -> R.string.routing_conversion_drop_order
         ConversionDrop.MultiAddressHost -> R.string.routing_conversion_drop_multi_address_host
     }

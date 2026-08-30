@@ -210,6 +210,7 @@
     <string name="routing_conversion_drop_balancer">Automatic server selection (%1$d). Subspace routing picks one server instead of balancing between several — the pasted config keeps balancing only while routing stays off.</string>
     <string name="routing_conversion_drop_domain_and_ip">Rules requiring a domain and an address together (%1$d). Converting them would match more traffic than the original config did.</string>
     <string name="routing_conversion_drop_unknown_outbound">Rules pointing at a server the file does not define (%1$d).</string>
+    <string name="routing_conversion_drop_non_server_outbound">Rules pointing at the file\'s own DNS or loopback handling rather than a server (%1$d). Subspace has no equivalent, so these rules are dropped rather than sent through the proxy.</string>
     <string name="routing_conversion_drop_order">Rule order was simplified (%1$d). Rules are now grouped by what they do, so a domain listed twice may behave differently than before.</string>
     <string name="routing_conversion_drop_multi_address_host">DNS entries listing several addresses for one name (%1$d). Subspace keeps only one address per name.</string>
 </resources>

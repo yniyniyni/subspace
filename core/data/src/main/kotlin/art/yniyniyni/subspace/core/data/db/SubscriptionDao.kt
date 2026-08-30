@@ -282,6 +282,14 @@ internal interface SubscriptionDao {
      * previously-flagged row — means the provider is offering it again, so the flag clears.
      * `SubscriptionSyncerTest.theFlagClearsWhenTheServerReappears` pins this half of the
      * lifecycle; until Task 11 review round 2 nothing did.
+     *
+     * [ProfileEntity.passthroughRejection] is carried over **only when [ProfileEntity.rawJson]
+     * is unchanged** (final review C1). `SubscriptionSyncer.buildUpserts` never writes
+     * `CoreRejected` — only the structural verdict — so a plain overwrite would silently erase a
+     * recorded core rejection on every periodic refresh (`RefreshScheduler`), leaving a row that
+     * claims to run as written, in the editor, for a config xray-core has already refused. The
+     * verdict is a judgement about those exact bytes: if the provider changed `rawJson`, the old
+     * verdict describes a config that no longer exists and must not survive onto the new one.
      */
     @Transaction
     suspend fun upsertBySubscriptionKey(profile: ProfileEntity) {
@@ -296,6 +304,12 @@ internal interface SubscriptionDao {
                     lastConnectedAt = existing.lastConnectedAt,
                     lastError = existing.lastError,
                     createdAt = existing.createdAt,
+                    passthroughRejection =
+                    if (existing.rawJson == profile.rawJson) {
+                        existing.passthroughRejection
+                    } else {
+                        profile.passthroughRejection
+                    },
                 ),
             )
         } else {

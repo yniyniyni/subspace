@@ -631,10 +631,18 @@ private fun RawJsonFields(
         // `kind == RAW_JSON && passthroughRejection == null`, so every ineligible
         // row would otherwise show both. Gated here on the same boolean instead
         // of on `passthroughRejection == null` so the two conditions cannot drift.
+        // Final review C1/I2: also false when routingOverridesThisConfig is true —
+        // otherwise this claim ("Subspace runs that file as written") renders right
+        // above editor_raw_json_override_warning ("so it does not run as written"),
+        // contradicting itself on an eligible row whose routing/DNS is overridden.
         Text(
             text =
             stringResource(
-                if (state.runsAsWritten) R.string.editor_raw_json_notice else R.string.editor_raw_json_read_only_notice,
+                if (state.runsAsWritten && !state.routingOverridesThisConfig) {
+                    R.string.editor_raw_json_notice
+                } else {
+                    R.string.editor_raw_json_read_only_notice
+                },
             ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

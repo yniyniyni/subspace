@@ -146,6 +146,13 @@ public enum class FailureReason {
     PerAppAllowListEmpty,
 
     /**
+     * The app's routing or DNS override requires a `proxy` outbound that this stored config does
+     * not define. Refused before core startup rather than allowing a dangling routing target to
+     * produce a Connected tunnel that drops matching traffic.
+     */
+    PassthroughOverrideUnavailable,
+
+    /**
      * A stored raw config passed validation at import and the core refuses it now.
      *
      * Deliberately not a fallback to the typed projection. §6 permits that

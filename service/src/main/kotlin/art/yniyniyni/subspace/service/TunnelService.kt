@@ -28,6 +28,8 @@ import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
+import art.yniyniyni.subspace.core.parser.analysePassthrough
+import art.yniyniyni.subspace.core.xray.ComposeFailure
 import art.yniyniyni.subspace.core.xray.ComposeResult
 import art.yniyniyni.subspace.core.xray.ConfigResult
 import art.yniyniyni.subspace.core.xray.DnsPlan
@@ -161,22 +163,25 @@ internal fun validationFailureReason(runsAsWritten: Boolean): FailureReason =
  * already names — `RawConfigComposer` only ever appends outbounds, so an
  * unfiltered duplicate tag is a config the core is not obliged to accept.
  *
- * Malformed input (should not reach here: `runsAsWritten` implies this row
- * passed structural analysis at import) yields an empty set rather than
- * throwing — the worst case is then an unfiltered append, which is exactly
- * today's behaviour absent this filter, not a crash.
+ * Reuses `:core:parser`'s non-throwing structural read rather than Android's
+ * `JSONObject`: this helper is also the connect-time guard against a missing
+ * `proxy` tag, and keeping one parser for both decisions prevents them drifting.
  */
-@Suppress("SwallowedException") // Malformed JSON here degrades to "no known tags", not a crash — see above.
 private fun existingOutboundTags(rawJson: String): Set<String> =
-    try {
-        val outbounds = JSONObject(rawJson).optJSONArray("outbounds") ?: return emptySet()
-        buildSet {
-            for (i in 0 until outbounds.length()) {
-                outbounds.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotEmpty() }?.let(::add)
-            }
-        }
-    } catch (e: JSONException) {
-        emptySet()
+    analysePassthrough(rawJson).outboundTags.filterTo(mutableSetOf()) { it.isNotBlank() }
+
+/** The failure that prevents a generated override from targeting a missing outbound. */
+internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? =
+    ComposeFailure.MissingOverrideProxy.takeUnless { "proxy" in existingOutboundTags(rawJson) }
+
+/** Maps composition failures to the user-actionable service reason they represent. */
+internal fun compositionFailureReason(reason: ComposeFailure): FailureReason =
+    when (reason) {
+        ComposeFailure.MissingOverrideProxy -> FailureReason.PassthroughOverrideUnavailable
+        ComposeFailure.NotJson,
+        ComposeFailure.NoOutbounds,
+        ComposeFailure.InvalidOverride,
+        -> FailureReason.ConfigGenerationFailed
     }
 
 /** This outbound literal's own `tag`, or null if it has none this can read. */
@@ -771,7 +776,7 @@ class TunnelService : VpnService() {
                 // it here is an environment or data change, not a core verdict.
                 is ComposeResult.Failed ->
                     ConfigJsonOutcome.Failed(
-                        FailureReason.ConfigGenerationFailed,
+                        compositionFailureReason(composed.reason),
                         IllegalStateException("stored config did not compose: ${composed.reason}"),
                     )
             }
@@ -816,6 +821,7 @@ class TunnelService : VpnService() {
             )
         val override =
             if (plan.overrideApplies) {
+                passthroughOverrideFailure(rawJson)?.let { return ComposeResult.Failed(it) }
                 val existingTags = existingOutboundTags(rawJson)
                 XrayConfigGenerator.overrideBlocks(settings)
                     .let { blocks ->

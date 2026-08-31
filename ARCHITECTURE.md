@@ -428,66 +428,26 @@ three lean on the same connect-time backstop:**
   against, and routing-heavy configs are exactly what this milestone targets.
   Same backstop: an unvalidated row that the core would in fact refuse fails at
   connect instead of at import.
-- **A config with no `proxy` tag, or with duplicate/blank outbound tags, is
-  not gated at import.** `PassthroughAnalysis` computes exactly this
-  (`overrideBlocker`, distinct from `rejection`: `NoProxyTag` /
-  `AmbiguousOutboundTags`), but only `.rejection` is ever persisted or read —
-  `overrideBlocker` is computed and unit-tested, with no consumer anywhere in
-  the app. Such a config stays eligible and runs as written in the pure
-  branch, where this is harmless: nothing of ours references its outbound
-  tags there. It matters only in the override branch, whose substituted
-  `routing` rules name `proxy`, `direct` and `block` — a config missing one
-  of those may then carry a rule referencing an outbound that does not exist.
-  It is not the import-time `PassthroughValidator` check that could catch
-  this either way: that one hardcodes `override = null`
-  (`BoundPassthroughValidator.validate`), so it only ever exercises the
-  pure-passthrough branch and never sees an override's routing rules at all —
-  the overrideBlocker gap is entirely unguarded at import regardless of
-  geo-asset state or refresh path.
+- **A config with no exact `proxy` tag is not rejected at import, but it now
+  fails closed before core startup when an app override applies.**
+  `PassthroughAnalysis` still computes `OverrideBlocker.NoProxyTag` without
+  persisting it, because the pure branch can run such a config correctly: none
+  of the config's own rules needs our conventional tag. The override branch is
+  different — every app-generated proxy rule currently names `proxy`.
+  `TunnelService.composePassthrough` therefore reuses the analyser's outbound
+  tags immediately before composition and returns
+  `FailureReason.PassthroughOverrideUnavailable` when that exact target is
+  absent. The core is never started, so the previously reproduced failure
+  shape — Connected while matching traffic is dropped — is closed.
 
-  **Whether the connect-time backstop (`TunnelService.startCore`'s
-  `xray.validate(file)`, on the fully resolved config, real override
-  included, before `xray.start`) catches this at all now has a settled — and
-  split — answer**, from two device tests that each isolate one defect,
-  replacing a single earlier test that conflated both and was corrected
-  after re-review (`RawConfigComposerXrayTest`,
-  `core/xray/src/androidTest/.../RawConfigComposerXrayTest.kt`; full history
-  in `docs/agent/research/2026-08-25-m7-device-verification.md` Question 3):
-
-  - **`NoProxyTag` is NOT caught — the gap is real, not cosmetic.**
-    `theCoreAcceptsAFilteredOverrideWithOnlyADanglingProxyOutboundTag`
-    composes the shape `TunnelService.composePassthrough` actually produces
-    in production — the target panel's balancer fixture, the override's
-    stock `direct`/`block` outbounds filtered against the config's own tags
-    first, then overridden with a `RoutingRuleSet` that produces an
-    `outboundTag: "proxy"` rule the composed config never defines, with no
-    other defect present. Observed 2026-08-30 on a Pixel 8: xray-core
-    **accepts this at config build** — `testXray` succeeds. A config missing
-    a `proxy` tag can therefore pass both the import-time and connect-time
-    `testXray` checks and then simply never match the routing rule that
-    names it, with no error anywhere — the same silent-no-match failure
-    shape as `SniffingCannotServeOwnRules` below.
-  - **A composed config carrying duplicate outbound tags IS caught.**
-    `theCoreRejectsAnUnfilteredOverrideWithOnlyDuplicateDirectAndBlockOutboundTags`
-    composes a config whose `outbounds` carry two `direct` and two `block`
-    entries — the config's own, plus the override's stock outbounds
-    deliberately left unfiltered, reproducing what an unguarded
-    `RawConfigComposer.compose` append produces — with the dangling
-    reference resolved (a `proxy` outbound present), so duplication is the
-    only defect. Observed 2026-08-30: xray-core **rejects this at config
-    build** with `XrayException`. This establishes the mechanism
-    `AmbiguousOutboundTags`'s duplicate-tag sub-case would trigger, not that
-    exact sub-case (a stored config whose *own* outbounds already collide,
-    before any append) — the blank-tag sub-case remains untested.
-  - Read together, these narrow rather than resolve the dangling-`fallbackTag`
-    question Task 5 answered for a related case: xray-core's build-time
-    validation is lazier about *reference* integrity (an
-    `outboundTag`/`fallbackTag` naming nothing) than it is about *structural*
-    integrity (two outbounds sharing one tag) — one asymmetry, observed
-    twice, not two unrelated facts. Because `NoProxyTag` is now confirmed
-    unguarded end-to-end, `overrideBlocker` needs an actual UI consumer
-    before this class of mistake stops being silent — not just the research
-    note this correction leaves behind.
+  This is a guard, not full support for arbitrary tags or balancers. Resolving
+  the config's actual server/balancer target remains M7.5; until then, turning
+  app routing off and restoring the default DNS setting runs the config's own
+  routing unchanged. Import-time `PassthroughValidator` still exercises only
+  the pure branch (`override = null`), so this decision deliberately stays at
+  connect where the active routing/DNS state is known. Duplicate outbound tags
+  remain a separate structural failure that xray-core rejects during the
+  connect-time `validate` call.
 
   Same dead-analysis shape as `overrideBlocker` otherwise, recorded here
   rather than wired for the same closing-milestone reason (a consumer is a UI

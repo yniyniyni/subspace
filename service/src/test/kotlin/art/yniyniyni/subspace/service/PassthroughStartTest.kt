@@ -3,6 +3,7 @@
 package art.yniyniyni.subspace.service
 
 import art.yniyniyni.subspace.core.model.FailureReason
+import art.yniyniyni.subspace.core.xray.ComposeFailure
 import art.yniyniyni.subspace.core.xray.ComposeResult
 import art.yniyniyni.subspace.core.xray.OverrideBlocks
 import art.yniyniyni.subspace.core.xray.RawConfigComposer
@@ -100,6 +101,30 @@ class PassthroughStartTest {
 
         plan.assetDir shouldBe "/geo"
         plan.overrideApplies shouldBe false
+    }
+
+    @Test
+    fun `an override is refused when the config has no exact proxy outbound`() {
+        val balancerConfig =
+            """
+            {
+              "outbounds": [
+                { "tag": "proxy-auto", "protocol": "vless" },
+                { "tag": "direct", "protocol": "freedom" },
+                { "tag": "block", "protocol": "blackhole" }
+              ]
+            }
+            """.trimIndent()
+
+        passthroughOverrideFailure(balancerConfig) shouldBe ComposeFailure.MissingOverrideProxy
+        passthroughOverrideFailure(config) shouldBe null
+    }
+
+    @Test
+    fun `a missing override target gets its own user-actionable failure reason`() {
+        compositionFailureReason(ComposeFailure.MissingOverrideProxy) shouldBe
+            FailureReason.PassthroughOverrideUnavailable
+        compositionFailureReason(ComposeFailure.NotJson) shouldBe FailureReason.ConfigGenerationFailed
     }
 
     // This mapping is the backstop two accepted M7 limitations rest on

@@ -28,6 +28,9 @@ internal val DEFAULT_SNIFFING = SniffingSettings(listOf("http", "tls", "quic"))
  * passthrough path passes the *config's own* block rather than
  * [DEFAULT_SNIFFING], because substituting ours changes which of the config's
  * rules match (spec §4.2).
+ * [tag] defaults to the typed path's stable name; the passthrough composer
+ * supplies the source config's original SOCKS tag so its untouched
+ * `routing.rules[].inboundTag` references keep matching.
  *
  * Returns the inbound object with no trailing comma and no surrounding array;
  * the caller places it.
@@ -35,10 +38,11 @@ internal val DEFAULT_SNIFFING = SniffingSettings(listOf("http", "tls", "quic"))
 internal fun socksInboundJson(
     port: Int,
     sniffing: SniffingSettings?,
+    tag: String = "socks-in",
 ): String {
     val sb = StringBuilder()
     sb.appendLine("""    {""")
-    sb.appendLine("""      "tag": "socks-in",""")
+    sb.appendLine("""      "tag": ${jsonString(tag)},""")
     sb.appendLine("""      "protocol": "socks",""")
     sb.appendLine("""      "listen": "127.0.0.1",""")
     sb.appendLine("""      "port": $port,""")
@@ -62,14 +66,18 @@ internal fun socksInboundJson(
  * Same loopback rule, and it matters more here: an HTTP proxy reachable from the
  * LAN is usable directly from any browser on the network. No `sniffing` block —
  * an HTTP `CONNECT` states its destination, so there is nothing to sniff.
+ * [tag] follows the same preservation rule as [socksInboundJson].
  *
  * Returns the inbound object with no trailing comma and no surrounding array;
  * the caller places it.
  */
-internal fun httpInboundJson(port: Int): String {
+internal fun httpInboundJson(
+    port: Int,
+    tag: String = "http-in",
+): String {
     val sb = StringBuilder()
     sb.appendLine("""    {""")
-    sb.appendLine("""      "tag": "http-in",""")
+    sb.appendLine("""      "tag": ${jsonString(tag)},""")
     sb.appendLine("""      "protocol": "http",""")
     sb.appendLine("""      "listen": "127.0.0.1",""")
     sb.appendLine("""      "port": $port,""")

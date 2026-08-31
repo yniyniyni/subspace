@@ -17,6 +17,9 @@ public enum class ComposeFailure {
     NotJson,
     NoOutbounds,
 
+    /** The app override targets `proxy`, but the stored config defines no exact tag with that name. */
+    MissingOverrideProxy,
+
     /**
      * [OverrideBlocks]'s `routingJson`/`dnsJson`/`extraOutboundsJson` did not
      * parse. Task 4's callers are expected to hand `compose` well-formed text
@@ -151,7 +154,7 @@ public object RawConfigComposer {
             } else {
                 sniffingOf(root)
             }
-        val inbounds = inboundsJson(settings, sniffing)
+        val inbounds = inboundsJson(settings, sniffing, inboundTagsOf(root))
         return ComposeResult.Ok(render(kept, inbounds))
     }
 
@@ -203,11 +206,54 @@ public object RawConfigComposer {
     private fun inboundsJson(
         settings: TunnelSettings,
         sniffing: SniffingSettings?,
+        tags: InboundTags,
     ): String {
-        val socks = socksInboundJson(settings.socksPort, sniffing.takeIf { settings.enableSniffing })
-        val http = settings.httpPort?.let(::httpInboundJson)
+        val socks = socksInboundJson(settings.socksPort, sniffing.takeIf { settings.enableSniffing }, tags.socks)
+        val http = settings.httpPort?.let { httpInboundJson(it, tags.http) }
         return listOfNotNull(socks, http).joinToString(",\n")
     }
+
+    /** The client-facing tags whose references survive in the config's own routing block. */
+    private data class InboundTags(val socks: String, val http: String)
+
+    /**
+     * Preserves the original client inbound tags while replacing their listeners and ports.
+     *
+     * The pure branch keeps the config's routing tree untouched. If a rule names the original
+     * SOCKS/HTTP tag through `inboundTag`, changing that tag on the injected inbound makes the rule
+     * silently stop matching even though xray-core accepts the config. Defaults are used only when
+     * the source has no usable tag for that protocol. The HTTP fallback is kept distinct from the
+     * SOCKS tag so the injected pair can never create a duplicate-tag config by itself.
+     */
+    private fun inboundTagsOf(root: JsonObject): InboundTags {
+        val socks = root.inboundTagFor("socks") ?: DEFAULT_SOCKS_INBOUND_TAG
+        val requestedHttp = root.inboundTagFor("http") ?: DEFAULT_HTTP_INBOUND_TAG
+        val http =
+            when {
+                requestedHttp != socks -> requestedHttp
+                DEFAULT_HTTP_INBOUND_TAG != socks -> DEFAULT_HTTP_INBOUND_TAG
+                else -> FALLBACK_HTTP_INBOUND_TAG
+            }
+        return InboundTags(socks = socks, http = http)
+    }
+
+    private fun JsonObject.inboundTagFor(protocol: String): String? =
+        (this["inbounds"] as? JsonArray)
+            ?.filterIsInstance<JsonObject>()
+            ?.firstOrNull { inbound -> inbound.stringValue("protocol") == protocol }
+            ?.stringValue("tag")
+            ?.takeIf { it.isNotBlank() }
+
+    private fun JsonObject.stringValue(key: String): String? =
+        when (val value = this[key]) {
+            null, is JsonNull -> null
+            is JsonPrimitive -> value.content
+            else -> null
+        }
+
+    private const val DEFAULT_SOCKS_INBOUND_TAG = "socks-in"
+    private const val DEFAULT_HTTP_INBOUND_TAG = "http-in"
+    private const val FALLBACK_HTTP_INBOUND_TAG = "subspace-http-in"
 
     /**
      * Emits the tree with `inbounds` spliced in as text.

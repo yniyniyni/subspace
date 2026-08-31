@@ -102,8 +102,36 @@ class RawConfigComposerTest {
         val socks = inbounds[0] as JsonObject
         socks["port"]!!.jsonPrimitive.content shouldBe "41080"
         socks["listen"]!!.jsonPrimitive.content shouldBe "127.0.0.1"
-        socks["tag"]!!.jsonPrimitive.content shouldBe "socks-in"
-        (inbounds[1] as JsonObject)["port"]!!.jsonPrimitive.content shouldBe "41081"
+        socks["tag"]!!.jsonPrimitive.content shouldBe "socks"
+        val http = inbounds[1] as JsonObject
+        http["port"]!!.jsonPrimitive.content shouldBe "41081"
+        http["tag"]!!.jsonPrimitive.content shouldBe "http"
+    }
+
+    @Test
+    fun `routing rules keep matching the original client inbound tags`() {
+        val raw =
+            """
+            {
+              "inbounds": [
+                { "tag": "client-socks", "protocol": "socks", "port": 10808 },
+                { "tag": "client-http", "protocol": "http", "port": 10809 }
+              ],
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ],
+              "routing": {
+                "rules": [
+                  { "inboundTag": ["client-socks"], "outboundTag": "proxy" },
+                  { "inboundTag": ["client-http"], "outboundTag": "proxy" }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        val out = composed(raw)
+        val inbounds = out["inbounds"] as JsonArray
+
+        (inbounds[0] as JsonObject)["tag"]!!.jsonPrimitive.content shouldBe "client-socks"
+        (inbounds[1] as JsonObject)["tag"]!!.jsonPrimitive.content shouldBe "client-http"
     }
 
     // Research §5b.5: substituting our destOverride would start sniffing QUIC and

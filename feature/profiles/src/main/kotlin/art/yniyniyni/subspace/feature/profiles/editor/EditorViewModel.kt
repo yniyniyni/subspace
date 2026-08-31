@@ -254,13 +254,15 @@ constructor(
                 } else {
                     val loaded =
                         profile.toEditorState(groups).copy(routingOverridesThisConfig = routingOverridesThisConfig)
-                    // Off Main: convertibleRouting() is a full JSON parse of the pasted config
-                    // (convertXrayRouting), and load() otherwise runs on Main.immediate — a large
-                    // config would add a frame hitch on every RAW_JSON editor open.
-                    val canConvertRouting = withContext(conversionDispatcher) { loaded.convertibleRouting() != null }
-                    val advisories =
+                    // Off Main: convertibleRouting() and analysePassthrough() each do a full JSON
+                    // parse of the pasted config, and load() otherwise runs on Main.immediate — a
+                    // large config would add a frame hitch on every RAW_JSON editor open. One hop,
+                    // not two: both parses are pure and share nothing that forces a second dispatch.
+                    val (canConvertRouting, advisories) =
                         withContext(conversionDispatcher) {
-                            loaded.rawJson?.let { analysePassthrough(it).advisories }.orEmpty()
+                            val canConvert = loaded.convertibleRouting() != null
+                            val advisories = loaded.rawJson?.let { analysePassthrough(it).advisories }.orEmpty()
+                            canConvert to advisories
                         }
                     loaded.copy(canConvertRouting = canConvertRouting, advisories = advisories)
                 }

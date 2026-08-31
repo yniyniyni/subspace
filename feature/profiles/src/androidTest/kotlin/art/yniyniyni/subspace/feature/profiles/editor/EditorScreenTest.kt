@@ -15,6 +15,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughAdvisory
 import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import art.yniyniyni.subspace.feature.profiles.R
@@ -370,6 +371,51 @@ class EditorScreenTest {
         )
 
         composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_rejected_core_rejected)).assertExists()
+    }
+
+    // Fix round 1, Important 1: PassthroughAdvisory.messageRes() is a member->string mapping
+    // added in one edit, in the same file, rendered by the same composable as
+    // PassthroughRejection.messageRes() above — an exhaustive `when` catches a *missing* branch
+    // for a future fourth member, but not a *mis-mapping* between three that already exist. Same
+    // one-test-per-member shape as anIneligibleRawProfileSaysNotJsonWhenTheFileIsNotJson and its
+    // siblings.
+    @Test
+    fun aRawProfileShowsTheDanglingRoutingReferenceAdvisory() {
+        setContent(state = rawJsonState.copy(advisories = listOf(PassthroughAdvisory.DanglingRoutingReference)))
+
+        composeRule.onNodeWithText(
+            context.getString(R.string.editor_raw_json_advisory_dangling_reference),
+        ).assertExists()
+    }
+
+    @Test
+    fun aRawProfileShowsTheSniffingCannotServeOwnRulesAdvisory() {
+        setContent(state = rawJsonState.copy(advisories = listOf(PassthroughAdvisory.SniffingCannotServeOwnRules)))
+
+        composeRule.onNodeWithText(
+            context.getString(R.string.editor_raw_json_advisory_sniffing_cannot_serve_rules),
+        ).assertExists()
+    }
+
+    @Test
+    fun aRawProfileShowsTheFakeDnsWithoutSniffingOverrideAdvisory() {
+        setContent(state = rawJsonState.copy(advisories = listOf(PassthroughAdvisory.FakeDnsWithoutSniffingOverride)))
+
+        composeRule.onNodeWithText(
+            context.getString(R.string.editor_raw_json_advisory_fakedns_without_sniffing),
+        ).assertExists()
+    }
+
+    @Test
+    fun aRawProfileWithNoAdvisoriesRendersNoneOfTheThreeStrings() {
+        setContent(state = rawJsonState.copy(advisories = emptyList()))
+
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_advisory_dangling_reference))
+            .assertDoesNotExist()
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_advisory_sniffing_cannot_serve_rules))
+            .assertDoesNotExist()
+        composeRule.onNodeWithText(context.getString(R.string.editor_raw_json_advisory_fakedns_without_sniffing))
+            .assertDoesNotExist()
     }
 
     // Task 15: the entry point that makes Task 13's convertXrayRouting and Task 14's

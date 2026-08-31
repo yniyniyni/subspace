@@ -216,7 +216,7 @@ private fun advisoriesFor(
         if (wantsFakeDns && "fakedns" !in sniffedDestOverrides) {
             add(PassthroughAdvisory.FakeDnsWithoutSniffingOverride)
         }
-        if (hasDanglingReference(routing, outboundTags)) {
+        if (hasDanglingReference(root, routing, outboundTags)) {
             add(PassthroughAdvisory.DanglingRoutingReference)
         }
     }
@@ -235,15 +235,33 @@ private fun advisoriesFor(
  * tags, so `selector: ["proxy"]` legitimately selects `proxy-auto`,
  * `proxy-auto-2` and so on. Treating its entries as exact references would
  * report a defect that is not there — §10.4.
+ *
+ * Suppressed entirely when the config carries a `reverse` block: `ARCHITECTURE.md`
+ * §"Passthrough execution" (line 331) lists `reverse` among the blocks
+ * `RawConfigComposer` deliberately preserves as opaque, so such a config does
+ * reach the core through passthrough. In xray's reverse-proxy shape, a rule's
+ * `outboundTag` can legitimately name a `reverse` bridge/portal tag, which
+ * lives outside `outbounds` — this analyser has no model of that namespace.
+ * Widening the outbound-tag set to include reverse tags would need an
+ * upstream citation this codebase does not have (§10.5); suppressing instead
+ * makes no claim about how `reverse` resolves and fails toward silence
+ * rather than toward a false accusation — the same §10.4 reasoning the
+ * `selector` carve-out rests on.
  */
 private fun hasDanglingReference(
+    root: JsonObject,
     routing: JsonObject?,
     outboundTags: List<String>,
 ): Boolean {
+    if (root["reverse"] != null) return false
+
     val rules = routing.arrayOf("rules").filterIsInstance<JsonObject>()
     val balancers = routing.arrayOf("balancers").filterIsInstance<JsonObject>()
     val balancerTags = balancers.mapNotNull { it["tag"].stringOrNull() }.toSet()
-    val outbounds = outboundTags.toSet()
+    // Blank tags are filtered out: an outbound with no `tag` seeds outboundTags
+    // with "" (analyseOutbounds' orEmpty()), and a rule carrying an equally
+    // blank "outboundTag": "" must not resolve against that placeholder.
+    val outbounds = outboundTags.filter { it.isNotBlank() }.toSet()
 
     val outboundRefs =
         rules.mapNotNull { it["outboundTag"].stringOrNull() } +

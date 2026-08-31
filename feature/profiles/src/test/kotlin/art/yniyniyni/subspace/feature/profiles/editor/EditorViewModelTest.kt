@@ -371,8 +371,12 @@ class EditorViewModelTest {
             viewModel.state.value.advisories shouldBe listOf(PassthroughAdvisory.DanglingRoutingReference)
         }
 
+    // Fix round 1, Minor 5: renamed from "...whose references all resolve carries no
+    // advisories" — rawJsonProfile's own rawJson carries no `routing` block at all, so there
+    // is nothing to resolve; the honest claim this test pins is the absence of a routing block
+    // producing an empty advisory list, not a resolved reference.
     @Test
-    fun `a raw json profile whose references all resolve carries no advisories`() =
+    fun `a raw json profile with no routing block carries no advisories`() =
         runTest {
             val source = FakeProfileSource(listOf(rawJsonProfile))
             val viewModel = editorViewModel(source)

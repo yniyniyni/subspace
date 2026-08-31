@@ -249,6 +249,45 @@ class PassthroughAnalysisTest {
         analysePassthrough(json).advisories shouldContainExactly emptyList()
     }
 
+    // Fix round 1, Minor 4: an outbound with no `tag` seeds the outbound-tag namespace with ""
+    // (analyseOutbounds' orEmpty()). A rule's own equally blank "outboundTag": "" must not
+    // resolve against that placeholder — a blank reference is never a real one.
+    @Test
+    fun `a rule with a blank outboundTag is a dangling reference, not a match against an untagged outbound`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" },
+                             { "protocol": "freedom" } ],
+              "routing": { "rules": [ { "type": "field", "outboundTag": "" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly
+            listOf(PassthroughAdvisory.DanglingRoutingReference)
+    }
+
+    // Fix round 1, Minor 3 (promoted): ARCHITECTURE.md's "Passthrough execution" section (line
+    // 331) lists `reverse` among the blocks RawConfigComposer deliberately preserves as opaque —
+    // such a config reaches the core through passthrough. In xray's reverse-proxy shape, a rule's
+    // `outboundTag` can legitimately name a `reverse` bridge/portal tag outside `outbounds`; this
+    // analyser has no model of that namespace and no upstream citation to widen into it (§10.5),
+    // so it suppresses the whole check rather than risk telling the user a working config is
+    // broken (§10.4) — the same reasoning the `selector` carve-out rests on.
+    @Test
+    fun `a config with a reverse block raises no dangling advisory even with an unresolved outboundTag`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ],
+              "reverse": { "bridges": [ { "tag": "bridge", "domain": "test.local" } ] },
+              "routing": { "rules": [ { "type": "field", "outboundTag": "bridge" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly emptyList()
+    }
+
     // §7: this analyser is on the never-throw side of the parser boundary.
     @Test
     fun `malformed shapes are reported, never thrown`() {

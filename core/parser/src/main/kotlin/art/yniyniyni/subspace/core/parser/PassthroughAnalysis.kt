@@ -75,6 +75,23 @@ public enum class PassthroughAdvisory {
 
     /** `dns.servers` asks for FakeDNS but no inbound lists `fakedns` in `destOverride`. */
     FakeDnsWithoutSniffingOverride,
+
+    /**
+     * A `routing` rule or balancer names a tag that the config does not define.
+     *
+     * Traffic matching that rule is dropped when it fires — the core logs
+     * `app/dispatcher: non existing outTag: <tag>` and the user sees a profile
+     * that connects and carries nothing, with no message. Advisory rather than
+     * a [PassthroughRejection] because the config still runs, and often runs
+     * fine: the reference may name a path that never fires.
+     *
+     * Only this app can report it. xray-core **accepts** a dangling
+     * `outboundTag` at config build and fails only when the rule fires —
+     * established by instrumented run, see Question 3 of
+     * `docs/agent/research/2026-08-25-m7-device-verification.md`. `testXray`
+     * therefore never catches it.
+     */
+    DanglingRoutingReference,
 }
 
 /**
@@ -155,7 +172,7 @@ private fun analyseOutbounds(
     return PassthroughAnalysis(
         rejection = rejection,
         overrideBlocker = overrideBlockerFor(tags),
-        advisories = advisoriesFor(root, routing),
+        advisories = advisoriesFor(root, routing, tags),
         isBalancer = isBalancer,
         serverOutboundCount = serverCount,
         outboundTags = tags,
@@ -186,6 +203,7 @@ private fun overrideBlockerFor(tags: List<String>): OverrideBlocker? =
 private fun advisoriesFor(
     root: JsonObject,
     routing: JsonObject?,
+    outboundTags: List<String>,
 ): List<PassthroughAdvisory> {
     val sniffedDestOverrides = sniffedDestOverrides(root)
     val hasDomainRules = routing.arrayOf("rules").filterIsInstance<JsonObject>().any { it["domain"] != null }
@@ -198,7 +216,41 @@ private fun advisoriesFor(
         if (wantsFakeDns && "fakedns" !in sniffedDestOverrides) {
             add(PassthroughAdvisory.FakeDnsWithoutSniffingOverride)
         }
+        if (hasDanglingReference(routing, outboundTags)) {
+            add(PassthroughAdvisory.DanglingRoutingReference)
+        }
     }
+}
+
+/**
+ * Whether any `routing` reference names something the config never defines.
+ *
+ * Three reference kinds, two namespaces:
+ * - a rule's `outboundTag` names an **outbound** tag,
+ * - a rule's `balancerTag` names a **balancer** tag,
+ * - a balancer's `fallbackTag` names an **outbound** tag — the core's own
+ *   refusal calls it `outTag` (device record F9, Pixel 8, 2026-08-31).
+ *
+ * `selector` is deliberately absent: it is a **prefix** match over outbound
+ * tags, so `selector: ["proxy"]` legitimately selects `proxy-auto`,
+ * `proxy-auto-2` and so on. Treating its entries as exact references would
+ * report a defect that is not there — §10.4.
+ */
+private fun hasDanglingReference(
+    routing: JsonObject?,
+    outboundTags: List<String>,
+): Boolean {
+    val rules = routing.arrayOf("rules").filterIsInstance<JsonObject>()
+    val balancers = routing.arrayOf("balancers").filterIsInstance<JsonObject>()
+    val balancerTags = balancers.mapNotNull { it["tag"].stringOrNull() }.toSet()
+    val outbounds = outboundTags.toSet()
+
+    val outboundRefs =
+        rules.mapNotNull { it["outboundTag"].stringOrNull() } +
+            balancers.mapNotNull { it["fallbackTag"].stringOrNull() }
+    val balancerRefs = rules.mapNotNull { it["balancerTag"].stringOrNull() }
+
+    return outboundRefs.any { it !in outbounds } || balancerRefs.any { it !in balancerTags }
 }
 
 /** `destOverride` values from every inbound whose `sniffing.enabled` is true. */

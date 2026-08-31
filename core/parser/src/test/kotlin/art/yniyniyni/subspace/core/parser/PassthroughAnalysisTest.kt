@@ -137,7 +137,8 @@ class PassthroughAnalysisTest {
             {
               "routing": { "rules": [ { "domain": ["domain:ru"], "outboundTag": "direct" } ] },
               "inbounds": [ { "tag": "socks", "protocol": "socks" } ],
-              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ]
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" },
+                             { "tag": "direct", "protocol": "freedom" } ]
             }
             """.trimIndent()
 
@@ -164,6 +165,88 @@ class PassthroughAnalysisTest {
 
         analysePassthrough(json).advisories shouldContainExactly
             listOf(PassthroughAdvisory.FakeDnsWithoutSniffingOverride)
+    }
+
+    // Device record F9: the target panel's own balancer entry, reduced to the defect.
+    @Test
+    fun `a rule naming an outbound that does not exist is an advisory`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "rules": [ { "type": "field", "outboundTag": "proxy" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly
+            listOf(PassthroughAdvisory.DanglingRoutingReference)
+    }
+
+    @Test
+    fun `a balancer fallbackTag naming an outbound that does not exist is an advisory`() {
+        // The target panel's own balancer entry, reduced to the defect (device record F9).
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" },
+                             { "tag": "proxy-auto-2", "protocol": "vless" } ],
+              "routing": {
+                "rules": [ { "type": "field", "network": "tcp,udp", "balancerTag": "Auto_Balancer" } ],
+                "balancers": [ { "tag": "Auto_Balancer", "selector": ["proxy"], "fallbackTag": "proxy" } ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly
+            listOf(PassthroughAdvisory.DanglingRoutingReference)
+    }
+
+    @Test
+    fun `a selector prefix that matches no tag exactly is not a dangling reference`() {
+        // selector is a PREFIX match: "proxy" legitimately selects proxy-auto*.
+        // Flagging it would report a defect that is not there.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" },
+                             { "tag": "direct", "protocol": "freedom" } ],
+              "routing": {
+                "rules": [ { "type": "field", "network": "tcp,udp", "balancerTag": "Auto_Balancer" } ],
+                "balancers": [ { "tag": "Auto_Balancer", "selector": ["proxy"], "fallbackTag": "direct" } ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly emptyList()
+    }
+
+    @Test
+    fun `a rule naming a balancer that does not exist is an advisory`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ],
+              "routing": { "rules": [ { "type": "field", "balancerTag": "Nope" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly
+            listOf(PassthroughAdvisory.DanglingRoutingReference)
+    }
+
+    @Test
+    fun `a config whose every reference resolves carries no dangling advisory`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" },
+                             { "tag": "direct", "protocol": "freedom" } ],
+              "routing": { "rules": [ { "type": "field", "outboundTag": "direct" },
+                                      { "type": "field", "outboundTag": "proxy" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly emptyList()
     }
 
     // §7: this analyser is on the never-throw side of the parser boundary.

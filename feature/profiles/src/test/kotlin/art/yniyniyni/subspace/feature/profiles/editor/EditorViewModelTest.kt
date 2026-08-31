@@ -15,6 +15,7 @@ import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.parser.PassthroughAdvisory
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
@@ -124,6 +125,17 @@ class EditorViewModelTest {
             """"outbounds":[{"tag":"block","protocol":"blackhole"}]}"""
 
     private val allDroppedRawJsonProfile = rawJsonProfile.copy(id = 4L, rawJson = allDroppedRawJson)
+
+    /**
+     * The target panel's own balancer entry, reduced to the defect (device record F9):
+     * `fallbackTag` names an outbound the document never defines.
+     */
+    private val danglingRoutingRawJson =
+        """{"routing":{"rules":[{"type":"field","network":"tcp,udp","balancerTag":"Auto_Balancer"}],""" +
+            """"balancers":[{"tag":"Auto_Balancer","selector":["proxy"],"fallbackTag":"proxy"}]},""" +
+            """"outbounds":[{"tag":"proxy-auto","protocol":"vless"}]}"""
+
+    private val danglingRoutingRawJsonProfile = rawJsonProfile.copy(id = 5L, rawJson = danglingRoutingRawJson)
 
     private class FakeProfileSource(
         profiles: List<StoredProfile>,
@@ -342,6 +354,33 @@ class EditorViewModelTest {
 
             viewModel.state.value.runsAsWritten shouldBe true
             viewModel.state.value.passthroughRejection shouldBe null
+        }
+
+    // Task 3, M7 device fixes: the target panel's balancer entry connects and carries
+    // nothing (device record F9) — analysePassthrough reports it as an advisory, and load()
+    // must carry that into EditorState for the screen to render.
+    @Test
+    fun `a raw json profile with a dangling fallbackTag carries the advisory`() =
+        runTest {
+            val source = FakeProfileSource(listOf(danglingRoutingRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(danglingRoutingRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.advisories shouldBe listOf(PassthroughAdvisory.DanglingRoutingReference)
+        }
+
+    @Test
+    fun `a raw json profile whose references all resolve carries no advisories`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.advisories shouldBe emptyList()
         }
 
     @Test

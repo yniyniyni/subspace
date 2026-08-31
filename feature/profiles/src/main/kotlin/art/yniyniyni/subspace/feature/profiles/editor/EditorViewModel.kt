@@ -19,7 +19,9 @@ import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughAdvisory
 import art.yniyniyni.subspace.core.parser.PassthroughRejection
+import art.yniyniyni.subspace.core.parser.analysePassthrough
 import art.yniyniyni.subspace.core.parser.routing.RoutingConversion
 import art.yniyniyni.subspace.core.parser.routing.convertXrayRouting
 import art.yniyniyni.subspace.core.parser.validatePort
@@ -98,6 +100,14 @@ internal data class EditorState(
     val runsAsWritten: Boolean = false,
     /** Why the bytes cannot be run, or null when they can (or the row is TYPED). */
     val passthroughRejection: PassthroughRejection? = null,
+    /**
+     * Structural warnings about this config that are the user's to act on, not the app's.
+     *
+     * Computed at load from [rawJson], never stored: `analysePassthrough` is pure and the
+     * verdict depends only on those bytes, so a column would be a second source of truth
+     * for something already derivable. Empty for every [ProfileKind.TYPED] row.
+     */
+    val advisories: List<PassthroughAdvisory> = emptyList(),
     /** True when [runsAsWritten] and an app rule set or DNS resolver would replace this config's blocks. */
     val routingOverridesThisConfig: Boolean = false,
     /**
@@ -248,7 +258,11 @@ constructor(
                     // (convertXrayRouting), and load() otherwise runs on Main.immediate — a large
                     // config would add a frame hitch on every RAW_JSON editor open.
                     val canConvertRouting = withContext(conversionDispatcher) { loaded.convertibleRouting() != null }
-                    loaded.copy(canConvertRouting = canConvertRouting)
+                    val advisories =
+                        withContext(conversionDispatcher) {
+                            loaded.rawJson?.let { analysePassthrough(it).advisories }.orEmpty()
+                        }
+                    loaded.copy(canConvertRouting = canConvertRouting, advisories = advisories)
                 }
         }
     }

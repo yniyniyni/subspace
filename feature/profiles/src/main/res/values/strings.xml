@@ -279,6 +279,26 @@
         recovered from it and are used instead.
     </string>
 
+    <!-- One per PassthroughAdvisory member. §5.6 forbids putting anything derived from config
+         contents on screen or in a log — none of these three names the offending tag/domain. -->
+    <!-- PassthroughAdvisory.DanglingRoutingReference. Deliberately does not name the tag:
+         §5.6 forbids putting anything derived from config contents on screen or in a log. -->
+    <string name="editor_raw_json_advisory_dangling_reference">
+        This file has a routing rule pointing at an outbound or balancer it never defines.
+        Traffic matching that rule is dropped rather than sent anywhere, so the tunnel can
+        connect and still carry nothing. Ask whoever provided the config to fix it.
+    </string>
+    <!-- PassthroughAdvisory.SniffingCannotServeOwnRules -->
+    <string name="editor_raw_json_advisory_sniffing_cannot_serve_rules">
+        This file matches traffic by domain name, but its own sniffing settings never recover
+        one, so those rules match nothing.
+    </string>
+    <!-- PassthroughAdvisory.FakeDnsWithoutSniffingOverride -->
+    <string name="editor_raw_json_advisory_fakedns_without_sniffing">
+        This file asks for FakeDNS but no inbound lists it under sniffing, so FakeDNS answers
+        are never resolved back to a domain.
+    </string>
+
     <string name="editor_raw_json_label">Pasted config (read-only)</string>
 
     <!-- Same closed-vocabulary shape as import_failure_* above, minus the

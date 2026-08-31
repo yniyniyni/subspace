@@ -54,6 +54,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughAdvisory
 import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.core.parser.SHADOWSOCKS_METHODS
 import art.yniyniyni.subspace.feature.profiles.R
@@ -676,6 +677,17 @@ private fun RawJsonFields(
                 color = MaterialTheme.colorScheme.error,
             )
         }
+        // Advisories are the config's own inconsistencies, not ours: shown on
+        // an eligible row too, because such a config runs and may still carry
+        // nothing (device record F9). Distinct colour from the rejection above —
+        // this is a warning about a file that runs, not a refusal.
+        state.advisories.forEach { advisory ->
+            Text(
+                text = stringResource(advisory.messageRes()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(text = stringResource(R.string.editor_raw_json_label), style = MaterialTheme.typography.labelLarge)
         Text(
             text = state.rawJson.orEmpty(),
@@ -700,6 +712,20 @@ private fun PassthroughRejection.messageRes(): Int =
         PassthroughRejection.NoOutbounds -> R.string.editor_raw_json_rejected_no_outbounds
         PassthroughRejection.SeveralServers -> R.string.editor_raw_json_rejected_several_servers
         PassthroughRejection.CoreRejected -> R.string.editor_raw_json_rejected_core_rejected
+    }
+
+/**
+ * One string per [PassthroughAdvisory] member — same no-`else` reasoning as
+ * [PassthroughRejection.messageRes] above.
+ */
+private fun PassthroughAdvisory.messageRes(): Int =
+    when (this) {
+        PassthroughAdvisory.SniffingCannotServeOwnRules ->
+            R.string.editor_raw_json_advisory_sniffing_cannot_serve_rules
+        PassthroughAdvisory.FakeDnsWithoutSniffingOverride ->
+            R.string.editor_raw_json_advisory_fakedns_without_sniffing
+        PassthroughAdvisory.DanglingRoutingReference ->
+            R.string.editor_raw_json_advisory_dangling_reference
     }
 
 // One shared text-field primitive, reused for every field in the form —

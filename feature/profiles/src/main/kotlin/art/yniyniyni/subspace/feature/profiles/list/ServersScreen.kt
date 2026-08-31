@@ -189,7 +189,7 @@ internal fun ServersScreenContent(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        ServersHeader(onAddProfile = actions.onAddProfile)
+        ServersHeader(onAddProfile = actions.onAddProfile, showAddAction = state.groups.isNotEmpty())
 
         ServersFilters(state = state, actions = actions)
 
@@ -270,15 +270,21 @@ private fun UpdateResultBanner(
  * The screen title plus the header's own "Add server" action — split out of
  * [ServersScreenContent] to keep it short.
  *
- * The empty state has its own add button (`servers_empty_action`), reachable
- * only when [ServersState.groups] is empty. Task 2 (M7 device fixes): Home's
- * "Add server" chip navigates here regardless of whether a group already
- * exists, so this header action is present whenever the screen is, and the
- * two are not mutually exclusive.
+ * The empty state (`EmptyServersState`, private to `ServersGroupList.kt`) has
+ * its own add button (`servers_empty_action`), reachable only when
+ * [ServersState.groups] is empty — and it renders the same literal text as
+ * `servers_add_action`.
+ * Task 2 (M7 device fixes): Home's "Add server" chip navigates here
+ * regardless of whether a group already exists, so this screen needs *some*
+ * add affordance in every state — but exactly one, never two identical
+ * buttons at once. [showAddAction] is therefore the negation of the empty
+ * state's own visibility condition: this button shows only when there is a
+ * group list for the empty state to *not* be showing over.
  */
 @Composable
 private fun ServersHeader(
     onAddProfile: () -> Unit,
+    showAddAction: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -290,8 +296,10 @@ private fun ServersHeader(
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.weight(1f).padding(vertical = CONTENT_HORIZONTAL_PADDING),
         )
-        TextButton(onClick = onAddProfile) {
-            Text(stringResource(R.string.servers_add_action))
+        if (showAddAction) {
+            TextButton(onClick = onAddProfile) {
+                Text(stringResource(R.string.servers_add_action))
+            }
         }
     }
 }

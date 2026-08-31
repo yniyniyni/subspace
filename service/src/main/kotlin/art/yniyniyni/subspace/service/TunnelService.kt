@@ -174,6 +174,25 @@ private fun existingOutboundTags(rawJson: String): Set<String> =
 internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? =
     ComposeFailure.MissingOverrideProxy.takeUnless { "proxy" in existingOutboundTags(rawJson) }
 
+/**
+ * Why a collapsed balancer row cannot be measured by probing one server.
+ *
+ * Such a row keeps the *first* member's typed projection (`ProfileRepository.import`'s
+ * collapse), and both ping modes read that projection alone. Reporting its result as the
+ * row's is wrong in both directions: a healthy first member hides a fleet that is failing,
+ * and a dead first member — the panel's `AUTO_BALANCER` set carried eight of them on
+ * 2026-09-01 — reads as the whole profile being unreachable while traffic flows fine over
+ * the other members. §10.4: a result must not misdescribe what was measured, so this
+ * refuses rather than reporting a number about one arbitrary destination.
+ *
+ * [LatencyOutcome.UNSUPPORTED] rather than a failure outcome because nothing failed —
+ * the row is not a single server, which is what these probes measure. Measuring every
+ * member and reporting the best is the better answer and needs `:core:parser` to expose
+ * a per-member projection; recorded as a follow-up rather than done here.
+ */
+internal fun balancerLatencyRefusal(rawJson: String?): LatencyOutcome? =
+    LatencyOutcome.UNSUPPORTED.takeIf { rawJson != null && analysePassthrough(rawJson).isBalancer }
+
 /** Maps composition failures to the user-actionable service reason they represent. */
 internal fun compositionFailureReason(reason: ComposeFailure): FailureReason =
     when (reason) {
@@ -1384,6 +1403,10 @@ class TunnelService : VpnService() {
         // local endpoint instead (§10.1).
         if (foreignVpn.holdsDefaultRoute(ownTunnelActive())) {
             LatencyResult.failed(LatencyOutcome.FOREIGN_VPN)
+        } else if (balancerLatencyRefusal(profile.rawJson) != null) {
+            // Checked before either mode, for the same reason the foreign-VPN guard is:
+            // both modes would otherwise return a number that describes one member.
+            LatencyResult.failed(LatencyOutcome.UNSUPPORTED)
         } else {
             when (options.mode) {
                 PingMode.TCP -> measureTcp(profile, options)

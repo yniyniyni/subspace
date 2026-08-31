@@ -16,6 +16,7 @@ import art.yniyniyni.subspace.core.model.DnsTransport
 import art.yniyniyni.subspace.core.model.ProfileDns
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
+import art.yniyniyni.subspace.core.parser.routing.ConversionDrop
 import art.yniyniyni.subspace.core.ui.theme.SubspaceTheme
 import org.junit.Rule
 import org.junit.Test
@@ -193,6 +194,34 @@ class ImportReviewSheetTest {
                 ),
             ).assertIsDisplayed()
         composeRule.onNodeWithText(string(R.string.import_review_will_activate)).assertIsDisplayed()
+    }
+
+    // Task 14 fix round 1: the JVM test proves the drops reach ImportReviewState;
+    // nothing proved they render. If ConversionDropsSection were deleted, or the
+    // `when` misrouted a member to the wrong Text, this is what would catch it.
+    @Test
+    fun aConversionsDropsRenderAsTheirOwnSection() {
+        setContent(
+            reviewingState.copy(
+                drops =
+                mapOf(
+                    ConversionDrop.BalancerRule to 1,
+                    ConversionDrop.UnknownOutbound to 2,
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText(string(R.string.routing_conversion_drops_title)).assertIsDisplayed()
+        composeRule.onNodeWithText(string(R.string.routing_conversion_drop_balancer, 1)).assertIsDisplayed()
+        composeRule.onNodeWithText(string(R.string.routing_conversion_drop_unknown_outbound, 2)).assertIsDisplayed()
+    }
+
+    @Test
+    fun aLosslessConversionShowsNoDropsSection() {
+        setContent(reviewingState.copy(drops = emptyMap()))
+
+        composeRule.onNodeWithText(string(R.string.routing_conversion_drops_title)).assertDoesNotExist()
+        composeRule.onNodeWithText(string(R.string.routing_conversion_drop_balancer, 1)).assertDoesNotExist()
     }
 
     @Test

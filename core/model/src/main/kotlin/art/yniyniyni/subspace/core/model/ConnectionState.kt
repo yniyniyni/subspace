@@ -85,6 +85,14 @@ public enum class StartupStage {
 }
 
 public enum class FailureReason {
+    /**
+     * No runnable config bytes could be produced at all — a typed model failed
+     * to generate, a stored config failed to compose, or writing either to
+     * disk failed. Distinct from [ConfigRejected] and
+     * [PassthroughRejectedAtConnect], which both mean the core saw
+     * well-formed bytes and refused them; this one means the core was never
+     * shown anything.
+     */
     ConfigGenerationFailed,
     ConfigRejected,
     PortAllocationFailed,
@@ -136,6 +144,23 @@ public enum class FailureReason {
      * per-app screen and one who goes looking for a broken server.
      */
     PerAppAllowListEmpty,
+
+    /**
+     * The app's routing or DNS override requires a `proxy` outbound that this stored config does
+     * not define. Refused before core startup rather than allowing a dangling routing target to
+     * produce a Connected tunnel that drops matching traffic.
+     */
+    PassthroughOverrideUnavailable,
+
+    /**
+     * A stored raw config passed validation at import and the core refuses it now.
+     *
+     * Deliberately not a fallback to the typed projection. §6 permits that
+     * fallback only as a visible state, and two different tunnels behind one tap
+     * is not a state a user can act on — this reason tells them the stored bytes
+     * or their environment changed.
+     */
+    PassthroughRejectedAtConnect,
 }
 
 /**

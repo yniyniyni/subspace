@@ -35,6 +35,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
@@ -188,11 +189,7 @@ internal fun ServersScreenContent(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = stringResource(R.string.servers_title),
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING, vertical = CONTENT_HORIZONTAL_PADDING),
-        )
+        ServersHeader(onAddProfile = actions.onAddProfile, showAddAction = state.groups.isNotEmpty())
 
         ServersFilters(state = state, actions = actions)
 
@@ -267,6 +264,44 @@ private fun UpdateResultBanner(
             .clickable(onClick = onDismiss)
             .testTag(SERVERS_UPDATE_RESULT_TEST_TAG),
     )
+}
+
+/**
+ * The screen title plus the header's own "Add server" action — split out of
+ * [ServersScreenContent] to keep it short.
+ *
+ * The empty state (`EmptyServersState`, private to `ServersGroupList.kt`) has
+ * its own add button (`servers_empty_action`), reachable only when
+ * [ServersState.groups] is empty — and it renders the same literal text as
+ * `servers_add_action`.
+ * Task 2 (M7 device fixes): Home's "Add server" chip navigates here
+ * regardless of whether a group already exists, so this screen needs *some*
+ * add affordance in every state — but exactly one, never two identical
+ * buttons at once. [showAddAction] is therefore the negation of the empty
+ * state's own visibility condition: this button shows only when there is a
+ * group list for the empty state to *not* be showing over.
+ */
+@Composable
+private fun ServersHeader(
+    onAddProfile: () -> Unit,
+    showAddAction: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(horizontal = CONTENT_HORIZONTAL_PADDING),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.servers_title),
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.weight(1f).padding(vertical = CONTENT_HORIZONTAL_PADDING),
+        )
+        if (showAddAction) {
+            TextButton(onClick = onAddProfile) {
+                Text(stringResource(R.string.servers_add_action))
+            }
+        }
+    }
 }
 
 /**

@@ -20,9 +20,12 @@ import art.yniyniyni.subspace.core.model.RuleBucket
 import art.yniyniyni.subspace.core.model.RuleSetAssetFailure
 import art.yniyniyni.subspace.core.model.RuleSetAssetState
 import art.yniyniyni.subspace.core.model.requiredGeoFiles
+import art.yniyniyni.subspace.core.parser.routing.ConversionDrop
 import art.yniyniyni.subspace.core.parser.routing.ImportProblem
 import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
+import art.yniyniyni.subspace.core.parser.routing.convertXrayRouting
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.Dispatchers
@@ -301,6 +304,56 @@ class ImportReviewViewModelTest {
 
         viewModel.state.value.stage shouldBe Stage.Reviewing
         viewModel.state.value.failure shouldBe null
+    }
+
+    // Task 14: the conversion's own drops (Task 13) must reach the sheet's state
+    // rather than only living in RoutingConversion, or a user adopting the rule
+    // set never learns the balancer did not survive.
+    @Test
+    fun `a conversion's drops reach the state`() = runTest {
+        val conversion =
+            convertXrayRouting(
+                """
+                {
+                  "routing": {
+                    "balancers": [ { "tag": "B", "selector": ["proxy"] } ],
+                    "rules": [
+                      { "network": "tcp,udp", "balancerTag": "B" },
+                      { "domain": ["domain:ru"], "outboundTag": "direct" }
+                    ]
+                  },
+                  "outbounds": [
+                    { "tag": "proxy-auto", "protocol": "vless" },
+                    { "tag": "direct", "protocol": "freedom" }
+                  ]
+                }
+                """.trimIndent(),
+                name = "Pasted config",
+            )!!
+
+        viewModel.startConversionReview(conversion)
+
+        viewModel.state.value.drops shouldBe mapOf(ConversionDrop.BalancerRule to 1)
+        viewModel.state.value.profile!!.bucket(RouteOutcome.DIRECT).sites shouldContainExactly
+            listOf("domain:ru")
+    }
+
+    @Test
+    fun `a lossless conversion shows no drops section`() = runTest {
+        val conversion =
+            convertXrayRouting(
+                """
+                {
+                  "routing": { "rules": [ { "domain": ["a.com"], "outboundTag": "direct" } ] },
+                  "outbounds": [ { "tag": "direct", "protocol": "freedom" } ]
+                }
+                """.trimIndent(),
+                name = "Pasted config",
+            )!!
+
+        viewModel.startConversionReview(conversion)
+
+        viewModel.state.value.drops shouldBe emptyMap()
     }
 
     private fun sampleProfile(): RoutingProfile {

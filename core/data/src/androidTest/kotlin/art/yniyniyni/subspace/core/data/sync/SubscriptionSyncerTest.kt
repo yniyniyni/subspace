@@ -18,6 +18,7 @@ import art.yniyniyni.subspace.core.network.FetchOutcome
 import art.yniyniyni.subspace.core.network.HwidProvider
 import art.yniyniyni.subspace.core.network.SubscriptionRequest
 import art.yniyniyni.subspace.core.network.SubscriptionSource
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -71,6 +72,81 @@ private val ROUTING_HEADER_LINK =
         Base64.getUrlEncoder().withoutPadding().encodeToString(
             """{"Name":"FromHeader","DirectSites":["domain:header.example"]}""".toByteArray(),
         )
+
+// Task 7b fixtures. SubscriptionParser routes any body starting with `{`/`[` to parseXrayJson —
+// the same balancer-fanout producer Task 7 taught ProfileRepository.import to collapse — so a
+// subscription body can exercise the exact same passthrough-analysis and collapse behaviour as a
+// manually pasted raw config. Kept single-line (no embedded newlines) so DirectiveSplitter's
+// line-based scan never has to be reasoned about here.
+
+/**
+ * Research §5b: the target panel's auto-balancer entry. One `routing.balancers` element with two
+ * `vless` outbounds mints two profiles sharing one document's bytes — the load-bearing case this
+ * task exists for. Distinct tags ("proxy-auto", "proxy-auto-2") give each profile a distinct,
+ * unique name, so subscriptionKeysFor assigns each its bare name rather than an ordinal.
+ */
+private const val BALANCER_SUBSCRIPTION_BODY =
+    """{"routing":{"balancers":[{"tag":"Auto_Balancer","selector":["proxy"]}],""" +
+        """"rules":[{"network":"tcp,udp","balancerTag":"Auto_Balancer"}]},""" +
+        """"outbounds":[""" +
+        """{"tag":"proxy-auto","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.1",""" +
+        """"port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111"}]}]}},""" +
+        """{"tag":"proxy-auto-2","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.2",""" +
+        """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]}}""" +
+        """]}"""
+
+/**
+ * Two server outbounds, no balancer — [PassthroughRejection.SeveralServers]. Both profiles share
+ * one document's bytes (a bare top-level object's `elementText` is the whole document, per
+ * `XrayJson.kt`) but neither is dropped: they stay as rows, ineligible. This is the fixture that
+ * actually exercises `buildUpserts`' `isBalancer` gate — its two outbounds are byte-identical
+ * `rawJson` the same way a balancer element's members are, so an ungated or mis-keyed collapse
+ * would wrongly eat one of them.
+ */
+private const val SEVERAL_SERVERS_NO_BALANCER_SUBSCRIPTION_BODY =
+    """{"outbounds":[""" +
+        """{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.3",""" +
+        """"port":443,"users":[{"id":"33333333-3333-3333-3333-333333333333"}]}]}},""" +
+        """{"tag":"proxy-2","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.4",""" +
+        """"port":443,"users":[{"id":"44444444-4444-4444-4444-444444444444"}]}]}}""" +
+        """]}"""
+
+/**
+ * A top-level array of three *independent* one-server documents (device-fixes finding's array
+ * shape). Per `XrayJson.kt`, a top-level array's `elementText` is each entry's own text, so these
+ * three elements never share `rawJson` bytes with each other in the first place — the collapse
+ * mechanism is structurally unreachable for this fixture regardless of how (or whether) it is
+ * gated. This is an array-shape element-provenance guard, not a balancer-gate guard: each
+ * element's own single server must keep its own distinct `rawJson` and land as its own eligible
+ * row.
+ */
+private const val THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY =
+    """[""" +
+        """{"outbounds":[{"tag":"proxy-a","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.10",""" +
+        """"port":443,"users":[{"id":"55555555-5555-5555-5555-555555555555"}]}]}}]},""" +
+        """{"outbounds":[{"tag":"proxy-b","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.11",""" +
+        """"port":443,"users":[{"id":"66666666-6666-6666-6666-666666666666"}]}]}}]},""" +
+        """{"outbounds":[{"tag":"proxy-c","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.12",""" +
+        """"port":443,"users":[{"id":"77777777-7777-7777-7777-777777777777"}]}]}}]}""" +
+        """]"""
+
+/**
+ * Final review C1. A single eligible server, tagged "proxy" so its `subscriptionKey` is stable
+ * across a refresh regardless of which address/port variant is in play — the update branch of
+ * `SubscriptionDao.upsertBySubscriptionKey` keys on `subscriptionKey`, not on `rawJson`.
+ */
+private const val SINGLE_SERVER_SUBSCRIPTION_BODY =
+    """{"outbounds":[""" +
+        """{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.20",""" +
+        """"port":443,"users":[{"id":"88888888-8888-8888-8888-888888888888"}]}]}}""" +
+        """]}"""
+
+/** Same tag as [SINGLE_SERVER_SUBSCRIPTION_BODY] (same `subscriptionKey`), different bytes. */
+private const val SINGLE_SERVER_SUBSCRIPTION_BODY_CHANGED =
+    """{"outbounds":[""" +
+        """{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"198.51.100.21",""" +
+        """"port":443,"users":[{"id":"88888888-8888-8888-8888-888888888888"}]}]}}""" +
+        """]}"""
 
 class SubscriptionSyncerTest {
     private lateinit var db: SubspaceDatabase
@@ -535,5 +611,159 @@ class SubscriptionSyncerTest {
 
         (result as SyncResult.Synced).rejectedDirectives shouldBe 2
         subscriptions.effective(id, "profile-update-interval", null).providerValue shouldBe null
+    }
+
+    // Task 7b. Task 7's review found that SubscriptionSyncer — the path a subscription actually
+    // takes, on first add and on every periodic refresh — never ran the passthrough analysis or
+    // the balancer collapse ProfileRepository.import already had. Without this, a user adding the
+    // target panel's auto-balancer entry *as a subscription* (the panel's normal distribution
+    // mechanism) got seven duplicate rows all left eligible, even ones that could never run as
+    // written.
+    @Test
+    fun aBalancerSubscriptionCollapsesToASingleEligibleRow() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(BALANCER_SUBSCRIPTION_BODY, emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        row.passthroughRejection shouldBe null
+        row.runsAsWritten shouldBe true
+        // The surviving row must carry the key of the profile that actually survived the
+        // collapse (the first one, "proxy-auto") — the alignment trap this task is named for:
+        // filtering profiles before mapping would shift every subscriptionKey by one.
+        db.profileDao().profile(row.id)!!.subscriptionKey shouldBe "proxy-auto"
+    }
+
+    // This is the load-bearing guard for the brief's third bullet: two outbounds sharing one
+    // *byte-identical* rawJson document, with no balancer present, must be stored as rows and
+    // flagged ineligible, not collapsed. Deleting the isBalancer gate in buildUpserts (or wrongly
+    // keying the collapse on "any repeated rawJson" instead of isBalancer) fails exactly this
+    // test: the fixture's two outbounds share one document's bytes, so an ungated collapse would
+    // wrongly drop one of them the same way it correctly drops a balancer member.
+    @Test
+    fun severalServersWithoutABalancerAreStoredAndFlaggedIneligible() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SEVERAL_SERVERS_NO_BALANCER_SUBSCRIPTION_BODY, emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
+        rows.map { it.name }.toSet() shouldBe setOf("proxy", "proxy-2")
+        rows.forEach {
+            it.passthroughRejection shouldBe PassthroughRejection.SeveralServers
+            it.runsAsWritten shouldBe false
+        }
+    }
+
+    // NOT a balancer-gate test: per XrayJson.kt, a top-level array's elementText is each entry's
+    // own text, so these three elements never share rawJson bytes in the first place — the
+    // collapse mechanism is structurally unreachable here regardless of whether it exists or how
+    // it is keyed. This guards a different, narrower thing: array-shape element provenance. Each
+    // of the three independent one-server documents must keep its own distinct rawJson and land
+    // as its own row — nothing about parsing a top-level array should merge or share bytes across
+    // elements. (The real guard against an ungated/mis-keyed collapse eating a shared document is
+    // severalServersWithoutABalancerAreStoredAndFlaggedIneligible above.)
+    @Test
+    fun independentArrayElementsKeepDistinctRawJsonAndRows() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(THREE_INDEPENDENT_RAW_JSON_DOCS_SUBSCRIPTION_BODY, emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
+        rows.size shouldBe 3
+        rows.forEach { it.passthroughRejection shouldBe null }
+    }
+
+    @Test
+    fun aTypedSubscriptionNeverBecomesIneligible() = runTest {
+        // Share links carry no rawJson, so they are ProfileKind.TYPED and must never be handed to
+        // analysePassthrough at all — passthroughRejection is meaningless for a kind that never
+        // runs as written in the first place.
+        val id = addSubscription()
+        response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
+
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val rows = profiles.observeGroups().first().single { it.id == groupId }.profiles
+        rows.size shouldBe 2
+        rows.forEach { it.passthroughRejection shouldBe null }
+    }
+
+    // Final review C1. buildUpserts never writes CoreRejected — only ProfileSource's import-time
+    // PassthroughValidator does, via ProfileRepository.setPassthroughRejection — so a periodic
+    // refresh must not silently erase a verdict a previous import recorded for these exact bytes.
+    @Test
+    fun aRecordedCoreRejectionSurvivesARefreshThatDoesNotChangeTheBytes() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        row.passthroughRejection shouldBe null
+        profiles.setPassthroughRejection(row.id, PassthroughRejection.CoreRejected.name)
+        profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.CoreRejected
+
+        // Same bytes come back on the next refresh — the verdict is about those exact bytes and
+        // must not be reset to eligible just because a refresh ran.
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.CoreRejected
+    }
+
+    // Correction pass on final review C1: the original fix carried over *any* stored verdict on
+    // unchanged bytes, not just CoreRejected — so a row a stale/buggy analysePassthrough once
+    // rejected structurally would stay frozen at that verdict forever, since buildUpserts's freshly
+    // recomputed structural verdict (here: null, this body is normally eligible) was always
+    // discarded in favour of the old one. Narrowed to carry over only CoreRejected specifically
+    // (SubscriptionDao.upsertBySubscriptionKey) so a structural verdict keeps tracking the
+    // analyser on every refresh, the same as a row that was never flagged at all.
+    @Test
+    fun aStaleStructuralVerdictIsRederivedRatherThanFrozenOnAnUnchangedRefresh() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        row.passthroughRejection shouldBe null
+        // Simulate a structural verdict an earlier (possibly buggy) analysePassthrough recorded for
+        // these exact bytes — buildUpserts itself never writes SeveralServers for a single-server
+        // body, so this stands in for "the analyser used to reject this and no longer does".
+        profiles.setPassthroughRejection(row.id, PassthroughRejection.SeveralServers.name)
+        profiles.profile(row.id)!!.passthroughRejection shouldBe PassthroughRejection.SeveralServers
+
+        // Same bytes come back on the next refresh. Unlike CoreRejected, a structural verdict must
+        // NOT survive unconditionally — buildUpserts recomputes it from the (unchanged) bytes every
+        // time, and that fresh computation is the one that should win.
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        profiles.profile(row.id)!!.passthroughRejection shouldBe null
+    }
+
+    @Test
+    fun aRecordedCoreRejectionDoesNotSurviveARefreshThatChangesTheBytes() = runTest {
+        val id = addSubscription()
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY, emptyMap())
+        syncer().sync(id)
+
+        val groupId = subscriptions.observeSubscriptions().first().single().groupId
+        val row = profiles.observeGroups().first().single { it.id == groupId }.profiles.single()
+        profiles.setPassthroughRejection(row.id, PassthroughRejection.CoreRejected.name)
+
+        // The provider changes the config's own bytes under the same tag (same subscriptionKey):
+        // the old verdict described a config that no longer exists and must not survive onto it.
+        response = FetchOutcome.Success(SINGLE_SERVER_SUBSCRIPTION_BODY_CHANGED, emptyMap())
+        syncer().sync(id)
+
+        profiles.profile(row.id)!!.passthroughRejection shouldBe null
     }
 }

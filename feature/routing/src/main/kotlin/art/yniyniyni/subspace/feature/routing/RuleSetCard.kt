@@ -195,6 +195,7 @@ private fun RuleSetRow.provenanceLabel(): String =
         RoutingSourceKind.Deeplink -> stringResource(R.string.routing_source_deeplink)
         RoutingSourceKind.Qr -> stringResource(R.string.routing_source_qr)
         RoutingSourceKind.Clipboard -> stringResource(R.string.routing_source_clipboard)
+        RoutingSourceKind.Conversion -> stringResource(R.string.routing_source_conversion)
         RoutingSourceKind.Header,
         RoutingSourceKind.Body,
         ->

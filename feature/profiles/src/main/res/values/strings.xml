@@ -5,6 +5,12 @@
 <resources>
     <string name="servers_title">Servers</string>
 
+    <!-- The header action that opens AddServerSheet. Distinct from
+         servers_empty_action, which is the empty state's own button: this one
+         is present whenever the screen is, so a user with existing groups is
+         not left hunting through a group's overflow menu. -->
+    <string name="servers_add_action">Add server</string>
+
     <string name="servers_search_placeholder">Search servers</string>
     <string name="servers_search_clear_description">Clear search</string>
 
@@ -38,6 +44,11 @@
 
     <string name="servers_empty_title">No servers yet</string>
     <string name="servers_empty_body">Import a subscription or paste a config to add your first server.</string>
+    <!-- Load-bearing text: ServersAddActionTest.exactlyOneAddActionExistsWhenGroupsAreEmpty
+         counts nodes matching the literal "Add server" across this string and
+         servers_add_action to prove only one Add-server affordance exists when groups are
+         empty. Rewording this alone (without updating that test) breaks it even though the
+         product invariant it checks still holds. -->
     <string name="servers_empty_action">Add server</string>
 
     <!-- RAW_JSON runs through the typed projection, not verbatim (§6) — "raw"
@@ -214,23 +225,86 @@
 
     <string name="editor_save_button">Save</string>
 
-    <!-- ARCHITECTURE.md §6: passthrough execution (running a RAW_JSON profile's
-         own bytes instead of the typed projection) is not implemented. This
-         notice is the one place the editor says so out loud, so a user does
-         not read "read-only" as an unfinished feature rather than a deliberate
-         one — see EditorViewModel.kt's own KDoc for the full reasoning. -->
+    <!-- M7: this config's own bytes now reach the core, when eligible. The old
+         wording said Subspace runs "a parsed copy of it, not the file itself",
+         which is no longer universally true — this claim is now shown only when
+         EditorState.runsAsWritten is true (Task 10 review, Critical 1): an
+         ineligible row gets editor_raw_json_read_only_notice below instead, so
+         this claim and a rejection string are never on screen together. -->
     <string name="editor_raw_json_notice">
-        This server was added from a pasted config file. Subspace runs a parsed copy of it, not
-        the file itself, so editing the text here would show you something the app does not
-        actually use yet. Only the name can be changed — everything else is shown for reference.
+        This server was added from a pasted config file, and Subspace runs that file as written.
+        Only the name can be changed — editing the text would risk breaking a config the app
+        cannot re-derive.
     </string>
-    <!-- §6: a RAW_JSON profile connects through the typed projection, so its own
-         routing and dns blocks never reach the core. The notice above says the
-         file is not run; this says what that costs, which is the question a
-         user asks once M6 lets them import a routing profile on purpose. M7 —
-         raw config passthrough — is what will remove this string. -->
-    <string name="editor_raw_json_not_passthrough">
-        Routing and DNS settings inside this config are not applied.
+
+    <!-- Shown instead of editor_raw_json_notice whenever the "runs as written" claim would not
+         hold for what actually reaches the core: either this row is not eligible to run as
+         written (rejection string shown with it), or the row IS eligible but an app rule set or
+         DNS plan is overriding its routing/dns (I2 fix — editor_raw_json_override_warning shown
+         with it instead, which contradicts "runs that file as written" if the notice above were
+         used). Same read-only/rename explanation in both cases, minus the "runs as written"
+         claim. -->
+    <string name="editor_raw_json_read_only_notice">
+        This server was added from a pasted config file. Only the name can be changed — editing
+        the text would risk breaking a config the app cannot re-derive.
+    </string>
+
+    <!-- Shown only when this profile runs as written AND an app rule set or a
+         custom DNS resolver is active. Task 10 review ruling: names both
+         replaced blocks (spec §3 swaps both routing and dns wholesale, not just
+         routing rules) and gives a remedy covering both switches, since either
+         one alone can trigger this. Deliberately in the user's terms: no tag
+         names, no mention of routing/dns blocks as such. -->
+    <string name="editor_raw_json_override_warning">
+        Your routing and DNS settings replace this file\'s own, so it does not run as written.
+        Turn routing off and set DNS back to default to run it exactly as written.
+    </string>
+
+    <!-- Offered on a raw profile whose own routing block can become an app rule
+         set. Turning routing on replaces this file's rules (see
+         editor_raw_json_override_warning); this is how a user keeps them. -->
+    <string name="editor_raw_json_convert_routing">Use this file\'s routing rules</string>
+
+    <!-- One per PassthroughRejection member. Closed vocabulary, same shape as
+         import_failure_* — the stored value is an enum name, never a message
+         derived from config contents (§5.6). -->
+    <string name="editor_raw_json_rejected_unvalidated">
+        This file was imported by an older version and has not been checked for running as written.
+        Re-import it to validate the complete file; the recovered server details are used meanwhile.
+    </string>
+    <string name="editor_raw_json_rejected_not_json">
+        This file is not valid JSON, so it cannot be run as written. The server details below were
+        recovered from it and are used instead.
+    </string>
+    <string name="editor_raw_json_rejected_no_outbounds">
+        This file lists no servers, so it cannot be run as written.
+    </string>
+    <string name="editor_raw_json_rejected_several_servers">
+        This file describes several servers without a rule for choosing between them, so it cannot
+        be run as written. Each server was imported separately instead.
+    </string>
+    <string name="editor_raw_json_rejected_core_rejected">
+        Xray rejected this file, so it cannot be run as written. The server details below were
+        recovered from it and are used instead.
+    </string>
+
+    <!-- One per PassthroughAdvisory member. §5.6 forbids putting anything derived from config
+         contents on screen or in a log — none of these three names the offending tag/domain. -->
+    <!-- PassthroughAdvisory.DanglingRoutingReference -->
+    <string name="editor_raw_json_advisory_dangling_reference">
+        This file\'s routing points at an outbound or balancer it never defines. Traffic that
+        reaches that reference is dropped rather than sent anywhere, so the tunnel can connect
+        and still carry nothing. Ask whoever provided the config to fix it.
+    </string>
+    <!-- PassthroughAdvisory.SniffingCannotServeOwnRules -->
+    <string name="editor_raw_json_advisory_sniffing_cannot_serve_rules">
+        This file matches traffic by domain name, but its own sniffing settings never recover
+        one, so those rules match nothing.
+    </string>
+    <!-- PassthroughAdvisory.FakeDnsWithoutSniffingOverride -->
+    <string name="editor_raw_json_advisory_fakedns_without_sniffing">
+        This file asks for FakeDNS but no inbound lists it under sniffing, so FakeDNS answers
+        are never resolved back to a domain.
     </string>
 
     <string name="editor_raw_json_label">Pasted config (read-only)</string>

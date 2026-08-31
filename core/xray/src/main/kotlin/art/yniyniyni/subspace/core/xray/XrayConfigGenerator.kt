@@ -89,6 +89,20 @@ public sealed interface ConfigResult {
  * test. §10.5: agents confidently invent plausible Xray keys, and an unknown key
  * can be silently ignored or reject the entire config.
  */
+/**
+ * The three fixed outbound objects every generated config carries alongside
+ * `proxy`, shared between [XrayConfigGenerator.appendOutbounds] (which always
+ * emits `direct`/`block`, and `dns-out` when [TunnelSettings.dns] is set) and
+ * [XrayConfigGenerator.overrideBlocks] (which hands the same three to the
+ * passthrough path's override branch for outbounds the config lacks). One
+ * definition rather than two hand-typed copies, so the pinned wire shape has
+ * a single author (§10.5).
+ */
+private const val DIRECT_OUTBOUND_JSON = """{ "tag": "direct", "protocol": "freedom" }"""
+private const val BLOCK_OUTBOUND_JSON = """{ "tag": "block", "protocol": "blackhole" }"""
+private const val DNS_OUT_OUTBOUND_JSON = """{ "tag": "dns-out", "protocol": "dns" }"""
+
+@Suppress("TooManyFunctions") // One object per wire shape (§6); splitting it would scatter the shape's single author.
 public object XrayConfigGenerator {
     /**
      * Dispatches on the profile's protocol.
@@ -163,37 +177,7 @@ public object XrayConfigGenerator {
         sb: StringBuilder,
         settings: TunnelSettings,
     ) {
-        val plan = settings.dns
-        sb.appendLine("""  "dns": {""")
-        if (plan == null) {
-            sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
-            sb.appendLine("""  },""")
-            return
-        }
-        if (plan.hosts.isNotEmpty()) {
-            sb.appendLine("""    "hosts": {""")
-            // Sorted: a Map's iteration order is a property of its implementation
-            // rather than of its contents, and §6 requires byte-determinism.
-            val hosts = plan.hosts.toSortedMap().entries.toList()
-            hosts.forEachIndexed { index, (host, address) ->
-                val comma = if (index == hosts.size - 1) "" else ","
-                sb.appendLine("""      ${jsonString(host)}: ${jsonString(address)}$comma""")
-            }
-            sb.appendLine("""    },""")
-        }
-        sb.appendLine("""    "servers": [""")
-        val entries = buildList {
-            if (plan.fakeDns) add(""""fakedns"""")
-            plan.servers.forEach { add(it.render()) }
-        }
-        entries.forEachIndexed { index, entry ->
-            val comma = if (index == entries.size - 1) "" else ","
-            sb.appendLine("""      $entry$comma""")
-        }
-        sb.appendLine("""    ],""")
-        sb.appendLine("""    "queryStrategy": "UseIP",""")
-        sb.appendLine("""    "tag": "dns-module"""")
-        sb.appendLine("""  },""")
+        sb.appendLine("""  "dns": ${dnsObject(settings)},""")
     }
 
     /**
@@ -212,31 +196,47 @@ public object XrayConfigGenerator {
         routing: RoutingRuleSet?,
         dns: DnsPlan?,
     ) {
-        val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
-        val rules = dnsRuleLines(dns) + routing?.let(::routingRuleLines).orEmpty()
-
-        sb.appendLine("""  "routing": {""")
-        sb.appendLine("""    "domainStrategy": ${jsonString(strategy.wireValue)},""")
-        if (rules.isEmpty()) {
-            sb.appendLine("""    "rules": []""")
-        } else {
-            sb.appendLine("""    "rules": [""")
-            rules.forEachIndexed { index, rule ->
-                val comma = if (index == rules.size - 1) "" else ","
-                sb.appendLine("""      $rule$comma""")
-            }
-            sb.appendLine("""    ]""")
-        }
-        sb.appendLine("""  }""")
+        sb.appendLine("""  "routing": ${routingObject(routing, dns)}""")
     }
+
+    /**
+     * The `routing` and `dns` objects the typed path writes, for the passthrough
+     * path's override branch.
+     *
+     * Exposed rather than duplicated so a rule's shape has one author. The
+     * passthrough path splices these in place of a config's own blocks; the two
+     * paths therefore agree on what an app rule looks like by construction.
+     */
+    public fun overrideBlocks(settings: TunnelSettings): OverrideBlocks =
+        OverrideBlocks(
+            routingJson = routingObject(settings.routing, settings.dns),
+            dnsJson = dnsObject(settings),
+            extraOutboundsJson =
+            buildList {
+                add(DIRECT_OUTBOUND_JSON)
+                add(BLOCK_OUTBOUND_JSON)
+                if (settings.dns != null) add(DNS_OUT_OUTBOUND_JSON)
+            },
+        )
 
     private fun appendInbounds(
         sb: StringBuilder,
         settings: TunnelSettings,
     ) {
+        val sniffing =
+            if (!settings.enableSniffing) {
+                null
+            } else if (settings.dns?.fakeDns == true) {
+                SniffingSettings(DEFAULT_SNIFFING.destOverride + "fakedns")
+            } else {
+                DEFAULT_SNIFFING
+            }
         sb.appendLine("""  "inbounds": [""")
-        appendSocksInbound(sb, settings, trailingComma = settings.httpPort != null)
-        settings.httpPort?.let { port -> appendHttpInbound(sb, port) }
+        sb.append(socksInboundJson(settings.socksPort, sniffing))
+        sb.appendLine(if (settings.httpPort != null) "," else "")
+        settings.httpPort?.let { port ->
+            sb.appendLine(httpInboundJson(port))
+        }
         sb.appendLine("""  ],""")
     }
 
@@ -270,16 +270,16 @@ public object XrayConfigGenerator {
         sb.appendLine("""      },""")
         appendStreamSettings(sb, out)
         sb.appendLine("""    },""")
-        sb.appendLine("""    { "tag": "direct", "protocol": "freedom" },""")
+        sb.appendLine("""    $DIRECT_OUTBOUND_JSON,""")
         val needsDnsOutbound = settings.dns != null
-        sb.appendLine("""    { "tag": "block", "protocol": "blackhole" }${if (needsDnsOutbound) "," else ""}""")
+        sb.appendLine("""    $BLOCK_OUTBOUND_JSON${if (needsDnsOutbound) "," else ""}""")
         if (needsDnsOutbound) {
             // No settings object: the modern (rewriteNetwork/rewriteAddress/rules)
             // and legacy (network/address/nonIPQuery) field sets both exist at
             // v26.7.11, and emitting neither is stable across the deprecation.
             // Research §4: A/AAAA queries default to hijack into the built-in
             // resolver, which is exactly what this config wants.
-            sb.appendLine("""    { "tag": "dns-out", "protocol": "dns" }""")
+            sb.appendLine("""    $DNS_OUT_OUTBOUND_JSON""")
         }
         sb.appendLine("""  ],""")
     }
@@ -407,73 +407,6 @@ public object XrayConfigGenerator {
 }
 
 /**
- * The SOCKS inbound M1's tunnel has always carried. Byte-identical whether or
- * not [appendHttpInbound] follows it — only [trailingComma] changes with that.
- *
- * A top-level function rather than a member of [XrayConfigGenerator], same
- * reason as [appendHttpInbound]: neither needs the object's other members, and
- * splitting the single inbound-emitting function into two for the optional
- * HTTP inbound pushed the object over detekt's function-count threshold.
- */
-private fun appendSocksInbound(
-    sb: StringBuilder,
-    settings: TunnelSettings,
-    trailingComma: Boolean,
-) {
-    sb.appendLine("""    {""")
-    sb.appendLine("""      "tag": "socks-in",""")
-    sb.appendLine("""      "protocol": "socks",""")
-    // §6: loopback only. Never 0.0.0.0 — that turns the phone into an open
-    // proxy for anyone on the same Wi-Fi.
-    sb.appendLine("""      "listen": "127.0.0.1",""")
-    sb.appendLine("""      "port": ${settings.socksPort},""")
-    sb.appendLine("""      "settings": {""")
-    sb.appendLine("""        "udp": true""")
-    sb.appendLine("""      }${if (settings.enableSniffing) "," else ""}""")
-    if (settings.enableSniffing) {
-        val overrides =
-            if (settings.dns?.fakeDns == true) {
-                """"http", "tls", "quic", "fakedns""""
-            } else {
-                """"http", "tls", "quic""""
-            }
-        sb.appendLine("""      "sniffing": {""")
-        sb.appendLine("""        "enabled": true,""")
-        sb.appendLine("""        "destOverride": [$overrides]""")
-        sb.appendLine("""      }""")
-    }
-    sb.appendLine("""    }${if (trailingComma) "," else ""}""")
-}
-
-/**
- * The inbound `:core:network` dials so app fetches travel through the tunnel.
- *
- * Same loopback rule as the SOCKS inbound, and it matters more here: an HTTP
- * proxy reachable from the LAN is usable directly from any browser on the
- * network.
- *
- * No `sniffing` block: the destination is already known — an HTTP `CONNECT`
- * states it — so there is nothing to sniff.
- *
- * A top-level function rather than a member of [XrayConfigGenerator]: it needs
- * none of the object's other members, and keeping it out is what keeps that
- * object under detekt's function-count threshold now that the SOCKS inbound
- * emission was split out too.
- */
-private fun appendHttpInbound(
-    sb: StringBuilder,
-    port: Int,
-) {
-    sb.appendLine("""    {""")
-    sb.appendLine("""      "tag": "http-in",""")
-    sb.appendLine("""      "protocol": "http",""")
-    sb.appendLine("""      "listen": "127.0.0.1",""")
-    sb.appendLine("""      "port": $port,""")
-    sb.appendLine("""      "settings": {}""")
-    sb.appendLine("""    }""")
-}
-
-/**
  * One `dns.servers` entry — a bare string when unscoped, an object when it carries
  * `domains`.
  *
@@ -526,4 +459,78 @@ private fun resolverRule(
     val field = if (DnsValidation.isAddressLiteral(match)) "ip" else "domain"
     return """{ "type": "field", "inboundTag": ["dns-module"], "$field": [${jsonString(match)}], """ +
         """"outboundTag": "$outboundTag" }"""
+}
+
+/**
+ * The `dns` object's text, without the surrounding key or trailing comma —
+ * [XrayConfigGenerator.appendDns] supplies both for the typed path;
+ * [XrayConfigGenerator.overrideBlocks] hands the bare object to the
+ * passthrough path's override branch. Top-level rather than a member so it
+ * does not count against the object's function budget.
+ */
+private fun dnsObject(settings: TunnelSettings): String {
+    val plan = settings.dns
+    val sb = StringBuilder()
+    sb.append("{\n")
+    if (plan == null) {
+        sb.appendLine("""    "servers": [${jsonString(settings.dnsServer)}]""")
+        sb.append("""  }""")
+        return sb.toString()
+    }
+    if (plan.hosts.isNotEmpty()) {
+        sb.appendLine("""    "hosts": {""")
+        // Sorted: a Map's iteration order is a property of its implementation
+        // rather than of its contents, and §6 requires byte-determinism.
+        val hosts = plan.hosts.toSortedMap().entries.toList()
+        hosts.forEachIndexed { index, (host, address) ->
+            val comma = if (index == hosts.size - 1) "" else ","
+            sb.appendLine("""      ${jsonString(host)}: ${jsonString(address)}$comma""")
+        }
+        sb.appendLine("""    },""")
+    }
+    sb.appendLine("""    "servers": [""")
+    val entries = buildList {
+        if (plan.fakeDns) add(""""fakedns"""")
+        plan.servers.forEach { add(it.render()) }
+    }
+    entries.forEachIndexed { index, entry ->
+        val comma = if (index == entries.size - 1) "" else ","
+        sb.appendLine("""      $entry$comma""")
+    }
+    sb.appendLine("""    ],""")
+    sb.appendLine("""    "queryStrategy": "UseIP",""")
+    sb.appendLine("""    "tag": "dns-module"""")
+    sb.append("""  }""")
+    return sb.toString()
+}
+
+/**
+ * The `routing` object's text, without the surrounding key —
+ * [XrayConfigGenerator.appendRouting] supplies it for the typed path;
+ * [XrayConfigGenerator.overrideBlocks] hands the bare object to the
+ * passthrough path's override branch. Top-level rather than a member so it
+ * does not count against the object's function budget.
+ */
+private fun routingObject(
+    routing: RoutingRuleSet?,
+    dns: DnsPlan?,
+): String {
+    val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
+    val rules = dnsRuleLines(dns) + routing?.let(::routingRuleLines).orEmpty()
+
+    val sb = StringBuilder()
+    sb.append("{\n")
+    sb.appendLine("""    "domainStrategy": ${jsonString(strategy.wireValue)},""")
+    if (rules.isEmpty()) {
+        sb.appendLine("""    "rules": []""")
+    } else {
+        sb.appendLine("""    "rules": [""")
+        rules.forEachIndexed { index, rule ->
+            val comma = if (index == rules.size - 1) "" else ","
+            sb.appendLine("""      $rule$comma""")
+        }
+        sb.appendLine("""    ]""")
+    }
+    sb.append("""  }""")
+    return sb.toString()
 }

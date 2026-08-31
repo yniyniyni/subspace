@@ -17,6 +17,17 @@ public enum class RoutingSourceKind(
     Qr("qr"),
     Header("header"),
     Body("body"),
+
+    /**
+     * Derived by converting another profile's own `routing` block into a rule
+     * set (Task 13/14), not delivered as a link, QR code, clipboard paste or
+     * subscription. Distinct from [Clipboard] on purpose: the user did not
+     * paste this rule set's contents, the app derived them from a config
+     * already stored elsewhere, and the provenance badge is the one place the
+     * user learns where a rule set came from (§9) — collapsing this into
+     * [Clipboard] would tell them something that did not happen.
+     */
+    Conversion("conversion"),
     ;
 
     public companion object {

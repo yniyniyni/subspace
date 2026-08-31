@@ -108,6 +108,7 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:parser"))
     implementation(project(":core:xray"))
     implementation(project(":core:data"))
 

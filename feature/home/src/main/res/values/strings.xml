@@ -42,6 +42,10 @@
     <string name="failure_profile_decode">This profile could not be read</string>
     <string name="failure_geo_data_missing">Required geo data is missing</string>
     <string name="failure_per_app_allow_list_empty">No apps selected for the tunnel</string>
+    <string name="failure_passthrough_override_unavailable">
+        This stored config cannot use the app’s routing or DNS override
+    </string>
+    <string name="failure_passthrough_rejected_at_connect">The core rejected this server\'s stored config</string>
     <string name="home_latency_label">Latency</string>
     <!-- An em-dash, not "0 ms": nothing has been measured, and a substituted
          number would look measured (ARCHITECTURE.md §10.1). -->

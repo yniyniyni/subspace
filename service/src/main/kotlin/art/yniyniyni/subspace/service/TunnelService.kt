@@ -28,11 +28,15 @@ import art.yniyniyni.subspace.core.model.PingMode
 import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.StartupStage
 import art.yniyniyni.subspace.core.model.failure
+import art.yniyniyni.subspace.core.parser.analysePassthrough
+import art.yniyniyni.subspace.core.xray.ComposeFailure
+import art.yniyniyni.subspace.core.xray.ComposeResult
 import art.yniyniyni.subspace.core.xray.ConfigResult
 import art.yniyniyni.subspace.core.xray.DnsPlan
 import art.yniyniyni.subspace.core.xray.DnsPlanner
 import art.yniyniyni.subspace.core.xray.LibXrayPingApi
 import art.yniyniyni.subspace.core.xray.ProxyHeadProbe
+import art.yniyniyni.subspace.core.xray.RawConfigComposer
 import art.yniyniyni.subspace.core.xray.SocketProtector
 import art.yniyniyni.subspace.core.xray.TcpProbe
 import art.yniyniyni.subspace.core.xray.TcpSocketProtector
@@ -49,6 +53,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONException
+import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
 
@@ -90,6 +96,145 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
         intent.getParcelableExtra(EXTRA_PROFILE)
     }
 }
+
+/** [passthroughPlanFor]'s answer: what a passthrough compose call should do about routing/DNS. */
+internal data class PassthroughPlan(
+    /** Spec §4.3: what `xray.location.asset` must name — see [passthroughPlanFor]. */
+    val assetDir: String,
+    /** Whether the app's own `routing`/`dns` should replace the stored config's own. */
+    val overrideApplies: Boolean,
+)
+
+/**
+ * Spec §4.3, and the one override-branch decision this file must not make
+ * twice with two different conditions.
+ *
+ * The asset directory a passthrough config's `env` block names follows the
+ * routing state alone — [routingActive] — never whether an override applies.
+ * An override, in turn, applies whenever routing is active *or* a DNS plan
+ * exists ([dnsPlanPresent]), which is a strictly wider condition than
+ * [routingActive] alone: a routing-off session with a non-default DNS plan
+ * takes the override branch but must still resolve to [flatRoot], not
+ * [activeAssetDir]. Deriving both answers from the same two booleans in one
+ * function — rather than, say, keying the asset dir off "is there an
+ * override" — is what makes the wrong wiring structurally unavailable rather
+ * than merely undesirable; a `PassthroughStartTest` case pins exactly the
+ * routing-off-plus-DNS-plan combination this guards.
+ *
+ * [activeAssetDir] is nullable so "routing is active but its own asset
+ * directory is unknown" cannot be silently misread as "use the empty
+ * string" — it is read only when [routingActive] is true, and even then
+ * falls back to [flatRoot] rather than writing an empty
+ * `xray.location.asset`.
+ *
+ * Extracted as a standalone function, rather than inlined where it is used, so
+ * this one rule is testable on the JVM without constructing a
+ * [RoutingResolution] or a `GeoAssetRepository`.
+ */
+internal fun passthroughPlanFor(
+    routingActive: Boolean,
+    dnsPlanPresent: Boolean,
+    activeAssetDir: String?,
+    flatRoot: String,
+): PassthroughPlan =
+    PassthroughPlan(
+        assetDir = activeAssetDir.takeIf { routingActive } ?: flatRoot,
+        overrideApplies = routingActive || dnsPlanPresent,
+    )
+
+/**
+ * Which [FailureReason] a core refusal at `xray.validate` names.
+ *
+ * The backstop two accepted M7 limitations depend on: core validation at
+ * import does not run on the periodic subscription-refresh path, and is
+ * skipped when geo assets are not yet installed. Both are acceptable only
+ * because a stored config the core later refuses fails visibly, with this
+ * accurate reason, at connect time — a `ConfigRejected` here would read as
+ * "our own generation is broken" instead of "your stored config no longer
+ * runs", sending the user looking for the wrong kind of fix.
+ */
+internal fun validationFailureReason(runsAsWritten: Boolean): FailureReason =
+    if (runsAsWritten) FailureReason.PassthroughRejectedAtConnect else FailureReason.ConfigRejected
+
+/**
+ * The tags already on a stored config's own `outbounds`, so
+ * [TunnelService.composePassthrough] can keep the override's stock
+ * `direct`/`block`/`dns-out` outbounds from colliding with one the config
+ * already names — `RawConfigComposer` only ever appends outbounds, so an
+ * unfiltered duplicate tag is a config the core is not obliged to accept.
+ *
+ * Reuses `:core:parser`'s non-throwing structural read rather than Android's
+ * `JSONObject`: this helper is also the connect-time guard against a missing
+ * `proxy` tag, and keeping one parser for both decisions prevents them drifting.
+ */
+private fun existingOutboundTags(rawJson: String): Set<String> =
+    analysePassthrough(rawJson).outboundTags.filterTo(mutableSetOf()) { it.isNotBlank() }
+
+private val REQUIRED_OVERRIDE_PROTOCOLS =
+    mapOf(
+        "direct" to "freedom",
+        "block" to "blackhole",
+        "dns-out" to "dns",
+    )
+
+private val INFRASTRUCTURE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
+
+/** The failure that prevents generated rules from targeting a missing or misleading outbound. */
+internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? {
+    val protocols = analysePassthrough(rawJson).outboundProtocolsByTag
+    val proxyProtocol = protocols["proxy"]
+    val reservedTagIsIncompatible =
+        REQUIRED_OVERRIDE_PROTOCOLS.any { (tag, expectedProtocol) ->
+            protocols[tag]?.let { it != expectedProtocol } == true
+        }
+    return when {
+        proxyProtocol == null -> ComposeFailure.MissingOverrideProxy
+        proxyProtocol.isBlank() || proxyProtocol in INFRASTRUCTURE_PROTOCOLS ->
+            ComposeFailure.IncompatibleOverrideOutbound
+        reservedTagIsIncompatible -> ComposeFailure.IncompatibleOverrideOutbound
+        else -> null
+    }
+}
+
+/**
+ * Why a collapsed balancer row cannot be measured by probing one server.
+ *
+ * Such a row keeps the *first* member's typed projection (`ProfileRepository.import`'s
+ * collapse), and both ping modes read that projection alone. Reporting its result as the
+ * row's is wrong in both directions: a healthy first member hides a fleet that is failing,
+ * and a dead first member — the panel's `AUTO_BALANCER` set carried eight of them on
+ * 2026-09-01 — reads as the whole profile being unreachable while traffic flows fine over
+ * the other members. §10.4: a result must not misdescribe what was measured, so this
+ * refuses rather than reporting a number about one arbitrary destination.
+ *
+ * [LatencyOutcome.UNSUPPORTED] rather than a failure outcome because nothing failed —
+ * the row is not a single server, which is what these probes measure. Measuring every
+ * member and reporting the best is the better answer and needs `:core:parser` to expose
+ * a per-member projection; recorded as a follow-up rather than done here.
+ */
+internal fun balancerLatencyRefusal(rawJson: String?): LatencyOutcome? =
+    LatencyOutcome.UNSUPPORTED.takeIf { rawJson != null && analysePassthrough(rawJson).isBalancer }
+
+/** Maps composition failures to the user-actionable service reason they represent. */
+internal fun compositionFailureReason(reason: ComposeFailure): FailureReason =
+    when (reason) {
+        ComposeFailure.MissingOverrideProxy,
+        ComposeFailure.IncompatibleOverrideOutbound,
+        -> FailureReason.PassthroughOverrideUnavailable
+        ComposeFailure.NotJson,
+        ComposeFailure.NoOutbounds,
+        ComposeFailure.InvalidOverride,
+        -> FailureReason.ConfigGenerationFailed
+    }
+
+/** This outbound literal's own `tag`, or null if it has none this can read. */
+@Suppress("SwallowedException") // A literal this can't parse is treated as untagged, not a crash.
+private fun String.tagOf(): String? =
+    try {
+        JSONObject(this).optString("tag").takeIf { it.isNotEmpty() }
+    } catch (e: JSONException) {
+        null
+    }
 
 /** Returns the same-UID debug-test callback only; release builds ignore this extra. */
 @Suppress("DEPRECATION")
@@ -577,17 +722,10 @@ class TunnelService : VpnService() {
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck
         // "Connecting" notification, same as every other branch in this function.
-        val json =
-            when (val config = XrayConfigGenerator.generate(profile, settings)) {
-                is ConfigResult.Unsupported ->
-                    return failStart(
-                        gen,
-                        FailureReason.ProtocolNotSupported,
-                        IllegalArgumentException("${config.protocol} is not supported yet"),
-                        rowId,
-                    )
-
-                is ConfigResult.Ok -> config.json
+        val (json, runsAsWritten) =
+            when (val outcome = resolveConfigJson(profile, settings, routing, dnsPlan, rowId)) {
+                is ConfigJsonOutcome.Ok -> outcome.json to outcome.runsAsWritten
+                is ConfigJsonOutcome.Failed -> return failStart(gen, outcome.reason, outcome.cause, rowId)
             }
         val file =
             try {
@@ -606,7 +744,13 @@ class TunnelService : VpnService() {
         try {
             xray.validate(file)
         } catch (e: XrayException) {
-            return failStart(gen, FailureReason.ConfigRejected, e, rowId)
+            // A stored config that passed import can still be refused here —
+            // the core, the environment, or the row's own bytes changed since.
+            // §10.4: that is a different, user-actionable fact from "our own
+            // typed generation produced something the core dislikes"
+            // (ConfigRejected), and §6 forbids silently falling back to the
+            // typed projection instead of naming it.
+            return failStart(gen, validationFailureReason(runsAsWritten), e, rowId)
         }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingCore))) return null
@@ -617,6 +761,121 @@ class TunnelService : VpnService() {
         }
 
         return StartedPorts(socksPort, httpPort)
+    }
+
+    /** [resolveConfigJson]'s outcome — a JSON string ready for [writeConfig], or a named failure. */
+    private sealed interface ConfigJsonOutcome {
+        /** @property runsAsWritten Whether [json] is the row's own composed bytes, not a typed generation. */
+        data class Ok(val json: String, val runsAsWritten: Boolean) : ConfigJsonOutcome
+
+        data class Failed(val reason: FailureReason, val cause: Exception) : ConfigJsonOutcome
+    }
+
+    /**
+     * Produces the config text [startCore] hands to [writeConfig] — the row's
+     * own bytes for a `runsAsWritten` profile, or a typed generation otherwise.
+     *
+     * The raw bytes come from Room, not the Parcel: `ProfileParcel` carries
+     * typed columns only (§5.6 — a Binder transaction is capped near 1MB and a
+     * pasted config has no bound), so whether this row runs as written is read
+     * fresh here, the same way the latency path already reads a row by id
+     * (`loadProfile = { id -> profileRepository.profile(id) }`).
+     */
+    @Suppress("ReturnCount") // One early return per distinct outcome, same reasoning as startCore's own.
+    private suspend fun resolveConfigJson(
+        profile: Profile,
+        settings: TunnelSettings,
+        routing: RoutingResolution,
+        dnsPlan: DnsPlan?,
+        rowId: Long,
+    ): ConfigJsonOutcome {
+        // A row that vanished between connect and here — a subscription sync
+        // racing a mid-flight connect can delete or re-key it — is not "assume
+        // typed": §6 forbids silently running the typed projection behind a
+        // profile the user may have imported as passthrough, and once the row
+        // is gone there is no way to ask Room which this was.
+        val stored =
+            profileRepository.profile(rowId) ?: return ConfigJsonOutcome.Failed(
+                FailureReason.ConfigGenerationFailed,
+                IllegalStateException("profile row is gone"),
+            )
+        if (stored.runsAsWritten) {
+            // Invariant, not expected to be reachable: `runsAsWritten` only
+            // reads true for a RAW_JSON row (StoredProfile.runsAsWritten),
+            // which always carries its bytes. Fail loudly rather than fall
+            // back to the typed `profile` argument — §6 forbids running a
+            // config this row was never validated as, silently, behind the
+            // one state the user can see.
+            val rawJson =
+                stored.rawJson ?: return ConfigJsonOutcome.Failed(
+                    FailureReason.ConfigGenerationFailed,
+                    IllegalStateException("a runsAsWritten row stored no bytes"),
+                )
+            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan)) {
+                is ComposeResult.Ok -> ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true)
+                // Distinct from PassthroughRejectedAtConnect, which startCore uses when the
+                // *core* refuses a well-formed config (§10.4): this means composition itself
+                // failed — a condition import already screens for structurally, so reaching
+                // it here is an environment or data change, not a core verdict.
+                is ComposeResult.Failed ->
+                    ConfigJsonOutcome.Failed(
+                        compositionFailureReason(composed.reason),
+                        IllegalStateException("stored config did not compose: ${composed.reason}"),
+                    )
+            }
+        }
+        return when (val config = XrayConfigGenerator.generate(profile, settings)) {
+            is ConfigResult.Unsupported ->
+                ConfigJsonOutcome.Failed(
+                    FailureReason.ProtocolNotSupported,
+                    IllegalArgumentException("${config.protocol} is not supported yet"),
+                )
+
+            is ConfigResult.Ok -> ConfigJsonOutcome.Ok(config.json, runsAsWritten = false)
+        }
+    }
+
+    /**
+     * Composes a `runsAsWritten` row's own bytes, in place of
+     * [XrayConfigGenerator.generate].
+     *
+     * [passthroughPlanFor] decides, from the same two booleans, both whether
+     * the app's own `routing`/`dns` replaces the config's own and which geo
+     * asset directory the composed config's `env` block names (spec §4.3) —
+     * see its KDoc for why those two answers come from one function rather
+     * than two independently-wired conditions. The override's stock
+     * `direct`/`block`/`dns-out` outbounds are filtered against the stored
+     * config's own tags first: `RawConfigComposer` only ever appends, so an
+     * unfiltered duplicate tag (a `direct` freedom outbound is common) would be
+     * a config the core is not obliged to accept.
+     */
+    private fun composePassthrough(
+        rawJson: String,
+        settings: TunnelSettings,
+        routing: RoutingResolution,
+        dnsPlan: DnsPlan?,
+    ): ComposeResult {
+        val plan =
+            passthroughPlanFor(
+                routingActive = routing is RoutingResolution.Active,
+                dnsPlanPresent = dnsPlan != null,
+                activeAssetDir = (routing as? RoutingResolution.Active)?.assetDir?.absolutePath,
+                flatRoot = geoAssetRepository.geoDirectory().absolutePath,
+            )
+        val override =
+            if (plan.overrideApplies) {
+                passthroughOverrideFailure(rawJson)?.let { return ComposeResult.Failed(it) }
+                val existingTags = existingOutboundTags(rawJson)
+                XrayConfigGenerator.overrideBlocks(settings)
+                    .let { blocks ->
+                        blocks.copy(
+                            extraOutboundsJson = blocks.extraOutboundsJson.filter { it.tagOf() !in existingTags },
+                        )
+                    }
+            } else {
+                null
+            }
+        return RawConfigComposer.compose(rawJson, settings, plan.assetDir, override)
     }
 
     /** The per-app gate keeps "off" distinct from "resolution failed" for [attachTun]. */
@@ -1168,6 +1427,10 @@ class TunnelService : VpnService() {
         // local endpoint instead (§10.1).
         if (foreignVpn.holdsDefaultRoute(ownTunnelActive())) {
             LatencyResult.failed(LatencyOutcome.FOREIGN_VPN)
+        } else if (balancerLatencyRefusal(profile.rawJson) != null) {
+            // Checked before either mode, for the same reason the foreign-VPN guard is:
+            // both modes would otherwise return a number that describes one member.
+            LatencyResult.failed(LatencyOutcome.UNSUPPORTED)
         } else {
             when (options.mode) {
                 PingMode.TCP -> measureTcp(profile, options)

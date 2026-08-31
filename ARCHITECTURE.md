@@ -215,6 +215,31 @@ the one that actually reaches a misbehaving app:
   addressed to the ISP's own resolver comes back answered by the *configured*
   resolver; with no plan emitted, the same query is silently swallowed.
 
+**These three levers describe a config this app generates, and a `RAW_JSON`
+profile running in passthrough (§6) does not get all three.** It carries its
+own `dns` and `routing`, so levers 2 and 3 — the config's `dns` block and the
+port-53 hijack rule — are whatever that config's author wrote, not ours: a
+config that sends its resolver's traffic to a `freedom` outbound will leak,
+and nothing here stops it. **Lever 1 still fires, unconditionally, regardless
+of passthrough**: `TunnelService.establishTun` calls
+`builder.addDnsServerOrFallback(dnsPlan)` on every connect, and in the pure
+passthrough branch (no rule set, no custom resolver) `dnsPlan` is null, which
+falls back to advertising `DNS_SERVER` (`1.1.1.1`) on the TUN interface to
+every app on the device — while the config's own `dns` block governs only
+what xray's *internal* client resolves. So a passthrough connection leaves
+the device with two DNS opinions at once: the TUN says 1.1.1.1, the config
+says whatever it says, and neither is enforced against the other. This is
+exactly the lever-inconsistency this section says must not happen; the code
+has not been changed to close it, and this paragraph no longer claims that it
+has. The guarantee is restored (all three levers coherent again) the moment a
+rule set or a DNS resolver is configured, which replaces the config's `dns`
+and `routing` blocks wholesale (§6). Verified against the target panel's own
+template, not assumed to hold generally: its rules send every DNS query
+through the proxy except a vestigial `223.5.5.5:53 → direct`, so that
+particular config does not leak *its own* traffic — but the TUN-level
+1.1.1.1 advertisement above is independent of what any given config does.
+Source: `docs/agent/research/2026-08-25-remnawave-xray-json-and-balancers.md`.
+
 **The hijack is a loop hazard unless something claims the resolver's own
 traffic first.** The built-in resolver's query *to a DoU server* is itself
 UDP to port 53, so if nothing ahead of the hijack claims it, it matches the
@@ -287,27 +312,190 @@ the VLESS outbound and discards ws path and headers, gRPC service names,
 Finalmask blocks, and anything else the model has no field for. That loss is
 permanent once the pasted text is gone; storing the bytes makes it reversible.
 
-### Passthrough execution is deferred, and that is not an oversight
+### Passthrough execution: `RawConfigComposer`
 
-§A.2 lists raw JSON profiles in passthrough mode — the config runs as written,
-app-level routing rules not applied. **That is not implemented.** A `RAW_JSON`
-profile connects through the same typed projection as every other kind, so its
-unmodelled fields do not reach the core. Any UI marker on such a profile must
-say so; "raw" alone promises behaviour that does not exist yet.
+A `RAW_JSON` profile marked eligible (below) runs **as written**: its own
+`routing`, `dns` and `outbounds` reach the core, not the typed projection every
+other profile kind goes through. This is M7. The obstacle §6 used to record
+here — the config carries its own `inbounds`, and the tunnel needs a SOCKS
+inbound on a port allocated at connect time (§10.6 forbids a literal); adopting
+the config's port collides with other proxy apps, injecting ours means
+rewriting `routing`, which is no longer "as written" — is resolved rather than
+avoided: **the config's `inbounds` are replaced outright**, not merged with or
+adapted to. A shipping libXray client resolves the same constraint the same
+way (Appendix C.2, OneXray); that is corroboration, not the reason — the
+reasoning stands on §10.6 and on tun2socks dialling a port this app allocated.
 
-The obstacle is concrete rather than incidental. A user's config carries its own
-`inbounds`, and the tunnel needs a SOCKS inbound on a port allocated at connect
-time — §10.6 forbids a literal. Adopting the config's port collides with other
-proxy apps; injecting ours means rewriting `routing` to reference it, which is
-no longer "as written"; taking only its `outbounds` is barely passthrough at
-all. Whichever is chosen is a **second tunnel code path**, and §10.1 means it
-earns its own §11 device checklist rather than a green build.
+`RawConfigComposer` (`:core:xray`) does the rewriting, working on parsed JSON
+rather than a typed model precisely so it preserves whatever the config
+carries that this design does not name — `burstObservatory`, `reverse`, an
+opaque `fakedns` object. Four rewrites apply regardless of which branch below
+is taken:
 
-When it does land it is per-kind, not a migration: `TYPED` profiles generate
-from the typed form permanently, and only `RAW_JSON` switches. The typed columns
-stay either way — they are what the UI filters and sorts on — and the typed
-projection remains the fallback when `testXray` rejects the stored JSON,
-provided that fallback is a visible state and not a silent downgrade.
+- `inbounds` replaced with the SOCKS + HTTP pair `socksInboundJson`/
+  `httpInboundJson` already emit for a typed profile — moved into a shared
+  `Inbounds.kt` so both paths call one definition rather than two that can
+  drift apart silently.
+- `env` set to the resolved geo asset directory — Go cannot see a Java
+  `setenv` (§6's `XrayEnv` note above still applies).
+- `log` forced to `access: "none"`, `loglevel: "warning"` (§5.6 — the device-
+  found logcat leak, one line per destination).
+- `stats`/`policy`/`metrics` stripped — a config's own listener is an
+  unaudited open port, not this milestone's concern.
+
+**Two branches, chosen from state the app already has, not a persisted
+setting:**
+
+- **Pure passthrough** — the app has no routing or DNS opinion of its own (no
+  active rule set, and no DNS plan). The config's `routing`, `dns` and
+  `outbounds` reach the core byte-identical; nothing of ours is prepended or
+  removed. This is the branch §5.2's new carve-out describes.
+- **App override** — a rule set is active, or a DNS plan exists (the same
+  `routingActive || dnsPlanPresent` `resolveAndStartCore` already computes).
+  `routing` and `dns` are **removed** and replaced with the blocks the typed
+  generator would emit for the same state; the config's own `outbounds` and
+  their `streamSettings` survive untouched, and the app's stock
+  `direct`/`block`/`dns-out` outbounds (the same three literals
+  `XrayConfigGenerator.overrideBlocks` hands a typed profile's routing) are
+  **appended** to them — the substituted `routing` rules name those tags, and
+  an outbound they reference has to exist somewhere in the composed config's
+  `outbounds` array. `RawConfigComposer.compose` appends unconditionally; what
+  makes that safe is `TunnelService.composePassthrough` filtering the append
+  against the stored config's own outbound tags first
+  (`existingOutboundTags`/`tagOf()`, `TunnelService.kt`) — a config that
+  already defines `direct` or `block` itself (common: a `direct` freedom
+  outbound is exactly the kind of thing a hand-built config carries) would
+  otherwise pick up a duplicate tag alongside its own — a config the core is
+  not obliged to accept.
+  Deletion rather than merge for `routing`/`dns`: an arbitrary Xray rule array
+  has no single reading once a second author's rules are interleaved into it,
+  and `RoutingRuleSet`'s three-bucket model cannot express one anyway.
+
+**Sniffing is preserved, not defaulted, in the pure branch.** Traffic arrives
+from tun2socks addressed to an IP; without sniffing, a `domain`/`geosite:` rule
+in the config's own routing matches nothing, and replacing the inbounds would
+silently discard whatever sniffing settings made those rules work. So the
+config's own `sniffing` block is carried onto the injected SOCKS inbound
+verbatim when it has one; the app's default sniffing settings are used only
+when it has none. Not the reverse: injecting a wider `destOverride` than the
+config chose (adding `quic` to a config that sniffed only `http`/`tls`, say)
+would start matching rules the config's author never exercised, moving traffic
+the app was never asked to move — a leak in the other direction, introduced by
+us, with no error and no log line. In the override branch this does not apply:
+the app's rules are what runs, so the injected inbound takes the app's own
+sniffing defaults.
+
+**Eligibility is decided at import, against the real core**, not discovered at
+connect. `testXray` runs against the composed form — the same bytes with the
+same inbound pair a connect would inject — plus a check that the element
+produced exactly one profile or is a `routing.balancers` entry (an
+"auto/best server" document, which collapses into one passthrough row rather
+than being read as several servers to choose from — reading it as several
+would run the same tunnel under every row). A profile failing either check
+keeps today's typed-projection behaviour, with the failed check named in the
+editor rather than left to guess. A profile that passes and later fails
+`testXray` at connect — the stored bytes or the environment changed since
+import — fails visibly with `FailureReason.PassthroughRejectedAtConnect`
+rather than falling back to the typed projection; a silent fallback would be
+two different tunnels behind one tap.
+
+**Three gaps in that import-time check are accepted, not oversights, and all
+three lean on the same connect-time backstop:**
+
+- **The periodic subscription-refresh path skips core validation.**
+  `SubscriptionRefreshWorker` runs from `:app` via `RefreshScheduler` straight
+  into `SubscriptionSyncer`, never through `ProfileSource`. This is a scope
+  decision, not a structural one: `:core:data` (where `SubscriptionSyncer`
+  lives) genuinely cannot depend on `:core:xray` (§4), but `RefreshScheduler`
+  itself lives in `:app`, and `app/build.gradle.kts` already declares
+  `:service` — nothing in §4's graph stops `RefreshScheduler` from taking a
+  `PassthroughValidator` dependency today. It was left out of M7's scope
+  rather than ruled out by the module boundary. A refreshed row still gets the
+  full *structural* verdict (`analysePassthrough`, the same balancer collapse
+  the first import gets) — only the real-core check is missing.
+  `FailureReason.PassthroughRejectedAtConnect` is what makes a core refusal on
+  such a row fail visibly at connect with an accurate reason, instead of
+  connecting into an untested config.
+- **Core validation is skipped entirely when geo assets are not installed.**
+  `testXray` genuinely resolves geo files at config-build time — confirmed on
+  hardware, not assumed:
+  `docs/agent/research/2026-08-11-geo-assets-and-xray-routing.md` §2b records
+  `testXray` failing at *build* with `failed to open geosite.dat` when the
+  asset location does not resolve. Validating a config carrying `geosite:`/
+  `geoip:` rules before the curated geo files download would therefore mark it
+  rejected **permanently** for a condition that resolves itself the moment the
+  download completes — exactly the durable-wrong-verdict failure §10.4 warns
+  against, and routing-heavy configs are exactly what this milestone targets.
+  Same backstop: an unvalidated row that the core would in fact refuse fails at
+  connect instead of at import.
+- **A config with no exact `proxy` tag is not rejected at import, but it now
+  fails closed before core startup when an app override applies.**
+  `PassthroughAnalysis` still computes `OverrideBlocker.NoProxyTag` without
+  persisting it, because the pure branch can run such a config correctly: none
+  of the config's own rules needs our conventional tag. The override branch is
+  different — every app-generated proxy rule currently names `proxy`.
+  `TunnelService.composePassthrough` therefore reuses the analyser's outbound
+  tags immediately before composition and returns
+  `FailureReason.PassthroughOverrideUnavailable` when that exact target is
+  absent. The core is never started, so the previously reproduced failure
+  shape — Connected while matching traffic is dropped — is closed.
+
+  This is a guard, not full support for arbitrary tags or balancers. Resolving
+  the config's actual server/balancer target remains M7.5; until then, turning
+  app routing off and restoring the default DNS setting runs the config's own
+  routing unchanged. Import-time `PassthroughValidator` still exercises only
+  the pure branch (`override = null`), so this decision deliberately stays at
+  connect where the active routing/DNS state is known. Duplicate outbound tags
+  remain a separate structural failure that xray-core rejects during the
+  connect-time `validate` call.
+
+  Same dead-analysis shape as `overrideBlocker` otherwise, recorded here
+  rather than wired for the same closing-milestone reason (a consumer is a UI
+  task with its own copy and its own tests): `PassthroughAnalysis.advisories`
+  (a `List<PassthroughAdvisory>`) and the `serverOutboundCount`/`outboundTags`
+  fields it sits alongside are likewise computed and unit-tested with no
+  consumer anywhere in the app. Worth naming specifically because one of the
+  conditions it can detect is `SniffingCannotServeOwnRules` — a config whose
+  domain/geosite routing rules can never match because its own sniffing
+  settings do not surface the destination those rules need. That is not a
+  config that fails to connect; it is one that connects, passes traffic, and
+  silently ignores its own routing the whole time — §10.1's signature
+  failure, already detected by code in this tree, told to nobody. A future
+  contributor should be able to find that by reading this paragraph rather
+  than by grepping for `PassthroughAdvisory` and wondering why it exists.
+
+**Two more edges live in the `LENIENT` JSON parser itself** (`RawConfigComposer`,
+`PassthroughAnalysis`, `XrayRoutingConversion` — each its own `Json { isLenient = true }`
+instance, same shape, no shared object), not in the eligibility check above. Both are parser
+edges, not design positions — nothing here chose these behaviors on purpose:
+
+- **A non-standard unquoted literal round-trips into invalid JSON.** `isLenient` accepts an
+  unquoted scalar on parse (e.g. `mode: auto` rather than `"mode": "auto"`), producing a JSON
+  element whose `isString` is `false`; that element's own `toString()` re-emits the literal
+  unquoted, so text `RawConfigComposer.render` produces from it can itself fail to parse as JSON,
+  even though `compose` returned `ComposeResult.Ok`. This is backstopped, not silent:
+  `BoundPassthroughValidator` hands the composed text to `testXray` before an import is accepted,
+  so the failure surfaces as `PassthroughRejection.CoreRejected` — "Xray rejected this file"
+  (`editor_raw_json_rejected_core_rejected`) — which is true but imprecise about which side
+  actually produced the invalid bytes.
+- **`//` line comments make a config `NotJson` here.** kotlinx.serialization's lenient mode
+  relaxes quoting rules, not comment syntax — no `Json { }` option enables comment parsing — so a
+  stored config using them fails to parse in this app before the balancer/eligibility check or
+  `testXray` ever runs. Whether xray-core's own JSON loader accepts such comments is **not
+  established from anything in this codebase** (§10.5):
+  `docs/agent/research/2026-07-27-m2-residuals-for-m3.md` records the claim and flags it
+  explicitly as unverified against Xray-core source. If it turns out to be true, a config that
+  would run correctly on-device is rejected here first, and the user is told `NotJson` for a file
+  the core itself would have accepted.
+
+Related: `ignoreUnknownKeys = true` was present in all three `LENIENT` blocks above but is inert
+in every one of them — it governs typed deserialization (`decodeFromString`), and all three call
+sites only ever use `parseToJsonElement`, which never consults it. Removed rather than left
+looking load-bearing.
+
+It is per-kind, not a migration: `TYPED` profiles generate from the typed form
+permanently, and only `RAW_JSON` switches. The typed columns stay either way —
+they are what the UI filters and sorts on.
 
 Shape:
 
@@ -379,7 +567,26 @@ Rules:
   xray-core is pointed at the install directory through the invoke `env`
   object PR #133 restored upstream (`third_party/libxray-patches/`) —
   `XrayController` builds it from `GeoAssetRepository.geoDirectory()` and
-  sends it on every `testXray`/`runXray` call. **Not**
+  sends it on every `testXray`/`runXray` call. **`testXray` (import-time
+  validation) does not consult this channel at all — measured on a Pixel 8,
+  2026-08-31**
+  (`docs/agent/research/2026-08-25-m7-device-verification.md` finding F8,
+  all five rows calling `XrayController.validate`, i.e. `testXray`; none
+  exercise `runXray`): it resolves geo files from the composed config's own
+  `env["xray.location.asset"]` alone, never from this invoke envelope, which
+  is why `RawConfigComposer.compose` writes that key into the JSON it hands
+  `BoundPassthroughValidator` (`service/.../PassthroughValidator.kt`) rather
+  than relying on `XrayController`'s `geoAssetDir` to reach it. **`runXray`
+  (a running tunnel) is not measured by F8** — that is a separate claim,
+  carried by inference rather than by the same evidence: the typed-config
+  generation path never writes an `env["xray.location.asset"]` key into its
+  own JSON (only `RawConfigComposer`'s passthrough path does), so for a typed
+  profile's tunnel the invoke envelope is the only channel available to name
+  a geo directory at all, which is why the codebase relies on it there. An
+  earlier version of this paragraph claimed the invoke envelope was what
+  mattered for both calls alike; believing that for `testXray` produced a
+  validator that refused every config carrying a `geosite:`/`geoip:` rule.
+  **Not**
   `android.system.Os.setenv`: an earlier version of this design used it, every
   automated test passed, and it does not work — Go's Android shared-library
   entry point starts the runtime with an empty environment, so `os.LookupEnv`
@@ -1103,8 +1310,14 @@ Mandatory rules:
 - [ ] Import: manual entry, clipboard, QR camera scan, file, URL
 - [ ] Subscription import with auto-update on an interval, plus update on
       app launch
-- [ ] Raw JSON config profiles (passthrough mode — the config runs as
-      written, app-level routing rules are **not** applied to it)
+- [ ] Raw JSON config profiles (passthrough mode — §6. An eligible config runs
+      as written, own `routing`/`dns` and all, when the app has no routing or
+      DNS opinion of its own; the moment a rule set is active or a resolver is
+      configured, the app's routing and DNS blocks replace the config's
+      wholesale instead, in the same way §5.2 already does for a generated
+      config. M7 built this (tasks 1–16, plus a controller-added 7b, on
+      `feat/m7-raw-json-passthrough`); left unchecked because the §11 device
+      checklist has not run — §10.1)
 - [ ] Multi-subscription, multi-profile management, grouping, collapse/expand
 - [x] Latency testing with selectable mode: **`tcp` and `proxy-head`**, and a
       configurable check URL.
@@ -1178,7 +1391,7 @@ domestic/remote split — are recorded in
 with sniffing off) is unreachable in this build, because sniffing has no user
 setting, and is recorded as not run rather than as a pass. The run cost one
 product defect, again invisible to a green build. Raw Xray JSON passthrough
-is M7.
+is M7 — built (§6), device checklist not yet run.
 
 This is what the user asked about specifically and it is the strongest idea
 in Happ. Routing configuration is a **shareable artifact**, not something
@@ -1574,8 +1787,8 @@ assembled from several sources.
 **Before you copy anything from any project below, check `THIRD_PARTY.md`.**
 License determines whether a project may be copied from or only learned from,
 and the distinction is not visible in the code. The short version: `SaeedDev94/Xray`
-and `heiher/sockstun` are MIT and may be adapted with attribution; `v2rayNG`
-and `LibreXrayVPN` are GPL-3.0 and must be read for behaviour only.
+and `heiher/sockstun` are MIT and may be adapted with attribution; `v2rayNG`,
+`LibreXrayVPN` and `OneXray` are GPL-3.0 and must be read for behaviour only.
 
 ## C.1 Header protocol and HWID
 
@@ -1595,6 +1808,7 @@ and `LibreXrayVPN` are GPL-3.0 and must be read for behaviour only.
 | **XrayFA** (`Q7DF1`) | Actively maintained, Hysteria2 support already in. Check how they wire the newer protocols. |
 | **yaxc** (`derundevu`) | Closest to RU-specific needs: tun0 defense, antifilter.download subnets, per-app split, SOCKS auth. |
 | **hev-socks5-tunnel** | The TUN→SOCKS library itself. Not a client — a dependency. |
+| **OneXray** (`OneXray/OneXray`, GPL-3.0, read-only) | Runs a hand-written Xray config by replacing its `inbounds` outright rather than adopting or merging them — the same resolution M7 reached independently for the same §10.6 port constraint, and pins its geo asset directory into the invoke `env` object the same way. Corroboration, not the source of the design; read for behaviour only. Commit `7ce3f4ec81ed2944d0cf3a0c027e918a4da6841e`, read 2026-08-25. |
 
 ## C.3 Architecture and UI
 
@@ -1602,6 +1816,7 @@ and `LibreXrayVPN` are GPL-3.0 and must be read for behaviour only.
 |---|---|
 | **LibreXrayVPN** (`Ko4Learner`) | Compose + Hilt + MVI + Clean Architecture on Xray. Small enough to read fully in an evening. Stale (late 2025) — use as a skeleton, not a dependency. |
 | **Lust** (`envywook`) | Compose + subscriptions + HEV tun2socks. Very new, unproven. Worth a look for how they bridged hev via JNI. |
+| **OneXray** (`OneXray/OneXray`, GPL-3.0, read-only) | Flutter/Dart, cross-platform (iOS/macOS/Android/Windows/Linux) on libXray + Xray-core. Its app-level routing override (`XrayRoutingModeFix`) is a mode switch that *deletes* a raw config's `routing`/`dns` rather than merging into them — read for how a shipped client frames that same precedence decision, not for code. |
 
 ## C.4 The panel side
 
@@ -1616,6 +1831,13 @@ reliable than any client's interpretation of it:
   "wrong format" bug.
 - `remnawave/subscription-page` → `frontend/public/assets/app-config.json` —
   the client list shown to end users on the subscription page.
+
+`docs/agent/research/2026-08-25-remnawave-xray-json-and-balancers.md` sources
+the `XRAY_JSON` template's array-of-configs shape from the panel's own
+generator rather than from an observation on the wire, and records its
+`routing.balancers` ("auto/best server") shape and its per-outbound tagging
+schemes (`tagPrefix`, `useHostRemarkAsTag`) that M7's eligibility checks (§6)
+are written against.
 
 ---
 

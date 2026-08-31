@@ -12,7 +12,9 @@ import art.yniyniyni.subspace.core.data.RoutingRepository
 import art.yniyniyni.subspace.core.model.RouteOutcome
 import art.yniyniyni.subspace.core.model.RoutingProfile
 import art.yniyniyni.subspace.core.model.RoutingSourceKind
+import art.yniyniyni.subspace.core.parser.routing.ConversionDrop
 import art.yniyniyni.subspace.core.parser.routing.ImportResult
+import art.yniyniyni.subspace.core.parser.routing.RoutingConversion
 import art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport
 import art.yniyniyni.subspace.core.parser.routing.RoutingVerb
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -274,17 +276,45 @@ constructor(
         }
         pending = PendingImport.Profile(result.profile, result.verb, sourceKind, subscriptionId)
         _state.value =
-            ImportReviewState(
-                stage = Stage.Reviewing,
-                name = result.profile.name,
-                replacesExisting = preview.replacesExisting,
-                replacesActive = preview.replacesActive,
-                bucketCounts = bucketCounts(result.profile),
-                defaultRouteIsDirect = result.profile.globalProxy == false,
-                geoDownloads = preview.geoFiles.map { it.toDownloadPreview() },
-                dns = result.profile.dns,
-                dnsState = dnsStateOf(result.profile.dns, sniffingEnabled = true),
+            reviewState(
+                profile = result.profile,
+                preview = preview,
                 willActivate = result.verb == RoutingVerb.OnAdd || preview.willActivate,
+                drops = emptyMap(),
+            )
+    }
+
+    /**
+     * Starts review for a config's `routing` converted into a rule set (Task 13),
+     * rather than one arriving over a link/QR/clipboard/subscription channel.
+     *
+     * Runs the same [ImportReviewSource.preview] path [onImported] does — same
+     * fingerprint gate, same geo-download disclosure — so this task changes
+     * nothing about apply. The only thing this adds is [conversion]'s [drops]
+     * reaching [ImportReviewState], which is the whole reason Task 13 counted
+     * them: a drop nobody sees is a drop that might as well not be reported.
+     *
+     * [RoutingSourceKind.Conversion] names this provenance precisely — the user
+     * did not paste this rule set's contents, the app derived them from a
+     * config's own `routing` block, and the badge is the one place the user
+     * learns where a rule set came from (§9). [RoutingSourceKind.Clipboard]
+     * would say something that did not happen.
+     */
+    suspend fun startConversionReview(conversion: RoutingConversion) {
+        val profile = conversion.profile
+        val preview = source.preview(profile)
+        if (preview.decision == RoutingRepository.UpdateDecision.Unchanged) {
+            pending = null
+            _state.value = ImportReviewState(stage = Stage.Done)
+            return
+        }
+        pending = PendingImport.Profile(profile, RoutingVerb.Add, RoutingSourceKind.Conversion, subscriptionId = null)
+        _state.value =
+            reviewState(
+                profile = profile,
+                preview = preview,
+                willActivate = preview.willActivate,
+                drops = conversion.drops,
             )
     }
 
@@ -293,6 +323,28 @@ constructor(
         _state.value = ImportReviewState(stage = Stage.Reviewing, isDisableRouting = true)
     }
 }
+
+/** Shared by [ImportReviewViewModel.onImported] and [ImportReviewViewModel.startConversionReview]. */
+private fun reviewState(
+    profile: RoutingProfile,
+    preview: ImportPreview,
+    willActivate: Boolean,
+    drops: Map<ConversionDrop, Int>,
+): ImportReviewState =
+    ImportReviewState(
+        stage = Stage.Reviewing,
+        name = profile.name,
+        replacesExisting = preview.replacesExisting,
+        replacesActive = preview.replacesActive,
+        bucketCounts = bucketCounts(profile),
+        defaultRouteIsDirect = profile.globalProxy == false,
+        geoDownloads = preview.geoFiles.map { it.toDownloadPreview() },
+        dns = profile.dns,
+        dnsState = dnsStateOf(profile.dns, sniffingEnabled = true),
+        willActivate = willActivate,
+        profile = profile,
+        drops = drops,
+    )
 
 private sealed interface PendingImport {
     data class Profile(

@@ -18,6 +18,9 @@ import art.yniyniyni.subspace.core.model.SocksOutbound
 import art.yniyniyni.subspace.core.model.TrojanOutbound
 import art.yniyniyni.subspace.core.model.VlessOutbound
 import art.yniyniyni.subspace.core.model.VmessOutbound
+import art.yniyniyni.subspace.core.parser.PassthroughAnalysis
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
+import art.yniyniyni.subspace.core.parser.analysePassthrough
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -60,6 +63,13 @@ public data class StoredProfile(
      * since <this timestamp>" — nothing in `:core:data` reads it back.
      */
     val droppedFromSubscriptionAt: Long? = null,
+    /**
+     * Why this row cannot run as written, or null when it can.
+     *
+     * Structural only — decided by `analysePassthrough` at import. Whether the
+     * core accepts the config is a separate gate applied by `:service`.
+     */
+    val passthroughRejection: PassthroughRejection? = null,
 ) {
     // §5.6: this is the type that crosses out of :core:data carrying a server address, an
     // Outbound (UUID and REALITY key material) and the raw config, so the redaction has to hold
@@ -69,7 +79,8 @@ public data class StoredProfile(
         "StoredProfile(id=$id, groupId=$groupId, kind=$kind, name=$name, protocol=$protocol, " +
             "address=<redacted>, port=$port, transport=$transport, outbound=<redacted>, " +
             "rawJson=<redacted>, lastConnectedAt=$lastConnectedAt, lastError=$lastError, " +
-            "droppedFromSubscriptionAt=$droppedFromSubscriptionAt)"
+            "droppedFromSubscriptionAt=$droppedFromSubscriptionAt, " +
+            "passthroughRejection=$passthroughRejection)"
 
     /** RAW_JSON runs through the typed projection in M3 (§6). */
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
@@ -99,6 +110,15 @@ public data class StoredProfile(
      */
     public val connectable: Boolean
         get() = (outbound as? VlessOutbound)?.stream?.network?.lowercase() in CONNECTABLE_NETWORKS
+
+    /**
+     * Whether this row's own bytes reach the core, rather than a typed projection.
+     *
+     * `TYPED` rows generate from the typed form permanently (§6), so this is
+     * false for them however well-formed they are.
+     */
+    public val runsAsWritten: Boolean
+        get() = kind == ProfileKind.RAW_JSON && passthroughRejection == null
 }
 
 /**
@@ -227,7 +247,21 @@ internal constructor(
     public suspend fun deleteGroup(id: Long): Unit = dao.deleteGroup(id)
 
     /**
-     * Imports parsed profiles into [groupId], one row per profile.
+     * Imports parsed profiles into [groupId], one row per profile — except a balancer element's
+     * profiles, which collapse to one (see below).
+     *
+     * Every `RAW_JSON` profile's element bytes are run through
+     * [art.yniyniyni.subspace.core.parser.analysePassthrough] once per distinct
+     * [Profile.rawJson] value, and the verdict is stored as
+     * [ProfileEntity.passthroughRejection] — `null` means the row is eligible to run
+     * as written (design §6). When that analysis reports
+     * [art.yniyniyni.subspace.core.parser.PassthroughAnalysis.isBalancer], the element's
+     * outbounds are balancer members, not several servers the user picks between
+     * (research §5b: the target panel's own "auto | best server" entry is exactly this
+     * shape), so only the *first* profile carrying that element's bytes is kept — the
+     * rest are dropped before the upsert loop below ever sees them. This is a storage
+     * decision, not a parser one: `:core:parser`'s per-destination fan-out is still
+     * correct output for a `TYPED` re-import of the same bytes.
      *
      * [Profile.rawJson] carries provenance per-profile now, not per-batch (element-provenance
      * fix, device-fixes finding part 2): a profile parsed out of a hand-written Xray config
@@ -277,9 +311,23 @@ internal constructor(
         groupId: Long,
     ): Int {
         val now = System.currentTimeMillis()
-        val rawJsonFanoutCounts = profiles.mapNotNull { it.rawJson }.groupingBy { it }.eachCount()
+        val analysisCache = mutableMapOf<String, PassthroughAnalysis>()
+        fun analysisFor(rawJson: String) = analysisCache.getOrPut(rawJson) { analysePassthrough(rawJson) }
+
+        // A balancer element (research §5b, the target panel's auto entry) mints one profile per
+        // `vless` destination even though those destinations are members of one logical server,
+        // not several a user picks between. Keep only the first profile carrying that element's
+        // bytes; the rest would otherwise land as extra rows all pointing at the same document.
+        val seenBalancerRawJson = mutableSetOf<String>()
+        val survivingProfiles =
+            profiles.filter { profile ->
+                val rawJson = profile.rawJson
+                rawJson == null || !analysisFor(rawJson).isBalancer || seenBalancerRawJson.add(rawJson)
+            }
+
+        val rawJsonFanoutCounts = survivingProfiles.mapNotNull { it.rawJson }.groupingBy { it }.eachCount()
         val identityHashes = mutableSetOf<String>()
-        profiles.forEachIndexed { index, profile ->
+        survivingProfiles.forEachIndexed { index, profile ->
             val rawJson = profile.rawJson
             val kind = if (rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON
             val identityHash =
@@ -305,11 +353,35 @@ internal constructor(
                     lastConnectedAt = null,
                     lastError = null,
                     createdAt = now,
+                    passthroughRejection = rawJson?.let { analysisFor(it).rejection?.name },
                 ),
             )
         }
         return identityHashes.size
     }
+
+    /**
+     * Overwrites [profileId]'s row with the core's own verdict — a thin, `id`-keyed wrapper over
+     * [ProfileDao.setPassthroughRejection].
+     *
+     * Review fix (Important 1): an earlier version of this method took `(groupId, rawJson)` and
+     * re-derived the row via `identityHashOfRaw(rawJson)`, on the claim that a caller only ever
+     * has the config's text in hand, not the id. That claim was false — `:feature:profiles`'
+     * `ProfileSource` (Task 8's only caller) already iterates [StoredProfile]s pulled from
+     * [observeGroups], which carry [StoredProfile.id] directly — and the re-derivation was also
+     * provably wrong on its own terms: [import]'s own KDoc documents two byte-identical raw
+     * elements both falling to the outbound-identity fallback while each still analyses to a
+     * null structural rejection, a case `identityHashOfRaw` cannot distinguish. Taking the id
+     * directly removes both problems: no re-derivation, and no config material in the signature.
+     *
+     * [reason] is a [art.yniyniyni.subspace.core.parser.PassthroughRejection]'s `name`, not the
+     * enum itself, matching [ProfileDao.setPassthroughRejection]'s own contract — see that
+     * method's KDoc for why the DAO layer stays off `:core:parser`'s types.
+     */
+    public suspend fun setPassthroughRejection(
+        profileId: Long,
+        reason: String?,
+    ): Unit = dao.setPassthroughRejection(profileId, reason)
 
     /**
      * Moves a profile to a different group. A no-op (returns `true`) if the profile no
@@ -442,12 +514,22 @@ internal constructor(
             lastConnectedAt = lastConnectedAt,
             lastError = lastError,
             droppedFromSubscriptionAt = droppedFromSubscriptionAt,
+            passthroughRejection = passthroughRejection?.let(::decodePassthroughRejection),
         )
     }
 }
 
 private fun decodeProfileKind(value: String): ProfileKind? =
     ProfileKind.entries.firstOrNull { it.name == value }
+
+/**
+ * Decodes a stored [PassthroughRejection] name back into the enum, or null for
+ * anything that does not match — a null column already means eligible, and an
+ * unrecognised name (a future rejection member reintroduced against an older
+ * install) degrades the same way rather than crashing the Servers screen.
+ */
+private fun decodePassthroughRejection(value: String): PassthroughRejection? =
+    PassthroughRejection.entries.firstOrNull { it.name == value }
 
 /**
  * The canonical protocol name, matching `OutboundDto`'s `@SerialName`s (`:core:data:serialization`).

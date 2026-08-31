@@ -4,6 +4,7 @@ package art.yniyniyni.subspace.feature.profiles.editor
 
 import art.yniyniyni.subspace.core.data.AddedSubscription
 import art.yniyniyni.subspace.core.data.EffectiveValue
+import art.yniyniyni.subspace.core.data.PendingRoutingConversion
 import art.yniyniyni.subspace.core.data.ProfileGroup
 import art.yniyniyni.subspace.core.data.ProfileKind
 import art.yniyniyni.subspace.core.data.StoredProfile
@@ -14,6 +15,7 @@ import art.yniyniyni.subspace.core.model.Profile
 import art.yniyniyni.subspace.core.model.Security
 import art.yniyniyni.subspace.core.model.StreamSettings
 import art.yniyniyni.subspace.core.model.VlessOutbound
+import art.yniyniyni.subspace.core.parser.PassthroughAdvisory
 import art.yniyniyni.subspace.feature.profiles.ProfileSource
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +80,11 @@ class EditorViewModelTest {
 
     private val originalPastedText = """{  "outbounds" : [ { "protocol":"vless" } ]  }"""
 
+    /** A raw config whose own `routing` block `convertXrayRouting` (Task 13) can carry. */
+    private val routableRawJson =
+        """{"routing":{"rules":[{"domain":["a.com"],"outboundTag":"direct"}]},""" +
+            """"outbounds":[{"tag":"direct","protocol":"freedom"}]}"""
+
     private val rawJsonProfile =
         StoredProfile(
             id = 2L,
@@ -101,6 +108,35 @@ class EditorViewModelTest {
             lastError = null,
         )
 
+    /** Same shape as [rawJsonProfile], but its own `routing` block converts (Task 15). */
+    private val routableRawJsonProfile = rawJsonProfile.copy(id = 3L, rawJson = routableRawJson)
+
+    /**
+     * A raw config whose `routing.rules` array is non-empty, but every rule is dropped —
+     * `protocol` is one of [art.yniyniyni.subspace.core.parser.routing.ConversionDrop.UnsupportedMatcher]'s
+     * keys, so this rule carries no `domain`/`ip` entry into any bucket. Fix round 1 (Important
+     * 1): `convertXrayRouting` still returns non-null here (a non-null `RoutingConversion` with
+     * an empty bucket map), so `canConvertRouting` must not gate on non-null alone — offering the
+     * action for this config would hand the review sheet a profile that replaces this config's
+     * routing with nothing once activated.
+     */
+    private val allDroppedRawJson =
+        """{"routing":{"rules":[{"protocol":["bittorrent"],"outboundTag":"block"}]},""" +
+            """"outbounds":[{"tag":"block","protocol":"blackhole"}]}"""
+
+    private val allDroppedRawJsonProfile = rawJsonProfile.copy(id = 4L, rawJson = allDroppedRawJson)
+
+    /**
+     * The target panel's own balancer entry, reduced to the defect (device record F9):
+     * `fallbackTag` names an outbound the document never defines.
+     */
+    private val danglingRoutingRawJson =
+        """{"routing":{"rules":[{"type":"field","network":"tcp,udp","balancerTag":"Auto_Balancer"}],""" +
+            """"balancers":[{"tag":"Auto_Balancer","selector":["proxy"],"fallbackTag":"proxy"}]},""" +
+            """"outbounds":[{"tag":"proxy-auto","protocol":"vless"}]}"""
+
+    private val danglingRoutingRawJsonProfile = rawJsonProfile.copy(id = 5L, rawJson = danglingRoutingRawJson)
+
     private class FakeProfileSource(
         profiles: List<StoredProfile>,
         private val groups: List<ProfileGroup> = listOf(ProfileGroup(10L, "Local configs", emptyList())),
@@ -111,6 +147,14 @@ class EditorViewModelTest {
          * default so every pre-existing test keeps its original "every write lands" shape.
          */
         private val rejectWritesFor: Set<Long> = emptySet(),
+        /**
+         * Backs [routingOverridesPassthrough] below — Task 10 review, Critical 2: the real
+         * value comes from `SettingsRepository.activeRoutingRuleSetId`/`.dnsResolver` combined
+         * (see `ProfileSource.BoundProfileSource`'s own override), which this fake stands in
+         * for as a plain constructor flag since [EditorViewModel.load] only ever reads one
+         * snapshot of it via `.first()`.
+         */
+        private val routingOverridesPassthroughValue: Boolean = false,
     ) : ProfileSource {
         private val stored = profiles.associateBy { it.id }.toMutableMap()
 
@@ -128,6 +172,8 @@ class EditorViewModelTest {
 
         override val activeProfileId: StateFlow<Long?> = MutableStateFlow<Long?>(null).asStateFlow()
         override val globalHwidEnabled: StateFlow<Boolean> = MutableStateFlow(true).asStateFlow()
+        override val routingOverridesPassthrough: Flow<Boolean> =
+            MutableStateFlow(routingOverridesPassthroughValue).asStateFlow()
 
         override suspend fun setActiveProfile(id: Long?) = Unit
 
@@ -234,11 +280,37 @@ class EditorViewModelTest {
         Dispatchers.resetMain()
     }
 
+    /**
+     * Constructs [EditorViewModel] with [EditorViewModel.conversionDispatcher] pinned to
+     * [Dispatchers.Unconfined] rather than the real [Dispatchers.Default] `load()` uses in
+     * production.
+     *
+     * Fix round 1, Minor: `load()` moved its `canConvertRouting` parse off Main via a genuine
+     * `withContext(Dispatchers.Default)` hop. Left at its production default, that hop escapes
+     * [UnconfinedTestDispatcher]'s virtual-time control — the real background thread resumes
+     * `load()`'s coroutine on its own schedule, so `advanceUntilIdle()` (which only drains the
+     * *test* dispatcher's queue) returns before `_state.value` is actually assigned, and every
+     * test in this file that asserts immediately after `load()` observes a stale default
+     * `EditorState()`. Every other suspend call `load()` makes runs against a trivial
+     * [ProfileSource] fake with no real suspension; this dispatcher is the one exception, so it
+     * gets the one override, keeping this file's `advanceUntilIdle()`-then-assert pattern intact
+     * for every test rather than rewriting the file's synchronisation style.
+     *
+     * Fix round 2: [EditorViewModel.conversionDispatcher] gained `private set`, so this goes
+     * through [EditorViewModel.setConversionDispatcherForTesting] rather than a direct
+     * assignment — see that function's KDoc.
+     */
+    private fun editorViewModel(
+        source: ProfileSource,
+        pending: PendingRoutingConversion = PendingRoutingConversion(),
+    ): EditorViewModel =
+        EditorViewModel(source, pending).apply { setConversionDispatcherForTesting(Dispatchers.Unconfined) }
+
     @Test
     fun `editing a typed profile rewrites its identity hash`() =
         runTest {
             val source = FakeProfileSource(listOf(typedProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
 
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
@@ -258,7 +330,7 @@ class EditorViewModelTest {
     fun `a raw json profile is not field-editable`() =
         runTest {
             val source = FakeProfileSource(listOf(rawJsonProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
 
             viewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
@@ -267,11 +339,75 @@ class EditorViewModelTest {
             viewModel.state.value.rawJson shouldBe originalPastedText
         }
 
+    // Task 10 review, Critical 2: EditorState.runsAsWritten/passthroughRejection come
+    // straight off the loaded StoredProfile (unchanged this round), but
+    // routingOverridesThisConfig is new wiring — load() now reads
+    // ProfileSource.routingOverridesPassthrough rather than defaulting to false forever.
+    @Test
+    fun `an eligible raw json profile carries runsAsWritten and no rejection`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.runsAsWritten shouldBe true
+            viewModel.state.value.passthroughRejection shouldBe null
+        }
+
+    // Task 3, M7 device fixes: the target panel's balancer entry connects and carries
+    // nothing (device record F9) — analysePassthrough reports it as an advisory, and load()
+    // must carry that into EditorState for the screen to render.
+    @Test
+    fun `a raw json profile with a dangling fallbackTag carries the advisory`() =
+        runTest {
+            val source = FakeProfileSource(listOf(danglingRoutingRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(danglingRoutingRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.advisories shouldBe listOf(PassthroughAdvisory.DanglingRoutingReference)
+        }
+
+    // Fix round 1, Minor 5: renamed from "...whose references all resolve carries no
+    // advisories" — rawJsonProfile's own rawJson carries no `routing` block at all, so there
+    // is nothing to resolve; the honest claim this test pins is the absence of a routing block
+    // producing an empty advisory list, not a resolved reference.
+    @Test
+    fun `a raw json profile with no routing block carries no advisories`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.advisories shouldBe emptyList()
+        }
+
+    @Test
+    fun `load reads routingOverridesThisConfig from the routing-overrides signal`() =
+        runTest {
+            val overridingSource = FakeProfileSource(listOf(rawJsonProfile), routingOverridesPassthroughValue = true)
+            val overridingViewModel = editorViewModel(overridingSource)
+            overridingViewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+            overridingViewModel.state.value.routingOverridesThisConfig shouldBe true
+
+            val quietSource = FakeProfileSource(listOf(rawJsonProfile), routingOverridesPassthroughValue = false)
+            val quietViewModel = editorViewModel(quietSource)
+            quietViewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+            quietViewModel.state.value.routingOverridesThisConfig shouldBe false
+        }
+
     @Test
     fun `renaming a raw json profile leaves its bytes untouched`() =
         runTest {
             val source = FakeProfileSource(listOf(rawJsonProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
 
             viewModel.load(rawJsonProfile.id)
             advanceUntilIdle()
@@ -284,11 +420,95 @@ class EditorViewModelTest {
             source.lastUpdate shouldBe null
         }
 
+    // Task 15: the entry point that makes Task 13's convertXrayRouting and Task 14's
+    // startConversionReview reachable in production.
+    @Test
+    fun `canConvertRouting is true when the config's own routing block converts`() =
+        runTest {
+            val source = FakeProfileSource(listOf(routableRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(routableRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.canConvertRouting shouldBe true
+        }
+
+    @Test
+    fun `canConvertRouting is false when the config has nothing convertXrayRouting can carry`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.canConvertRouting shouldBe false
+        }
+
+    @Test
+    fun `convertRouting offers the converted profile to the pending holder`() =
+        runTest {
+            val source = FakeProfileSource(listOf(routableRawJsonProfile))
+            val pending = PendingRoutingConversion()
+            val viewModel = editorViewModel(source, pending)
+            viewModel.load(routableRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.convertRouting()
+
+            pending.conversion.value?.profile?.name shouldBe routableRawJsonProfile.name
+        }
+
+    @Test
+    fun `convertRouting does nothing when there is nothing to convert`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rawJsonProfile))
+            val pending = PendingRoutingConversion()
+            val viewModel = editorViewModel(source, pending)
+            viewModel.load(rawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.convertRouting()
+
+            pending.conversion.value shouldBe null
+        }
+
+    // Fix round 1, Important 1: convertXrayRouting returns non-null (a RoutingConversion with an
+    // empty bucket map) for a config whose routing.rules is non-empty but whose every rule is
+    // dropped — canConvertRouting must not offer the action for that config, or confirming it
+    // would replace this config's own routing with nothing once activated.
+    @Test
+    fun `canConvertRouting is false when every rule in routing is dropped`() =
+        runTest {
+            val source = FakeProfileSource(listOf(allDroppedRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(allDroppedRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.canConvertRouting shouldBe false
+        }
+
+    @Test
+    fun `convertRouting does nothing when every rule in routing is dropped`() =
+        runTest {
+            val source = FakeProfileSource(listOf(allDroppedRawJsonProfile))
+            val pending = PendingRoutingConversion()
+            val viewModel = editorViewModel(source, pending)
+            viewModel.load(allDroppedRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.convertRouting()
+
+            pending.conversion.value shouldBe null
+        }
+
     @Test
     fun `loading an unknown profile id reports not found, not a crash`() =
         runTest {
             val source = FakeProfileSource(emptyList())
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
 
             viewModel.load(999L)
             advanceUntilIdle()
@@ -301,7 +521,7 @@ class EditorViewModelTest {
     fun `saving a typed profile with an invalid port does not persist and reports an error`() =
         runTest {
             val source = FakeProfileSource(listOf(typedProfile))
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 
@@ -326,7 +546,7 @@ class EditorViewModelTest {
                         ProfileGroup(20L, "Other", emptyList()),
                     ),
                 )
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 
@@ -348,7 +568,7 @@ class EditorViewModelTest {
     fun `saving a typed profile into a colliding identity reports duplicate identity, not a crash`() =
         runTest {
             val source = FakeProfileSource(listOf(typedProfile), rejectWritesFor = setOf(typedProfile.id))
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 
@@ -380,7 +600,7 @@ class EditorViewModelTest {
                     ),
                     rejectWritesFor = setOf(typedProfile.id),
                 )
-            val viewModel = EditorViewModel(source)
+            val viewModel = editorViewModel(source)
             viewModel.load(typedProfile.id)
             advanceUntilIdle()
 

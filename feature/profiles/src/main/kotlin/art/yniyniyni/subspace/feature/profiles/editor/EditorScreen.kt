@@ -54,6 +54,8 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import art.yniyniyni.subspace.core.parser.DetailField
 import art.yniyniyni.subspace.core.parser.FailureDetail
+import art.yniyniyni.subspace.core.parser.PassthroughAdvisory
+import art.yniyniyni.subspace.core.parser.PassthroughRejection
 import art.yniyniyni.subspace.core.parser.SHADOWSOCKS_METHODS
 import art.yniyniyni.subspace.feature.profiles.R
 import art.yniyniyni.subspace.feature.profiles.add.labelRes
@@ -106,11 +108,19 @@ private val STREAM_PROTOCOLS = setOf("vless", "vmess", "trojan")
  * [EditorViewModel.save] actually persists (`state.saved`), or immediately for the back
  * button / not-found screen, so the caller (`SubspaceNavHost`) can pop the back stack either
  * way without this screen knowing anything about navigation itself.
+ *
+ * @param onConvertRouting Task 15: the "Use this file's routing rules" action
+ *   ([EditorState.canConvertRouting]) fires this after
+ *   [EditorViewModel.convertRouting] has already stored the conversion in
+ *   [art.yniyniyni.subspace.core.data.PendingRoutingConversion] — same split as [onDone]: this
+ *   screen owns storing the conversion, the caller owns where the back stack goes next (the
+ *   routing import review destination).
  */
 @Composable
 fun EditorScreen(
     profileId: Long,
     onDone: () -> Unit,
+    onConvertRouting: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val viewModel: EditorViewModel = hiltViewModel()
@@ -150,6 +160,26 @@ fun EditorScreen(
             onXhttpHostChanged = viewModel::onXhttpHostChanged,
             onXhttpModeChanged = viewModel::onXhttpModeChanged,
             onSave = viewModel::save,
+            // Task 15: stores the conversion in the M6-style in-memory holder
+            // ([art.yniyniyni.subspace.core.data.PendingRoutingConversion]) first,
+            // then lets the caller (`SubspaceNavHost`) navigate to the routing
+            // import review destination — the same split [onBack]/[onDone] make
+            // between "this screen's own state" and "where the back stack goes
+            // next".
+            //
+            // Deliberate: viewModel.convertRouting() runs synchronously on Main
+            // (unlike load()'s canConvertRouting check, which hops to
+            // conversionDispatcher). These two calls must execute back to back —
+            // if convertRouting() returned before storing the conversion, the
+            // caller could navigate to the routing list first, and
+            // ApplyPendingRoutingConversion there would find nothing to consume
+            // (an intermittent race, since it would depend on which coroutine
+            // wins). See [EditorViewModel.convertRouting]'s KDoc for why the
+            // parse itself is cheap enough that this is a fine trade.
+            onConvertRouting = {
+                viewModel.convertRouting()
+                onConvertRouting()
+            },
         ),
         modifier = modifier,
     )
@@ -189,6 +219,8 @@ internal data class EditorActions(
     val onXhttpHostChanged: (String) -> Unit,
     val onXhttpModeChanged: (String) -> Unit,
     val onSave: () -> Unit,
+    /** The "Use this file's routing rules" action — see [EditorScreen]'s own KDoc. */
+    val onConvertRouting: () -> Unit,
 )
 
 /**
@@ -288,7 +320,7 @@ private fun EditorForm(
         if (state.fieldsEditable) {
             TypedFields(state = state, actions = actions)
         } else {
-            RawJsonFields(state = state)
+            RawJsonFields(state = state, actions = actions)
         }
 
         if (state.duplicateIdentity) {
@@ -591,22 +623,71 @@ private fun RealityFields(
 @Composable
 private fun RawJsonFields(
     state: EditorState,
+    actions: EditorActions,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(FIELD_GAP)) {
+        // Task 10 review, Critical 1: the "runs as written" claim and a rejection
+        // string must never render together — StoredProfile.runsAsWritten is
+        // `kind == RAW_JSON && passthroughRejection == null`, so every ineligible
+        // row would otherwise show both. Gated here on the same boolean instead
+        // of on `passthroughRejection == null` so the two conditions cannot drift.
+        // Final review C1/I2: also false when routingOverridesThisConfig is true —
+        // otherwise this claim ("Subspace runs that file as written") renders right
+        // above editor_raw_json_override_warning ("so it does not run as written"),
+        // contradicting itself on an eligible row whose routing/DNS is overridden.
         Text(
-            text = stringResource(R.string.editor_raw_json_notice),
+            text =
+            stringResource(
+                if (state.runsAsWritten && !state.routingOverridesThisConfig) {
+                    R.string.editor_raw_json_notice
+                } else {
+                    R.string.editor_raw_json_read_only_notice
+                },
+            ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // The specific cost of running a converted copy, not a restatement of
-        // the notice above: this config's own routing and dns blocks are
-        // discarded silently, and until M7 nothing else says so.
-        Text(
-            text = stringResource(R.string.editor_raw_json_not_passthrough),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Shown only when this config runs as written AND the app's own routing
+        // would otherwise replace its rules (§9) — never for an ineligible row,
+        // which already gets the more specific rejection text below instead.
+        if (state.runsAsWritten && state.routingOverridesThisConfig) {
+            Text(
+                text = stringResource(R.string.editor_raw_json_override_warning),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // Task 15: offered whenever this config's own routing survives conversion into an app
+        // rule set — state.canConvertRouting already folds in runsAsWritten (see its own KDoc),
+        // so no separate gate is needed here. Not conditioned on routingOverridesThisConfig
+        // above: the config's rules are worth keeping before the user ever turns routing on.
+        if (state.canConvertRouting) {
+            Button(onClick = actions.onConvertRouting) {
+                Text(stringResource(R.string.editor_raw_json_convert_routing))
+            }
+        }
+        // §6: one message per PassthroughRejection member — never a generic
+        // "not eligible" line, and never anything derived from the config's
+        // own text (§5.6).
+        state.passthroughRejection?.let { rejection ->
+            Text(
+                text = stringResource(rejection.messageRes()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        // Advisories are the config's own inconsistencies, not ours: shown on
+        // an eligible row too, because such a config runs and may still carry
+        // nothing (device record F9). Distinct colour from the rejection above —
+        // this is a warning about a file that runs, not a refusal.
+        state.advisories.forEach { advisory ->
+            Text(
+                text = stringResource(advisory.messageRes()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(text = stringResource(R.string.editor_raw_json_label), style = MaterialTheme.typography.labelLarge)
         Text(
             text = state.rawJson.orEmpty(),
@@ -618,6 +699,35 @@ private fun RawJsonFields(
         )
     }
 }
+
+/**
+ * One string per [PassthroughRejection] member — deliberately no `else` branch, so a sixth
+ * member added later fails the build here rather than rendering nothing (the gap [CoreRejected]
+ * left before this task: it reached [art.yniyniyni.subspace.core.data.StoredProfile] but had no
+ * string and no `when` branch anywhere in the app).
+ */
+private fun PassthroughRejection.messageRes(): Int =
+    when (this) {
+        PassthroughRejection.Unvalidated -> R.string.editor_raw_json_rejected_unvalidated
+        PassthroughRejection.NotJson -> R.string.editor_raw_json_rejected_not_json
+        PassthroughRejection.NoOutbounds -> R.string.editor_raw_json_rejected_no_outbounds
+        PassthroughRejection.SeveralServers -> R.string.editor_raw_json_rejected_several_servers
+        PassthroughRejection.CoreRejected -> R.string.editor_raw_json_rejected_core_rejected
+    }
+
+/**
+ * One string per [PassthroughAdvisory] member — same no-`else` reasoning as
+ * [PassthroughRejection.messageRes] above.
+ */
+private fun PassthroughAdvisory.messageRes(): Int =
+    when (this) {
+        PassthroughAdvisory.SniffingCannotServeOwnRules ->
+            R.string.editor_raw_json_advisory_sniffing_cannot_serve_rules
+        PassthroughAdvisory.FakeDnsWithoutSniffingOverride ->
+            R.string.editor_raw_json_advisory_fakedns_without_sniffing
+        PassthroughAdvisory.DanglingRoutingReference ->
+            R.string.editor_raw_json_advisory_dangling_reference
+    }
 
 // One shared text-field primitive, reused for every field in the form —
 // label/value/callback/modifier are the composable-parameter baseline every

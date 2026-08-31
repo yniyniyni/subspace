@@ -5,6 +5,7 @@ package art.yniyniyni.subspace.feature.routing
 import art.yniyniyni.subspace.core.data.GeoAssetRepository
 import art.yniyniyni.subspace.core.data.GeoDownloadProgress
 import art.yniyniyni.subspace.core.data.GeoDownloadProgressRegistry
+import art.yniyniyni.subspace.core.data.PendingRoutingConversion
 import art.yniyniyni.subspace.core.data.PendingRoutingImport
 import art.yniyniyni.subspace.core.data.ProfileRepository
 import art.yniyniyni.subspace.core.data.RoutingProfileImporter
@@ -18,6 +19,7 @@ import art.yniyniyni.subspace.core.model.BucketField
 import art.yniyniyni.subspace.core.model.RoutingEntries
 import art.yniyniyni.subspace.core.model.RoutingRuleSet
 import art.yniyniyni.subspace.core.parser.routing.ImportResult
+import art.yniyniyni.subspace.core.parser.routing.RoutingConversion
 import art.yniyniyni.subspace.core.parser.routing.RoutingProfileImport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -97,6 +99,13 @@ private data class PendingInputs(
     val enableValues: Map<Long, String>,
 )
 
+// TooManyFunctions: this interface is the module's read/write surface onto RoutingRepository,
+// SettingsRepository and GeoAssetRepository together (see the class KDoc a few lines below),
+// and its width tracks that surface, not a design that split poorly. Task 15's
+// pendingConversion/consumePendingConversion pair pushed it past the default threshold; splitting
+// it would only move members into a second interface RoutingViewModel would still depend on both
+// halves of.
+@Suppress("TooManyFunctions")
 internal interface RoutingSource {
     /**
      * Every stored rule set, with its import provenance and asset state. See
@@ -177,6 +186,27 @@ internal interface RoutingSource {
      * (see [PendingRoutingImport]).
      */
     val pendingOffer: Flow<RoutingImportOffer?> get() = flowOf(null)
+
+    /**
+     * A config's `routing` block converted (Task 13) into a rule set by the editor's "Use this
+     * config's routing rules" action (Task 15), waiting for this screen's review sheet to take
+     * it.
+     *
+     * Reaches here through [PendingRoutingConversion] rather than a navigation argument, for the
+     * same reason [pendingOffer] does — see that holder's own KDoc. Unlike [pendingOffer], this
+     * has only one channel and nothing persisted to reconcile: the user just tapped a button on
+     * this same run of the app, so there is no "already presented" set to consult.
+     *
+     * Defaults to an always-null flow for the same keep-`FakeSource`-compiling reason [ruleSet]
+     * documents.
+     */
+    val pendingConversion: Flow<RoutingConversion?> get() = flowOf(null)
+
+    /**
+     * Clears [conversion] once the review sheet has taken it. No-op by default; see
+     * [pendingConversion].
+     */
+    fun consumePendingConversion(conversion: RoutingConversion) = Unit
 
     /**
      * The geo filenames present in [set]'s **own** resolved asset directory.
@@ -314,6 +344,7 @@ constructor(
     private val progressRegistry: GeoDownloadProgressRegistry,
     private val importer: RoutingProfileImporter,
     private val pendingRoutingImport: PendingRoutingImport,
+    private val pendingRoutingConversion: PendingRoutingConversion,
     private val assets: RuleSetAssets,
 ) : RoutingSource {
     override val ruleSets: Flow<List<StoredRuleSet>> = routingRepository.observeAllStored()
@@ -443,6 +474,11 @@ constructor(
         pendingRoutingImport.markPresented(offer.text)
         if (offer is RoutingImportOffer.Deeplink) pendingRoutingImport.consume(offer.text)
     }
+
+    override val pendingConversion: Flow<RoutingConversion?> = pendingRoutingConversion.conversion
+
+    override fun consumePendingConversion(conversion: RoutingConversion) =
+        pendingRoutingConversion.consume(conversion)
 
     /**
      * Deletes through [RoutingProfileImporter], not [RoutingRepository].

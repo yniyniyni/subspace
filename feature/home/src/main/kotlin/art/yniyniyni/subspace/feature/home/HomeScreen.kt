@@ -423,6 +423,8 @@ private fun StartupStage.labelRes(): Int =
         StartupStage.StartingTunnel -> R.string.stage_starting_tunnel
     }
 
+// One exhaustive enum-to-resource mapping; splitting it would only hide the same branches.
+@Suppress("CyclomaticComplexMethod")
 private fun FailureReason.labelRes(): Int =
     when (this) {
         FailureReason.ConfigGenerationFailed -> R.string.failure_config_generation
@@ -437,4 +439,6 @@ private fun FailureReason.labelRes(): Int =
         FailureReason.ProfileDecodeFailed -> R.string.failure_profile_decode
         FailureReason.GeoDataMissing -> R.string.failure_geo_data_missing
         FailureReason.PerAppAllowListEmpty -> R.string.failure_per_app_allow_list_empty
+        FailureReason.PassthroughOverrideUnavailable -> R.string.failure_passthrough_override_unavailable
+        FailureReason.PassthroughRejectedAtConnect -> R.string.failure_passthrough_rejected_at_connect
     }

@@ -5,6 +5,12 @@
 <resources>
     <string name="servers_title">Servers</string>
 
+    <!-- The header action that opens AddServerSheet. Distinct from
+         servers_empty_action, which is the empty state's own button: this one
+         is present whenever the screen is, so a user with existing groups is
+         not left hunting through a group's overflow menu. -->
+    <string name="servers_add_action">Add server</string>
+
     <string name="servers_search_placeholder">Search servers</string>
     <string name="servers_search_clear_description">Clear search</string>
 

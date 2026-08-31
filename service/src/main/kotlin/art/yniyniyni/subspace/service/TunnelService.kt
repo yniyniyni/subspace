@@ -170,9 +170,31 @@ internal fun validationFailureReason(runsAsWritten: Boolean): FailureReason =
 private fun existingOutboundTags(rawJson: String): Set<String> =
     analysePassthrough(rawJson).outboundTags.filterTo(mutableSetOf()) { it.isNotBlank() }
 
-/** The failure that prevents a generated override from targeting a missing outbound. */
-internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? =
-    ComposeFailure.MissingOverrideProxy.takeUnless { "proxy" in existingOutboundTags(rawJson) }
+private val REQUIRED_OVERRIDE_PROTOCOLS =
+    mapOf(
+        "direct" to "freedom",
+        "block" to "blackhole",
+        "dns-out" to "dns",
+    )
+
+private val INFRASTRUCTURE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
+
+/** The failure that prevents generated rules from targeting a missing or misleading outbound. */
+internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? {
+    val protocols = analysePassthrough(rawJson).outboundProtocolsByTag
+    val proxyProtocol = protocols["proxy"]
+    val reservedTagIsIncompatible =
+        REQUIRED_OVERRIDE_PROTOCOLS.any { (tag, expectedProtocol) ->
+            protocols[tag]?.let { it != expectedProtocol } == true
+        }
+    return when {
+        proxyProtocol == null -> ComposeFailure.MissingOverrideProxy
+        proxyProtocol.isBlank() || proxyProtocol in INFRASTRUCTURE_PROTOCOLS ->
+            ComposeFailure.IncompatibleOverrideOutbound
+        reservedTagIsIncompatible -> ComposeFailure.IncompatibleOverrideOutbound
+        else -> null
+    }
+}
 
 /**
  * Why a collapsed balancer row cannot be measured by probing one server.
@@ -196,7 +218,9 @@ internal fun balancerLatencyRefusal(rawJson: String?): LatencyOutcome? =
 /** Maps composition failures to the user-actionable service reason they represent. */
 internal fun compositionFailureReason(reason: ComposeFailure): FailureReason =
     when (reason) {
-        ComposeFailure.MissingOverrideProxy -> FailureReason.PassthroughOverrideUnavailable
+        ComposeFailure.MissingOverrideProxy,
+        ComposeFailure.IncompatibleOverrideOutbound,
+        -> FailureReason.PassthroughOverrideUnavailable
         ComposeFailure.NotJson,
         ComposeFailure.NoOutbounds,
         ComposeFailure.InvalidOverride,

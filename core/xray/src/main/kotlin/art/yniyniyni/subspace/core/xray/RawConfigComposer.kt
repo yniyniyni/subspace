@@ -20,6 +20,9 @@ public enum class ComposeFailure {
     /** The app override targets `proxy`, but the stored config defines no exact tag with that name. */
     MissingOverrideProxy,
 
+    /** A reserved override tag exists, but its outbound protocol would give that tag different semantics. */
+    IncompatibleOverrideOutbound,
+
     /**
      * [OverrideBlocks]'s `routingJson`/`dnsJson`/`extraOutboundsJson` did not
      * parse. Task 4's callers are expected to hand `compose` well-formed text
@@ -139,7 +142,8 @@ public object RawConfigComposer {
             kept["outbounds"] = JsonArray(outbounds + parsedOverride.extraOutbounds)
         }
 
-        val sniffing =
+        val preservedSniffing = if (override == null) sniffingOf(root) else null
+        val generatedSniffing =
             if (override != null) {
                 // The app already owns `dns` wholesale on this branch (just above), so
                 // adding the one destOverride entry that block's fakeDns requires is
@@ -151,10 +155,12 @@ public object RawConfigComposer {
                 } else {
                     DEFAULT_SNIFFING
                 }
+            } else if (preservedSniffing == null) {
+                DEFAULT_SNIFFING
             } else {
-                sniffingOf(root)
+                null
             }
-        val inbounds = inboundsJson(settings, sniffing, inboundTagsOf(root))
+        val inbounds = inboundsJson(settings, generatedSniffing, preservedSniffing, inboundTagsOf(root))
         return ComposeResult.Ok(render(kept, inbounds))
     }
 
@@ -169,7 +175,7 @@ public object RawConfigComposer {
     )
 
     /**
-     * The config's own sniffing block, or the app's default when it has none.
+     * The config's own sniffing block, when its SOCKS inbound has one.
      *
      * Not our default unconditionally: the target panel sniffs `["http","tls"]`
      * with `domainStrategy: "AsIs"`, so adding `quic` would start matching its
@@ -177,38 +183,28 @@ public object RawConfigComposer {
      * the user's routing, made by us, with no error and no log line
      * (research §5b.5).
      */
-    @Suppress("ReturnCount")
-    private fun sniffingOf(root: JsonObject): SniffingSettings? {
-        val inbound =
-            (root["inbounds"] as? JsonArray)
-                ?.filterIsInstance<JsonObject>()
-                ?.firstOrNull { (it["protocol"] as? JsonPrimitive)?.content == "socks" }
-                ?: return DEFAULT_SNIFFING
-        val sniffing = inbound["sniffing"] as? JsonObject ?: return DEFAULT_SNIFFING
-        if ((sniffing["enabled"] as? JsonPrimitive)?.content != "true") return null
-        // Final review I1: `.map { it.jsonPrimitive.content }` throws IllegalArgumentException on
-        // any non-string element (an earlier review fixed this exact contract violation in the
-        // override branch; this call site was missed). compose() must never throw on untrusted
-        // config bytes — mapNotNull silently drops a malformed entry instead, same safety level
-        // PassthroughAnalysis already applies to this same untrusted field via stringOrNull().
-        //
-        // Correction pass: `JsonNull` is itself a `JsonPrimitive`, so `(it as? JsonPrimitive)?.content`
-        // let a JSON `null` element through as the literal string `"null"` — parity with
-        // `PassthroughAnalysis.stringOrNull()` (which this comment already claimed) requires
-        // excluding it explicitly, not just non-primitives.
-        val overrides =
-            (sniffing["destOverride"] as? JsonArray)
-                ?.mapNotNull { if (it is JsonNull) null else (it as? JsonPrimitive)?.content }
-                ?: return DEFAULT_SNIFFING
-        return SniffingSettings(overrides)
-    }
+    private fun sniffingOf(root: JsonObject): JsonObject? =
+        (root["inbounds"] as? JsonArray)
+            ?.filterIsInstance<JsonObject>()
+            ?.firstOrNull { (it["protocol"] as? JsonPrimitive)?.content == "socks" }
+            ?.get("sniffing") as? JsonObject
 
     private fun inboundsJson(
         settings: TunnelSettings,
-        sniffing: SniffingSettings?,
+        generatedSniffing: SniffingSettings?,
+        preservedSniffing: JsonObject?,
         tags: InboundTags,
     ): String {
-        val socks = socksInboundJson(settings.socksPort, sniffing.takeIf { settings.enableSniffing }, tags.socks)
+        val socks =
+            if (preservedSniffing != null) {
+                socksInboundJsonPreservingSniffing(settings.socksPort, preservedSniffing, tags.socks)
+            } else {
+                socksInboundJson(
+                    settings.socksPort,
+                    generatedSniffing.takeIf { settings.enableSniffing },
+                    tags.socks,
+                )
+            }
         val http = settings.httpPort?.let { httpInboundJson(it, tags.http) }
         return listOfNotNull(socks, http).joinToString(",\n")
     }

@@ -4,6 +4,8 @@
 
 package art.yniyniyni.subspace.core.xray
 
+import kotlinx.serialization.json.JsonObject
+
 /**
  * A SOCKS inbound's `sniffing` block.
  *
@@ -39,7 +41,22 @@ internal fun socksInboundJson(
     port: Int,
     sniffing: SniffingSettings?,
     tag: String = "socks-in",
+): String = socksInboundJson(port, sniffing, preservedSniffing = null, tag)
+
+/** The same loopback inbound with a passthrough config's sniffing object kept unchanged. */
+internal fun socksInboundJsonPreservingSniffing(
+    port: Int,
+    sniffing: JsonObject,
+    tag: String,
+): String = socksInboundJson(port, generatedSniffing = null, preservedSniffing = sniffing, tag)
+
+private fun socksInboundJson(
+    port: Int,
+    generatedSniffing: SniffingSettings?,
+    preservedSniffing: JsonObject?,
+    tag: String,
 ): String {
+    val hasSniffing = generatedSniffing != null || preservedSniffing != null
     val sb = StringBuilder()
     sb.appendLine("""    {""")
     sb.appendLine("""      "tag": ${jsonString(tag)},""")
@@ -48,13 +65,16 @@ internal fun socksInboundJson(
     sb.appendLine("""      "port": $port,""")
     sb.appendLine("""      "settings": {""")
     sb.appendLine("""        "udp": true""")
-    sb.appendLine("""      }${if (sniffing != null) "," else ""}""")
-    if (sniffing != null) {
-        val overrides = sniffing.destOverride.joinToString(", ") { jsonString(it) }
-        sb.appendLine("""      "sniffing": {""")
-        sb.appendLine("""        "enabled": true,""")
-        sb.appendLine("""        "destOverride": [$overrides]""")
-        sb.appendLine("""      }""")
+    sb.appendLine("""      }${if (hasSniffing) "," else ""}""")
+    when {
+        preservedSniffing != null -> sb.appendLine("""      "sniffing": $preservedSniffing""")
+        generatedSniffing != null -> {
+            val overrides = generatedSniffing.destOverride.joinToString(", ") { jsonString(it) }
+            sb.appendLine("""      "sniffing": {""")
+            sb.appendLine("""        "enabled": true,""")
+            sb.appendLine("""        "destOverride": [$overrides]""")
+            sb.appendLine("""      }""")
+        }
     }
     sb.append("""    }""")
     return sb.toString()

@@ -80,8 +80,8 @@ internal data class ProfileEntity(
     val subscriptionKey: String? = null,
     val droppedFromSubscriptionAt: Long? = null,
     /**
-     * Why this row cannot run as written, or null when it has never been analysed
-     * or is eligible.
+     * Why this row cannot run as written, or null when it is eligible. A
+     * migrated row that has never been analysed stores `Unvalidated` instead.
      *
      * A [art.yniyniyni.subspace.core.parser.PassthroughRejection] name, never a
      * message — §5.6 forbids persisting anything derived from config contents,

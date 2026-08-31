@@ -342,10 +342,21 @@ class EditorScreenTest {
     }
 
     // Task 10 review, Minor: the exhaustive `when` in EditorScreen.kt's messageRes() catches a
-    // *missing* branch for a future fifth PassthroughRejection member, but not a mis-mapping
+    // *missing* branch for a future sixth PassthroughRejection member, but not a mis-mapping
     // between two existing ones — CoreRejected in particular had zero rendering before this
     // task, which is exactly the kind of gap a compiler check alone would not have caught here
     // either. One assertion per remaining member pins each string to its own rejection.
+    @Test
+    fun anIneligibleMigratedRawProfileExplainsThatItNeedsReimporting() {
+        setContent(
+            state = rawJsonState.copy(runsAsWritten = false, passthroughRejection = PassthroughRejection.Unvalidated),
+        )
+
+        composeRule.onNodeWithText(
+            context.getString(R.string.editor_raw_json_rejected_unvalidated),
+        ).assertExists()
+    }
+
     @Test
     fun anIneligibleRawProfileSaysNotJsonWhenTheFileIsNotJson() {
         setContent(

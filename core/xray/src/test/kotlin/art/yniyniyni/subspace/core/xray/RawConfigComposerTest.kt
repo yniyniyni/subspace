@@ -134,15 +134,18 @@ class RawConfigComposerTest {
         (inbounds[1] as JsonObject)["tag"]!!.jsonPrimitive.content shouldBe "client-http"
     }
 
-    // Research §5b.5: substituting our destOverride would start sniffing QUIC and
-    // silently change which of the config's own rules match.
+    // Research §5b.5: changing any source sniffing field can change whether a
+    // destination is rewritten or used only for routing, as well as which
+    // protocols are sniffed.
     @Test
-    fun `the config's own sniffing settings are carried onto our inbound`() {
+    fun `the config's complete sniffing block is carried onto our inbound`() {
         val socks = (composed()["inbounds"] as JsonArray)[0] as JsonObject
-        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
-            .map { it.jsonPrimitive.content }
+        val expected =
+            Json.parseToJsonElement(
+                """{ "enabled": true, "routeOnly": false, "destOverride": ["http", "tls"] }""",
+            )
 
-        overrides shouldBe listOf("http", "tls")
+        socks["sniffing"] shouldBe expected
     }
 
     @Test
@@ -161,12 +164,11 @@ class RawConfigComposerTest {
         overrides shouldBe listOf("http", "tls", "quic")
     }
 
-    // Final review I1: an earlier review fixed this exact contract violation in the override
-    // branch (`ParsedOverride`'s try/catch); this call site was missed. `compose` must never
-    // throw on untrusted config bytes, so a non-string destOverride element (JsonObject/JsonArray)
-    // must be skipped, not crash `.jsonPrimitive.content` with IllegalArgumentException.
+    // `compose` must never throw on untrusted config bytes, but pure passthrough
+    // also must not sanitize them: core validation owns whether the preserved
+    // block is runnable.
     @Test
-    fun `a malformed destOverride entry is dropped rather than crashing compose`() {
+    fun `a malformed destOverride entry is preserved without crashing compose`() {
         val malformed =
             """
             {
@@ -183,18 +185,16 @@ class RawConfigComposerTest {
             """.trimIndent()
 
         val socks = (composed(malformed)["inbounds"] as JsonArray)[0] as JsonObject
-        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
-            .map { it.jsonPrimitive.content }
+        val expected =
+            Json.parseToJsonElement(
+                """{ "enabled": true, "destOverride": ["http", {"not": "a string"}, "tls"] }""",
+            )
 
-        overrides shouldBe listOf("http", "tls")
+        socks["sniffing"] shouldBe expected
     }
 
-    // Correction pass: `JsonNull` is itself a `JsonPrimitive`, so the fix above's
-    // `(it as? JsonPrimitive)?.content` let a JSON `null` element through as the literal string
-    // "null" instead of dropping it — the one case `PassthroughAnalysis.stringOrNull()` (the parity
-    // this code claims) explicitly excludes.
     @Test
-    fun `a JSON null destOverride entry is dropped, not admitted as the string null`() {
+    fun `a JSON null destOverride entry remains JSON null`() {
         val withNull =
             """
             {
@@ -211,10 +211,12 @@ class RawConfigComposerTest {
             """.trimIndent()
 
         val socks = (composed(withNull)["inbounds"] as JsonArray)[0] as JsonObject
-        val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
-            .map { it.jsonPrimitive.content }
+        val expected =
+            Json.parseToJsonElement(
+                """{ "enabled": true, "destOverride": ["http", null, "tls"] }""",
+            )
 
-        overrides shouldBe listOf("http", "tls")
+        socks["sniffing"] shouldBe expected
     }
 
     // §5.6: the device-found logcat leak — one line per destination the user reaches.
@@ -285,7 +287,7 @@ class RawConfigComposerTest {
     // though it means the config's own domain/geosite rules stop matching
     // under tun2socks.
     @Test
-    fun `sniffing explicitly disabled by the config is not silently re-enabled`() {
+    fun `sniffing explicitly disabled by the config is preserved verbatim`() {
         val disabled =
             """
             {
@@ -297,7 +299,7 @@ class RawConfigComposerTest {
             """.trimIndent()
         val socks = (composed(disabled)["inbounds"] as JsonArray)[0] as JsonObject
 
-        socks["sniffing"] shouldBe null
+        socks["sniffing"] shouldBe Json.parseToJsonElement("""{ "enabled": false }""")
     }
 
     private val override =

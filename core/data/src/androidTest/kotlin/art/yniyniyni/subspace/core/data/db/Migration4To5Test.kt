@@ -39,6 +39,15 @@ class Migration4To5Test {
                         'tcp', '{}', '{"outbounds":[]}', 0, NULL, NULL, 0)
                 """.trimIndent(),
             )
+            db.execSQL(
+                """
+                INSERT INTO profiles (id, groupId, kind, identityHash, name, protocol, address, port,
+                                      transport, outbound, rawJson, position, lastConnectedAt,
+                                      lastError, createdAt)
+                VALUES (2, 1, 'TYPED', 'h2', 'typed', 'vless', '192.0.2.2', 443,
+                        'tcp', '{}', NULL, 1, NULL, NULL, 0)
+                """.trimIndent(),
+            )
         }
 
         val db = helper.runMigrationsAndValidate(DB_NAME, 5, true, MIGRATION_4_5)
@@ -46,9 +55,13 @@ class Migration4To5Test {
         db.query("SELECT rawJson, passthroughRejection FROM profiles WHERE id = 1").use { cursor ->
             cursor.moveToFirst() shouldBe true
             cursor.getString(0) shouldBe """{"outbounds":[]}"""
-            // Existing rows have never been analysed; null would mean "eligible",
-            // which is a claim this migration cannot make. Task 7 re-analyses on read.
-            cursor.isNull(1) shouldBe true
+            // Existing rows have never been analysed; null means eligible to
+            // run as written, which is a claim this migration cannot make.
+            cursor.getString(1) shouldBe "Unvalidated"
+        }
+        db.query("SELECT passthroughRejection FROM profiles WHERE id = 2").use { cursor ->
+            cursor.moveToFirst() shouldBe true
+            cursor.isNull(0) shouldBe true
         }
     }
 }

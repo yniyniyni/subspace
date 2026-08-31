@@ -268,6 +268,10 @@
     <!-- One per PassthroughRejection member. Closed vocabulary, same shape as
          import_failure_* — the stored value is an enum name, never a message
          derived from config contents (§5.6). -->
+    <string name="editor_raw_json_rejected_unvalidated">
+        This file was imported by an older version and has not been checked for running as written.
+        Re-import it to validate the complete file; the recovered server details are used meanwhile.
+    </string>
     <string name="editor_raw_json_rejected_not_json">
         This file is not valid JSON, so it cannot be run as written. The server details below were
         recovered from it and are used instead.

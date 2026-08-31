@@ -9,6 +9,7 @@ import art.yniyniyni.subspace.core.xray.OverrideBlocks
 import art.yniyniyni.subspace.core.xray.RawConfigComposer
 import art.yniyniyni.subspace.core.xray.TunnelSettings
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
@@ -118,6 +119,24 @@ class PassthroughStartTest {
 
         passthroughOverrideFailure(balancerConfig) shouldBe ComposeFailure.MissingOverrideProxy
         passthroughOverrideFailure(config) shouldBe null
+    }
+
+    @Test
+    fun `an override is refused when a reserved tag has incompatible semantics`() {
+        val incompatible =
+            listOf(
+                """{ "tag": "proxy", "protocol": "freedom" }""",
+                """{ "tag": "proxy", "protocol": "vless" }, { "tag": "direct", "protocol": "blackhole" }""",
+                """{ "tag": "proxy", "protocol": "vless" }, { "tag": "block", "protocol": "freedom" }""",
+                """{ "tag": "proxy", "protocol": "vless" }, { "tag": "dns-out", "protocol": "freedom" }""",
+            )
+
+        incompatible.forEach { outbounds ->
+            val failure = passthroughOverrideFailure("""{ "outbounds": [ $outbounds ] }""")
+            failure shouldNotBe null
+            compositionFailureReason(requireNotNull(failure)) shouldBe
+                FailureReason.PassthroughOverrideUnavailable
+        }
     }
 
     @Test

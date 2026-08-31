@@ -17,12 +17,20 @@ import kotlinx.serialization.json.JsonPrimitive
  * derived from config contents, and §10.4 wants the reason to be actionable
  * rather than descriptive. The UI maps each member to a string resource.
  *
- * [CoreRejected] is the one member [analysePassthrough] never returns (design
- * §6.1): it is written by `:service` after `testXray`, not by structural
- * analysis, and lives in this same enum only so the UI renders one vocabulary
- * of reasons rather than two.
+ * [CoreRejected] and [Unvalidated] are the two members [analysePassthrough]
+ * never returns (design §6.1): they are persistence states supplied by core
+ * validation and database migration, not structural analysis, and live here so
+ * the UI renders one vocabulary of reasons rather than several.
  */
 public enum class PassthroughRejection {
+    /**
+     * The row predates passthrough eligibility and has never been checked.
+     *
+     * Kept in compatibility mode until the user re-imports it, because a
+     * migration cannot run structural analysis plus the real Xray core.
+     */
+    Unvalidated,
+
     /** The stored text does not parse as a JSON object at all. */
     NotJson,
 
@@ -109,6 +117,8 @@ public data class PassthroughAnalysis(
     val isBalancer: Boolean,
     val serverOutboundCount: Int,
     val outboundTags: List<String>,
+    /** Exact protocol by tag, used to verify app-owned override targets before routing to them. */
+    val outboundProtocolsByTag: Map<String, String>,
 ) {
     override fun toString(): String =
         "PassthroughAnalysis(rejection=$rejection, overrideBlocker=$overrideBlocker, " +
@@ -163,7 +173,8 @@ private fun analyseOutbounds(
 ): PassthroughAnalysis {
     val objects = outbounds.filterIsInstance<JsonObject>()
     val tags = objects.map { it["tag"].stringOrNull().orEmpty() }
-    val serverCount = objects.count { it["protocol"].stringOrNull() !in NON_SERVER_PROTOCOLS }
+    val protocols = objects.map { it["protocol"].stringOrNull().orEmpty() }
+    val serverCount = protocols.count { it !in NON_SERVER_PROTOCOLS }
 
     val routing = root["routing"] as? JsonObject
     val isBalancer = routing.arrayOf("balancers").isNotEmpty()
@@ -176,6 +187,7 @@ private fun analyseOutbounds(
         isBalancer = isBalancer,
         serverOutboundCount = serverCount,
         outboundTags = tags,
+        outboundProtocolsByTag = tags.zip(protocols).toMap(),
     )
 }
 
@@ -187,6 +199,7 @@ private fun rejectedAs(reason: PassthroughRejection): PassthroughAnalysis =
         isBalancer = false,
         serverOutboundCount = 0,
         outboundTags = emptyList(),
+        outboundProtocolsByTag = emptyMap(),
     )
 
 private fun overrideBlockerFor(tags: List<String>): OverrideBlocker? =

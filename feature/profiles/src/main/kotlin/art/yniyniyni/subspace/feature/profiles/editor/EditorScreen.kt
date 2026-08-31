@@ -701,13 +701,14 @@ private fun RawJsonFields(
 }
 
 /**
- * One string per [PassthroughRejection] member — deliberately no `else` branch, so a fifth
+ * One string per [PassthroughRejection] member — deliberately no `else` branch, so a sixth
  * member added later fails the build here rather than rendering nothing (the gap [CoreRejected]
  * left before this task: it reached [art.yniyniyni.subspace.core.data.StoredProfile] but had no
  * string and no `when` branch anywhere in the app).
  */
 private fun PassthroughRejection.messageRes(): Int =
     when (this) {
+        PassthroughRejection.Unvalidated -> R.string.editor_raw_json_rejected_unvalidated
         PassthroughRejection.NotJson -> R.string.editor_raw_json_rejected_not_json
         PassthroughRejection.NoOutbounds -> R.string.editor_raw_json_rejected_no_outbounds
         PassthroughRejection.SeveralServers -> R.string.editor_raw_json_rejected_several_servers

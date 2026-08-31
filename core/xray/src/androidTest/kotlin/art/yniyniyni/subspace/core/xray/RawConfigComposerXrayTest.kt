@@ -125,6 +125,76 @@ class RawConfigComposerXrayTest {
         )
     }
 
+    // A config whose routing needs a geo asset — the shape every config the
+    // target panel emits has, and the shape no other fixture in this file has.
+    private val geoRuleConfig =
+        """
+        {
+          "dns": { "servers": ["8.8.8.8"] },
+          "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [ { "type": "field", "domain": ["geosite:category-ru"], "outboundTag": "direct" } ]
+          },
+          "outbounds": [
+            { "tag": "proxy", "protocol": "vless",
+              "settings": { "vnext": [ { "address": "192.0.2.1", "port": 443,
+                "users": [ { "id": "00000000-0000-0000-0000-000000000001", "encryption": "none" } ] } ] },
+              "streamSettings": { "network": "tcp", "security": "none" } },
+            { "tag": "direct", "protocol": "freedom" },
+            { "tag": "block", "protocol": "blackhole" }
+          ]
+        }
+        """.trimIndent()
+
+    /**
+     * §10.5, measured 2026-08-31 on a Pixel 8. The composed config's own
+     * `env["xray.location.asset"]` is the only channel `testXray` resolves geo
+     * files from; `XrayController`'s `geoAssetDir` envelope does not override
+     * it. Asserted by pointing the two at *different* directories and reading
+     * which one the core's refusal names.
+     *
+     * Deliberately asserts the negative — a rejection naming the composed
+     * directory — rather than a success: a positive case would need a real
+     * multi-megabyte `geosite.dat` committed as a fixture, and the direction
+     * that matters here is which path the core went looking down.
+     */
+    @Test
+    fun theComposedEnvNotTheInvokeEnvelopeIsWhereTheCoreResolvesGeoFiles() =
+        runTest {
+            val fromJson =
+                File(context.filesDir, "geo-json").apply {
+                    deleteRecursively()
+                    mkdirs()
+                }
+            val fromEnvelope =
+                File(context.filesDir, "geo-envelope").apply {
+                    deleteRecursively()
+                    mkdirs()
+                }
+
+            val composed = RawConfigComposer.compose(geoRuleConfig, settings, fromJson.absolutePath, null)
+            check(composed is ComposeResult.Ok)
+            val file = File.createTempFile("geo-channel", ".json", context.cacheDir)
+            val result =
+                try {
+                    file.writeText(composed.json)
+                    runCatching { XrayController(geoAssetDir = fromEnvelope).validate(file) }
+                } finally {
+                    file.delete()
+                }
+
+            val message = result.exceptionOrNull()?.message.orEmpty()
+            check("failed to open geosite.dat" in message) {
+                "expected a geo-asset refusal, got: $message"
+            }
+            check(fromJson.absolutePath in message) {
+                "the core looked somewhere other than the composed env: $message"
+            }
+            check(fromEnvelope.absolutePath !in message) {
+                "the core read the invoke envelope after all: $message"
+            }
+        }
+
     @Test
     fun theCoreAcceptsAComposedBalancerConfig() =
         runTest {

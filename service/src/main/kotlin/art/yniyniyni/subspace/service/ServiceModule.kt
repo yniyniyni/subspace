@@ -48,11 +48,17 @@ internal object ServiceModule {
      * check, not a per-rule one: it does not inspect which specific `.dat` files [json]'s own
      * rules reference, only whether *any* geo asset is installed at all.
      *
-     * [geoAssetRepository] also supplies [XrayController]'s real `geoAssetDir`, which travels on
-     * the libXray invoke envelope (`LibXrayInvoke`'s `env` parameter) — the channel that actually
-     * resolves geo files during validation. [BoundPassthroughValidator]'s own composed config
-     * carries an inert placeholder instead; see that class's KDoc for why that channel does not
-     * matter.
+     * [geoAssetRepository] supplies the geo directory twice over, and both matter
+     * for different reasons. It is what [BoundPassthroughValidator] composes into
+     * the config's own `env["xray.location.asset"]`, which is the channel
+     * `testXray` actually resolves geo files from (measured 2026-08-31; see that
+     * parameter's KDoc and finding F8 in
+     * `docs/agent/research/2026-08-25-m7-device-verification.md`). It is also
+     * still handed to [XrayController] as `geoAssetDir`, unchanged — that
+     * envelope is what a *running* tunnel uses, and leaving the two consistent
+     * costs nothing. An earlier version of this KDoc claimed the envelope
+     * overrode the composed `env`; it does not, and that claim refused every
+     * config the target panel emits.
      */
     @Provides
     @Singleton
@@ -60,7 +66,7 @@ internal object ServiceModule {
         @ApplicationContext context: Context,
         geoAssetRepository: GeoAssetRepository,
     ): BoundPassthroughValidator =
-        BoundPassthroughValidator { json ->
+        BoundPassthroughValidator(assetDir = { geoAssetRepository.geoDirectory().absolutePath }) { json ->
             if (geoAssetRepository.installedFileNames().isEmpty()) {
                 true
             } else {

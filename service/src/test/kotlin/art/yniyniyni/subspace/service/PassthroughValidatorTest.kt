@@ -25,10 +25,29 @@ class PassthroughValidatorTest {
         """{ "outbounds": [ { "tag": "proxy", "protocol": "vless" } ] }"""
 
     @Test
+    fun `composes against the asset directory it was given, not a hardcoded one`() =
+        runTest {
+            val core = RecordingCore(accept = true)
+            val validator = BoundPassthroughValidator(assetDir = { "/data/user/0/pkg/files/geo" }) { json ->
+                core.validate(json)
+            }
+
+            validator.validate(ordinary) shouldBe true
+
+            val sent = core.lastConfig!!
+            // §10.5, measured 2026-08-31: the composed env is the ONLY channel
+            // testXray reads xray.location.asset from — the libXray invoke
+            // envelope does not override it. A placeholder here refuses every
+            // config carrying a geosite:/geoip: rule.
+            sent.contains(""""xray.location.asset":"/data/user/0/pkg/files/geo"""") shouldBe true
+            sent.contains("/data/local/tmp") shouldBe false
+        }
+
+    @Test
     fun `composes before validating, so the bytes tested are the bytes run`() =
         runTest {
             val core = RecordingCore(accept = true)
-            val validator = BoundPassthroughValidator(core::validate)
+            val validator = BoundPassthroughValidator(assetDir = { "/geo" }, testConfig = core::validate)
 
             validator.validate(ordinary) shouldBe true
 
@@ -45,7 +64,8 @@ class PassthroughValidatorTest {
     @Test
     fun `a config the core refuses is not eligible`() =
         runTest {
-            val validator = BoundPassthroughValidator(RecordingCore(accept = false)::validate)
+            val validator =
+                BoundPassthroughValidator(assetDir = { "/geo" }, testConfig = RecordingCore(accept = false)::validate)
 
             validator.validate(ordinary) shouldBe false
         }
@@ -54,7 +74,7 @@ class PassthroughValidatorTest {
     fun `a config the composer cannot build is not eligible, and the core is never asked`() =
         runTest {
             val core = RecordingCore(accept = true)
-            val validator = BoundPassthroughValidator(core::validate)
+            val validator = BoundPassthroughValidator(assetDir = { "/geo" }, testConfig = core::validate)
 
             validator.validate("not json") shouldBe false
 
@@ -68,7 +88,8 @@ class PassthroughValidatorTest {
     @Test
     fun `a failure to even run the check is undetermined, not a rejection`() =
         runTest {
-            val validator = BoundPassthroughValidator { throw java.io.IOException("cache full") }
+            val validator =
+                BoundPassthroughValidator(assetDir = { "/geo" }) { throw java.io.IOException("cache full") }
 
             validator.validate(ordinary) shouldBe true
         }
@@ -79,7 +100,8 @@ class PassthroughValidatorTest {
     @Test
     fun `cancellation propagates rather than being reported as a verdict`() =
         runTest {
-            val validator = BoundPassthroughValidator { throw CancellationException("navigated away") }
+            val validator =
+                BoundPassthroughValidator(assetDir = { "/geo" }) { throw CancellationException("navigated away") }
 
             shouldThrow<CancellationException> { validator.validate(ordinary) }
         }

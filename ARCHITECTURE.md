@@ -607,7 +607,18 @@ Rules:
   xray-core is pointed at the install directory through the invoke `env`
   object PR #133 restored upstream (`third_party/libxray-patches/`) —
   `XrayController` builds it from `GeoAssetRepository.geoDirectory()` and
-  sends it on every `testXray`/`runXray` call. **Not**
+  sends it on every `testXray`/`runXray` call. **This channel governs
+  `runXray` (a running tunnel) but not `testXray` (import-time validation) —
+  measured on a Pixel 8, 2026-08-31**
+  (`docs/agent/research/2026-08-25-m7-device-verification.md` finding F8):
+  `testXray` resolves geo files from the composed config's own
+  `env["xray.location.asset"]` alone, never from this invoke envelope, which
+  is why `RawConfigComposer.compose` writes that key into the JSON it hands
+  `BoundPassthroughValidator` (`service/.../PassthroughValidator.kt`) rather
+  than relying on `XrayController`'s `geoAssetDir` to reach it. An earlier
+  version of this paragraph claimed the invoke envelope was what mattered for
+  both calls alike; believing that for `testXray` produced a validator that
+  refused every config carrying a `geosite:`/`geoip:` rule. **Not**
   `android.system.Os.setenv`: an earlier version of this design used it, every
   automated test passed, and it does not work — Go's Android shared-library
   entry point starts the runtime with an empty environment, so `os.LookupEnv`

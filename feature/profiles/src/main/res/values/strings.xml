@@ -44,6 +44,11 @@
 
     <string name="servers_empty_title">No servers yet</string>
     <string name="servers_empty_body">Import a subscription or paste a config to add your first server.</string>
+    <!-- Load-bearing text: ServersAddActionTest.exactlyOneAddActionExistsWhenGroupsAreEmpty
+         counts nodes matching the literal "Add server" across this string and
+         servers_add_action to prove only one Add-server affordance exists when groups are
+         empty. Rewording this alone (without updating that test) breaks it even though the
+         product invariant it checks still holds. -->
     <string name="servers_empty_action">Add server</string>
 
     <!-- RAW_JSON runs through the typed projection, not verbatim (§6) — "raw"
@@ -283,9 +288,9 @@
          contents on screen or in a log — none of these three names the offending tag/domain. -->
     <!-- PassthroughAdvisory.DanglingRoutingReference -->
     <string name="editor_raw_json_advisory_dangling_reference">
-        This file has a routing rule pointing at an outbound or balancer it never defines.
-        Traffic matching that rule is dropped rather than sent anywhere, so the tunnel can
-        connect and still carry nothing. Ask whoever provided the config to fix it.
+        This file\'s routing points at an outbound or balancer it never defines. Traffic that
+        reaches that reference is dropped rather than sent anywhere, so the tunnel can connect
+        and still carry nothing. Ask whoever provided the config to fix it.
     </string>
     <!-- PassthroughAdvisory.SniffingCannotServeOwnRules -->
     <string name="editor_raw_json_advisory_sniffing_cannot_serve_rules">

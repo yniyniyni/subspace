@@ -253,7 +253,10 @@ private fun hasDanglingReference(
     routing: JsonObject?,
     outboundTags: List<String>,
 ): Boolean {
-    if (root["reverse"] != null) return false
+    // `root["reverse"]` is a non-null JsonNull for an explicit `"reverse": null`, so this
+    // must check for an actual object, not merely non-null, or that shape would disable the
+    // whole dangling check for free.
+    if ((root["reverse"] as? JsonObject) != null) return false
 
     val rules = routing.arrayOf("rules").filterIsInstance<JsonObject>()
     val balancers = routing.arrayOf("balancers").filterIsInstance<JsonObject>()

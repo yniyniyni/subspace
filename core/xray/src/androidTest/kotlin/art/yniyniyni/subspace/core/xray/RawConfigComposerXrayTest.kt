@@ -181,17 +181,31 @@ class RawConfigComposerXrayTest {
                     runCatching { XrayController(geoAssetDir = fromEnvelope).validate(file) }
                 } finally {
                     file.delete()
+                    // Cleaned here, not only at the next run's setup, so this test leaves no
+                    // trace in the app's files dir regardless of how it exits — matching the
+                    // temp config file above rather than leaving an asymmetry.
+                    fromJson.deleteRecursively()
+                    fromEnvelope.deleteRecursively()
                 }
 
             val message = result.exceptionOrNull()?.message.orEmpty()
+            // §5.6: XrayException's message can quote the config back (LibXrayInvoke's own
+            // KDoc), so only the exception's class name is safe to surface in a failure
+            // message — never `.exceptionOrNull()`. `message` above is read only for the
+            // assertions themselves; the failure text below names the two directories (this
+            // test's own, not config-derived) and a boolean instead of the message itself.
             check("failed to open geosite.dat" in message) {
-                "expected a geo-asset refusal, got: $message"
+                "expected a geo-asset refusal; got a ${result.exceptionOrNull()?.javaClass?.simpleName}"
             }
             check(fromJson.absolutePath in message) {
-                "the core looked somewhere other than the composed env: $message"
+                "the core looked somewhere other than the composed env " +
+                    "(composedDir=${fromJson.name}, envelopeDir=${fromEnvelope.name}, " +
+                    "sawComposedDir=${fromJson.absolutePath in message})"
             }
             check(fromEnvelope.absolutePath !in message) {
-                "the core read the invoke envelope after all: $message"
+                "the core read the invoke envelope after all " +
+                    "(composedDir=${fromJson.name}, envelopeDir=${fromEnvelope.name}, " +
+                    "sawEnvelopeDir=${fromEnvelope.absolutePath in message})"
             }
         }
 

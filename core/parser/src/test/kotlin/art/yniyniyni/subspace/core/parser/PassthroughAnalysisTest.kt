@@ -288,6 +288,25 @@ class PassthroughAnalysisTest {
         analysePassthrough(json).advisories shouldContainExactly emptyList()
     }
 
+    // Minor 4: `root["reverse"]` is `JsonNull` — a non-null `JsonElement` — for an explicit
+    // `"reverse": null`, so a bare `!= null` check would suppress the whole dangling-reference
+    // check for this shape too. It must not: there is no reverse block here, so the check stays
+    // live and the dangling outboundTag below is still reported.
+    @Test
+    fun `an explicit reverse null does not suppress the dangling reference check`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ],
+              "reverse": null,
+              "routing": { "rules": [ { "type": "field", "outboundTag": "missing" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).advisories shouldContainExactly
+            listOf(PassthroughAdvisory.DanglingRoutingReference)
+    }
+
     // §7: this analyser is on the never-throw side of the parser boundary.
     @Test
     fun `malformed shapes are reported, never thrown`() {

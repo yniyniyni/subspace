@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.core.network"
+    namespace = "space.getsub.core.network"
 }
 
 dependencies {

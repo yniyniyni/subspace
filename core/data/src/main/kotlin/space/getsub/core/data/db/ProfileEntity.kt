@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
+package space.getsub.core.data.db
+
+import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+/**
+ * One stored server.
+ *
+ * ARCHITECTURE.md §6: storage follows provenance. [kind] is `TYPED` for share
+ * links, base64 lists and Clash YAML — bounded formats, stored as a serialized
+ * [outbound]. It is `RAW_JSON` for a hand-written config, which additionally
+ * keeps [rawJson] byte-for-byte because extraction is lossy and the loss is
+ * permanent once the pasted text is gone.
+ *
+ * [protocol], [address], [port] and [transport] are shadow columns derived on
+ * write. The Servers screen filters and searches on them, and doing that in SQL
+ * beats deserializing every row. They are never a second source of truth.
+ *
+ * [identityHash] covers the **whole** outbound, which is what makes the unique
+ * index safe. M2's `Profile.id` hashed protocol/address/port/credential only,
+ * so two variants of one server differing solely in SNI or flow collapsed into
+ * a single id — fine for re-import dedup, silent data loss at an upsert.
+ *
+ * [lastConnectedAt] and [lastError] are the only columns `:bg` writes.
+ *
+ * [subscriptionKey] is the provider's own identity for a server within its
+ * subscription, and it is what refresh keys on — **not** [identityHash]. The M3
+ * spec's handoff note is the reason: because [identityHash] covers the whole
+ * outbound, a provider changing a server's SNI produces a *new* row rather than
+ * an update, orphaning the old one along with its connection history. NULL for
+ * every hand-imported profile; SQLite treats NULLs as distinct in a unique
+ * index, so any number of manual rows coexist and only subscription-backed rows
+ * are constrained.
+ *
+ * [droppedFromSubscriptionAt] is spec D4's "kept and flagged" marker: set when
+ * a sync finds this row's [subscriptionKey] active (the tunnel is using it) but
+ * absent from the provider's response, so the row survives instead of being
+ * deleted. Null otherwise. Cleared back to null the moment the row's
+ * `subscriptionKey` reappears in a response — see
+ * `SubscriptionDao.upsertBySubscriptionKey`. Added directly to the v2 schema
+ * (Task 11 review fix) rather than as a v3 migration: v2 has not shipped, so
+ * there is no installed database whose migration path would need to change.
+ */
+@Entity(
+    tableName = "profiles",
+    foreignKeys = [
+        ForeignKey(
+            entity = ProfileGroupEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["groupId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index(value = ["groupId", "identityHash"], unique = true),
+        Index(value = ["groupId", "subscriptionKey"], unique = true),
+        Index(value = ["groupId", "position"]),
+    ],
+)
+internal data class ProfileEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val groupId: Long,
+    val kind: String,
+    val identityHash: String,
+    val name: String,
+    val protocol: String,
+    val address: String,
+    val port: Int,
+    val transport: String,
+    val outbound: String,
+    val rawJson: String?,
+    val position: Int,
+    val lastConnectedAt: Long?,
+    val lastError: String?,
+    val createdAt: Long,
+    val subscriptionKey: String? = null,
+    val droppedFromSubscriptionAt: Long? = null,
+    /**
+     * Why this row cannot run as written, or null when it is eligible. A
+     * migrated row that has never been analysed stores `Unvalidated` instead.
+     *
+     * A [space.getsub.core.parser.PassthroughRejection] name, never a
+     * message — §5.6 forbids persisting anything derived from config contents,
+     * and §10.4 wants a reason the UI can render in the user's own language.
+     *
+     * Meaningful only for `kind = RAW_JSON`. A `TYPED` row leaves it null.
+     */
+    val passthroughRejection: String? = null,
+) {
+    // §5.6, same structural guard the subscription entities carry: address, outbound and rawJson
+    // are the server address, the serialized credential set (UUID, REALITY key material) and the
+    // raw config. subscriptionKey is derived from provider-supplied fields and is redacted with
+    // them; identityHash is a hash, and ids, kind, protocol, port and timestamps are shape rather
+    // than content, so they stay readable — a redacted line still has to be useful.
+    override fun toString(): String =
+        "ProfileEntity(id=$id, groupId=$groupId, kind=$kind, identityHash=$identityHash, " +
+            "name=$name, protocol=$protocol, address=<redacted>, port=$port, " +
+            "transport=$transport, outbound=<redacted>, rawJson=<redacted>, position=$position, " +
+            "lastConnectedAt=$lastConnectedAt, lastError=$lastError, createdAt=$createdAt, " +
+            "subscriptionKey=<redacted>, droppedFromSubscriptionAt=$droppedFromSubscriptionAt)"
+}

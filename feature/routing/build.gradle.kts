@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.feature.routing"
+    namespace = "space.getsub.feature.routing"
 }
 
 dependencies {

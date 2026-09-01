@@ -13,7 +13,7 @@ project.
   `// SPDX-License-Identifier: AGPL-3.0-or-later`, followed by
   `// Additional permission: see Stores Exception in LICENSE.`
 - Follow the project constraints: package root
-  `art.yniyniyni.subspace`, no `androidx.datastore`, and no config-content
+  `space.getsub`, no `androidx.datastore`, and no config-content
   logging.
 - Add focused tests where a change can be tested.  A green build alone does
   not establish that the VPN works; tunnel changes also need the relevant

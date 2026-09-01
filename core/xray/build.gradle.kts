@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.core.xray"
+    namespace = "space.getsub.core.xray"
 }
 
 // The AAR is gitignored (ARCHITECTURE.md §10.7 — a 91 MB binary blob in an AGPL

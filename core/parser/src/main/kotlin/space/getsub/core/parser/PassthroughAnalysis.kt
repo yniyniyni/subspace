@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
-@file:Suppress("TooManyFunctions", "UnreachableCode")
+@file:Suppress("TooManyFunctions")
 
 package space.getsub.core.parser
 
@@ -168,6 +168,10 @@ public data class BalancerSpec(
 private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
 
 /** Every balancer this app could name, in document order. */
+@Suppress("UnreachableCode")
+// UnreachableCode is flagged only by detektMain (type-resolution pass in `./gradlew check`),
+// not by plain `./gradlew :core:parser:detekt`. The labeled return is valid; detektMain
+// over-reports on lines 173–174.
 private fun balancerSpecs(routing: JsonObject?): List<BalancerSpec> =
     routing.arrayOf("balancers").filterIsInstance<JsonObject>().mapNotNull { balancer ->
         val tag = balancer["tag"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null

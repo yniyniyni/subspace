@@ -13,11 +13,11 @@
 
     <application>
         <service
-            android:name="art.yniyniyni.subspace.core.data.WriterService"
+            android:name="space.getsub.core.data.WriterService"
             android:exported="false"
             android:process=":writer" />
         <service
-            android:name="art.yniyniyni.subspace.core.data.GeoAssetLockService"
+            android:name="space.getsub.core.data.GeoAssetLockService"
             android:exported="false"
             android:process=":geo_lock_writer" />
     </application>

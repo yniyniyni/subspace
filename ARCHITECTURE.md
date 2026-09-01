@@ -998,8 +998,8 @@ Manual smoke checklist before any release:
 
 ## 12. Conventions
 
-- Package root: `art.yniyniyni.subspace`
-- Application ID: `art.yniyniyni.subspace`
+- Package root: `space.getsub`
+- Application ID: `space.getsub`
 - License: AGPL-3.0-or-later. Every source file carries an SPDX header:
   `// SPDX-License-Identifier: AGPL-3.0-or-later`
 - `ktlint` + `detekt`, enforced in CI

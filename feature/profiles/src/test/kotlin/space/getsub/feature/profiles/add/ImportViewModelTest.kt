@@ -1,0 +1,662 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
+package space.getsub.feature.profiles.add
+
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+import space.getsub.core.data.AddedSubscription
+import space.getsub.core.data.EffectiveValue
+import space.getsub.core.data.ProfileGroup
+import space.getsub.core.data.ProfileKind
+import space.getsub.core.data.StoredProfile
+import space.getsub.core.data.StoredSubscription
+import space.getsub.core.data.sync.SubscriptionSyncFailure
+import space.getsub.core.data.sync.SyncResult
+import space.getsub.core.model.Outbound
+import space.getsub.core.model.Profile
+import space.getsub.feature.profiles.ProfileSource
+import space.getsub.feature.profiles.R
+
+/**
+ * Covers what Task 19 builds: turning pasted or imported text into stored
+ * profiles via [SubscriptionParser][space.getsub.core.parser.SubscriptionParser]
+ * and [ProfileSource.import], honestly reporting both halves of the resulting
+ * `ParseOutcome` (§7) rather than silently dropping the failing entries
+ * (§10.4).
+ *
+ * `viewModelScope` needs a Main dispatcher outside Android, hence
+ * [UnconfinedTestDispatcher] — same setup as [space.getsub.feature.home.HomeViewModelTest]
+ * and [space.getsub.feature.profiles.list.ServersViewModelTest]. But
+ * [ImportViewModel.import] hops to a genuine `Dispatchers.Default` background
+ * thread for the parse (see its own KDoc for why), which the test scheduler
+ * [advanceUntilIdle] drains does not control — a bare `advanceUntilIdle()`
+ * after [ImportViewModel.import] is not enough and the very first version of
+ * this file proved it, failing all four tests with `imported=0` instead of
+ * the real count (assertions ran before the background hop resumed). Fixed
+ * the same way the M1 predecessor's test did (`git show a2e3bf4`,
+ * `HomeViewModelTest`'s old `parseInput` coverage): also await
+ * `state.first { it.completed }`, which suspends on the real cross-thread
+ * resume rather than the virtual clock.
+ *
+ * Backtick test names keep the spaces the brief wrote them with, same as
+ * [space.getsub.feature.home.HomeViewModelTest]: this file runs as
+ * a plain JVM unit test (`:feature:profiles:testDebugUnitTest`), never
+ * through D8/dexing, so the DEX-040 synthetic-class-name restriction that
+ * forces camelCase in this repo's *instrumented* tests does not apply here.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class ImportViewModelTest {
+    /**
+     * A minimal but complete `:core:xray`-emittable VLESS body: `protocol`
+     * alone (the brief's own illustrative fixture) has no `settings.vnext`,
+     * so `parseXrayJson` reports it as malformed JSON rather than a profile —
+     * this adds the address/port/user `parseVlessOutbound` requires while
+     * keeping the brief's own irregular spacing (`"outbounds" :`, double
+     * spaces around the braces) to prove that formatting survives storage
+     * unchanged. 198.51.100.7 is RFC 5737 documentation space, matching
+     * FailureTextTest's own convention for "an address that must never leak."
+     */
+    private val validRawJson =
+        """{  "outbounds" : [ { "protocol":"vless","settings":{"vnext":[{"address":"198.51.100.7",""" +
+            """"port":443,"users":[{"id":"11111111-1111-1111-1111-111111111111"}]}]} } ]  }"""
+
+    /**
+     * Defect 1's third site (device fixes report): the target panel returns a
+     * top-level JSON **array** wrapping a whole Xray config. §6 stores raw
+     * Xray JSON byte-for-byte, but the capture at this call site was
+     * `raw.takeIf { raw.trim().startsWith("{") }` — `false` for a leading
+     * `[`, so a fixed parser alone would still silently store this as
+     * `TYPED` and drop the provenance rule. 203.0.113.9 is RFC 5737
+     * documentation space, matching [validRawJson]'s own convention.
+     *
+     * Element-provenance fix (device-fixes finding, part 2): the profile this yields now
+     * carries only [validRawJsonArrayElement]'s bytes, not the enclosing array — see
+     * `XrayJsonTest`'s own coverage of that split. Written already in the compact form
+     * `kotlinx.serialization`'s `JsonElement.toString()` re-serializes an array element
+     * into (no extra whitespace, same key order), so the "stored byte-for-byte" test below
+     * can compare it with a plain string equality instead of re-parsing both sides.
+     */
+    private val validRawJsonArrayElement =
+        """{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"203.0.113.9",""" +
+            """"port":443,"users":[{"id":"22222222-2222-2222-2222-222222222222"}]}]}}]}"""
+    private val validRawJsonArray = "[$validRawJsonArrayElement]"
+
+    private class FakeProfileSource : ProfileSource {
+        private val stored = mutableMapOf<Long, StoredProfile>()
+        private var nextId = 1L
+
+        var lastImportedGroupId: Long? = null
+            private set
+
+        override fun observeGroups(
+            query: String,
+            protocol: String?,
+        ): Flow<List<ProfileGroup>> = MutableStateFlow(emptyList())
+
+        override val activeProfileId: Flow<Long?> = MutableStateFlow(null)
+        override val globalHwidEnabled: Flow<Boolean> = MutableStateFlow(true)
+
+        override suspend fun setActiveProfile(id: Long?) = Unit
+
+        override suspend fun renameGroup(
+            id: Long,
+            name: String,
+        ) = Unit
+
+        override suspend fun deleteGroup(id: Long) = Unit
+
+        // Mirrors ProfileRepository.defaultGroupId()'s "Local configs" group
+        // (spec D3) — a single fixed id is enough here, nothing in this test
+        // exercises group creation itself.
+        override suspend fun defaultGroupId(): Long = 1L
+
+        // Mirrors ProfileRepository.import's own identity rule closely enough to exercise
+        // ImportViewModel's wiring (not to re-prove the rule itself — ProfileRepositoryTest
+        // owns that, against the real Room table): a profile's own Profile.rawJson decides
+        // TYPED vs RAW_JSON, and profiles sharing one element's rawJson (several outbounds
+        // out of one raw document) are still distinguishable by outbound, so they still
+        // count as separate stored rows here — this fake has no real upsert-by-identity to
+        // collapse them, so distinctness is simulated by grouping on (rawJson, outbound)
+        // instead of a real identity hash.
+        override suspend fun import(
+            profiles: List<Profile>,
+            groupId: Long,
+        ): Int {
+            lastImportedGroupId = groupId
+            profiles.forEach { profile ->
+                val id = nextId++
+                stored[id] =
+                    StoredProfile(
+                        id = id,
+                        groupId = groupId,
+                        kind = if (profile.rawJson == null) ProfileKind.TYPED else ProfileKind.RAW_JSON,
+                        name = profile.name,
+                        protocol = "vless",
+                        address = profile.outbound.address,
+                        port = profile.outbound.port,
+                        transport = "tcp",
+                        outbound = profile.outbound,
+                        rawJson = profile.rawJson,
+                        lastConnectedAt = null,
+                        lastError = null,
+                    )
+            }
+            return profiles.map { it.rawJson to it.outbound }.distinct().size
+        }
+
+        override suspend fun profile(id: Long): StoredProfile? = stored[id]
+
+        // Not exercised here — EditorViewModelTest (Task 21) owns real
+        // coverage of these three.
+        override suspend fun rename(
+            id: Long,
+            name: String,
+        ) = Unit
+
+        override suspend fun move(
+            id: Long,
+            toGroupId: Long,
+        ) = true
+
+        override suspend fun update(
+            id: Long,
+            name: String,
+            outbound: Outbound,
+        ) = true
+
+        // Review round 1: these three used to be hardcoded (always Synced, no
+        // way to configure a failure) — a vacuous fake nothing below could
+        // have called out even if ImportViewModel.addSubscription's
+        // add-then-sync-then-conditional-delete wiring were completely
+        // broken. syncResultToReturn makes the outcome configurable per
+        // test; the call-tracking fields below let a test assert not just
+        // "what did addSubscription return" but "was sync/delete even
+        // reached, and with which id." onSyncSubscription is an optional
+        // suspension point (a real one — not virtual-clock-controlled) so a
+        // test can observe ImportViewModel's busy state while its coroutine
+        // is genuinely still in flight, the same thing `import`'s own
+        // `Dispatchers.Default` hop lets the tests above do implicitly.
+        var syncResultToReturn: SyncResult = SyncResult.Synced(0, 0, 0, 0, 0)
+        var onSyncSubscription: suspend () -> Unit = {}
+
+        var addSubscriptionCallCount = 0
+            private set
+        var lastAddSubscriptionUrl: String? = null
+            private set
+        var syncSubscriptionCallCount = 0
+            private set
+        var lastSyncedSubscriptionId: Long? = null
+            private set
+        val deletedSubscriptionIds = mutableListOf<Long>()
+
+        /** Non-null makes the fake behave like `add` on a URL the user already has. */
+        var existingSubscriptionId: Long? = null
+
+        override suspend fun addSubscription(
+            url: String,
+            name: String,
+        ): AddedSubscription {
+            addSubscriptionCallCount++
+            lastAddSubscriptionUrl = url
+            return existingSubscriptionId?.let { AddedSubscription(it, created = false) }
+                ?: AddedSubscription(nextId++, created = true)
+        }
+
+        override suspend fun syncSubscription(id: Long): SyncResult {
+            syncSubscriptionCallCount++
+            lastSyncedSubscriptionId = id
+            onSyncSubscription()
+            return syncResultToReturn
+        }
+
+        override suspend fun deleteSubscription(id: Long) {
+            deletedSubscriptionIds += id
+        }
+
+        // Not exercised — ImportViewModel never reads either. Task 14's
+        // real coverage lives in ServersViewModelTest.
+        override fun observeSubscriptions(): Flow<List<StoredSubscription>> = MutableStateFlow(emptyList())
+
+        override fun observeUserInfo(id: Long): Flow<String?> = MutableStateFlow(null)
+
+        // Not exercised here — same reasoning as observeUserInfo above. SubscriptionDetailViewModelTest
+        // (Task 15) owns real coverage of these five.
+        override fun observeEffective(
+            id: Long,
+            key: String,
+            default: String?,
+        ): Flow<EffectiveValue> = MutableStateFlow(EffectiveValue(key, default, null, isPinned = false))
+
+        override suspend fun pin(
+            id: Long,
+            key: String,
+            value: String,
+        ) = Unit
+
+        override suspend fun unpin(
+            id: Long,
+            key: String,
+        ) = Unit
+
+        override suspend fun setHwidEnabled(
+            id: Long,
+            enabled: Boolean,
+        ) = Unit
+
+        override suspend fun setUserAgentOverride(
+            id: Long,
+            userAgent: String?,
+        ) = Unit
+    }
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `a partial import reports both halves`() =
+        runTest {
+            val source = FakeProfileSource()
+            val viewModel = ImportViewModel(source)
+
+            val validLines =
+                (1..197).map { i ->
+                    "vless://11111111-1111-1111-1111-111111111111@host$i.example.com:443#server$i"
+                }
+            val brokenLines =
+                listOf(
+                    // Malformed UUID -> MissingCredential.
+                    "vless://not-a-uuid@bad.example.com:443#broken1",
+                    // Port out of range -> InvalidPort.
+                    "vless://11111111-1111-1111-1111-111111111111@bad.example.com:99999#broken2",
+                    // No "://" at all -> UnknownScheme.
+                    "not-a-link-at-all",
+                )
+            val twoHundredLinesOfWhichThreeAreBroken = (validLines + brokenLines).joinToString("\n")
+
+            viewModel.import(twoHundredLinesOfWhichThreeAreBroken)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 197
+            viewModel.state.value.parsed shouldBe 197
+            viewModel.state.value.failures.size shouldBe 3
+        }
+
+    // §10.1 fix (element-provenance report): before this, ImportState.imported and the
+    // "Imported N of N" summary both read off ParseOutcome.profiles.size — "true" of what
+    // the parser produced and false of what reached storage whenever two parsed profiles
+    // shared an identity, exactly the shape of the real 15-parsed/1-stored bug. Two
+    // identical share links are the simplest reproduction that does not need raw JSON at
+    // all: they parse to two profiles with an identical outbound, FakeProfileSource's
+    // distinct-by-outbound count (mirroring ProfileRepository's real upsert-by-identity)
+    // collapses them to one stored row, and `imported` must say so.
+    @Test
+    fun `imported reports rows actually stored, not profiles parsed`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            val link = "vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one"
+
+            viewModel.import(listOf(link, link).joinToString("\n"))
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.parsed shouldBe 2
+            viewModel.state.value.imported shouldBe 1
+            viewModel.state.value.total shouldBe 2
+        }
+
+    @Test
+    fun `raw json is stored byte-for-byte`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import(validRawJson)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.profile(1)?.rawJson shouldBe validRawJson
+        }
+
+    @Test
+    fun `raw json wrapped in a top-level array is stored as that element's own bytes`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import(validRawJsonArray)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.profile(1)?.rawJson shouldBe validRawJsonArrayElement
+        }
+
+    @Test
+    fun `a clean import lands in the default group`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import("vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            repository.lastImportedGroupId shouldBe repository.defaultGroupId()
+        }
+
+    @Test
+    fun `an empty paste reports zero imported and one failure, not a crash`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.import("")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.failures.size shouldBe 1
+            viewModel.state.value.completed shouldBe true
+        }
+
+    // Fix round 1, finding 3: `input` moved from AddServerSheet's own
+    // `rememberSaveable` into ImportState (see that class's own KDoc for why)
+    // so it can be driven and cleared here without Compose at all.
+
+    @Test
+    fun `typing into the paste field updates state input`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+
+            viewModel.onInputChanged("vless://pasted")
+
+            viewModel.state.value.input shouldBe "vless://pasted"
+        }
+
+    @Test
+    fun `a successful import clears the pasted input`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            val link = "vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one"
+            viewModel.onInputChanged(link)
+
+            viewModel.import(viewModel.state.value.input)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.input shouldBe ""
+        }
+
+    @Test
+    fun `a fully failed import keeps the pasted input so the user can fix it`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val brokenPaste = "not-a-link-at-all"
+            viewModel.onInputChanged(brokenPaste)
+
+            viewModel.import(viewModel.state.value.input)
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.input shouldBe brokenPaste
+        }
+
+    // Fix round 1, finding 2: the file-read path (AddServerSheet.kt) reports
+    // a null/thrown read through these two ImportViewModel entry points
+    // rather than doing nothing or crashing the coroutine.
+
+    @Test
+    fun `reportFileReadFailure surfaces a visible failure and leaves busy false`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val owner = viewModel.beginFileRead()
+
+            viewModel.reportFileReadFailure(owner)
+
+            viewModel.state.value.fileReadFailed shouldBe true
+            viewModel.state.value.busy shouldBe false
+        }
+
+    @Test
+    fun `cancelling a file read clears busy without fabricating an outcome`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val owner = viewModel.beginFileRead()
+
+            viewModel.cancelFileRead(owner)
+
+            viewModel.state.value.busy shouldBe false
+            viewModel.state.value.completed shouldBe false
+            viewModel.state.value.imported shouldBe 0
+            viewModel.state.value.failures.shouldBeEmpty()
+            viewModel.state.value.fileReadFailed shouldBe false
+        }
+
+    @Test
+    fun `a stale file read cancellation cannot clear a newer read busy state`() =
+        runTest {
+            val viewModel = ImportViewModel(FakeProfileSource())
+            val staleOwner = viewModel.beginFileRead()
+            val currentOwner = viewModel.beginFileRead()
+
+            viewModel.cancelFileRead(staleOwner)
+
+            viewModel.state.value.busy shouldBe true
+            viewModel.cancelFileRead(currentOwner)
+            viewModel.state.value.busy shouldBe false
+        }
+
+    @Test
+    fun `beginFileRead resets a stale completed result but keeps the pasted input`() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+            viewModel.import("vless://11111111-1111-1111-1111-111111111111@host.example.com:443#one")
+            advanceUntilIdle()
+            viewModel.state.first { it.completed }
+            viewModel.onInputChanged("kept across the file pick")
+
+            viewModel.beginFileRead()
+
+            viewModel.state.value.completed shouldBe false
+            viewModel.state.value.busy shouldBe true
+            viewModel.state.value.input shouldBe "kept across the file pick"
+        }
+
+    // Task 13, review round 1: addSubscription's own orchestration — the URL
+    // gate, add-then-sync, and the conditional delete the brief singles out
+    // ("on failure of the first sync after add, delete the subscription
+    // again") — had zero executed coverage. SubscriptionImportTest only
+    // proves SyncResult.toUserMessage() is a correct pure function; these
+    // prove ImportViewModel actually calls the sequence that function's
+    // input comes from.
+
+    @Test
+    fun readdingAnExistingUrlNeverDeletesItWhenTheSyncFails() =
+        runTest {
+            // The branch's worst defect, and it was composed from two individually reasonable
+            // behaviours: `add` is idempotent on URL and hands back the EXISTING id, and a first
+            // sync that does not land as Synced deletes the row again to avoid a half-added group.
+            // Together they meant that pasting a subscription you already have, at a moment the
+            // provider happened to be unreachable, deleted that subscription — and with it, via
+            // the cascade §A.1 requires, its servers, its stored directives and every pin you had
+            // set. Both halves were documented; nothing looked at them together.
+            val repository = FakeProfileSource()
+            repository.existingSubscriptionId = 42L
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.Unreachable)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds.shouldBeEmpty()
+        }
+
+    @Test
+    fun aSubscriptionThisAddActuallyCreatedIsStillCleanedUpOnAFailedFirstSync() =
+        runTest {
+            // The other half of the rule: the cleanup must still happen for a genuinely new row,
+            // or a failed add leaves an empty group the user never asked for. Without this test
+            // the fix above could be "never delete", which passes the first test and breaks this.
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.Unreachable)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun addSubscriptionAddsThenSyncsTheNewSubscription() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.addSubscriptionCallCount shouldBe 1
+            repository.lastAddSubscriptionUrl shouldBe "https://example.com/sub"
+            repository.syncSubscriptionCallCount shouldBe 1
+            // Proves sync is called with the id addSubscription itself just returned,
+            // not some other one — FakeProfileSource.nextId starts at 1L.
+            repository.lastSyncedSubscriptionId shouldBe 1L
+        }
+
+    @Test
+    fun addSubscriptionDeletesTheSubscriptionWhenTheFirstSyncFails() =
+        runTest {
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.NotFound)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun addSubscriptionDeletesTheSubscriptionWhenTheFirstSyncFindsNoServers() =
+        runTest {
+            // NoServers is not SyncResult.Failed, but addSubscription treats it the same
+            // way for this purpose — a first sync that lands zero servers is still a
+            // group the user did not ask for. Worth its own case: it is the one non-Failed,
+            // non-Synced variant most likely to be miscategorised as "success enough."
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.NoServers("empty response")
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe listOf(1L)
+        }
+
+    @Test
+    fun addSubscriptionDoesNotDeleteTheSubscriptionWhenTheFirstSyncSucceeds() =
+        runTest {
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Synced(added = 3, 0, 0, 0, 0)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            repository.deletedSubscriptionIds shouldBe emptyList()
+        }
+
+    @Test
+    fun addSubscriptionReportsTheMappedResultInState() =
+        runTest {
+            val repository = FakeProfileSource()
+            repository.syncResultToReturn = SyncResult.Failed(SubscriptionSyncFailure.HwidRequired)
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            // Ties this file's orchestration coverage to SubscriptionImportTest's pure-function
+            // one: the state actually carries what toUserMessage() would produce for the same
+            // SyncResult, not some other resource id.
+            viewModel.state.value.subscriptionResult?.resId shouldBe R.string.subscription_error_hwid_required
+        }
+
+    @Test
+    fun addSubscriptionWithAnInvalidUrlIsANoOp() =
+        runTest {
+            val repository = FakeProfileSource()
+            val viewModel = ImportViewModel(repository)
+
+            // Not http/https at all — DirectiveKind.Url's own scheme rule (a file:
+            // subscription URL is the same hazard §A.1 already guards against for
+            // provider-supplied URL directives, just typed by the user instead).
+            viewModel.addSubscription("file:///etc/passwd")
+            advanceUntilIdle()
+
+            repository.addSubscriptionCallCount shouldBe 0
+            repository.syncSubscriptionCallCount shouldBe 0
+            repository.deletedSubscriptionIds shouldBe emptyList()
+            viewModel.state.value.busy shouldBe false
+            viewModel.state.value.subscriptionResult shouldBe null
+        }
+
+    @Test
+    fun addSubscriptionIsBusyWhileTheSyncIsInFlight() =
+        runTest {
+            // syncSubscription's fake body never truly suspends by default (unlike
+            // import()'s real Dispatchers.Default hop), so under UnconfinedTestDispatcher
+            // the whole addSubscription coroutine would otherwise run to completion
+            // synchronously and busy would already be false by the time this test could
+            // observe it. onSyncSubscription's CompletableDeferred is a genuine suspension
+            // point, so busy=true is caught mid-flight rather than asserted vacuously.
+            val repository = FakeProfileSource()
+            val gate = CompletableDeferred<Unit>()
+            repository.onSyncSubscription = { gate.await() }
+            val viewModel = ImportViewModel(repository)
+
+            viewModel.addSubscription("https://example.com/sub")
+
+            viewModel.state.value.busy shouldBe true
+            viewModel.state.value.subscriptionResult shouldBe null
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+            viewModel.state.first { it.subscriptionResult != null }
+
+            viewModel.state.value.busy shouldBe false
+        }
+}

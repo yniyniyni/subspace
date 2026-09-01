@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.core.ui"
+    namespace = "space.getsub.core.ui"
 }
 
 dependencies {

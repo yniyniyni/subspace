@@ -11,12 +11,12 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace"
+    namespace = "space.getsub"
     // See the note in subspace.android.library: compileSdk leads targetSdk on purpose.
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "art.yniyniyni.subspace"
+        applicationId = "space.getsub"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

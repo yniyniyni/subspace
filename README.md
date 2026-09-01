@@ -171,7 +171,7 @@ git submodule update --init --recursive
 ./gradlew installDebug
 ```
 
-The APK installs as `art.yniyniyni.subspace` (`0.1.0-alpha01`, `versionCode 1`).
+The APK installs as `space.getsub` (`0.1.0-alpha01`, `versionCode 1`).
 
 ### Verification
 

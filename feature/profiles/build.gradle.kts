@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.feature.profiles"
+    namespace = "space.getsub.feature.profiles"
 }
 
 dependencies {

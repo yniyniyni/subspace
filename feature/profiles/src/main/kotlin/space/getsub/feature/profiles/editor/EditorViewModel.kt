@@ -1,0 +1,581 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Additional permission: see Stores Exception in LICENSE.
+package space.getsub.feature.profiles.editor
+
+import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import space.getsub.core.data.PendingRoutingConversion
+import space.getsub.core.data.ProfileKind
+import space.getsub.core.data.StoredProfile
+import space.getsub.core.model.Outbound
+import space.getsub.core.model.Security
+import space.getsub.core.model.ShadowsocksOutbound
+import space.getsub.core.model.SocksOutbound
+import space.getsub.core.model.StreamSettings
+import space.getsub.core.model.TransportOptions
+import space.getsub.core.model.TrojanOutbound
+import space.getsub.core.model.VlessOutbound
+import space.getsub.core.model.VmessOutbound
+import space.getsub.core.parser.DetailField
+import space.getsub.core.parser.FailureDetail
+import space.getsub.core.parser.PassthroughAdvisory
+import space.getsub.core.parser.PassthroughRejection
+import space.getsub.core.parser.analysePassthrough
+import space.getsub.core.parser.routing.RoutingConversion
+import space.getsub.core.parser.routing.convertXrayRouting
+import space.getsub.core.parser.validatePort
+import space.getsub.core.parser.validateRealityPublicKey
+import space.getsub.core.parser.validateShadowsocksMethod
+import space.getsub.core.parser.validateUuid
+import space.getsub.feature.profiles.ProfileSource
+import javax.inject.Inject
+
+/** One group the group picker can move a TYPED profile into. */
+internal data class EditorGroupOption(val id: Long, val name: String)
+
+/** Which of the four field-level validators (§ARCHITECTURE 6) currently rejects a TYPED profile's draft. */
+internal enum class EditorFieldKey { Port, Credential, PublicKey, Method }
+
+/** `StreamSettings.security`'s three shapes, as something a dropdown can select without nested data. */
+internal enum class EditorSecurityKind { None, Reality, Tls }
+
+/**
+ * What [EditorScreen] renders.
+ *
+ * ARCHITECTURE.md §6/§9: a [ProfileKind.RAW_JSON] profile is stored byte-for-byte, and — since
+ * M7 — an eligible one ([StoredProfile.runsAsWritten]) runs those exact bytes rather than a
+ * typed projection reconstructed from them. That does not make the editor a text box: letting
+ * it turn the JSON into a form and re-serialize it on save is exactly the lossy round trip §6
+ * exists to prevent regardless of which branch actually connects — unmodelled fields
+ * (fragmentation, custom headers, anything this app's [Outbound] has no property for) would
+ * silently vanish the moment a user hit Save. So [fieldsEditable] is `false` for
+ * [ProfileKind.RAW_JSON] and stays `true` only for [ProfileKind.TYPED] — [rawJson] is shown
+ * read-only, and the one write [EditorViewModel.save] performs for a RAW_JSON profile is a
+ * rename, never a reconstruction of the JSON.
+ *
+ * Every editable field below is a plain [String] (or the narrow [EditorSecurityKind]/
+ * [EditorGroupOption] enums), not the typed [Outbound] value it will become — the same
+ * reason [space.getsub.feature.profiles.add.ImportState.input] is a raw string,
+ * not a parsed profile: a text field needs something it can hold mid-edit (an empty port
+ * field, a half-typed UUID), which a strongly-typed [Outbound] cannot represent. [errors]
+ * is populated from [space.getsub.core.parser]'s own validators on [save] — the
+ * same functions [space.getsub.core.parser.SubscriptionParser] uses on import, so
+ * the editor and the importer cannot disagree about what is valid.
+ *
+ * Deliberately not exposed here: WebSocket header editing ([TransportOptions.WebSocket.headers]
+ * is a `Map<String, String>`, not a single field a text box can drive) — see [toOutbound]'s
+ * KDoc for how those survive a save unedited rather than being dropped.
+ */
+internal data class EditorState(
+    val loading: Boolean = true,
+    /** `false` only once [EditorViewModel.load] resolves a `null` profile — an id that names no real row. */
+    val exists: Boolean = true,
+    val id: Long = 0L,
+    val kind: ProfileKind = ProfileKind.TYPED,
+    val protocol: String = "",
+    val name: String = "",
+    val groupId: Long = 0L,
+    /**
+     * [groupId] as it was when [EditorViewModel.load] resolved this profile, kept alongside
+     * the (possibly since edited) [groupId] so [EditorViewModel.save] can tell "the user
+     * changed the group" from "the group was always this" without a second round trip to
+     * [space.getsub.feature.profiles.ProfileSource.profile]. Never itself editable.
+     */
+    val loadedGroupId: Long = 0L,
+    val availableGroups: List<EditorGroupOption> = emptyList(),
+    /** Non-null only for [ProfileKind.RAW_JSON] — the exact pasted bytes, shown read-only. */
+    val rawJson: String? = null,
+    /** True when this profile's own bytes reach the core rather than a typed projection. */
+    val runsAsWritten: Boolean = false,
+    /** Why the bytes cannot be run, or null when they can (or the row is TYPED). */
+    val passthroughRejection: PassthroughRejection? = null,
+    /**
+     * Structural warnings about this config that are the user's to act on, not the app's.
+     *
+     * Computed at load from [rawJson], never stored: `analysePassthrough` is pure and the
+     * verdict depends only on those bytes, so a column would be a second source of truth
+     * for something already derivable. Empty for every [ProfileKind.TYPED] row.
+     */
+    val advisories: List<PassthroughAdvisory> = emptyList(),
+    /** True when [runsAsWritten] and an app rule set or DNS resolver would replace this config's blocks. */
+    val routingOverridesThisConfig: Boolean = false,
+    /**
+     * True when this profile [runsAsWritten] and its own `routing` block converts into a rule
+     * set carrying **at least one entry** — [space.getsub.core.parser.routing.convertXrayRouting]
+     * returns non-null for [rawJson]/[name] *and* the resulting profile's
+     * [space.getsub.core.model.RoutingProfile.entryCount] is greater than zero. Gates
+     * the "Use this file's routing rules" action ([EditorActions.onConvertRouting]): shown only
+     * when there is something for it to actually convert. `convertXrayRouting` returning non-null
+     * is not enough on its own — a config whose `rules` array is non-empty but whose every rule
+     * is dropped (an unsupported matcher, a balancer rule, an unknown outbound tag) still
+     * produces a non-null [space.getsub.core.parser.routing.RoutingConversion] with an
+     * empty bucket map, and offering the action there would hand the review sheet a profile that
+     * replaces this config's routing with nothing once activated — the exact loss this feature
+     * exists to prevent. A conversion that keeps *some* but not all rules still offers the
+     * action; only the all-dropped case hides it, since the review sheet (Task 14) is what
+     * discloses a partial loss.
+     */
+    val canConvertRouting: Boolean = false,
+    val address: String = "",
+    val port: String = "",
+    /** UUID (vless/vmess), password (trojan/shadowsocks), or username (socks — see [secondaryCredential]). */
+    val primaryCredential: String = "",
+    /** SOCKS password only; every other protocol leaves this blank and unused. */
+    val secondaryCredential: String = "",
+    /** Shadowsocks cipher, one of [space.getsub.core.parser.SHADOWSOCKS_METHODS]. */
+    val method: String = "",
+    /** VLESS XTLS flow, e.g. `xtls-rprx-vision`. Blank means unset. */
+    val flow: String = "",
+    /** VMess legacy AlterID, as text — 0 on every modern server. */
+    val alterId: String = "",
+    /** VMess encryption: `auto`, `aes-128-gcm`, `chacha20-poly1305`, `none`. */
+    val vmessSecurity: String = "auto",
+    /** `tcp`, `ws` or `grpc` — vless/vmess/trojan only; shadowsocks/socks carry no [StreamSettings]. */
+    val network: String = "tcp",
+    val securityKind: EditorSecurityKind = EditorSecurityKind.None,
+    val tlsServerName: String = "",
+    val tlsFingerprint: String = "",
+    val tlsAllowInsecure: Boolean = false,
+    val realityServerName: String = "",
+    val realityPublicKey: String = "",
+    val realityShortId: String = "",
+    val realityFingerprint: String = "",
+    val realitySpiderX: String = "",
+    val wsPath: String = "",
+    val grpcServiceName: String = "",
+    val xhttpPath: String = "",
+    /** XHTTP `Host` header. Blank means unset, which dials with the address (§ see [toOutbound]). */
+    val xhttpHost: String = "",
+    /**
+     * XHTTP mode, one of [XHTTP_MODES]. Blank means unset, which Xray reads as `auto`.
+     *
+     * A closed option list rather than a text field on purpose: Xray-core v26.7.11 rejects
+     * the whole config on an unrecognised mode (`SplitHTTPConfig.Build`: `unsupported mode`),
+     * so a typo here would turn a working profile into one that fails at validation.
+     */
+    val xhttpMode: String = "",
+    /** Preserved from the loaded outbound, unedited — see [toOutbound]'s KDoc. */
+    val originalWsHeaders: Map<String, String> = emptyMap(),
+    val errors: Map<EditorFieldKey, FailureDetail> = emptyMap(),
+    /**
+     * `true` when the last [EditorViewModel.save] was rejected because the edited outbound
+     * (or the destination group, for a group change) already holds an identical profile —
+     * [space.getsub.core.data.db.ProfileEntity]'s unique `(groupId, identityHash)`
+     * index (§4.2). Not a [FailureDetail] like [errors]: this is not one field being wrong,
+     * it is the whole draft colliding with a sibling row, so it renders as a single banner
+     * (see [EditorScreen]) rather than attaching to any one text field. Reset to `false` at
+     * the start of every [EditorViewModel.save] call, so it reflects only the most recent
+     * attempt.
+     */
+    val duplicateIdentity: Boolean = false,
+    val saved: Boolean = false,
+) {
+    /** RAW_JSON is read-only plus rename (§6) — see this file's own KDoc for why. */
+    val fieldsEditable: Boolean get() = kind == ProfileKind.TYPED
+}
+
+/**
+ * Loads one [StoredProfile] for editing and writes back through [ProfileSource].
+ *
+ * [load] must be called once (from `LaunchedEffect(profileId)`, see [EditorScreen]) before
+ * [state] carries anything but its initial [EditorState.loading] value.
+ */
+@Suppress("TooManyFunctions") // One onXChanged per editable field (§ARCHITECTURE 6's "name, group, address,
+// port, credential, transport, security" plus each protocol's own sub-fields) — the width of
+// this class's surface is the width of the form it drives, same call ProfileRepository.kt's
+// own KDoc makes for its own suppression.
+@HiltViewModel
+internal class EditorViewModel
+@Inject
+constructor(
+    private val profileSource: ProfileSource,
+    private val pendingRoutingConversion: PendingRoutingConversion,
+) : ViewModel() {
+    private val _state = MutableStateFlow(EditorState())
+    val state: StateFlow<EditorState> = _state.asStateFlow()
+
+    /**
+     * Where [load]'s `canConvertRouting` parse actually runs. `Dispatchers.Default` in
+     * production (fix round 1, Minor: keeps a large pasted config's JSON parse off Main).
+     *
+     * A plain internal property rather than a constructor parameter: this codebase has no
+     * existing qualified `CoroutineDispatcher` Hilt binding, and adding one is a bigger DI
+     * change than one off-main hop warrants. `private set` keeps this a read-only seam from
+     * every other production call site in `:feature:profiles` — the only way to change it is
+     * [setConversionDispatcherForTesting], which exists so nothing but a test can retarget it
+     * at runtime. [space.getsub.feature.profiles.editor.EditorViewModelTest]'s own
+     * `editorViewModel` helper calls that function to pin this to
+     * [kotlinx.coroutines.Dispatchers.Unconfined] after construction, so `load()` stays
+     * synchronous under that file's `UnconfinedTestDispatcher` + `advanceUntilIdle()` pattern —
+     * every other suspend call `load()` makes already runs against a trivial [ProfileSource]
+     * fake with no real suspension, and this is the one call that would otherwise escape that
+     * determinism.
+     */
+    internal var conversionDispatcher: CoroutineDispatcher = Dispatchers.Default
+        private set
+
+    /**
+     * Test-only seam for [conversionDispatcher] — see that property's KDoc. Not called from
+     * any production code path; exists so the dispatcher can be pinned to
+     * [kotlinx.coroutines.Dispatchers.Unconfined] under a test scheduler without leaving the
+     * property itself publicly settable.
+     */
+    @VisibleForTesting
+    internal fun setConversionDispatcherForTesting(dispatcher: CoroutineDispatcher) {
+        conversionDispatcher = dispatcher
+    }
+
+    fun load(profileId: Long) {
+        viewModelScope.launch {
+            val groups =
+                profileSource
+                    .observeGroups(query = "", protocol = null)
+                    .first()
+                    .map { EditorGroupOption(it.id, it.name) }
+            // Task 10 review, Critical 2: a snapshot at load time, same as [groups] above —
+            // this screen has no reason to recompose mid-edit if the user flips routing in
+            // another tab, and every other settings-derived value here is read the same way.
+            val routingOverridesThisConfig = profileSource.routingOverridesPassthrough.first()
+            val profile = profileSource.profile(profileId)
+            _state.value =
+                if (profile == null) {
+                    EditorState(loading = false, exists = false, id = profileId, availableGroups = groups)
+                } else {
+                    val loaded =
+                        profile.toEditorState(groups).copy(routingOverridesThisConfig = routingOverridesThisConfig)
+                    // Off Main: convertibleRouting() and analysePassthrough() each do a full JSON
+                    // parse of the pasted config, and load() otherwise runs on Main.immediate — a
+                    // large config would add a frame hitch on every RAW_JSON editor open. One hop,
+                    // not two: both parses are pure and share nothing that forces a second dispatch.
+                    val (canConvertRouting, advisories) =
+                        withContext(conversionDispatcher) {
+                            val canConvert = loaded.convertibleRouting() != null
+                            val advisories = loaded.rawJson?.let { analysePassthrough(it).advisories }.orEmpty()
+                            canConvert to advisories
+                        }
+                    loaded.copy(canConvertRouting = canConvertRouting, advisories = advisories)
+                }
+        }
+    }
+
+    fun onNameChanged(value: String) = update { it.copy(name = value) }
+
+    fun onGroupChanged(id: Long) = update { it.copy(groupId = id) }
+
+    fun onAddressChanged(value: String) = update { it.copy(address = value) }
+
+    fun onPortChanged(value: String) = update { it.copy(port = value) }
+
+    fun onPrimaryCredentialChanged(value: String) = update { it.copy(primaryCredential = value) }
+
+    fun onSecondaryCredentialChanged(value: String) = update { it.copy(secondaryCredential = value) }
+
+    fun onMethodChanged(value: String) = update { it.copy(method = value) }
+
+    fun onFlowChanged(value: String) = update { it.copy(flow = value) }
+
+    fun onAlterIdChanged(value: String) = update { it.copy(alterId = value) }
+
+    fun onVmessSecurityChanged(value: String) = update { it.copy(vmessSecurity = value) }
+
+    fun onNetworkChanged(value: String) = update { it.copy(network = value) }
+
+    fun onSecurityKindChanged(value: EditorSecurityKind) = update { it.copy(securityKind = value) }
+
+    fun onTlsServerNameChanged(value: String) = update { it.copy(tlsServerName = value) }
+
+    fun onTlsFingerprintChanged(value: String) = update { it.copy(tlsFingerprint = value) }
+
+    fun onTlsAllowInsecureChanged(value: Boolean) = update { it.copy(tlsAllowInsecure = value) }
+
+    fun onRealityServerNameChanged(value: String) = update { it.copy(realityServerName = value) }
+
+    fun onRealityPublicKeyChanged(value: String) = update { it.copy(realityPublicKey = value) }
+
+    fun onRealityShortIdChanged(value: String) = update { it.copy(realityShortId = value) }
+
+    fun onRealityFingerprintChanged(value: String) = update { it.copy(realityFingerprint = value) }
+
+    fun onRealitySpiderXChanged(value: String) = update { it.copy(realitySpiderX = value) }
+
+    fun onWsPathChanged(value: String) = update { it.copy(wsPath = value) }
+
+    fun onGrpcServiceNameChanged(value: String) = update { it.copy(grpcServiceName = value) }
+
+    fun onXhttpPathChanged(value: String) = update { it.copy(xhttpPath = value) }
+
+    fun onXhttpHostChanged(value: String) = update { it.copy(xhttpHost = value) }
+
+    fun onXhttpModeChanged(value: String) = update { it.copy(xhttpMode = value) }
+
+    /**
+     * Persists the current draft.
+     *
+     * A RAW_JSON profile calls only [ProfileSource.rename] — its bytes are never touched
+     * (§6). A TYPED profile validates first: any [EditorFieldKey] failure aborts the write
+     * and populates [EditorState.errors] instead, the same "validate before starting" the
+     * importer already follows. A group change is a separate [ProfileSource.move] call —
+     * [ProfileSource.update] does not touch `groupId`.
+     *
+     * Task 21 fix round 1: [ProfileSource.move] and [ProfileSource.update] both return
+     * `false` instead of throwing when the edited profile now collides with a sibling under
+     * [space.getsub.core.data.db.ProfileEntity]'s unique `(groupId, identityHash)`
+     * index — see [ProfileRepository.update][space.getsub.core.data.ProfileRepository.update]'s
+     * KDoc. Either `false` aborts the save, sets [EditorState.duplicateIdentity] and leaves
+     * the draft exactly as the user left it (nothing here resets any field), matching the
+     * validation-failure branch just above it: a rejected save is a state the user can act
+     * on, never an uncaught exception reaching [viewModelScope] (ARCHITECTURE.md §10.4).
+     */
+    fun save() {
+        val current = _state.value
+        if (!current.exists) return
+        viewModelScope.launch {
+            _state.update { it.copy(duplicateIdentity = false) }
+            if (current.fieldsEditable) {
+                val validationErrors = current.validate()
+                if (validationErrors.isNotEmpty()) {
+                    _state.update { it.copy(errors = validationErrors) }
+                    return@launch
+                }
+                if (current.groupId != current.loadedGroupId) {
+                    if (!profileSource.move(current.id, current.groupId)) {
+                        _state.update { it.copy(duplicateIdentity = true) }
+                        return@launch
+                    }
+                }
+                if (!profileSource.update(current.id, current.name, current.toOutbound())) {
+                    _state.update { it.copy(duplicateIdentity = true) }
+                    return@launch
+                }
+            } else {
+                profileSource.rename(current.id, current.name)
+            }
+            _state.update { it.copy(errors = emptyMap(), saved = true) }
+        }
+    }
+
+    /**
+     * Converts this RAW_JSON profile's own `routing` block into a rule set and offers it to
+     * [pendingRoutingConversion] for the routing import review sheet — the entry point that
+     * makes `:core:parser`'s `convertXrayRouting` (Task 13) and
+     * `ImportReviewViewModel.startConversionReview` (Task 14) reachable in production. See
+     * [EditorState.canConvertRouting]'s KDoc for the gate this backs, and
+     * [PendingRoutingConversion]'s own KDoc for why the result travels through that holder
+     * rather than a navigation argument.
+     *
+     * Recomputes from the current [EditorState.rawJson]/[EditorState.name] rather than reusing
+     * whatever produced [EditorState.canConvertRouting] at load time, so a rename made after
+     * loading (RAW_JSON's one editable field, §6) is reflected in the profile the review sheet
+     * names. The `!canConvertRouting` guard is defensive — the action is only ever shown when it
+     * is already true — so this can never offer a stale, absent, or all-dropped conversion.
+     *
+     * Deliberately synchronous on Main, unlike [load]'s own `canConvertRouting` parse: `EditorScreen`
+     * calls this and then navigates in the same click handler, and the conversion must already be
+     * sitting in [pendingRoutingConversion] before that navigation lands — see the call site's own
+     * comment for the race an async hop here would open.
+     */
+    fun convertRouting() {
+        val current = _state.value
+        if (!current.canConvertRouting) return
+        val conversion = current.convertibleRouting() ?: return
+        pendingRoutingConversion.offer(conversion)
+    }
+
+    private inline fun update(transform: (EditorState) -> EditorState) {
+        _state.update(transform)
+    }
+}
+
+/**
+ * The conversion [EditorState.canConvertRouting] gates, recomputed fresh from this state's own
+ * [EditorState.rawJson]/[EditorState.name] — or null when there is nothing worth offering.
+ *
+ * "Worth offering" is stricter than `convertXrayRouting`'s own null check: a config whose
+ * `routing.rules` array is non-empty but whose every rule is dropped (an unsupported matcher, a
+ * balancer rule, an unknown outbound tag — see [space.getsub.core.parser.routing.ConversionDrop])
+ * still produces a non-null [space.getsub.core.parser.routing.RoutingConversion] with an
+ * empty bucket map. Offering the action for that config would hand the review sheet a profile
+ * that replaces this config's own routing with nothing once activated, which is the loss this
+ * feature exists to prevent — see [EditorState.canConvertRouting]'s own KDoc.
+ */
+@Suppress("ReturnCount") // Each early return names one distinct reason there is nothing to offer.
+private fun EditorState.convertibleRouting(): RoutingConversion? {
+    if (!runsAsWritten) return null
+    val json = rawJson ?: return null
+    val conversion = convertXrayRouting(json, name) ?: return null
+    return conversion.takeIf { it.profile.entryCount > 0 }
+}
+
+/** Populates [EditorState] from a freshly loaded [StoredProfile]. */
+private fun StoredProfile.toEditorState(groups: List<EditorGroupOption>): EditorState {
+    val base =
+        EditorState(
+            loading = false,
+            exists = true,
+            id = id,
+            kind = kind,
+            protocol = protocol,
+            name = name,
+            groupId = groupId,
+            loadedGroupId = groupId,
+            availableGroups = groups,
+            rawJson = rawJson,
+            runsAsWritten = runsAsWritten,
+            passthroughRejection = passthroughRejection,
+            address = address,
+            port = port.toString(),
+        )
+    val ob = outbound ?: return base
+    return when (ob) {
+        is VlessOutbound ->
+            base
+                .copy(primaryCredential = ob.uuid, flow = ob.flow.orEmpty())
+                .withStream(ob.stream)
+        is VmessOutbound ->
+            base
+                .copy(primaryCredential = ob.uuid, alterId = ob.alterId.toString(), vmessSecurity = ob.security)
+                .withStream(ob.stream)
+        is TrojanOutbound -> base.copy(primaryCredential = ob.password).withStream(ob.stream)
+        is ShadowsocksOutbound -> base.copy(method = ob.method, primaryCredential = ob.password)
+        is SocksOutbound ->
+            base.copy(primaryCredential = ob.username.orEmpty(), secondaryCredential = ob.password.orEmpty())
+    }
+}
+
+private fun EditorState.withStream(stream: StreamSettings): EditorState {
+    val withSecurity =
+        when (val security = stream.security) {
+            Security.None -> copy(securityKind = EditorSecurityKind.None)
+            is Security.Tls ->
+                copy(
+                    securityKind = EditorSecurityKind.Tls,
+                    tlsServerName = security.serverName,
+                    tlsFingerprint = security.fingerprint,
+                    tlsAllowInsecure = security.allowInsecure,
+                )
+            is Security.Reality ->
+                copy(
+                    securityKind = EditorSecurityKind.Reality,
+                    realityServerName = security.serverName,
+                    realityPublicKey = security.publicKey,
+                    realityShortId = security.shortId,
+                    realityFingerprint = security.fingerprint,
+                    realitySpiderX = security.spiderX,
+                )
+        }
+    return when (val transport = stream.transport) {
+        TransportOptions.None -> withSecurity.copy(network = stream.network)
+        is TransportOptions.WebSocket ->
+            withSecurity.copy(network = stream.network, wsPath = transport.path, originalWsHeaders = transport.headers)
+        is TransportOptions.Grpc ->
+            withSecurity.copy(network = stream.network, grpcServiceName = transport.serviceName)
+        is TransportOptions.Xhttp ->
+            withSecurity.copy(
+                network = stream.network,
+                xhttpPath = transport.path,
+                // Null becomes blank for the text field and blank becomes null again in
+                // [toOutbound], so an unset host survives an untouched edit as unset rather
+                // than being written back as an empty header.
+                xhttpHost = transport.host.orEmpty(),
+                xhttpMode = transport.mode.orEmpty(),
+            )
+    }
+}
+
+/**
+ * Every field-level check §6 requires before a TYPED profile can be saved, run through
+ * `:core:parser`'s own validators — see [EditorViewModel.save]'s KDoc for why this must not
+ * be a second, independently-drifting copy of what the importer already enforces.
+ */
+private fun EditorState.validate(): Map<EditorFieldKey, FailureDetail> {
+    val errors = mutableMapOf<EditorFieldKey, FailureDetail>()
+
+    val portValue = port.toIntOrNull()
+    val portError = if (portValue == null) FailureDetail.Malformed(DetailField.Port) else validatePort(portValue)
+    portError?.let { errors[EditorFieldKey.Port] = it }
+
+    when (protocol) {
+        "vless", "vmess" -> validateUuid(primaryCredential)?.let { errors[EditorFieldKey.Credential] = it }
+        "trojan", "shadowsocks" ->
+            if (primaryCredential.isEmpty()) {
+                errors[EditorFieldKey.Credential] = FailureDetail.Missing(DetailField.Password)
+            }
+        // socks: both credentials are genuinely optional (SocksOutbound.username/password are nullable).
+    }
+    if (protocol == "shadowsocks") {
+        validateShadowsocksMethod(method)?.let { errors[EditorFieldKey.Method] = it }
+    }
+    if (securityKind == EditorSecurityKind.Reality) {
+        validateRealityPublicKey(realityPublicKey)?.let { errors[EditorFieldKey.PublicKey] = it }
+    }
+    return errors
+}
+
+/**
+ * Reconstructs the [Outbound] [EditorViewModel.save] persists — only called after
+ * [EditorState.validate] returned no errors, so `port.toIntOrNull()`/etc. below are safe.
+ *
+ * [EditorState.originalWsHeaders] passes through untouched: this editor exposes a WebSocket
+ * transport's path but not its header map (a `Map<String, String>` has no single-field form
+ * this task builds a UI for), so a save must carry the loaded headers forward rather than
+ * silently dropping them to an empty map — the exact "unmodelled fields vanish" failure §6
+ * exists to prevent, this time for a TYPED profile instead of RAW_JSON.
+ *
+ * The `xhttp` branch is the same guarantee for the transport that regression exposed: before
+ * it existed, saving an xhttp profile through this editor rewrote its transport to
+ * [TransportOptions.None], discarding the path and Host it was imported with. Editing the
+ * name of a working server must not quietly change how it dials.
+ */
+private fun EditorState.toTransportOptions(): TransportOptions =
+    when (network) {
+        "ws" -> TransportOptions.WebSocket(path = wsPath, headers = originalWsHeaders)
+        "grpc" -> TransportOptions.Grpc(serviceName = grpcServiceName)
+        // Blank back to null, the inverse of [withStream]'s orEmpty(): "" and null are
+        // different requests on the wire, and only null means "let Xray decide".
+        "xhttp", "splithttp" ->
+            TransportOptions.Xhttp(
+                path = xhttpPath.ifBlank { "/" },
+                host = xhttpHost.ifBlank { null },
+                mode = xhttpMode.ifBlank { null },
+            )
+
+        else -> TransportOptions.None
+    }
+
+private fun EditorState.toOutbound(): Outbound {
+    val portValue = port.toIntOrNull() ?: 0
+    val security: Security =
+        when (securityKind) {
+            EditorSecurityKind.None -> Security.None
+            EditorSecurityKind.Reality ->
+                Security.Reality(
+                    realityServerName,
+                    realityPublicKey,
+                    realityShortId,
+                    realityFingerprint,
+                    realitySpiderX,
+                )
+            EditorSecurityKind.Tls -> Security.Tls(tlsServerName, tlsFingerprint, tlsAllowInsecure)
+        }
+    val stream = StreamSettings(network = network, security = security, transport = toTransportOptions())
+    return when (protocol) {
+        "vless" -> VlessOutbound(address, portValue, primaryCredential, flow.ifBlank { null }, stream)
+        "vmess" ->
+            VmessOutbound(address, portValue, primaryCredential, alterId.toIntOrNull() ?: 0, vmessSecurity, stream)
+        "trojan" -> TrojanOutbound(address, portValue, primaryCredential, stream)
+        "shadowsocks" -> ShadowsocksOutbound(address, portValue, method, primaryCredential)
+        else ->
+            SocksOutbound(address, portValue, primaryCredential.ifBlank { null }, secondaryCredential.ifBlank { null })
+    }
+}

@@ -168,7 +168,7 @@ reap_locked (void)
 }
 
 JNIEXPORT jboolean JNICALL
-Java_art_yniyniyni_subspace_service_Tun2Socks_nativeStart (JNIEnv *env,
+Java_space_getsub_service_Tun2Socks_nativeStart (JNIEnv *env,
                                                            jclass clazz,
                                                            jstring config,
                                                            jint tun_fd)
@@ -250,7 +250,7 @@ Java_art_yniyniyni_subspace_service_Tun2Socks_nativeStart (JNIEnv *env,
 }
 
 JNIEXPORT void JNICALL
-Java_art_yniyniyni_subspace_service_Tun2Socks_nativeStop (JNIEnv *env,
+Java_space_getsub_service_Tun2Socks_nativeStop (JNIEnv *env,
                                                           jclass clazz)
 {
     (void)env;
@@ -285,7 +285,7 @@ Java_art_yniyniyni_subspace_service_Tun2Socks_nativeStop (JNIEnv *env,
 }
 
 JNIEXPORT jboolean JNICALL
-Java_art_yniyniyni_subspace_service_Tun2Socks_nativeIsRunning (JNIEnv *env,
+Java_space_getsub_service_Tun2Socks_nativeIsRunning (JNIEnv *env,
                                                                jclass clazz)
 {
     (void)env;
@@ -301,7 +301,7 @@ Java_art_yniyniyni_subspace_service_Tun2Socks_nativeIsRunning (JNIEnv *env,
 
 #ifndef NDEBUG
 JNIEXPORT void JNICALL
-Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeArmPause (
+Java_space_getsub_service_Tun2SocksNativeTestHook_nativeArmPause (
     JNIEnv *env, jclass clazz)
 {
     (void)env;
@@ -316,7 +316,7 @@ Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeArmPause (
 }
 
 JNIEXPORT jboolean JNICALL
-Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeAwaitPaused (
+Java_space_getsub_service_Tun2SocksNativeTestHook_nativeAwaitPaused (
     JNIEnv *env, jclass clazz, jlong timeout_ms)
 {
     (void)env;
@@ -327,7 +327,7 @@ Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeAwaitPaused (
 }
 
 JNIEXPORT jboolean JNICALL
-Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeAwaitQuitReturned (
+Java_space_getsub_service_Tun2SocksNativeTestHook_nativeAwaitQuitReturned (
     JNIEnv *env, jclass clazz, jlong timeout_ms)
 {
     (void)env;
@@ -338,7 +338,7 @@ Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeAwaitQuitRetur
 }
 
 JNIEXPORT void JNICALL
-Java_art_yniyniyni_subspace_service_Tun2SocksNativeTestHook_nativeRelease (
+Java_space_getsub_service_Tun2SocksNativeTestHook_nativeRelease (
     JNIEnv *env, jclass clazz)
 {
     (void)env;

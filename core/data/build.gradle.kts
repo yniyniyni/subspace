@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.core.data"
+    namespace = "space.getsub.core.data"
 
     testFixtures {
         enable = true

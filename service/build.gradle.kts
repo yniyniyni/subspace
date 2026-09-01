@@ -80,7 +80,7 @@ tasks.named("check").configure {
 }
 
 android {
-    namespace = "art.yniyniyni.subspace.service"
+    namespace = "space.getsub.service"
 
     buildFeatures {
         aidl = true

@@ -46,6 +46,11 @@ coroutines:
   GlobalCoroutineUsage:
     active: true
 
+complexity:
+  TooManyFunctions:
+    # core:parser PassthroughAnalysis: 10 inherited + 2 extractors (Task 1 M7.5)
+    thresholdInFiles: 13
+
 exceptions:
   TooGenericExceptionCaught:
     active: true

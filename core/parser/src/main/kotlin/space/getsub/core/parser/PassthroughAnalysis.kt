@@ -119,12 +119,67 @@ public data class PassthroughAnalysis(
     val outboundTags: List<String>,
     /** Exact protocol by tag, used to verify app-owned override targets before routing to them. */
     val outboundProtocolsByTag: Map<String, String>,
+    /** Every balancer this app could name, in document order. Empty when there are none. */
+    val balancers: List<BalancerSpec>,
+    /** The `balancerTag` of every rule that matches everything, in document order. */
+    val catchAllBalancerRefs: List<String>,
 ) {
     override fun toString(): String =
-        "PassthroughAnalysis(rejection=$rejection, overrideBlocker=$overrideBlocker, " +
-            "advisories=$advisories, isBalancer=$isBalancer, servers=$serverOutboundCount, " +
-            "tags=<redacted, ${outboundTags.size}>)"
+        "PassthroughAnalysis(rejection=$rejection, advisories=$advisories, " +
+            "isBalancer=$isBalancer, servers=$serverOutboundCount, " +
+            "tags=<redacted, ${outboundTags.size}>, balancers=<redacted, ${balancers.size}>, " +
+            "catchAllRefs=<redacted, ${catchAllBalancerRefs.size}>)"
 }
+
+/**
+ * One `routing.balancers` entry, reduced to what target resolution needs.
+ *
+ * Only balancers with a non-blank `tag` become a [BalancerSpec]: an untagged
+ * balancer cannot be named by a rule, so treating it as a candidate would invite
+ * emitting `"balancerTag": ""`. [PassthroughAnalysis.isBalancer] is deliberately
+ * *not* narrowed the same way — it drives the [PassthroughRejection.SeveralServers]
+ * exemption, which is a statement about the document's shape rather than about
+ * whether this app can address the balancer.
+ *
+ * §5.6: [selector] entries are outbound tag prefixes, which are routing
+ * identifiers rather than credentials — but see [PassthroughAnalysis.toString].
+ */
+public data class BalancerSpec(
+    val tag: String,
+    val selector: List<String>,
+)
+
+/**
+ * The keys a rule may carry and still match everything.
+ *
+ * An **allow-list**, and the direction matters (design §3.3). A deny-list would
+ * treat an unrecognised selective key as non-narrowing, so a future or
+ * vendor-specific matcher would silently make a narrow rule look like a
+ * catch-all and resolve the wrong balancer. This way an unknown key stops the
+ * config disambiguating and it is refused instead.
+ *
+ * `network` is on the list because `"tcp,udp"` is the complete set a TUN
+ * carries — it is how this project writes its own catch-all
+ * (`RoutingRules.CATCH_ALL_DIRECT`), so treating it as a condition would discard
+ * the most common catch-all shape there is.
+ */
+private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
+
+/** Every balancer this app could name, in document order. */
+@Suppress("UnreachableCode")
+private fun balancerSpecs(routing: JsonObject?): List<BalancerSpec> =
+    routing.arrayOf("balancers").filterIsInstance<JsonObject>().mapNotNull { balancer ->
+        val tag = balancer["tag"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        BalancerSpec(tag = tag, selector = balancer.arrayOf("selector").mapNotNull { it.stringOrNull() })
+    }
+
+/** The `balancerTag` of every rule that matches everything, in document order. */
+private fun catchAllBalancerRefs(routing: JsonObject?): List<String> =
+    routing
+        .arrayOf("rules")
+        .filterIsInstance<JsonObject>()
+        .filter { rule -> rule.keys.all { it in UNCONDITIONED_RULE_KEYS } }
+        .mapNotNull { rule -> rule["balancerTag"].stringOrNull()?.takeIf { it.isNotBlank() } }
 
 /** Protocols that are infrastructure rather than a server the user chose. */
 private val NON_SERVER_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
@@ -188,6 +243,8 @@ private fun analyseOutbounds(
         serverOutboundCount = serverCount,
         outboundTags = tags,
         outboundProtocolsByTag = tags.zip(protocols).toMap(),
+        balancers = balancerSpecs(routing),
+        catchAllBalancerRefs = catchAllBalancerRefs(routing),
     )
 }
 
@@ -200,6 +257,8 @@ private fun rejectedAs(reason: PassthroughRejection): PassthroughAnalysis =
         serverOutboundCount = 0,
         outboundTags = emptyList(),
         outboundProtocolsByTag = emptyMap(),
+        balancers = emptyList(),
+        catchAllBalancerRefs = emptyList(),
     )
 
 private fun overrideBlockerFor(tags: List<String>): OverrideBlocker? =

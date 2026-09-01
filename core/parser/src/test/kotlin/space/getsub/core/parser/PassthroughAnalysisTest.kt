@@ -350,4 +350,104 @@ class PassthroughAnalysisTest {
             analysePassthrough(json).rejection shouldNotBe PassthroughRejection.CoreRejected
         }
     }
+
+    @Test
+    fun `a balancer's tag and selector are exposed`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "balancers": [ { "tag": "Auto_Balancer", "selector": ["proxy"] } ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).balancers shouldContainExactly
+            listOf(BalancerSpec(tag = "Auto_Balancer", selector = listOf("proxy")))
+    }
+
+    @Test
+    fun `a balancer with no usable tag is not a candidate`() {
+        // It cannot be named by a rule, so exposing it would invite a resolution
+        // that emits `"balancerTag": ""`.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "selector": ["proxy"] }, { "tag": " " } ] }
+            }
+            """.trimIndent()
+
+        val analysis = analysePassthrough(json)
+
+        analysis.balancers shouldBe emptyList()
+        // isBalancer stays true: it drives the SeveralServers exemption, which is
+        // about the document's shape, not about whether we can name the balancer.
+        analysis.isBalancer shouldBe true
+    }
+
+    @Test
+    fun `a balancer with no selector array exposes an empty selector`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "tag": "B" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).balancers shouldContainExactly
+            listOf(BalancerSpec(tag = "B", selector = emptyList()))
+    }
+
+    @Test
+    fun `an unconditioned rule's balancerTag is a catch-all reference`() {
+        // `network` does not make a rule selective: "tcp,udp" is the complete set
+        // a TUN carries, and is how this project writes its own catch-all.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "rules": [
+                  { "type": "field", "ip": ["8.8.8.8"], "balancerTag": "Narrow" },
+                  { "type": "field", "network": "tcp,udp", "balancerTag": "Wide" }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).catchAllBalancerRefs shouldContainExactly listOf("Wide")
+    }
+
+    @Test
+    fun `an unrecognised rule key makes a rule conditioned`() {
+        // Allow-list, not deny-list (spec 3.3): an unknown selective field must
+        // not make a narrow rule look like a catch-all.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "rules": [ { "type": "field", "someFutureMatcher": ["x"], "balancerTag": "B" } ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).catchAllBalancerRefs shouldBe emptyList()
+    }
+
+    @Test
+    fun `an unconditioned rule naming an outbound is not a balancer reference`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ],
+              "routing": { "rules": [ { "type": "field", "network": "tcp,udp", "outboundTag": "proxy" } ] }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).catchAllBalancerRefs shouldBe emptyList()
+    }
 }

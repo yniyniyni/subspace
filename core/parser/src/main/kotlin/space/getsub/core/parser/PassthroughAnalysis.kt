@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
-@file:Suppress("TooManyFunctions")
+@file:Suppress("TooManyFunctions", "UnreachableCode")
 
 package space.getsub.core.parser
 
@@ -168,10 +168,6 @@ public data class BalancerSpec(
 private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
 
 /** Every balancer this app could name, in document order. */
-@Suppress("UnreachableCode")
-// Detekt UnreachableCode is a false positive: the `?: return@mapNotNull null` on the following line is a
-// labeled return from the lambda, not unreachable code. The assignment succeeds when the left side is non-null,
-// and the following BalancerSpec construction is only reached on that non-null path.
 private fun balancerSpecs(routing: JsonObject?): List<BalancerSpec> =
     routing.arrayOf("balancers").filterIsInstance<JsonObject>().mapNotNull { balancer ->
         val tag = balancer["tag"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null

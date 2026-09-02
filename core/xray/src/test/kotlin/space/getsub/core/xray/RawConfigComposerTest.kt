@@ -313,15 +313,45 @@ class RawConfigComposerTest {
         )
 
     @Test
-    fun `the override branch replaces the config's routing and dns wholesale`() {
+    fun `the override branch replaces the config's routing rules and dns wholesale`() {
         val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
         val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
 
         val routing = out["routing"] as JsonObject
-        routing["balancers"] shouldBe null
         routing["domainMatcher"] shouldBe null
+        (routing["rules"] as JsonArray).size shouldBe 1
         (routing["domainStrategy"]!!.jsonPrimitive.content) shouldBe "IPIfNonMatch"
         ((out["dns"] as JsonObject)["servers"] as JsonArray).size shouldBe 1
+    }
+
+    // M7.5: the override's rules may name the config's own balancer, and the core
+    // refuses a rule naming a balancer the config does not declare (A3, pinned in
+    // RawConfigComposerXrayTest). Replacing `routing` wholesale used to take the
+    // declaration with it, so every balancer config was refused at build for a
+    // name only this carry-forward preserves.
+    @Test
+    fun `the override branch carries the config's own balancer declarations forward`() {
+        val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+
+        val balancers = (out["routing"] as JsonObject)["balancers"] as JsonArray
+        balancers.size shouldBe 1
+        ((balancers[0] as JsonObject)["tag"]!!.jsonPrimitive.content) shouldBe "Auto_Balancer"
+    }
+
+    @Test
+    fun `a config with no balancers gets no balancers key`() {
+        val noBalancers =
+            """
+            {
+              "routing": { "rules": [ { "network": "tcp,udp", "outboundTag": "proxy" } ] },
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ]
+            }
+            """.trimIndent()
+        val result = RawConfigComposer.compose(noBalancers, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+
+        (out["routing"] as JsonObject)["balancers"] shouldBe null
     }
 
     @Test

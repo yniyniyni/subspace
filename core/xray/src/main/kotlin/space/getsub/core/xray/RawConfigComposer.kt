@@ -143,7 +143,7 @@ public object RawConfigComposer {
                     null
                 } ?: return ComposeResult.Failed(ComposeFailure.InvalidOverride)
 
-            kept["routing"] = parsedOverride.routing
+            kept["routing"] = withDeclaredBalancers(parsedOverride.routing, root["routing"])
             kept["dns"] = parsedOverride.dns
             kept["outbounds"] = JsonArray(outbounds + parsedOverride.extraOutbounds)
         }
@@ -168,6 +168,38 @@ public object RawConfigComposer {
             }
         val inbounds = inboundsJson(settings, generatedSniffing, preservedSniffing, inboundTagsOf(root))
         return ComposeResult.Ok(render(kept, inbounds))
+    }
+
+    /**
+     * The override's `routing` object, carrying the stored config's own
+     * `balancers` declaration forward.
+     *
+     * The override replaces `routing` wholesale, which takes everything inside
+     * it — including the `balancers` array. That was harmless while the app's
+     * rules only ever named an outbound; since M7.5 they may name the config's
+     * own balancer, and the core refuses a rule naming a balancer the config
+     * does not declare (`RawConfigComposerXrayTest` pins it). Without this,
+     * every balancer config is refused at config build for a name only this
+     * carries.
+     *
+     * **`balancers` only.** The app owns the rules and the domain strategy on
+     * this branch by design (spec §4.2). A balancer declaration is not a routing
+     * decision: it is the definition of a name our own rules refer to, the same
+     * way the config's own `outbounds` are kept for our `outboundTag` to name.
+     * Its `strategy` and any `observatory`/`burstObservatory` block it leans on
+     * are the config's own and already survive at the top level.
+     */
+    private fun withDeclaredBalancers(
+        overrideRouting: JsonElement,
+        ownRouting: JsonElement?,
+    ): JsonElement {
+        val balancers = (ownRouting as? JsonObject)?.get("balancers") as? JsonArray
+        val routing = overrideRouting as? JsonObject
+        return if (balancers.isNullOrEmpty() || routing == null) {
+            overrideRouting
+        } else {
+            JsonObject(routing + ("balancers" to balancers))
+        }
     }
 
     /** Keys removed outright before anything is added back. */

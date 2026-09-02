@@ -54,6 +54,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import space.getsub.core.parser.DetailField
 import space.getsub.core.parser.FailureDetail
+import space.getsub.core.parser.OverrideBlocker
 import space.getsub.core.parser.PassthroughAdvisory
 import space.getsub.core.parser.PassthroughRejection
 import space.getsub.core.parser.SHADOWSOCKS_METHODS
@@ -688,6 +689,13 @@ private fun RawJsonFields(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        state.overrideBlocker?.let { blocker ->
+            Text(
+                text = stringResource(blocker.messageRes()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Text(text = stringResource(R.string.editor_raw_json_label), style = MaterialTheme.typography.labelLarge)
         Text(
             text = state.rawJson.orEmpty(),
@@ -727,6 +735,19 @@ private fun PassthroughAdvisory.messageRes(): Int =
             R.string.editor_raw_json_advisory_fakedns_without_sniffing
         PassthroughAdvisory.DanglingRoutingReference ->
             R.string.editor_raw_json_advisory_dangling_reference
+    }
+
+/**
+ * One string per [OverrideBlocker] member — same no-`else` reasoning as
+ * [PassthroughRejection.messageRes] above.
+ */
+private fun OverrideBlocker.messageRes(): Int =
+    when (this) {
+        OverrideBlocker.AmbiguousOutboundTags -> R.string.editor_raw_json_override_ambiguous_tags
+        OverrideBlocker.NoResolvableTarget -> R.string.editor_raw_json_override_no_target
+        OverrideBlocker.SeveralBalancers -> R.string.editor_raw_json_override_several_balancers
+        OverrideBlocker.BalancerSelectsNothing -> R.string.editor_raw_json_override_balancer_empty
+        OverrideBlocker.TargetTagCollision -> R.string.editor_raw_json_override_tag_collision
     }
 
 // One shared text-field primitive, reused for every field in the form —

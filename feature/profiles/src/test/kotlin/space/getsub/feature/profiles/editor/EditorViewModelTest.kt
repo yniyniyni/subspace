@@ -30,6 +30,7 @@ import space.getsub.core.model.Profile
 import space.getsub.core.model.Security
 import space.getsub.core.model.StreamSettings
 import space.getsub.core.model.VlessOutbound
+import space.getsub.core.parser.OverrideBlocker
 import space.getsub.core.parser.PassthroughAdvisory
 import space.getsub.feature.profiles.ProfileSource
 
@@ -136,6 +137,30 @@ class EditorViewModelTest {
             """"outbounds":[{"tag":"proxy-auto","protocol":"vless"}]}"""
 
     private val danglingRoutingRawJsonProfile = rawJsonProfile.copy(id = 5L, rawJson = danglingRoutingRawJson)
+
+    private val balancerRawJsonProfile =
+        rawJsonProfile.copy(
+            id = 6L,
+            rawJson =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["proxy"] } ] }
+            }
+            """.trimIndent(),
+        )
+
+    private val emptyBalancerRawJsonProfile =
+        rawJsonProfile.copy(
+            id = 7L,
+            rawJson =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["nothing"] } ] }
+            }
+            """.trimIndent(),
+        )
 
     private class FakeProfileSource(
         profiles: List<StoredProfile>,
@@ -369,6 +394,32 @@ class EditorViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.advisories shouldBe listOf(PassthroughAdvisory.DanglingRoutingReference)
+        }
+
+    @Test
+    fun `a balancer config that resolves carries no override blocker`() =
+        runTest {
+            val source = FakeProfileSource(listOf(balancerRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(balancerRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.overrideBlocker shouldBe null
+        }
+
+    @Test
+    fun `a balancer that selects nothing is reported to the user`() =
+        runTest {
+            // A6: the core accepts this config and then silently drops every
+            // packet, so this message is the only warning the user will get.
+            val source = FakeProfileSource(listOf(emptyBalancerRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(emptyBalancerRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.overrideBlocker shouldBe OverrideBlocker.BalancerSelectsNothing
         }
 
     // Fix round 1, Minor 5: renamed from "...whose references all resolve carries no

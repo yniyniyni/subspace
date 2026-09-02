@@ -17,8 +17,14 @@ public enum class ComposeFailure {
     NotJson,
     NoOutbounds,
 
-    /** The app override targets `proxy`, but the stored config defines no exact tag with that name. */
-    MissingOverrideProxy,
+    /**
+     * No outbound or balancer in the stored config can be named by the app's
+     * generated rules — see `OverrideTarget.Unresolvable`.
+     *
+     * Renamed from `MissingOverrideProxy` in M7.5: the absence of a literal
+     * `proxy` tag stopped being the question once the target became resolvable.
+     */
+    UnresolvableOverrideTarget,
 
     /** A reserved override tag exists, but its outbound protocol would give that tag different semantics. */
     IncompatibleOverrideOutbound,

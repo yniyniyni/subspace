@@ -428,39 +428,57 @@ three lean on the same connect-time backstop:**
   against, and routing-heavy configs are exactly what this milestone targets.
   Same backstop: an unvalidated row that the core would in fact refuse fails at
   connect instead of at import.
-- **A config with no exact `proxy` tag is not rejected at import, but it now
-  fails closed before core startup when an app override applies.**
-  `PassthroughAnalysis` still computes `OverrideBlocker.NoProxyTag` without
-  persisting it, because the pure branch can run such a config correctly: none
-  of the config's own rules needs our conventional tag. The override branch is
-  different — every app-generated proxy rule currently names `proxy`.
-  `TunnelService.composePassthrough` therefore reuses the analyser's outbound
-  tags immediately before composition and returns
-  `FailureReason.PassthroughOverrideUnavailable` when that exact target is
-  absent. The core is never started, so the previously reproduced failure
-  shape — Connected while matching traffic is dropped — is closed.
+- **A config need not tag anything `proxy`, and since M7.5 that is no longer a
+  blocker.** `resolveOverrideTarget` (`:core:parser`) turns a
+  `PassthroughAnalysis` into an `OverrideTarget`: `ViaBalancer` when the config
+  declares a live balancer, `ViaOutbound` when it has exactly one server
+  outbound this app can name, and `Unresolvable(reason)` when neither holds.
+  `:core:xray` maps the first onto the `balancerTag` key and the second onto
+  `outboundTag`, so every app-generated rule that names the server — the routing
+  rules' `PROXY` bucket, both `resolverRule` forms and the `dns-module`
+  catch-all — follows the config's own vocabulary. `direct` and `block` stay
+  literal: they are outbounds this app appends.
 
-  This is a guard, not full support for arbitrary tags or balancers. Resolving
-  the config's actual server/balancer target remains M7.5; until then, turning
-  app routing off and restoring the default DNS setting runs the config's own
-  routing unchanged. Import-time `PassthroughValidator` still exercises only
-  the pure branch (`override = null`), so this decision deliberately stays at
-  connect where the active routing/DNS state is known. Duplicate outbound tags
-  remain a separate structural failure that xray-core rejects during the
-  connect-time `validate` call.
+  `OverrideBlocker` is that refusal's reason vocabulary, not a dead field.
+  `TunnelService.composePassthrough` resolves at connect from the bytes it
+  already parses — never stored, because a stored target goes stale on the next
+  subscription refresh exactly as M7's stored verdict did — and returns
+  `FailureReason.PassthroughOverrideUnavailable` when nothing resolves. The
+  profile editor renders one string per member (`EditorState.overrideBlocker`),
+  none of which names the offending tag (§5.6). `NoProxyTag` was removed with
+  the old field: the absence of a literal `proxy` tag stopped being a problem
+  the moment the target became resolvable.
 
-  Same dead-analysis shape as `overrideBlocker` otherwise, recorded here
-  rather than wired for the same closing-milestone reason (a consumer is a UI
-  task with its own copy and its own tests): `PassthroughAnalysis.advisories`
-  (a `List<PassthroughAdvisory>`) and the `serverOutboundCount`/`outboundTags`
-  fields it sits alongside are likewise computed and unit-tested with no
-  consumer anywhere in the app. Worth naming specifically because one of the
+  The refusal is a type, not a discipline: `overrideBlocks` takes an
+  `OverrideTarget.Resolved`, so an unresolvable config cannot reach a rule
+  emitter. On the balancer branch the core is a second backstop — it refuses a
+  rule naming a balancer the config does not declare, at config build
+  (`RawConfigComposerXrayTest` pins it on hardware). There is no such backstop
+  on the outbound branch: a dangling `outboundTag` is accepted at build and
+  fails only when the rule fires, which is M7's finding F9.
+
+  One consequence lives in `RawConfigComposer`: the override replaces `routing`
+  wholesale, so the config's own `balancers` array is carried forward
+  explicitly. Without that carry-forward a `balancerTag` rule would name a
+  declaration the composer had just dropped, and every balancer config would be
+  refused at build.
+
+  Import-time `PassthroughValidator` still exercises only the pure branch
+  (`override = null`), so this decision deliberately stays at connect where the
+  active routing/DNS state is known. What remains of M7's connect-time guard is
+  the reserved-tag check: the override appends `direct`, `block` and `dns-out`,
+  and a config that already defines one of those names with a different protocol
+  is still refused.
+
+  A second analysis field is wired the same way and worth naming here:
+  `PassthroughAnalysis.advisories` (a `List<PassthroughAdvisory>`), which the
+  editor renders beside the blocker. Worth naming specifically because one of the
   conditions it can detect is `SniffingCannotServeOwnRules` — a config whose
   domain/geosite routing rules can never match because its own sniffing
   settings do not surface the destination those rules need. That is not a
   config that fails to connect; it is one that connects, passes traffic, and
-  silently ignores its own routing the whole time — §10.1's signature
-  failure, already detected by code in this tree, told to nobody. A future
+  silently ignores its own routing the whole time — §10.1's signature failure,
+  which is why it is surfaced to the user rather than only detected. A future
   contributor should be able to find that by reading this paragraph rather
   than by grepping for `PassthroughAdvisory` and wondering why it exists.
 

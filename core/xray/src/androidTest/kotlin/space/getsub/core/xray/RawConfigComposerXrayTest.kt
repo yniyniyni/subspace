@@ -16,6 +16,8 @@ import space.getsub.core.model.RouteOutcome
 import space.getsub.core.model.RoutingRuleSet
 import space.getsub.core.model.RuleBucket
 import space.getsub.core.parser.OverrideTarget
+import space.getsub.core.parser.analysePassthrough
+import space.getsub.core.parser.resolveOverrideTarget
 import java.io.File
 
 /**
@@ -435,6 +437,98 @@ class RawConfigComposerXrayTest {
             }
             check(outcome.exceptionOrNull() is XrayException) {
                 "core rejected the config for an unexpected reason: " +
+                    "${outcome.exceptionOrNull()?.javaClass?.simpleName}"
+            }
+        }
+
+    /**
+     * A3, pinned. Measured first on a Pixel 8, 2026-09-01
+     * (`docs/agent/research/2026-09-01-balancer-tag-binding.md`): the core
+     * refuses a `balancerTag` naming a balancer the config does not declare,
+     * with `app/router: balancer <tag> not found`, at config build.
+     *
+     * The whole M7.5 failure model rests on this being a *loud* failure, so it
+     * is a standing test rather than a line in a research file. If this ever
+     * starts passing, a wrong balancer resolution has become silent and the
+     * design's loudness argument no longer holds.
+     *
+     * §5.6: the core's message can quote the config back, so the assertion
+     * reduces it to a boolean and the failure text names only our own literal.
+     */
+    @Test
+    fun theCoreRefusesARuleNamingABalancerTheConfigDoesNotDeclare() =
+        runTest {
+            val override =
+                filteredForProductionShape(
+                    balancerConfig,
+                    XrayConfigGenerator.overrideBlocks(routingSettings, OverrideTarget.ViaBalancer("no-such-balancer")),
+                )
+
+            val result = validate(balancerConfig, override)
+
+            check(result.isFailure) {
+                "expected the core to refuse a dangling balancerTag at config build (A3, Pixel 8 " +
+                    "2026-09-01) but it was accepted"
+            }
+            val namesTheMissingBalancer =
+                "balancer no-such-balancer not found" in result.exceptionOrNull()?.message.orEmpty()
+            check(namesTheMissingBalancer) {
+                "the core refused for some other reason: " +
+                    "${result.exceptionOrNull()?.javaClass?.simpleName}, namedTheBalancer=false"
+            }
+        }
+
+    /**
+     * The other half of A3's asymmetry, in the same rig: a dangling
+     * *outboundTag* is accepted at build and fails only when the rule fires
+     * (M7's finding F9). This is why `OverrideTarget.ViaOutbound` may only ever
+     * name an outbound the config actually defines — there is no backstop on
+     * that branch.
+     */
+    @Test
+    fun theCoreAcceptsARuleNamingAnOutboundTheConfigDoesNotDeclare() =
+        runTest {
+            val override =
+                filteredForProductionShape(
+                    balancerConfig,
+                    XrayConfigGenerator.overrideBlocks(routingSettings, OverrideTarget.ViaOutbound("no-such-outbound")),
+                )
+
+            val outcome = validate(balancerConfig, override)
+
+            check(outcome.isSuccess) {
+                "expected the core to accept a dangling outboundTag at config build (F9, A3) but it " +
+                    "was rejected: ${outcome.exceptionOrNull()?.javaClass?.simpleName}"
+            }
+        }
+
+    /**
+     * The milestone's whole point, against the real core: the panel's balancer
+     * shape composes with the app's routing on top and is accepted.
+     *
+     * Acceptance is not the same as routing correctly — §10.1, and the exit
+     * criterion in the spec's §7 is a device run, not this test.
+     */
+    @Test
+    fun aBalancerConfigComposesWithTheAppOverrideAndTheCoreAcceptsIt() =
+        runTest {
+            val target =
+                resolveOverrideTarget(analysePassthrough(balancerConfig), setOf("direct", "block", "dns-out"))
+            check(target == OverrideTarget.ViaBalancer("Auto_Balancer")) {
+                "the resolver regressed before the core was reached"
+            }
+            check(target is OverrideTarget.Resolved)
+
+            val override =
+                filteredForProductionShape(
+                    balancerConfig,
+                    XrayConfigGenerator.overrideBlocks(routingSettings, target),
+                )
+
+            val outcome = validate(balancerConfig, override)
+
+            check(outcome.isSuccess) {
+                "the core rejected a balancer config carrying the app override: " +
                     "${outcome.exceptionOrNull()?.javaClass?.simpleName}"
             }
         }

@@ -103,6 +103,11 @@ private fun resolveBalancer(
     analysis: PassthroughAnalysis,
     reservedTags: Set<String>,
 ): OverrideTarget {
+    // Asked before liveness, because a balancer with no tag is not evidence about
+    // selectors: `analysis.balancers` omits it, so it can neither be live nor be
+    // counted as dead, and reporting `BalancerSelectsNothing` would describe a
+    // selector this app never even looked at.
+    if (analysis.balancers.isEmpty()) return OverrideTarget.Unresolvable(OverrideBlocker.BalancerHasNoTag)
     val live = analysis.balancers.filter { it.selects(analysis.serverOutboundTags()) }
     // A6: the core accepts a balancer that selects nothing and then silently
     // drops every packet, so this is the one refusal we must make ourselves.

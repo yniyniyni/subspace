@@ -746,6 +746,7 @@ private fun OverrideBlocker.messageRes(): Int =
         OverrideBlocker.AmbiguousOutboundTags -> R.string.editor_raw_json_override_ambiguous_tags
         OverrideBlocker.NoResolvableTarget -> R.string.editor_raw_json_override_no_target
         OverrideBlocker.SeveralBalancers -> R.string.editor_raw_json_override_several_balancers
+        OverrideBlocker.BalancerHasNoTag -> R.string.editor_raw_json_override_balancer_unnamed
         OverrideBlocker.BalancerSelectsNothing -> R.string.editor_raw_json_override_balancer_empty
         OverrideBlocker.TargetTagCollision -> R.string.editor_raw_json_override_tag_collision
     }

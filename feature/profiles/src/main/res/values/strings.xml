@@ -327,6 +327,11 @@
         ordinary traffic. This profile still connects, but your routing rules and custom
         DNS will not apply to it.
     </string>
+    <!-- OverrideBlocker.BalancerHasNoTag -->
+    <string name="editor_raw_json_override_balancer_unnamed">
+        This file\'s server group has no name, so no rule can point at it — not the app\'s, and
+        not the file\'s own. Ask whoever provided the config to fix it.
+    </string>
     <!-- OverrideBlocker.BalancerSelectsNothing -->
     <string name="editor_raw_json_override_balancer_empty">
         This file\'s server group is set to pick from a set of servers it never defines,

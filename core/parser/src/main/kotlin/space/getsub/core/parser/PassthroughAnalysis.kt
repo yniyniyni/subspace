@@ -82,7 +82,23 @@ public enum class OverrideBlocker {
     /** Several usable balancers, and the config's own rules do not single one out. */
     SeveralBalancers,
 
-    /** Every declared balancer's `selector` matches no server outbound, so it would carry nothing. */
+    /**
+     * The config declares balancers, and not one of them carries a usable `tag`.
+     *
+     * Distinct from [BalancerSelectsNothing]: such a balancer's `selector` may
+     * match perfectly well. The defect is that no rule can name it — the
+     * config's own rules included — so a message about its selector would send
+     * the reader looking at the wrong half of the declaration.
+     */
+    BalancerHasNoTag,
+
+    /**
+     * Every balancer this app can name has a `selector` matching no server
+     * outbound, so it would carry nothing.
+     *
+     * "Can name" is the narrowing [BalancerHasNoTag] leaves behind: a balancer
+     * with a blank tag is not a candidate and is not evidence about selectors.
+     */
     BalancerSelectsNothing,
 
     /** A balancer's `selector` would also capture an outbound the override appends. */

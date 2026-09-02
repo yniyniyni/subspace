@@ -155,6 +155,39 @@ class OverrideTargetTest {
     }
 
     @Test
+    fun `a balancer with no usable tag is unnameable, not empty`() {
+        // Its selector matches `proxy-auto` perfectly well. The defect is that no
+        // rule can name it — the config's own rules included — so reporting it as
+        // "selects nothing" would send the user looking at the wrong half.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "selector": ["proxy"] } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.BalancerHasNoTag)
+    }
+
+    @Test
+    fun `one nameable balancer among unnameable ones is the one reported on`() {
+        // `BalancerHasNoTag` is only for the case where *nothing* can be named.
+        // Once one balancer can be, the question becomes what that one selects.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "balancers": [ { "selector": ["proxy"] }, { "tag": "B", "selector": ["nope"] } ]
+              }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.BalancerSelectsNothing)
+    }
+
+    @Test
     fun `a balancer with no selector selects nothing`() {
         val json =
             """

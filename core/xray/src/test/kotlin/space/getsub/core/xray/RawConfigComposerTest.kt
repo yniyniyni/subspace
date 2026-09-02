@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
+import space.getsub.core.parser.OverrideTarget
 
 class RawConfigComposerTest {
     private val settings =
@@ -377,7 +378,7 @@ class RawConfigComposerTest {
     // gap by wiring the two functions together the way Task 9 will.
     @Test
     fun `overrideBlocks feeds straight into compose as a valid override`() {
-        val blocks = XrayConfigGenerator.overrideBlocks(settings)
+        val blocks = XrayConfigGenerator.overrideBlocks(settings, OverrideTarget.ViaOutbound("proxy"))
         val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", blocks)
 
         result.shouldBeOk()
@@ -394,7 +395,7 @@ class RawConfigComposerTest {
     @Test
     fun `overrideBlocks with a fakeDns plan produces dns-out and a fakedns-aware override`() {
         val settingsWithFakeDns = settings.copy(dns = dnsPlanWithFakeDns)
-        val blocks = XrayConfigGenerator.overrideBlocks(settingsWithFakeDns)
+        val blocks = XrayConfigGenerator.overrideBlocks(settingsWithFakeDns, OverrideTarget.ViaOutbound("proxy"))
         val result = RawConfigComposer.compose(panelLike, settingsWithFakeDns, "/data/geo", blocks)
 
         result.shouldBeOk()

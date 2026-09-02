@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 import space.getsub.core.model.RouteOutcome
 import space.getsub.core.model.RoutingRuleSet
 import space.getsub.core.model.RuleBucket
+import space.getsub.core.parser.OverrideTarget
 import java.io.File
 
 /**
@@ -309,7 +310,7 @@ class RawConfigComposerXrayTest {
     @Test
     fun theCoreRejectsTheUnfilteredOverrideBranchWithBothDanglingTagAndDuplicateOutbounds() =
         runTest {
-            val override = XrayConfigGenerator.overrideBlocks(routingSettings)
+            val override = XrayConfigGenerator.overrideBlocks(routingSettings, OverrideTarget.ViaOutbound("proxy"))
 
             // Confirm the fixture actually poses both defects at once before asking the core.
             val composed = RawConfigComposer.compose(balancerConfig, routingSettings, "/data/geo", override)
@@ -369,7 +370,7 @@ class RawConfigComposerXrayTest {
             val override =
                 filteredForProductionShape(
                     balancerConfig,
-                    XrayConfigGenerator.overrideBlocks(routingSettings),
+                    XrayConfigGenerator.overrideBlocks(routingSettings, OverrideTarget.ViaOutbound("proxy")),
                 )
 
             val composed = RawConfigComposer.compose(balancerConfig, routingSettings, "/data/geo", override)
@@ -410,7 +411,7 @@ class RawConfigComposerXrayTest {
     @Test
     fun theCoreRejectsAnUnfilteredOverrideWithOnlyDuplicateDirectAndBlockOutboundTags() =
         runTest {
-            val override = XrayConfigGenerator.overrideBlocks(routingSettings)
+            val override = XrayConfigGenerator.overrideBlocks(routingSettings, OverrideTarget.ViaOutbound("proxy"))
 
             val composed =
                 RawConfigComposer.compose(balancerConfigWithProxyOutbound, routingSettings, "/data/geo", override)

@@ -5,6 +5,7 @@ package space.getsub.core.xray
 import space.getsub.core.model.RouteOutcome
 import space.getsub.core.model.RoutingEntries
 import space.getsub.core.model.RoutingRuleSet
+import space.getsub.core.parser.OverrideTarget
 
 /**
  * The catch-all `GlobalProxy: "false"` needs, and why it is a rule rather than
@@ -24,20 +25,35 @@ private const val CATCH_ALL_DIRECT =
     """{ "type": "field", "network": "tcp,udp", "outboundTag": "direct" }"""
 
 /**
- * The Xray `outboundTag` each outcome routes to.
+ * The `outboundTag`/`balancerTag` fragment a rule uses to name where traffic goes.
  *
- * All three outbounds have been emitted by `XrayConfigGenerator.appendOutbounds`
- * since M1 — `proxy` from the profile, `direct` (freedom) and `block`
- * (blackhole). This milestone is the first to reference them from a rule.
+ * One key, never both — they are mutually exclusive in Xray, and emitting text
+ * rather than mutating a typed object makes that structural rather than
+ * remembered. (v2rayNG has to null one field when it sets the other precisely
+ * because it mutates beans; see the research record's E1.)
+ */
+internal fun OverrideTarget.Resolved.ruleTargetJson(): String =
+    when (this) {
+        is OverrideTarget.ViaBalancer -> """"balancerTag": ${jsonString(tag)}"""
+        is OverrideTarget.ViaOutbound -> """"outboundTag": ${jsonString(tag)}"""
+    }
+
+/**
+ * Where each outcome routes.
+ *
+ * `direct` and `block` are outbounds this app appends on every override, so they
+ * are named literally. Only [RouteOutcome.PROXY] follows the config's own
+ * vocabulary, because it is the only one that means "the server *this config*
+ * reaches".
  *
  * Kept here rather than on [RouteOutcome] itself: `:core:model` has no business
  * knowing Xray's tag vocabulary.
  */
-private fun RouteOutcome.outboundTag(): String =
+private fun RouteOutcome.targetFor(proxy: OverrideTarget.Resolved): OverrideTarget.Resolved =
     when (this) {
-        RouteOutcome.BLOCK -> "block"
-        RouteOutcome.PROXY -> "proxy"
-        RouteOutcome.DIRECT -> "direct"
+        RouteOutcome.BLOCK -> OverrideTarget.ViaOutbound("block")
+        RouteOutcome.PROXY -> proxy
+        RouteOutcome.DIRECT -> OverrideTarget.ViaOutbound("direct")
     }
 
 /**
@@ -67,13 +83,16 @@ private fun RouteOutcome.outboundTag(): String =
  * field, or invalidating the config. Values which need escaping are preserved;
  * valid stored entries retain their exact order and output.
  */
-internal fun routingRuleLines(set: RoutingRuleSet): List<String> =
+internal fun routingRuleLines(
+    set: RoutingRuleSet,
+    proxy: OverrideTarget.Resolved,
+): List<String> =
     buildList {
         set.order.forEach { outcome ->
             val bucket = set.bucket(outcome)
-            val tag = outcome.outboundTag()
-            if (bucket.sites.isNotEmpty()) add(ruleLine("domain", bucket.sites, tag))
-            if (bucket.ips.isNotEmpty()) add(ruleLine("ip", bucket.ips, tag))
+            val target = outcome.targetFor(proxy)
+            if (bucket.sites.isNotEmpty()) add(ruleLine("domain", bucket.sites, target))
+            if (bucket.ips.isNotEmpty()) add(ruleLine("ip", bucket.ips, target))
         }
         // Xray takes the first match, so a catch-all anywhere earlier would
         // shadow every rule after it.
@@ -83,8 +102,8 @@ internal fun routingRuleLines(set: RoutingRuleSet): List<String> =
 private fun ruleLine(
     field: String,
     values: List<String>,
-    tag: String,
+    target: OverrideTarget.Resolved,
 ): String {
     val array = values.joinToString(", ", transform = ::jsonString)
-    return """{ "type": "field", ${jsonString(field)}: [$array], "outboundTag": ${jsonString(tag)} }"""
+    return """{ "type": "field", ${jsonString(field)}: [$array], ${target.ruleTargetJson()} }"""
 }

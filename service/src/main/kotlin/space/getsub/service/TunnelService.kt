@@ -39,6 +39,7 @@ import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
 import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
+import space.getsub.core.parser.OverrideTarget
 import space.getsub.core.parser.analysePassthrough
 import space.getsub.core.xray.ComposeFailure
 import space.getsub.core.xray.ComposeResult
@@ -866,7 +867,7 @@ class TunnelService : VpnService() {
             if (plan.overrideApplies) {
                 passthroughOverrideFailure(rawJson)?.let { return ComposeResult.Failed(it) }
                 val existingTags = existingOutboundTags(rawJson)
-                XrayConfigGenerator.overrideBlocks(settings)
+                XrayConfigGenerator.overrideBlocks(settings, OverrideTarget.ViaOutbound("proxy"))
                     .let { blocks ->
                         blocks.copy(
                             extraOutboundsJson = blocks.extraOutboundsJson.filter { it.tagOf() !in existingTags },

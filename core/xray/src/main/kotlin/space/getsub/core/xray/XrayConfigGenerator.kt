@@ -13,6 +13,7 @@ import space.getsub.core.model.TransportOptions
 import space.getsub.core.model.TrojanOutbound
 import space.getsub.core.model.VlessOutbound
 import space.getsub.core.model.VmessOutbound
+import space.getsub.core.parser.OverrideTarget
 
 /** Runtime settings that shape the config but do not belong to a stored profile. */
 public data class TunnelSettings(
@@ -101,6 +102,15 @@ public sealed interface ConfigResult {
 private const val DIRECT_OUTBOUND_JSON = """{ "tag": "direct", "protocol": "freedom" }"""
 private const val BLOCK_OUTBOUND_JSON = """{ "tag": "block", "protocol": "blackhole" }"""
 private const val DNS_OUT_OUTBOUND_JSON = """{ "tag": "dns-out", "protocol": "dns" }"""
+
+/**
+ * The typed path's own server outbound tag.
+ *
+ * `appendOutbounds` emits `"tag": "proxy"` for every generated config, so the
+ * typed path resolves to itself and its output is byte-identical to what this
+ * generator produced before M7.5 — which the golden file test holds us to.
+ */
+private val TYPED_PATH_TARGET = OverrideTarget.ViaOutbound("proxy")
 
 @Suppress("TooManyFunctions") // One object per wire shape (§6); splitting it would scatter the shape's single author.
 public object XrayConfigGenerator {
@@ -196,7 +206,11 @@ public object XrayConfigGenerator {
         routing: RoutingRuleSet?,
         dns: DnsPlan?,
     ) {
-        sb.appendLine("""  "routing": ${routingObject(routing, dns)}""")
+        // The typed path builds the `proxy` outbound itself (appendOutbounds), so
+        // it is the one caller that knows its own target by construction. This is
+        // now the single place the literal appears; before M7.5 it was written
+        // out at three separate emitters.
+        sb.appendLine("""  "routing": ${routingObject(routing, dns, TYPED_PATH_TARGET)}""")
     }
 
     /**
@@ -206,10 +220,17 @@ public object XrayConfigGenerator {
      * Exposed rather than duplicated so a rule's shape has one author. The
      * passthrough path splices these in place of a config's own blocks; the two
      * paths therefore agree on what an app rule looks like by construction.
+     *
+     * [target] comes from the caller because only the caller knows whose config
+     * this is: the rules that name the server have to name whatever *that*
+     * document uses to reach it, and this generator never sees the document.
      */
-    public fun overrideBlocks(settings: TunnelSettings): OverrideBlocks =
+    public fun overrideBlocks(
+        settings: TunnelSettings,
+        target: OverrideTarget.Resolved,
+    ): OverrideBlocks =
         OverrideBlocks(
-            routingJson = routingObject(settings.routing, settings.dns),
+            routingJson = routingObject(settings.routing, settings.dns, target),
             dnsJson = dnsObject(settings),
             extraOutboundsJson =
             buildList {
@@ -441,12 +462,15 @@ private fun DnsServerSpec.render(): String {
  * `direct` leaves the tunnel, which is the exact §5.2 leak this plan exists to
  * prevent.
  */
-private fun dnsRuleLines(dns: DnsPlan?): List<String> {
+private fun dnsRuleLines(
+    dns: DnsPlan?,
+    target: OverrideTarget.Resolved,
+): List<String> {
     if (dns == null) return emptyList()
     val rules = mutableListOf<String>()
-    dns.directMatch?.let { match -> rules += resolverRule(match, "direct") }
-    dns.proxyMatch?.let { match -> rules += resolverRule(match, "proxy") }
-    rules += """{ "type": "field", "inboundTag": ["dns-module"], "outboundTag": "proxy" }"""
+    dns.directMatch?.let { match -> rules += resolverRule(match, OverrideTarget.ViaOutbound("direct")) }
+    dns.proxyMatch?.let { match -> rules += resolverRule(match, target) }
+    rules += """{ "type": "field", "inboundTag": ["dns-module"], ${target.ruleTargetJson()} }"""
     rules += """{ "type": "field", "network": "tcp,udp", "port": 53, "outboundTag": "dns-out" }"""
     return rules
 }
@@ -454,11 +478,11 @@ private fun dnsRuleLines(dns: DnsPlan?): List<String> {
 /** Matches one resolver's own traffic by address — an IP literal on `ip`, a hostname on `domain`. */
 private fun resolverRule(
     match: String,
-    outboundTag: String,
+    target: OverrideTarget.Resolved,
 ): String {
     val field = if (DnsValidation.isAddressLiteral(match)) "ip" else "domain"
     return """{ "type": "field", "inboundTag": ["dns-module"], "$field": [${jsonString(match)}], """ +
-        """"outboundTag": "$outboundTag" }"""
+        """${target.ruleTargetJson()} }"""
 }
 
 /**
@@ -514,9 +538,10 @@ private fun dnsObject(settings: TunnelSettings): String {
 private fun routingObject(
     routing: RoutingRuleSet?,
     dns: DnsPlan?,
+    target: OverrideTarget.Resolved,
 ): String {
     val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
-    val rules = dnsRuleLines(dns) + routing?.let(::routingRuleLines).orEmpty()
+    val rules = dnsRuleLines(dns, target) + routing?.let { routingRuleLines(it, target) }.orEmpty()
 
     val sb = StringBuilder()
     sb.append("{\n")

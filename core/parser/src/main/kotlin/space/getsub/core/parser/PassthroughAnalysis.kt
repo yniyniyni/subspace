@@ -63,16 +63,30 @@ public enum class PassthroughRejection {
  * Why the app's routing and DNS cannot be applied *on top of* a config that is
  * otherwise runnable.
  *
- * Distinct from [PassthroughRejection]: these configs run perfectly on their
- * own. The target panel's own balancer entry is one of them (research §5b.1),
- * which is why this is not an eligibility failure.
+ * Distinct from [PassthroughRejection]: these configs run perfectly on their own.
+ *
+ * This is [OverrideTarget.Unresolvable]'s reason vocabulary. Until M7.5 it was a
+ * field on [PassthroughAnalysis] that nothing read — `ARCHITECTURE.md` §6
+ * recorded it as dead. `NoProxyTag` is gone with that field: "no outbound tagged
+ * exactly `proxy`" stopped being a blocker the moment the target became
+ * resolvable, and a member naming a non-problem is how a stale check outlives
+ * its reason.
  */
 public enum class OverrideBlocker {
-    /** No outbound is tagged exactly `proxy`, so our rules have nothing to name. */
-    NoProxyTag,
-
-    /** An outbound tag is blank or repeated, so a reference to it is ambiguous. */
+    /** Two outbounds share a non-blank tag, so a reference to it names two things. */
     AmbiguousOutboundTags,
+
+    /** No single server outbound this app can name — none, several, or the only one is untagged. */
+    NoResolvableTarget,
+
+    /** Several usable balancers, and the config's own rules do not single one out. */
+    SeveralBalancers,
+
+    /** Every declared balancer's `selector` matches no server outbound, so it would carry nothing. */
+    BalancerSelectsNothing,
+
+    /** A balancer's `selector` would also capture an outbound the override appends. */
+    TargetTagCollision,
 }
 
 /**
@@ -114,7 +128,6 @@ public enum class PassthroughAdvisory {
  */
 public data class PassthroughAnalysis(
     val rejection: PassthroughRejection?,
-    val overrideBlocker: OverrideBlocker?,
     val advisories: List<PassthroughAdvisory>,
     val isBalancer: Boolean,
     val serverOutboundCount: Int,
@@ -187,7 +200,7 @@ private fun catchAllBalancerRefs(routing: JsonObject?): List<String> =
         .mapNotNull { rule -> rule["balancerTag"].stringOrNull()?.takeIf { it.isNotBlank() } }
 
 /** Protocols that are infrastructure rather than a server the user chose. */
-private val NON_SERVER_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
+internal val NON_SERVER_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
 // ignoreUnknownKeys governs typed decodeFromString; the only use below is parseToJsonElement,
 // which it never affects, so it is left out rather than left looking load-bearing.
@@ -242,7 +255,6 @@ private fun analyseOutbounds(
 
     return PassthroughAnalysis(
         rejection = rejection,
-        overrideBlocker = overrideBlockerFor(tags),
         advisories = advisoriesFor(root, routing, tags),
         isBalancer = isBalancer,
         serverOutboundCount = serverCount,
@@ -256,7 +268,6 @@ private fun analyseOutbounds(
 private fun rejectedAs(reason: PassthroughRejection): PassthroughAnalysis =
     PassthroughAnalysis(
         rejection = reason,
-        overrideBlocker = null,
         advisories = emptyList(),
         isBalancer = false,
         serverOutboundCount = 0,
@@ -265,13 +276,6 @@ private fun rejectedAs(reason: PassthroughRejection): PassthroughAnalysis =
         balancers = emptyList(),
         catchAllBalancerRefs = emptyList(),
     )
-
-private fun overrideBlockerFor(tags: List<String>): OverrideBlocker? =
-    when {
-        tags.any { it.isBlank() } || tags.size != tags.toSet().size -> OverrideBlocker.AmbiguousOutboundTags
-        "proxy" !in tags -> OverrideBlocker.NoProxyTag
-        else -> null
-    }
 
 /**
  * Research §5b.5: whether the config's own sniffing settings can serve its own

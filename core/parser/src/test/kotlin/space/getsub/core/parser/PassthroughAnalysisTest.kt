@@ -20,11 +20,10 @@ class PassthroughAnalysisTest {
         """.trimIndent()
 
     @Test
-    fun `an ordinary single-server config is eligible with no blocker`() {
+    fun `an ordinary single-server config is eligible`() {
         val analysis = analysePassthrough(ordinary)
 
         analysis.rejection shouldBe null
-        analysis.overrideBlocker shouldBe null
         analysis.isBalancer shouldBe false
         analysis.serverOutboundCount shouldBe 1
         analysis.outboundTags shouldContainExactly listOf("proxy", "direct", "block")
@@ -80,52 +79,6 @@ class PassthroughAnalysisTest {
         analysis.rejection shouldBe null
         analysis.isBalancer shouldBe true
         analysis.serverOutboundCount shouldBe 2
-    }
-
-    // Research §5b.1: tagPrefix "proxy-auto" with addVirtualHostAsOutbound unset
-    // leaves NO outbound tagged exactly `proxy`. The config runs fine; only our
-    // override branch, whose rules name `proxy`, cannot be applied to it.
-    @Test
-    fun `a config with no proxy tag is eligible but blocks the override branch`() {
-        val json =
-            """
-            {
-              "routing": { "balancers": [ { "tag": "B", "selector": ["proxy"] } ] },
-              "outbounds": [
-                { "tag": "proxy-auto", "protocol": "vless" },
-                { "tag": "proxy-auto-2", "protocol": "vless" }
-              ]
-            }
-            """.trimIndent()
-        val analysis = analysePassthrough(json)
-
-        analysis.rejection shouldBe null
-        analysis.overrideBlocker shouldBe OverrideBlocker.NoProxyTag
-    }
-
-    @Test
-    fun `duplicate or blank outbound tags block the override branch`() {
-        val duplicate =
-            """
-            {
-              "outbounds": [
-                { "tag": "proxy", "protocol": "vless" },
-                { "tag": "proxy", "protocol": "freedom" }
-              ]
-            }
-            """.trimIndent()
-        val blank =
-            """
-            {
-              "outbounds": [
-                { "tag": "proxy", "protocol": "vless" },
-                { "protocol": "freedom" }
-              ]
-            }
-            """.trimIndent()
-
-        analysePassthrough(duplicate).overrideBlocker shouldBe OverrideBlocker.AmbiguousOutboundTags
-        analysePassthrough(blank).overrideBlocker shouldBe OverrideBlocker.AmbiguousOutboundTags
     }
 
     // Research §5b.5: sniffing decides whether the config's own domain rules can

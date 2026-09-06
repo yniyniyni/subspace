@@ -186,8 +186,15 @@ private val REQUIRED_OVERRIDE_PROTOCOLS =
     )
 
 /**
- * The outbound tags the override branch appends, which a config's balancer must
- * not also select (design §3.4).
+ * The outbound tags the override branch **reserves**, which a config's balancer
+ * must not also select (design §3.4).
+ *
+ * Deliberately the *unfiltered* set, not the set actually appended.
+ * [composePassthrough] drops any stock outbound whose tag the config already
+ * defines, so a config carrying its own `direct` gets none of ours — but its own
+ * `direct` is still a `freedom` outbound, and a balancer selecting it leaks
+ * exactly the same way. Narrowing this to what is appended would trade a
+ * harmless over-refusal for a real leak.
  *
  * `dns-out` is conditional because `XrayConfigGenerator.overrideBlocks` only
  * appends it when a DNS plan is present — so a config whose balancer selects on

@@ -32,6 +32,7 @@ import space.getsub.core.model.StreamSettings
 import space.getsub.core.model.VlessOutbound
 import space.getsub.core.parser.OverrideBlocker
 import space.getsub.core.parser.PassthroughAdvisory
+import space.getsub.core.parser.PassthroughRejection
 import space.getsub.feature.profiles.ProfileSource
 
 /**
@@ -146,6 +147,26 @@ class EditorViewModelTest {
             {
               "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
               "routing": { "balancers": [ { "tag": "B", "selector": ["proxy"] } ] }
+            }
+            """.trimIndent(),
+        )
+
+    /**
+     * A RAW_JSON row the analyser rejected. Its bytes would resolve to
+     * `Unresolvable(NoResolvableTarget)`, so it is exactly the shape that used to
+     * show an override-blocker message it had no business showing.
+     */
+    private val rejectedRawJsonProfile =
+        rawJsonProfile.copy(
+            id = 8L,
+            passthroughRejection = PassthroughRejection.SeveralServers,
+            rawJson =
+            """
+            {
+              "outbounds": [
+                { "tag": "direct", "protocol": "freedom" },
+                { "tag": "block", "protocol": "blackhole" }
+              ]
             }
             """.trimIndent(),
         )
@@ -420,6 +441,23 @@ class EditorViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.overrideBlocker shouldBe OverrideBlocker.BalancerSelectsNothing
+        }
+
+    // Branch review I1: `rawJson` is populated for every RAW_JSON row, rejected ones
+    // included, so an ungated blocker told the user "this profile still connects, but
+    // those settings will not apply" about a row that neither runs as written nor
+    // escapes the app's routing — it gets both, via the typed projection.
+    @Test
+    fun `a rejected raw json row carries no override blocker`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rejectedRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(rejectedRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.runsAsWritten shouldBe false
+            viewModel.state.value.overrideBlocker shouldBe null
         }
 
     // Fix round 1, Minor 5: renamed from "...whose references all resolve carries no

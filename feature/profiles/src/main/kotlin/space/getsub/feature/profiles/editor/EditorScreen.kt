@@ -689,6 +689,9 @@ private fun RawJsonFields(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // No gate needed: EditorViewModel only computes overrideBlocker for a row that
+        // runs as written, because on any other row the message would be false twice
+        // over — see EditorState.overrideBlocker's KDoc.
         state.overrideBlocker?.let { blocker ->
             Text(
                 text = stringResource(blocker.messageRes()),

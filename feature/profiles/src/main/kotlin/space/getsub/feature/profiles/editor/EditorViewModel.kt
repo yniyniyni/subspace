@@ -115,6 +115,12 @@ internal data class EditorState(
      * Why the app's routing and DNS cannot be applied on top of this config, or
      * null when they can.
      *
+     * **Only ever set for a row that [runsAsWritten].** `rawJson` is populated for
+     * every [ProfileKind.RAW_JSON] row, including ones the analyser rejected, and on
+     * such a row this message would be false twice over: the row does not run as
+     * written, and the app's routing and DNS *do* apply to it, through the typed
+     * projection. §10.4 — a result must not misdescribe what was measured.
+     *
      * Computed at load from [rawJson] alongside [advisories], never stored — the
      * verdict depends only on those bytes, and a stored one would go stale on the
      * next subscription refresh.
@@ -290,6 +296,7 @@ constructor(
                         advisories = passthrough?.advisories.orEmpty(),
                         overrideBlocker =
                         passthrough
+                            ?.takeIf { loaded.runsAsWritten }
                             ?.let { resolveOverrideTarget(it, EDITOR_RESERVED_TAGS) }
                             ?.let { it as? OverrideTarget.Unresolvable }
                             ?.reason,
@@ -610,7 +617,7 @@ private fun EditorState.toOutbound(): Outbound {
 }
 
 /**
- * The outbound tags every override appends, regardless of settings.
+ * The outbound tags every override reserves, regardless of settings.
  *
  * `dns-out` is deliberately absent — see [EditorState.overrideBlocker].
  */

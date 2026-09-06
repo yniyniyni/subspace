@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
+import space.getsub.core.model.RoutingRuleSet
 import space.getsub.core.parser.OverrideTarget
 
 class RawConfigComposerTest {
@@ -437,5 +438,56 @@ class RawConfigComposerTest {
         val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
             .map { it.jsonPrimitive.content }
         overrides.contains("fakedns") shouldBe true
+    }
+
+    // A config that lists a `freedom` outbound first. Composing an override over
+    // it deletes its own catch-all while `compose` keeps `outbounds` in the order
+    // the document wrote them, so before the fallthrough rule existed every
+    // unmatched packet left through `direct` — a §5.2 leak introduced by us.
+    private val freedomFirst =
+        """
+        {
+          "routing": { "rules": [ { "network": "tcp,udp", "outboundTag": "proxy-auto" } ] },
+          "inbounds": [ { "tag": "socks", "port": 10808, "protocol": "socks" } ],
+          "outbounds": [
+            { "tag": "local", "protocol": "freedom" },
+            { "tag": "proxy-auto", "protocol": "vless" }
+          ]
+        }
+        """.trimIndent()
+
+    @Test
+    fun `a composed override names the target for unmatched traffic, not the config's first outbound`() {
+        val routed =
+            settings.copy(routing = RoutingRuleSet(name = "r", buckets = emptyMap(), globalProxy = true))
+        val blocks = XrayConfigGenerator.overrideBlocks(routed, OverrideTarget.ViaOutbound("proxy-auto"))
+        val result = RawConfigComposer.compose(freedomFirst, routed, "/data/geo", blocks)
+
+        result.shouldBeOk()
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val tags = (out["outbounds"] as JsonArray).map { (it as JsonObject)["tag"]!!.jsonPrimitive.content }
+        // The premise: `compose` only appends, so the document's own order
+        // survives and its `freedom` outbound is still the one in first position.
+        tags.take(2) shouldBe listOf("local", "proxy-auto")
+
+        val rules = (out["routing"] as JsonObject)["rules"] as JsonArray
+        val last = rules.last() as JsonObject
+        last["network"]!!.jsonPrimitive.content shouldBe "tcp,udp"
+        last["outboundTag"]!!.jsonPrimitive.content shouldBe "proxy-auto"
+    }
+
+    @Test
+    fun `a composed balancer override sends unmatched traffic through the balancer`() {
+        val routed =
+            settings.copy(routing = RoutingRuleSet(name = "r", buckets = emptyMap(), globalProxy = true))
+        val blocks = XrayConfigGenerator.overrideBlocks(routed, OverrideTarget.ViaBalancer("Auto_Balancer"))
+        val result = RawConfigComposer.compose(panelLike, routed, "/data/geo", blocks)
+
+        result.shouldBeOk()
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val rules = (out["routing"] as JsonObject)["rules"] as JsonArray
+        val last = rules.last() as JsonObject
+        last["balancerTag"]!!.jsonPrimitive.content shouldBe "Auto_Balancer"
+        last.containsKey("outboundTag") shouldBe false
     }
 }

@@ -210,7 +210,13 @@ public object XrayConfigGenerator {
         // it is the one caller that knows its own target by construction. This is
         // now the single place the literal appears; before M7.5 it was written
         // out at three separate emitters.
-        sb.appendLine("""  "routing": ${routingObject(routing, dns, TYPED_PATH_TARGET)}""")
+        //
+        // `namesFallthrough = false`: `appendOutbounds` writes `proxy` first, so
+        // unmatched traffic already reaches it and a rule saying so would change
+        // bytes the golden files pin. See `fallthroughRuleLines`.
+        sb.appendLine(
+            """  "routing": ${routingObject(routing, dns, TYPED_PATH_TARGET, namesFallthrough = false)}""",
+        )
     }
 
     /**
@@ -224,13 +230,19 @@ public object XrayConfigGenerator {
      * [target] comes from the caller because only the caller knows whose config
      * this is: the rules that name the server have to name whatever *that*
      * document uses to reach it, and this generator never sees the document.
+     *
+     * `namesFallthrough = true`, and it is not optional: replacing a config's
+     * `routing` deletes that config's own catch-all, and `RawConfigComposer`
+     * leaves its `outbounds` in the document's order — so without a trailing
+     * rule, unmatched traffic goes wherever that document happened to list
+     * first. See `fallthroughRuleLines`.
      */
     public fun overrideBlocks(
         settings: TunnelSettings,
         target: OverrideTarget.Resolved,
     ): OverrideBlocks =
         OverrideBlocks(
-            routingJson = routingObject(settings.routing, settings.dns, target),
+            routingJson = routingObject(settings.routing, settings.dns, target, namesFallthrough = true),
             dnsJson = dnsObject(settings),
             extraOutboundsJson =
             buildList {
@@ -539,9 +551,16 @@ private fun routingObject(
     routing: RoutingRuleSet?,
     dns: DnsPlan?,
     target: OverrideTarget.Resolved,
+    namesFallthrough: Boolean,
 ): String {
     val strategy = routing?.domainStrategy ?: DomainStrategy.IP_IF_NON_MATCH
-    val rules = dnsRuleLines(dns, target) + routing?.let { routingRuleLines(it, target) }.orEmpty()
+    // Last, and it has to be last: it matches everything, so anywhere earlier it
+    // would shadow every rule behind it — including the port-53 hijack the DNS
+    // plan depends on.
+    val rules =
+        dnsRuleLines(dns, target) +
+            routing?.let { routingRuleLines(it, target) }.orEmpty() +
+            fallthroughRuleLines(routing, target, namesFallthrough)
 
     val sb = StringBuilder()
     sb.append("{\n")

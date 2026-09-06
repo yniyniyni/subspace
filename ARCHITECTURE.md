@@ -440,9 +440,26 @@ three lean on the same connect-time backstop:**
   around.
   `:core:xray` maps the first onto the `balancerTag` key and the second onto
   `outboundTag`, so every app-generated rule that names the server — the routing
-  rules' `PROXY` bucket, both `resolverRule` forms and the `dns-module`
-  catch-all — follows the config's own vocabulary. `direct` and `block` stay
-  literal: they are outbounds this app appends.
+  rules' `PROXY` bucket, both `resolverRule` forms, the `dns-module` catch-all
+  and the override's trailing fallthrough rule — follows the config's own
+  vocabulary. `direct` and `block` stay literal: they are outbounds this app
+  appends.
+
+  **That trailing fallthrough rule exists only on the override branch, and it
+  has to.** The typed path never needs one: `appendOutbounds` writes `proxy`
+  first, and the core sends traffic no rule matched to the first outbound —
+  measured, not assumed (`docs/agent/research/2026-09-01-balancer-tag-binding.md`
+  row `C1`, where a rule-less config sank into the `blackhole` in first
+  position). The override branch has no such guarantee: it replaces the stored
+  config's `routing` wholesale, which deletes that config's own catch-all, while
+  `RawConfigComposer` keeps the config's `outbounds` in the document's order and
+  only ever appends to them. Without a trailing rule, unmatched traffic went
+  wherever the document happened to list first — outside the tunnel for a config
+  leading with `freedom` (§5.2), or past the balancer M7.5 exists to name.
+  `fallthroughRuleLines` emits it for the override path only; `globalProxy ==
+  false` needs nothing added, because `routingRuleLines` has already written its
+  catch-all to `direct` and Xray takes the first match. The typed path's golden
+  files pin that its own bytes did not move.
 
   `OverrideBlocker` is that refusal's reason vocabulary, not a dead field.
   `TunnelService.composePassthrough` resolves at connect from the bytes it

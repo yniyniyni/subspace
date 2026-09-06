@@ -752,6 +752,7 @@ private fun OverrideBlocker.messageRes(): Int =
         OverrideBlocker.BalancerHasNoTag -> R.string.editor_raw_json_override_balancer_unnamed
         OverrideBlocker.BalancerSelectsNothing -> R.string.editor_raw_json_override_balancer_empty
         OverrideBlocker.TargetTagCollision -> R.string.editor_raw_json_override_tag_collision
+        OverrideBlocker.BalancerFallbackNotAServer -> R.string.editor_raw_json_override_balancer_fallback
     }
 
 // One shared text-field primitive, reused for every field in the form —

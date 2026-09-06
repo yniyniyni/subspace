@@ -116,6 +116,17 @@ private fun BalancerSpec.selects(tags: Collection<String>): Boolean =
         tags.any { it.startsWith(prefix) }
     }
 
+/**
+ * Whether this balancer's declared fallback is one of [tags].
+ *
+ * **Exact, not prefix.** `fallbackTag` names a single outbound the way a rule's
+ * `outboundTag` does — `hasDanglingReference` already resolves it against
+ * outbound tags for that reason, and the core's own refusal for a missing one
+ * calls it `outTag` (device record F9, Pixel 8, 2026-08-31). Prefix-matching it
+ * would refuse a fallback that merely shares an opening with `direct`.
+ */
+private fun BalancerSpec.fallsBackTo(tags: Collection<String>): Boolean = fallbackTag != null && fallbackTag in tags
+
 @Suppress("ReturnCount", "UnreachableCode") // K2 detekt misreads the deliberate typed early returns as unreachable.
 private fun resolveBalancer(
     analysis: PassthroughAnalysis,
@@ -140,6 +151,22 @@ private fun resolveBalancer(
     val mustNotSelect = reservedTags + analysis.nonServerOutboundTags()
     if (live.any { it.selects(mustNotSelect) }) {
         return OverrideTarget.Unresolvable(OverrideBlocker.TargetTagCollision)
+    }
+    // The same hazard through the balancer's other door. A `fallbackTag` is not a
+    // selector match, so the guard above cannot see it — a balancer selecting
+    // only servers and falling back to a `freedom` outbound passes it untouched —
+    // and `RawConfigComposer.withDeclaredBalancers` carries the whole `balancers`
+    // array, fallback declaration included, into the composed config. Tolerating
+    // that in pure passthrough is right: it is the config's own fallback under
+    // the config's own rules. Tolerating it here is not, because the rules naming
+    // this balancer are ours, the `dns-module` catch-all among them.
+    //
+    // Asked over the same `mustNotSelect` set and for the same two reasons: the
+    // config's own `freedom`/`blackhole` outbounds, and a fallback naming a tag
+    // the override is about to append — which resolves to *our* `direct` even
+    // when the config never defined it.
+    if (live.any { it.fallsBackTo(mustNotSelect) }) {
+        return OverrideTarget.Unresolvable(OverrideBlocker.BalancerFallbackNotAServer)
     }
     if (live.size == 1) return OverrideTarget.ViaBalancer(live.single().tag)
 

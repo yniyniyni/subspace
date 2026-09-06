@@ -343,6 +343,12 @@
         server, so some traffic meant for the tunnel would leave it or be dropped. The app
         will not apply its routing or DNS to this profile.
     </string>
+    <!-- OverrideBlocker.BalancerFallbackNotAServer -->
+    <string name="editor_raw_json_override_balancer_fallback">
+        This file\'s server group falls back to an outbound that does not go to a server,
+        so whenever that fallback is in use, traffic meant for the tunnel would leave it
+        or be dropped. The app will not apply its routing or DNS to this profile.
+    </string>
 
     <string name="editor_raw_json_label">Pasted config (read-only)</string>
 

@@ -111,6 +111,26 @@ public enum class OverrideBlocker {
      * hazard, one reason.
      */
     TargetTagCollision,
+
+    /**
+     * A balancer's `fallbackTag` names an outbound that does not reach a server,
+     * so everything the override routes through that balancer leaves the tunnel
+     * or is dropped for as long as the fallback is in use.
+     *
+     * Deliberately **not** folded into [TargetTagCollision]. That member is
+     * about a `selector` **prefix** reaching further than its author meant; this
+     * one is about an exact declaration doing exactly what it says. The user's
+     * repair differs accordingly — narrow the selector there, repoint or drop
+     * the fallback here — and §10.4 wants the reason to be actionable rather
+     * than merely correct.
+     *
+     * A refusal only on the **override** branch, which is the only branch this
+     * enum describes. In pure passthrough the fallback is the config's own
+     * choice about the config's own rules; here the app's generated rules — the
+     * `dns-module` catch-all included — are what point at the balancer, so the
+     * leak would be ours.
+     */
+    BalancerFallbackNotAServer,
 }
 
 /**
@@ -186,6 +206,22 @@ public data class PassthroughAnalysis(
 public data class BalancerSpec(
     val tag: String,
     val selector: List<String>,
+    /**
+     * The balancer's declared `fallbackTag`, or null when it declares none.
+     *
+     * An **exact** outbound tag, unlike [selector]'s prefixes — the core's own
+     * refusal for a missing one calls it `outTag` (device record F9, Pixel 8,
+     * 2026-08-31), which is why `hasDanglingReference` already resolves it
+     * against outbound tags rather than balancer tags.
+     *
+     * Retained because a balancer that selects only servers can still carry a
+     * fallback that reaches none of them, and `RawConfigComposer.withDeclaredBalancers`
+     * carries the whole declaration — this field included — into the composed
+     * override config. Blank is normalised to null: `"fallbackTag": ""` names no
+     * outbound, and treating it as a reference would let a blank collide with an
+     * untagged outbound's placeholder.
+     */
+    val fallbackTag: String? = null,
 )
 
 /**
@@ -201,8 +237,56 @@ public data class BalancerSpec(
  * carries — it is how this project writes its own catch-all
  * (`RoutingRules.CATCH_ALL_DIRECT`), so treating it as a condition would discard
  * the most common catch-all shape there is.
+ *
+ * It is the **only** key on the list whose *value* is also checked, by
+ * [coversEveryNetwork]: design §3.3 admits `network` on the strength of
+ * `"tcp,udp"` specifically, and `network: "tcp"` says nothing at all about where
+ * UDP should go.
  */
 private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
+
+/** The two networks a TUN carries; a `network` value covering both narrows nothing. */
+private val TUN_NETWORKS = setOf("tcp", "udp")
+
+/**
+ * Whether this rule's `network` value, if it has one, still leaves the rule
+ * matching everything a TUN carries.
+ *
+ * Design §3.3 puts `network` on [UNCONDITIONED_RULE_KEYS] because `"tcp,udp"` is
+ * the complete set — the justification is about that value, not about the key.
+ * A lone `network: "tcp"` is a genuine condition: it expresses no default for
+ * UDP, so reading it as the config naming its catch-all balancer would resolve
+ * the override off a rule that covers half the traffic, and a config that also
+ * carries a real `"tcp,udp"` catch-all would be refused as ambiguous when it is
+ * not.
+ *
+ * **Read as a statement of intent, not as a matcher.** The override branch
+ * replaces `routing.rules` wholesale (`RawConfigComposer`), so the config's own
+ * rule never executes — it is only evidence about which balancer the author
+ * meant to be the default. That is why the tokens are trimmed and compared
+ * case-insensitively rather than byte-for-byte: `"udp, TCP"` states the same
+ * intent as `"tcp,udp"`, and how xray-core itself tokenises the field is an
+ * upstream question this repo has no measurement for (§10.5) and does not need
+ * one for, because the answer cannot change what runs.
+ *
+ * A rule carrying no `network` at all, or an explicit `null`, states no network
+ * condition and stays a catch-all — as it was before this check existed. This
+ * narrowing exists to catch a *stated* condition, not to invent one.
+ */
+private fun JsonObject.coversEveryNetwork(): Boolean {
+    val network = this["network"]
+    if (network == null || network is JsonNull) return true
+    val named =
+        when (network) {
+            // The list form is read the same way as the comma-joined string. Both
+            // were catch-alls for free while only the key was checked; narrowing to
+            // the reported defect must not quietly refuse the shape it did not name.
+            is JsonArray -> network.mapNotNull { it.stringOrNull() }
+            else -> network.stringOrNull()?.split(',').orEmpty()
+        }
+    val normalised = named.mapTo(mutableSetOf()) { it.trim().lowercase() }
+    return TUN_NETWORKS.all { it in normalised }
+}
 
 /** Every balancer this app could name, in document order. */
 @Suppress("UnreachableCode")
@@ -212,7 +296,11 @@ private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
 private fun balancerSpecs(routing: JsonObject?): List<BalancerSpec> =
     routing.arrayOf("balancers").filterIsInstance<JsonObject>().mapNotNull { balancer ->
         val tag = balancer["tag"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        BalancerSpec(tag = tag, selector = balancer.arrayOf("selector").mapNotNull { it.stringOrNull() })
+        BalancerSpec(
+            tag = tag,
+            selector = balancer.arrayOf("selector").mapNotNull { it.stringOrNull() },
+            fallbackTag = balancer["fallbackTag"].stringOrNull()?.takeIf { it.isNotBlank() },
+        )
     }
 
 /** The `balancerTag` of every rule that matches everything, in document order. */
@@ -220,7 +308,7 @@ private fun catchAllBalancerRefs(routing: JsonObject?): List<String> =
     routing
         .arrayOf("rules")
         .filterIsInstance<JsonObject>()
-        .filter { rule -> rule.keys.all { it in UNCONDITIONED_RULE_KEYS } }
+        .filter { rule -> rule.keys.all { it in UNCONDITIONED_RULE_KEYS } && rule.coversEveryNetwork() }
         .mapNotNull { rule -> rule["balancerTag"].stringOrNull()?.takeIf { it.isNotBlank() } }
 
 /** Protocols that are infrastructure rather than a server the user chose. */

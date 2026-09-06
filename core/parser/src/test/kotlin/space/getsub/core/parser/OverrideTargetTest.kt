@@ -445,6 +445,156 @@ class OverrideTargetTest {
         resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.SeveralBalancers)
     }
 
+    // --- The fallback half of the same guard --------------------------------
+
+    @Test
+    fun `a balancer falling back to the config's own freedom outbound is refused`() {
+        // The selector guard cannot see this: the selector captures only servers,
+        // so the balancer looks clean. But `RawConfigComposer.withDeclaredBalancers`
+        // carries the fallback declaration into the composed config, and it is our
+        // rules — the `dns-module` catch-all included — that name the balancer, so
+        // traffic meant to stay proxied leaves the tunnel when the fallback fires.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "eu-2", "protocol": "vless" },
+                { "tag": "local", "protocol": "freedom" }
+              ],
+              "routing": {
+                "balancers": [ { "tag": "bal", "selector": ["eu-"], "fallbackTag": "local" } ],
+                "rules": [ { "type": "field", "network": "tcp,udp", "balancerTag": "bal" } ]
+              }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.BalancerFallbackNotAServer)
+    }
+
+    @Test
+    fun `a balancer falling back to a blackhole outbound is refused`() {
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "drop", "protocol": "blackhole" }
+              ],
+              "routing": { "balancers": [ { "tag": "bal", "selector": ["eu-"], "fallbackTag": "drop" } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.BalancerFallbackNotAServer)
+    }
+
+    @Test
+    fun `a fallback naming a tag the override would append is refused only when it is appended`() {
+        // The config never defines `dns-out`, so nothing in the config makes this
+        // unsafe — our own appended outbound does, and only when a DNS plan is in
+        // play. Same parameterisation as the selector guard's `dns-out` case.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "eu-1", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "tag": "bal", "selector": ["eu-"], "fallbackTag": "dns-out" } ] }
+            }
+            """.trimIndent()
+
+        resolve(json, setOf("direct", "block", "dns-out")) shouldBe
+            OverrideTarget.Unresolvable(OverrideBlocker.BalancerFallbackNotAServer)
+        resolve(json, setOf("direct", "block")) shouldBe OverrideTarget.ViaBalancer("bal")
+    }
+
+    @Test
+    fun `a balancer falling back to one of its own servers still resolves`() {
+        // The guard must refuse an unsafe fallback, not every fallback.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "eu-2", "protocol": "vless" }
+              ],
+              "routing": { "balancers": [ { "tag": "bal", "selector": ["eu-"], "fallbackTag": "eu-2" } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.ViaBalancer("bal")
+    }
+
+    @Test
+    fun `a fallback is matched exactly, not by prefix`() {
+        // `fallbackTag` names one outbound the way a rule's `outboundTag` does.
+        // Prefix-matching it would refuse a server that merely opens like `direct`.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "directish", "protocol": "vless" }
+              ],
+              "routing": { "balancers": [ { "tag": "bal", "selector": ["eu-"], "fallbackTag": "directish" } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.ViaBalancer("bal")
+    }
+
+    // --- A protocol-specific rule is not a catch-all -------------------------
+
+    @Test
+    fun `a lone rule limited to one network does not single out a balancer`() {
+        // It names EU for TCP and says nothing about where UDP should go, so it is
+        // not the config declaring a default — design §3.3 admits `network` for
+        // "tcp,udp" specifically.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "us-1", "protocol": "vless" }
+              ],
+              "routing": {
+                "rules": [ { "type": "field", "network": "tcp", "balancerTag": "EU" } ],
+                "balancers": [
+                  { "tag": "EU", "selector": ["eu"] },
+                  { "tag": "US", "selector": ["us"] }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.SeveralBalancers)
+    }
+
+    @Test
+    fun `a protocol-specific rule before a genuine catch-all does not make the config ambiguous`() {
+        // The ordering case. Counting the narrow rule as a catch-all yields two
+        // distinct references and refuses a config that does name its default.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "us-1", "protocol": "vless" }
+              ],
+              "routing": {
+                "rules": [
+                  { "type": "field", "network": "tcp", "balancerTag": "EU" },
+                  { "type": "field", "network": "tcp,udp", "balancerTag": "US" }
+                ],
+                "balancers": [
+                  { "tag": "EU", "selector": ["eu"] },
+                  { "tag": "US", "selector": ["us"] }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.ViaBalancer("US")
+    }
+
     // --- Malformed input ---------------------------------------------------
 
     @Test

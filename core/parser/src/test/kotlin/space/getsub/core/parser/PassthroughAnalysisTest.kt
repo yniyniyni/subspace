@@ -403,4 +403,116 @@ class PassthroughAnalysisTest {
 
         analysePassthrough(json).catchAllBalancerRefs shouldBe emptyList()
     }
+
+    // --- `network` is admitted for its value, not for its name ---------------
+
+    @Test
+    fun `a rule limited to one network is not a catch-all reference`() {
+        // Design §3.3 admits `network` on the strength of "tcp,udp" being the
+        // complete set a TUN carries. "tcp" alone states no default for UDP, so
+        // reading it as the config naming its catch-all balancer would resolve the
+        // override off a rule covering half the traffic.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "rules": [
+                  { "type": "field", "network": "tcp", "balancerTag": "TcpOnly" },
+                  { "type": "field", "network": "udp", "balancerTag": "UdpOnly" }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).catchAllBalancerRefs shouldBe emptyList()
+    }
+
+    @Test
+    fun `a network value covering both is a catch-all whatever its order or spacing`() {
+        // The rule is read as a statement of intent — the override branch replaces
+        // `routing.rules` wholesale, so it never executes — which is why the tokens
+        // are trimmed and compared case-insensitively.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "rules": [
+                  { "type": "field", "network": "udp,tcp", "balancerTag": "Reversed" },
+                  { "type": "field", "network": "tcp, udp", "balancerTag": "Spaced" },
+                  { "type": "field", "network": "TCP,UDP", "balancerTag": "Shouted" },
+                  { "type": "field", "network": "tcp,udp,unix", "balancerTag": "Extra" }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).catchAllBalancerRefs shouldContainExactly
+            listOf("Reversed", "Spaced", "Shouted", "Extra")
+    }
+
+    @Test
+    fun `a network list form and an absent network are both still catch-alls`() {
+        // Both shapes were catch-alls before the value was checked at all; narrowing
+        // the check must not turn either into a refusal.
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": {
+                "rules": [
+                  { "type": "field", "network": ["udp", "tcp"], "balancerTag": "ListForm" },
+                  { "type": "field", "network": null, "balancerTag": "NullForm" },
+                  { "type": "field", "balancerTag": "Absent" }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).catchAllBalancerRefs shouldContainExactly
+            listOf("ListForm", "NullForm", "Absent")
+    }
+
+    // --- fallbackTag ---------------------------------------------------------
+
+    @Test
+    fun `a balancer's fallbackTag is exposed`() {
+        // A balancer selecting only servers can still carry a fallback that reaches
+        // none of them, and `RawConfigComposer.withDeclaredBalancers` carries the
+        // whole declaration into the composed override config.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "local", "protocol": "freedom" }
+              ],
+              "routing": {
+                "balancers": [ { "tag": "bal", "selector": ["eu-"], "fallbackTag": "local" } ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).balancers shouldContainExactly
+            listOf(BalancerSpec(tag = "bal", selector = listOf("eu-"), fallbackTag = "local"))
+    }
+
+    @Test
+    fun `a blank or absent fallbackTag is exposed as none`() {
+        val json =
+            """
+            {
+              "outbounds": [ { "tag": "eu-1", "protocol": "vless" } ],
+              "routing": {
+                "balancers": [
+                  { "tag": "blank", "selector": ["eu-"], "fallbackTag": " " },
+                  { "tag": "none", "selector": ["eu-"] }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        analysePassthrough(json).balancers.map { it.fallbackTag } shouldBe listOf(null, null)
+    }
 }

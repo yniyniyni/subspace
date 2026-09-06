@@ -51,11 +51,13 @@ public sealed interface OverrideTarget {
  * verdict going stale across a subscription refresh; a stored target would go
  * stale identically the moment a refresh renames an outbound.
  *
- * @param reservedTags the outbound tags the override branch would append —
- *   `direct`/`block`, plus `dns-out` only when a DNS plan is present. A
- *   parameter rather than a constant because those are `:core:xray`'s wire
- *   vocabulary (§4), and because the correct answer genuinely depends on whether
- *   a DNS plan is in play.
+ * @param reservedTags the outbound tags the override branch reserves —
+ *   `direct`/`block`, plus `dns-out` only when a DNS plan is present. Reserved
+ *   rather than appended: the caller may skip appending one the config already
+ *   defines, but the config's own outbound of that name is just as unsafe for a
+ *   balancer to select. A parameter rather than a constant because those are
+ *   `:core:xray`'s wire vocabulary (§4), and because the correct answer genuinely
+ *   depends on whether a DNS plan is in play.
  */
 public fun resolveOverrideTarget(
     analysis: PassthroughAnalysis,
@@ -74,6 +76,22 @@ public fun resolveOverrideTarget(
         resolveSingleServer(analysis)
     }
 }
+
+/**
+ * Tags of the config's own outbounds that do **not** reach a server — `freedom`,
+ * `blackhole`, `dns`, `loopback`.
+ *
+ * The complement of [serverOutboundTags], and the set a resolved balancer must
+ * not select: [serverOutboundTags] filters these out of the liveness question,
+ * so without asking separately a balancer straddling both sets looks perfectly
+ * live while carrying a share of everything we point at it out of the tunnel.
+ */
+private fun PassthroughAnalysis.nonServerOutboundTags(): List<String> =
+    outboundProtocolsByTag
+        .filterKeys { it.isNotBlank() }
+        .filterValues { it in NON_SERVER_PROTOCOLS }
+        .keys
+        .toList()
 
 /** Tags of outbounds that are a server the user chose, excluding untagged ones. */
 private fun PassthroughAnalysis.serverOutboundTags(): List<String> =
@@ -112,10 +130,15 @@ private fun resolveBalancer(
     // A6: the core accepts a balancer that selects nothing and then silently
     // drops every packet, so this is the one refusal we must make ourselves.
     if (live.isEmpty()) return OverrideTarget.Unresolvable(OverrideBlocker.BalancerSelectsNothing)
-    // §3.4: a prefix that also captures an outbound we append would put our
-    // `direct` (freedom) inside the user's balancer — proxied traffic leaving
-    // unproxied, with no error and no log line.
-    if (live.any { it.selects(reservedTags) }) {
+    // §3.4, widened after the branch review: a prefix that also captures an
+    // outbound which does not reach a server puts that outbound inside the user's
+    // balancer — proxied traffic leaving unproxied, or vanishing into a blackhole,
+    // with no error and no log line. Two sources, one hazard: the outbounds *we*
+    // append, and the config's **own** `freedom`/`blackhole` outbounds, which
+    // `serverOutboundTags()` hides from the liveness test above and which nothing
+    // downstream would catch — the core accepts such a balancer happily.
+    val mustNotSelect = reservedTags + analysis.nonServerOutboundTags()
+    if (live.any { it.selects(mustNotSelect) }) {
         return OverrideTarget.Unresolvable(OverrideBlocker.TargetTagCollision)
     }
     if (live.size == 1) return OverrideTarget.ViaBalancer(live.single().tag)
@@ -124,9 +147,15 @@ private fun resolveBalancer(
     // one of them. Not "the first" or "the last" — among rules that all match
     // everything, only the first fires, and which that is depends on evaluation
     // order this project has not measured. One distinct answer, or refuse.
+    // §3.3 to the letter: distinct **first**, liveness second. Filtering the
+    // references by liveness before counting them would rescue a config whose
+    // catch-alls name one dead and one live balancer — by picking the live one,
+    // which is a guess about which catch-all the core reaches first.
     val liveTags = live.mapTo(mutableSetOf()) { it.tag }
-    val named = analysis.catchAllBalancerRefs.filter { it in liveTags }.distinct()
-    val only = named.singleOrNull() ?: return OverrideTarget.Unresolvable(OverrideBlocker.SeveralBalancers)
+    val named = analysis.catchAllBalancerRefs.distinct()
+    val only =
+        named.singleOrNull()?.takeIf { it in liveTags }
+            ?: return OverrideTarget.Unresolvable(OverrideBlocker.SeveralBalancers)
     return OverrideTarget.ViaBalancer(only)
 }
 

@@ -339,8 +339,8 @@
     </string>
     <!-- OverrideBlocker.TargetTagCollision -->
     <string name="editor_raw_json_override_tag_collision">
-        This file\'s server group would also pick up the outbounds the app adds for direct
-        and blocked traffic, which could send proxied traffic outside the tunnel. The app
+        This file\'s server group would also pick up an outbound that does not go to a
+        server, so some traffic meant for the tunnel would leave it or be dropped. The app
         will not apply its routing or DNS to this profile.
     </string>
 

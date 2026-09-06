@@ -431,8 +431,13 @@ three lean on the same connect-time backstop:**
 - **A config need not tag anything `proxy`, and since M7.5 that is no longer a
   blocker.** `resolveOverrideTarget` (`:core:parser`) turns a
   `PassthroughAnalysis` into an `OverrideTarget`: `ViaBalancer` when the config
-  declares a live balancer, `ViaOutbound` when it has exactly one server
-  outbound this app can name, and `Unresolvable(reason)` when neither holds.
+  declares a live balancer, `ViaOutbound` when it declares no balancer at all and
+  has exactly one server outbound this app can name, and `Unresolvable(reason)`
+  otherwise. The two branches are exclusive, not a fallthrough: a config that
+  declares a balancer is answered by the balancer branch even when that balancer
+  turns out to be dead, because A6 — the core accepts a balancer selecting
+  nothing and then silently drops — is worth naming loudly rather than routing
+  around.
   `:core:xray` maps the first onto the `balancerTag` key and the second onto
   `outboundTag`, so every app-generated rule that names the server — the routing
   rules' `PROXY` bucket, both `resolverRule` forms and the `dns-module`
@@ -456,6 +461,14 @@ three lean on the same connect-time backstop:**
   (`RawConfigComposerXrayTest` pins it on hardware). There is no such backstop
   on the outbound branch: a dangling `outboundTag` is accepted at build and
   fails only when the rule fires, which is M7's finding F9.
+
+  A balancer must also not *select* an outbound that fails to reach a server —
+  neither the `direct`/`block`/`dns-out` this app reserves nor the config's own
+  `freedom`/`blackhole`. Either would put a non-server outbound inside the
+  balancer our rules name, sending a share of everything routed through it —
+  the `dns-module` catch-all included — out of the tunnel or into a hole, with
+  no error. That is `TargetTagCollision`, and it is why the guarantee two
+  paragraphs down holds unconditionally.
 
   One consequence lives in `RawConfigComposer`: the override replaces `routing`
   wholesale, so the config's own `balancers` array is carried forward

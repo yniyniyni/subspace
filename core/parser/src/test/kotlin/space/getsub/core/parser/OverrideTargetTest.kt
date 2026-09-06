@@ -219,6 +219,93 @@ class OverrideTargetTest {
     }
 
     @Test
+    fun `a balancer that also selects the config's own freedom outbound is refused`() {
+        // Branch review C1. Liveness only asks whether a selector matches at least
+        // one *server* outbound, and `serverOutboundTags()` filters the rest out —
+        // so without this the balancer resolves, our `dns-module` catch-all names
+        // it, and the core spreads resolver queries across a `freedom` member that
+        // leaves the tunnel. §5.2, silently.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "exit-1", "protocol": "vless" },
+                { "tag": "exit-local", "protocol": "freedom" }
+              ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["exit"] } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.TargetTagCollision)
+    }
+
+    @Test
+    fun `a balancer that also selects a blackhole outbound is refused`() {
+        // The same hazard pointing the other way: instead of leaving the tunnel, a
+        // share of proxied traffic is dropped, equally silently.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "exit-1", "protocol": "vless" },
+                { "tag": "exit-drop", "protocol": "blackhole" }
+              ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["exit"] } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.TargetTagCollision)
+    }
+
+    @Test
+    fun `a balancer whose selector stops short of the infrastructure outbound still resolves`() {
+        // The guard must not refuse every config that happens to own a freedom
+        // outbound — only one the balancer would actually capture.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "exit-1", "protocol": "vless" },
+                { "tag": "local", "protocol": "freedom" }
+              ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["exit"] } ] }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.ViaBalancer("B")
+    }
+
+    @Test
+    fun `catch-alls naming a dead and a live balancer are undecidable`() {
+        // Branch review M2. Design §3.3: "Zero, or two or more distinct balancers,
+        // is Unresolvable". Filtering the references by liveness first would rescue
+        // this to `EU` — a guess about which of the config's own catch-alls fires,
+        // which is the evaluation-order question §3.3 refuses to answer.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "eu-1", "protocol": "vless" },
+                { "tag": "us-1", "protocol": "vless" }
+              ],
+              "routing": {
+                "rules": [
+                  { "type": "field", "network": "tcp,udp", "balancerTag": "DEAD" },
+                  { "type": "field", "network": "tcp,udp", "balancerTag": "EU" }
+                ],
+                "balancers": [
+                  { "tag": "EU", "selector": ["eu"] },
+                  { "tag": "US", "selector": ["us"] },
+                  { "tag": "DEAD", "selector": ["nope"] }
+                ]
+              }
+            }
+            """.trimIndent()
+
+        resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.SeveralBalancers)
+    }
+
+    @Test
     fun `a dns-out collision is refused only when a dns plan is present`() {
         val json =
             """

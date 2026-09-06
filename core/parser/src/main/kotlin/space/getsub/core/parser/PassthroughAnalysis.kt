@@ -101,7 +101,15 @@ public enum class OverrideBlocker {
      */
     BalancerSelectsNothing,
 
-    /** A balancer's `selector` would also capture an outbound the override appends. */
+    /**
+     * A balancer's `selector` would also capture an outbound that does not reach a
+     * server, so a share of everything routed through it would leave the tunnel or
+     * be dropped.
+     *
+     * Both sources count: the `direct`/`block`/`dns-out` outbounds the override
+     * appends, and the config's **own** `freedom`/`blackhole` outbounds. One
+     * hazard, one reason.
+     */
     TargetTagCollision,
 }
 
@@ -200,7 +208,7 @@ private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
 @Suppress("UnreachableCode")
 // UnreachableCode is flagged only by detektMain (type-resolution pass in `./gradlew check`),
 // not by plain `./gradlew :core:parser:detekt`. The labeled return is valid; detektMain
-// over-reports on lines 173–174.
+// detektMain over-reports on this function's labelled return inside mapNotNull.
 private fun balancerSpecs(routing: JsonObject?): List<BalancerSpec> =
     routing.arrayOf("balancers").filterIsInstance<JsonObject>().mapNotNull { balancer ->
         val tag = balancer["tag"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null

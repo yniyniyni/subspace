@@ -426,6 +426,14 @@ class TunnelService : VpnService() {
     private var backoffJob: Job? = null
 
     /**
+     * Spec §2.3/§2.4. Reset on a committed [ConnectionState.Connected] (see
+     * [attachTun]) and on every [stopTunnel] — an explicit disconnect, revoke,
+     * or a terminal failure all start the next retry sequence counting from
+     * zero. Advanced only by [settleRetryableFailure].
+     */
+    private val reconnectAttempts = ReconnectAttemptCounter()
+
+    /**
      * The profile the live session was started from, so a per-app change can
      * rebuild the tunnel without :main re-supplying one (§5.5: what is connected
      * is this process's fact, not the UI's).
@@ -654,8 +662,16 @@ class TunnelService : VpnService() {
                 // §5.5 makes this service the source of truth, so it cannot rely
                 // on the UI to prevent a second connect. Without this guard the
                 // previous TUN fd leaks and the old core runs on unreferenced.
+                //
+                // Reconnecting is allowed through alongside Disconnected/Failed:
+                // it means a retryable failure already ran settleRetryableFailure's
+                // cleanup (controller/configFile/liveSession all null, no core or
+                // TUN running) and is waiting out its backoff. Refusing here would
+                // silently swallow every retry the moment BackoffElapsed fires it —
+                // fix round 1, Finding 1's core bug.
                 if (currentState !is ConnectionState.Disconnected &&
-                    currentState !is ConnectionState.Failed
+                    currentState !is ConnectionState.Failed &&
+                    currentState !is ConnectionState.Reconnecting
                 ) {
                     activeStartId = startId
                     liveSession = liveSession?.copy(startId = startId)
@@ -1160,6 +1176,9 @@ class TunnelService : VpnService() {
                     // not after it returns, for the same reason failStart's intent
                     // clear is: only a generation that actually committed may act.
                     cancelBackoffRetry()
+                    // Fix round 1, Finding 1: the counter the next outage should
+                    // start from zero, not from wherever this one left off.
+                    synchronized(lock) { reconnectAttempts.reset() }
                 },
                 onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
             )
@@ -1167,17 +1186,19 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * Publishes a specific failure and cleans up what a failed start leaves.
+     * Publishes a specific outcome and cleans up what a failed start leaves.
+     *
+     * Fix round 1, Finding 1: a retryable [reason] does not settle as
+     * terminal `Failed` — it settles as `Reconnecting` and schedules the
+     * backoff. Spec §6.1 is explicit that reconnection happens regardless of
+     * the fail-closed setting ("the setting decides only whether traffic runs
+     * in the clear while it does"), so this decision reads only
+     * [FailureReason.retryability]; it never reads `SettingsRepository.failClosed`
+     * or anything else that would make retrying conditional on that setting.
+     * TUN retention is a separate decision, owned by Task 9.
      *
      * §5.6: the config file holds the UUID and REALITY key. A failed start used
      * to leave it on disk indefinitely, because only teardown deleted it.
-     *
-     * `suspend`, not plain: the one write `:bg` performs on failure (spec D4) runs
-     * here, and it runs *after* the whole transition rather than in the middle of it.
-     * `stopForeground()`/`stopSelf()` used to follow that write, so a newer connection
-     * starting during it inherited this failure's teardown — its foreground state removed,
-     * or its service stopped, by the previous attempt (PR #4 review, P1 finding A). Both are
-     * now inside the generation-checked transition; nothing may be added after it.
      */
     private suspend fun failStart(
         gen: Int,
@@ -1186,9 +1207,35 @@ class TunnelService : VpnService() {
         rowId: Long,
     ): Nothing? {
         // failure() redacts at construction — libXray's errors quote the config
-        // straight back (§5.6). Built before the transition because that is the one
-        // thing here with no lifecycle effect.
+        // straight back (§5.6). Built before either branch because that is the
+        // one thing here with no lifecycle effect, and both branches need it:
+        // the terminal one to publish, the retryable one only if it turns out
+        // to be at the cap after all.
         val failed = failure(reason, cause.message.orEmpty())
+        when (val retryability = reason.retryability()) {
+            Retryability.Terminal -> settleTerminalFailure(gen, failed, rowId)
+            Retryability.Retryable, Retryability.RetryableCapped ->
+                settleRetryableFailure(gen, reason, failed, rowId, retryability)
+        }
+        return null
+    }
+
+    /**
+     * §1.2/§2.2: publishes `Failed`, clears session intent, and releases the
+     * started-service lifetime — the outcome only the user can act on.
+     *
+     * `suspend`, not plain: the one write `:bg` performs on failure (spec D4) runs
+     * here, and it runs *after* the whole transition rather than in the middle of it.
+     * `stopForeground()`/`stopSelf()` used to follow that write, so a newer connection
+     * starting during it inherited this failure's teardown — its foreground state removed,
+     * or its service stopped, by the previous attempt (PR #4 review, P1 finding A). Both are
+     * now inside the generation-checked transition; nothing may be added after it.
+     */
+    private suspend fun settleTerminalFailure(
+        gen: Int,
+        failed: ConnectionState.Failed,
+        rowId: Long,
+    ) {
         terminalOutcome.settle(
             gen = gen,
             state = failed,
@@ -1197,6 +1244,7 @@ class TunnelService : VpnService() {
                 configFile = null
                 controller = null
                 liveSession = null
+                reconnectAttempts.reset()
                 val startId = activeStartId
                 activeStartId = 0
                 removeForegroundSafely()
@@ -1205,18 +1253,67 @@ class TunnelService : VpnService() {
             },
             persist = {
                 connectionRecorder.record(rowId, failed)
-                // Spec §1.2/§2.2: the third of three intent-clearing sites, and the
-                // only one gated on the reason rather than unconditional — a
-                // retryable failure holds intent so the retry this milestone exists
-                // for still happens. Inside `persist` rather than beside `settle`
-                // so a superseded generation (this attempt lost the race) never
-                // clears intent for a session that is not this one's to clear.
-                if (reason.retryability() == Retryability.Terminal) {
-                    settingsRepository.setTunnelSessionWanted(false)
-                }
+                // Spec §1.2/§2.2: one of the intent-clearing sites. Inside
+                // `persist` rather than beside `settle` so a superseded
+                // generation (this attempt lost the race) never clears intent
+                // for a session that is not this one's to clear.
+                settingsRepository.setTunnelSessionWanted(false)
             },
         )
-        return null
+    }
+
+    /**
+     * §2.2/§2.4: holds session intent, publishes `Reconnecting`, and schedules
+     * the backoff — a retryable failure is not a reason to stop, and this is
+     * unconditional: nothing here reads the fail-closed setting (fix round 1,
+     * Finding 1 — reconnection happens whether or not it is on; only TUN
+     * retention, which Task 9 owns, depends on it).
+     *
+     * Reuses [terminalOutcome]'s atomic gen-check-then-mutate-then-publish
+     * transition — the same primitive [publishIfCurrent] is built on — rather
+     * than a second hand-rolled one: a superseded generation must not null out
+     * a *newer* generation's `controller`/`configFile` any more than it must
+     * publish over a newer generation's state, and `TerminalOutcome` already
+     * closes exactly that race. Used here for a non-terminal state
+     * deliberately — the mechanism is state-shape-agnostic even though its
+     * name is not.
+     *
+     * Unlike [settleTerminalFailure], this does **not** clear intent, remove
+     * the foreground notification, or resolve the started-service lifetime:
+     * the session is still wanted, still trying, and the service must survive
+     * to run the scheduled retry — see [startTunnel]'s guard clause, which
+     * fix round 1, Finding 1 also had to open up to a `Reconnecting`
+     * `currentState`, or the retry this schedules would be silently ignored
+     * the moment it fires.
+     *
+     * §2.3: a `RetryableCapped` reason whose next attempt would reach
+     * [space.getsub.core.model.TUN_ESTABLISH_ATTEMPT_CAP] settles as terminal
+     * instead (fix round 1, Finding 2) — see [nextAttemptExceedsCap].
+     */
+    private suspend fun settleRetryableFailure(
+        gen: Int,
+        reason: FailureReason,
+        failed: ConnectionState.Failed,
+        rowId: Long,
+        retryability: Retryability,
+    ) {
+        val nextAttempt = synchronized(lock) { reconnectAttempts.next() }
+        if (nextAttemptExceedsCap(retryability, nextAttempt)) {
+            settleTerminalFailure(gen, failed, rowId)
+            return
+        }
+        terminalOutcome.settle(
+            gen = gen,
+            state = ConnectionState.Reconnecting(reason, nextAttempt),
+            lifecycle = {
+                configFile?.delete()
+                configFile = null
+                controller = null
+                liveSession = null
+                true
+            },
+            persist = { scheduleBackoffRetry(nextAttempt) },
+        )
     }
 
     /**
@@ -1459,6 +1556,11 @@ class TunnelService : VpnService() {
             tunInterface = null
             configFile = null
             liveSession = null
+            // Every stopTunnel caller (explicit disconnect, onRevoke, a
+            // deliberate reapplyPerApp/network-change restart) ends whatever
+            // retry sequence was in progress; the next one starts at 1, not
+            // wherever this one left off.
+            reconnectAttempts.reset()
             startId = activeStartId
             activeStartId = 0
             publishLocked(ConnectionState.Disconnecting)
@@ -1790,16 +1892,9 @@ class TunnelService : VpnService() {
      * on the `NetworkCallback` instead, because a retry timer running in Doze is how
      * §11's six-hour screen-off row fails.
      *
-     * Not yet called from a live failure path: this task (M8 Task 7) wires
-     * reconcile, session intent, and the retry-scheduling machinery, but
-     * publishing [ConnectionState.Reconnecting] itself — the point that decides
-     * `Failed` vs. `Reconnecting`, tracks the attempt number, and keeps the
-     * foreground notification and started-service lifetime alive across a retry —
-     * is M8 Task 9's (`shouldRetainTun`, fail-closed), per that task's own brief.
-     * Suppressed rather than deleted so Task 9 finds this ready to call, and
-     * documented here rather than silently, per this task's own report.
+     * Called from [settleRetryableFailure]'s `persist`, so only once the
+     * generation that failed is confirmed still current.
      */
-    @Suppress("UnusedPrivateMember")
     private fun scheduleBackoffRetry(attempt: Int) {
         cancelBackoffRetry()
         val job =

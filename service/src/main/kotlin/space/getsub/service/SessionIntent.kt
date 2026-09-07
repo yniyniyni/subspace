@@ -96,3 +96,20 @@ private fun ConnectionState.Reconnecting.mayAttemptAgain(): Boolean =
         // Answering "no" rather than throwing keeps a mis-wire from spinning.
         Retryability.Terminal -> false
     }
+
+/**
+ * Whether the attempt a failure is about to publish should be settled as
+ * terminal instead of another `Reconnecting` (spec §2.3).
+ *
+ * Without this, a `RetryableCapped` reason reaching [TUN_ESTABLISH_ATTEMPT_CAP]
+ * would publish one more `Reconnecting` that [mayAttemptAgain] then permanently
+ * refuses to retry — nothing converts that into `Failed`, so the UI would show
+ * "reconnecting" forever over a session that has actually given up (spec §3.4
+ * names this exact class of gap). `Retryable` is deliberately unbounded: an
+ * unbounded retry while a network exists is the point of fail-closed (§2.4),
+ * not a bug in it.
+ */
+internal fun nextAttemptExceedsCap(
+    retryability: Retryability,
+    nextAttempt: Int,
+): Boolean = retryability == Retryability.RetryableCapped && nextAttempt >= TUN_ESTABLISH_ATTEMPT_CAP

@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONException
@@ -371,6 +372,19 @@ class TunnelService : VpnService() {
     // selection at resolve time rather than at construction — see PerAppResolver.
     private lateinit var perAppResolver: PerAppResolver
 
+    /**
+     * Spec §5.1/§5.2. Built in onCreate, once `applicationContext` is available —
+     * calling a `Context` method from a field initialiser runs before
+     * `attachBaseContext`, which is the same reason [connectionRecorder] and its
+     * neighbours above are `lateinit var` rather than initialised inline.
+     *
+     * Registered for as long as the session is *wanted*, driven by
+     * [SettingsRepository.tunnelSessionWanted] in [onCreate] — not by connect/
+     * disconnect — and stopped explicitly in [onDestroy]. See that collector's
+     * comment for why this cannot simply follow [ownTunnelActive].
+     */
+    private lateinit var networkMonitor: NetworkMonitor
+
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
             // §10.4: anything escaping the start sequence must still produce a
@@ -518,6 +532,35 @@ class TunnelService : VpnService() {
                 selection = { perAppRepository.selection.first() },
                 ownPackage = { packageName },
             )
+        networkMonitor =
+            NetworkMonitor(
+                context = applicationContext,
+                onChanged = { network ->
+                    // Spec §5.2. Never called before M8. Not cosmetic: this is what makes
+                    // the VPN report correct metered-ness and transport to apps querying
+                    // through it — including this app's own geoRefreshOnMetered and
+                    // pingOnLaunchMetered, which until now read whatever the platform
+                    // inferred in its absence.
+                    setUnderlyingNetworks(arrayOf(network))
+                    commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.NetworkChanged))
+                },
+                onNetworkLost = {
+                    commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.NetworkLost))
+                },
+            )
+        // Spec §5.1: registered for as long as the session is *wanted*, not while
+        // connected — fail-closed means sitting with no network and waiting, and
+        // this callback is the thing being waited on. Collecting the persisted
+        // flow (rather than toggling this at every connect/disconnect call site)
+        // also covers a sticky restart: `:bg` dying and coming back with a still-
+        // wanted session re-registers the callback without a fourth call site to
+        // remember. `distinctUntilChanged` avoids a pointless re-register/
+        // unregister when an unrelated settings write touches the same Room table.
+        scope.launch {
+            settingsRepository.tunnelSessionWanted.distinctUntilChanged().collect { wanted ->
+                if (wanted) networkMonitor.start() else networkMonitor.stop()
+            }
+        }
     }
 
     /**
@@ -1245,6 +1288,7 @@ class TunnelService : VpnService() {
                 controller = null
                 liveSession = null
                 reconnectAttempts.reset()
+                closeRetainedTunLocked()
                 val startId = activeStartId
                 activeStartId = 0
                 removeForegroundSafely()
@@ -1323,10 +1367,37 @@ class TunnelService : VpnService() {
                 controller = null
                 liveSession = null
                 reconnectAttempts.commit(trialAttempt)
+                closeRetainedTunLocked()
                 true
             },
             persist = { scheduleBackoffRetry(trialAttempt) },
         )
+    }
+
+    /**
+     * Closes and clears [tunInterface] if a retained-fd restart
+     * ([restartCoreRetainingTun]) left one behind when this generation's start
+     * sequence failed instead of committing (§5.4: the fd must still close on
+     * every path where the session ends, and a `Failed`/`Reconnecting`-from-
+     * scratch outcome both end the retained TUN's life — the next `Start` re-
+     * establishes one via [attachTun]).
+     *
+     * A no-op for every ordinary start-sequence failure, which never retains a
+     * TUN in the first place: [tunInterface] is already null by the time
+     * [failStart] runs there, either because the sequence never reached
+     * [attachTun] or because that function's own `Tun2Socks.start` failure path
+     * already closed and nulled it before calling [failStart].
+     *
+     * Must be called from inside a `lifecycle` block already holding [lock] —
+     * this does not take it itself.
+     */
+    private fun closeRetainedTunLocked() {
+        try {
+            tunInterface?.close()
+        } catch (e: java.io.IOException) {
+            Log.e(TAG, "closing retained tun fd failed: ${e.javaClass.simpleName}")
+        }
+        tunInterface = null
     }
 
     /**
@@ -1640,6 +1711,11 @@ class TunnelService : VpnService() {
                 currentState as? ConnectionState.Failed ?: ConnectionState.Disconnected
             }
         cancelBackoffRetry()
+        // Explicit, not left to scope.cancel() below: cancelling the collector
+        // coroutine that drives this does not run any cleanup on its own, and an
+        // unregistered-but-still-live ConnectivityManager callback referencing a
+        // dying service is exactly the kind of leak §5.4 is about.
+        networkMonitor.stop()
         stopTunnel(finalState)
         commandCoordinator.close()
         callbacks.kill()
@@ -1887,18 +1963,157 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * [ReconcileAction.Restart]'s effect (spec §5.4).
+     * [ReconcileAction.Restart]'s effect.
      *
-     * Task 8's `NetworkMonitor` is what sends [ReconcileTrigger.NetworkChanged] —
-     * nothing in this task does — so this path is unreached in production until
-     * that lands. The fallback below is a safe placeholder (a full stop and
-     * reconnect through [startFromRow]), deliberately **not** the fd-retaining
-     * restart spec §5.4 describes: naming and implementing that restart, so a
-     * network transition does not open a fail-closed window, is Task 8's job.
+     * Spec §5.3/§5.4. The conservative half of the choice.
+     *
+     * The soft alternative is `setUnderlyingNetworks` alone, letting the core
+     * notice its connections died and redial — new dials are protected
+     * automatically, because libXray's protector is a dial-time callback
+     * (§14.2). There is **no re-protect**: existing sockets cannot be
+     * re-marked, so §9's "at minimum a re-protect" describes an operation that
+     * does not exist.
+     *
+     * Which suffices is an empirical question §9 says to answer by physically
+     * toggling Wi-Fi, repeatedly — not by unit test and not by reasoning here.
+     * Task 16 row 1 settles it.
+     *
+     * The TUN fd genuinely survives this: it is captured from [tunInterface]
+     * before anything else runs, and neither this function nor
+     * [resolveAndStartCore]/[attachRetainedTun] ever calls `Builder.establish()`
+     * or closes it on the success path. Only the old core and the old
+     * tun2socks restart — a fresh [XrayController], freshly allocated ports
+     * (the old ones die with the old core), and tun2socks repointed at
+     * whichever port the new core picked. A failure partway through does close
+     * it, via [closeRetainedTunLocked] inside [settleTerminalFailure]/
+     * [settleRetryableFailure]: at that point the session is either over or
+     * about to reconnect from scratch through [ReconcileAction.Start], which
+     * establishes its own TUN via [attachTun] rather than reusing this one.
      */
+    // ReturnCount: the missing-profile refusal, the no-retained-fd degrade, and the
+    // superseded-generation bailout after resolveAndStartCore are three distinct outcomes,
+    // same reasoning as startCore's own early returns.
+    // TooGenericExceptionCaught: Tun2Socks.stop()'s Throwable catch mirrors stopTunnel's own —
+    // it must include NoClassDefFoundError from a failed System.loadLibrary, not just Exception.
+    @Suppress("ReturnCount", "TooGenericExceptionCaught")
     private suspend fun restartCoreRetainingTun(rowId: Long) {
-        stopTunnel(ConnectionState.Disconnected)
-        startFromRow(rowId)
+        val profile = profileRepository.profile(rowId)?.toProfile()
+        if (profile == null) {
+            // §5.6: no name, no address — same reasoning as startFromRow's own
+            // refusal. Nothing to restart onto, and the retained fd is still
+            // live, so route through the ordinary teardown that closes it
+            // rather than leaving it dangling.
+            Log.w(TAG, "reconcile: active profile row is not connectable")
+            settingsRepository.setTunnelSessionWanted(false)
+            stopTunnelAndService()
+            return
+        }
+
+        val handoff =
+            synchronized(lock) {
+                val fd = tunInterface
+                if (fd == null) {
+                    // Invariant says this should not happen — `reconcile` only
+                    // returns `Restart` from a `Connected` actual state, and
+                    // `Connected` is never published without a TUN attached.
+                    // Degrading to a full reconnect rather than trusting that
+                    // invariant blindly is what keeps a violated one from
+                    // silently dropping traffic instead of just retrying.
+                    null
+                } else {
+                    val nextGeneration = ++generation
+                    val oldXray = controller
+                    controller = null
+                    configFile?.delete()
+                    configFile = null
+                    publishLocked(ConnectionState.Connecting(StartupStage.AllocatingPort))
+                    RetainedRestart(nextGeneration, oldXray, fd)
+                }
+            }
+        if (handoff == null) {
+            startFromRow(rowId)
+            return
+        }
+
+        // Same order stopTunnel uses, and for the same reason: stop feeding
+        // packets into the old core before tearing it down. The TUN itself is
+        // untouched — [handoff.fd] is not closed here or anywhere on this path.
+        try {
+            Tun2Socks.stop()
+        } catch (e: Throwable) {
+            // Includes NoClassDefFoundError, same as stopTunnel's own catch —
+            // §5.4 requires this restart to keep going even if the native shim
+            // is in a bad state, or the retained TUN outlives a core that never
+            // comes back.
+            Log.e(TAG, "tun2socks stop failed during restart: ${e.javaClass.simpleName}")
+        }
+        handoff.oldXray?.stopBlocking()
+
+        val started = resolveAndStartCore(handoff.gen, profile, rowId) ?: return
+        attachRetainedTun(handoff.gen, started.xray, started.ports, handoff.fd, rowId)
+    }
+
+    /** [restartCoreRetainingTun]'s atomically-captured handoff from the old generation to the new one. */
+    private data class RetainedRestart(
+        val gen: Int,
+        val oldXray: XrayController?,
+        val fd: ParcelFileDescriptor,
+    )
+
+    /**
+     * [restartCoreRetainingTun]'s tail: points a freshly restarted core's
+     * tun2socks at the TUN interface that survived the restart, then settles
+     * `Connected` exactly like [attachTun]'s own tail — same [TerminalOutcome],
+     * same generation gate.
+     *
+     * Deliberately does not call [establishTun]/`Builder.establish()`, and does
+     * not resolve a [PerAppGateResult]: the TUN is not rebuilt, so there is no
+     * new fd to race a superseding generation for, and per-app selection is
+     * baked into the retained interface — unaffected by the network change
+     * that triggered this restart.
+     */
+    // Each return is a distinct outcome — a superseded generation, a tun2socks restart
+    // failure, and a lifecycle-rejected settlement — same reasoning as attachTun's own.
+    @Suppress("ReturnCount")
+    private suspend fun attachRetainedTun(
+        gen: Int,
+        xray: XrayController,
+        ports: StartedPorts,
+        fd: ParcelFileDescriptor,
+        rowId: Long,
+    ) {
+        if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingTunnel))) return
+        val config = tun2socksConfig(socksPort = ports.socksPort, mtu = TUN_MTU)
+        if (!Tun2Socks.start(config, fd.fd)) {
+            xray.stop()
+            // [fd] is not closed here: it is still `tunInterface`, and
+            // `closeRetainedTunLocked` inside the `failStart` this is about to
+            // reach closes it under the same generation gate a concurrent
+            // teardown uses. Closing it from two unsynchronised call sites is
+            // the double-close bug §5.4 warns about, not a safety margin.
+            failStart(
+                gen,
+                FailureReason.TunnelStartFailed,
+                IllegalStateException("tun2socks refused to restart"),
+                rowId,
+            )
+            return
+        }
+
+        val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
+        val settlement =
+            terminalOutcome.settleHandlingLifecycleRejection(
+                gen = gen,
+                state = connected,
+                lifecycle = { goForeground(R.string.notification_connected) },
+                persist = {
+                    connectionRecorder.record(rowId, connected)
+                    cancelBackoffRetry()
+                    synchronized(lock) { reconnectAttempts.reset() }
+                },
+                onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
+            )
+        if (settlement != TerminalSettlement.Committed) return
     }
 
     /**

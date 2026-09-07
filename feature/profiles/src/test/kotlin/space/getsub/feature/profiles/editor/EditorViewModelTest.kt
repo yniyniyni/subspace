@@ -460,6 +460,37 @@ class EditorViewModelTest {
             viewModel.state.value.overrideBlocker shouldBe null
         }
 
+    /**
+     * `EDITOR_RESERVED_TAGS` deliberately omits `dns-out`: whether the override
+     * appends it depends on a tunnel setting, not on this config, so a `dns-out`
+     * collision is left to the connect-time refusal instead of being shown here
+     * as though the file were broken. Documented in `EditorState.overrideBlocker`
+     * and, until now, pinned nowhere — so nothing would have caught the editor
+     * quietly starting to disagree with connect.
+     */
+    @Test
+    fun `a dns-out collision is not reported by the editor`() =
+        runTest {
+            val dnsOutCollision =
+                rawJsonProfile.copy(
+                    id = 9L,
+                    rawJson =
+                    """
+                    {
+                      "outbounds": [ { "tag": "dns-outer", "protocol": "vless" } ],
+                      "routing": { "balancers": [ { "tag": "B", "selector": ["dns-out"] } ] }
+                    }
+                    """.trimIndent(),
+                )
+            val source = FakeProfileSource(listOf(dnsOutCollision))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(dnsOutCollision.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.overrideBlocker shouldBe null
+        }
+
     // Fix round 1, Minor 5: renamed from "...whose references all resolve carries no
     // advisories" — rawJsonProfile's own rawJson carries no `routing` block at all, so there
     // is nothing to resolve; the honest claim this test pins is the absence of a routing block

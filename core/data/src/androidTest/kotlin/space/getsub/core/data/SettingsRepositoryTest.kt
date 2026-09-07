@@ -4,6 +4,7 @@ package space.getsub.core.data
 
 import androidx.room.Room
 import androidx.test.platform.app.InstrumentationRegistry
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -329,6 +330,74 @@ class SettingsRepositoryTest {
                 "DNS resolver flow must publish only complete resolver snapshots",
                 observed.all { resolver -> resolver == DnsResolver.DEFAULT || resolver == expected },
             )
+        }
+
+    @Test
+    fun tunnelSessionWantedDefaultsToFalse() =
+        runTest {
+            repository.tunnelSessionWanted.first() shouldBe false
+            repository.tunnelSessionWantedNow() shouldBe false
+        }
+
+    @Test
+    fun tunnelSessionWantedRoundTrips() =
+        runTest {
+            repository.setTunnelSessionWanted(true)
+
+            repository.tunnelSessionWanted.first() shouldBe true
+            repository.tunnelSessionWantedNow() shouldBe true
+
+            repository.setTunnelSessionWanted(false)
+
+            repository.tunnelSessionWanted.first() shouldBe false
+            repository.tunnelSessionWantedNow() shouldBe false
+        }
+
+    @Test
+    fun activeProfileIdNowMatchesTheFlow() =
+        runTest {
+            repository.activeProfileIdNow().shouldBeNull()
+
+            repository.setActiveProfile(42L)
+
+            repository.activeProfileIdNow() shouldBe 42L
+            repository.activeProfileId.first() shouldBe 42L
+        }
+
+    @Test
+    fun bootAutostartDefaultsToOff() =
+        runTest {
+            repository.bootAutostart.first() shouldBe false
+
+            repository.setBootAutostart(true)
+
+            repository.bootAutostart.first() shouldBe true
+        }
+
+    /**
+     * Spec §6.4: a leak is the worse failure for this app's audience, and §6.3's
+     * notification action is what makes defaulting on safe. This is an invariant,
+     * not a preference — flipping it changes what happens to every existing user
+     * on upgrade, silently.
+     */
+    @Test
+    fun failClosedDefaultsToOn() =
+        runTest {
+            repository.failClosed.first() shouldBe true
+
+            repository.setFailClosed(false)
+
+            repository.failClosed.first() shouldBe false
+        }
+
+    @Test
+    fun batteryPromptShownDefaultsToFalse() =
+        runTest {
+            repository.batteryPromptShown.first() shouldBe false
+
+            repository.setBatteryPromptShown(true)
+
+            repository.batteryPromptShown.first() shouldBe true
         }
 
     private companion object {

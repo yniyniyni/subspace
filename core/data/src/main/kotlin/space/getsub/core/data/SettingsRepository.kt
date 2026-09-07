@@ -35,6 +35,10 @@ private const val SELECTED_GEO_SOURCE_ID_DELIMITER = ","
 private const val KEY_PER_APP_MODE = "per_app_mode"
 private const val KEY_PER_APP_USER_PACKAGES = "per_app_user_packages"
 private const val PER_APP_PACKAGE_DELIMITER = ","
+private const val KEY_TUNNEL_SESSION_WANTED = "tunnel_session_wanted"
+private const val KEY_BOOT_AUTOSTART = "boot_autostart"
+private const val KEY_FAIL_CLOSED = "fail_closed"
+private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
 
 /**
  * A 204 endpoint on purpose: a `HEAD` against it returns no body, so a latency
@@ -341,5 +345,69 @@ internal constructor(
             domain = resolver.domain.orEmpty(),
             ip = resolver.ip.orEmpty(),
         )
+    }
+
+    /**
+     * Whether the tunnel is *supposed* to be up (spec §1).
+     *
+     * Half the session intent; [activeProfileId] is the other half. Written by
+     * `TunnelService` alone — §5.5, `:main` renders it and never sets it. It goes
+     * true when a connect command is **accepted**, not when connect succeeds, so a
+     * boot-time start that dies at `StartingCore` is still wanted and still retried.
+     */
+    public val tunnelSessionWanted: Flow<Boolean> =
+        dao.observe(KEY_TUNNEL_SESSION_WANTED).map { stored ->
+            // A value this repository writes is always "true" or "false"; this
+            // guards a hand-edited or future-version row, and defaults to the
+            // inert answer rather than resurrecting a tunnel nobody asked for.
+            stored?.toBooleanStrictOrNull() ?: false
+        }
+
+    public suspend fun setTunnelSessionWanted(wanted: Boolean) {
+        dao.put(SettingEntity(key = KEY_TUNNEL_SESSION_WANTED, value = wanted.toString()))
+    }
+
+    /**
+     * The one-shot read `:bg` reconciles against.
+     *
+     * Reconciliation answers "what is wanted *right now*" at a single instant;
+     * collecting [tunnelSessionWanted] for that would make the decision depend on
+     * emission timing rather than on stored state.
+     */
+    public suspend fun tunnelSessionWantedNow(): Boolean =
+        dao.value(KEY_TUNNEL_SESSION_WANTED)?.toBooleanStrictOrNull() ?: false
+
+    /** The one-shot counterpart to [activeProfileId], for the same reason. */
+    public suspend fun activeProfileIdNow(): Long? = dao.value(KEY_ACTIVE_PROFILE)?.toLongOrNull()
+
+    /** Spec §4.2: connect on every boot when on, regardless of prior session state. */
+    public val bootAutostart: Flow<Boolean> =
+        dao.observe(KEY_BOOT_AUTOSTART).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    public suspend fun setBootAutostart(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_BOOT_AUTOSTART, value = enabled.toString()))
+    }
+
+    /**
+     * Whether the TUN is retained while a wanted session is down (spec §6).
+     *
+     * **Defaults to on.** For this app's audience a leak is the worse failure, and
+     * the objection to defaulting on — sudden total loss of connectivity with no
+     * visible cause — is answered by the notification, which says exactly that and
+     * offers the way out (spec §6.3).
+     */
+    public val failClosed: Flow<Boolean> =
+        dao.observe(KEY_FAIL_CLOSED).map { stored -> stored?.toBooleanStrictOrNull() ?: true }
+
+    public suspend fun setFailClosed(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_FAIL_CLOSED, value = enabled.toString()))
+    }
+
+    /** §9's "prompt once, respect refusal" (spec §7.2). */
+    public val batteryPromptShown: Flow<Boolean> =
+        dao.observe(KEY_BATTERY_PROMPT_SHOWN).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    public suspend fun setBatteryPromptShown(shown: Boolean) {
+        dao.put(SettingEntity(key = KEY_BATTERY_PROMPT_SHOWN, value = shown.toString()))
     }
 }

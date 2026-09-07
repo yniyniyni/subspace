@@ -236,7 +236,18 @@ private fun ConnectionDetail(connection: ConnectionState) {
             )
         }
 
-        ConnectionState.Disconnected, ConnectionState.Disconnecting, is ConnectionState.Connecting -> Unit
+        // §7.3: whether traffic is currently blocked belongs here once a later
+        // task plumbs that signal through — ConnectionState.Reconnecting (Task 4)
+        // carries only reason and attempt, not whether the TUN was retained.
+        // Rendering the reason or attempt count on their own would be new
+        // information this milestone hasn't designed for, so this renders
+        // nothing extra beyond the "Reconnecting…" label, the same as the
+        // other non-terminal states below.
+        ConnectionState.Disconnected,
+        ConnectionState.Disconnecting,
+        is ConnectionState.Connecting,
+        is ConnectionState.Reconnecting,
+        -> Unit
     }
 }
 
@@ -394,6 +405,13 @@ private fun ActiveServerTile(
  * detail are still shown, via [labelRes] and [ConnectionDetail] — this
  * mapping only decides the control's own colour and tap behaviour, not
  * whether the failure is communicated at all.
+ *
+ * [ConnectionState.Reconnecting] maps to [ConnectVisualState.Connecting] for the
+ * same reason as [ConnectionState.Disconnecting]: it is a transient in-flight
+ * action, not a state a tap should act on. [HomeState.canConnect] and
+ * [HomeState.canDisconnect] already agree — neither is true for `Reconnecting` —
+ * so this only makes the control's own colour and tap-guard match what those
+ * booleans already decided.
  */
 private fun ConnectionState.toVisualState(): ConnectVisualState =
     when (this) {
@@ -402,6 +420,7 @@ private fun ConnectionState.toVisualState(): ConnectVisualState =
         is ConnectionState.Connected -> ConnectVisualState.Connected
         ConnectionState.Disconnecting -> ConnectVisualState.Connecting
         is ConnectionState.Failed -> ConnectVisualState.Disconnected
+        is ConnectionState.Reconnecting -> ConnectVisualState.Connecting
     }
 
 private fun ConnectionState.labelRes(): Int =
@@ -411,6 +430,12 @@ private fun ConnectionState.labelRes(): Int =
         is ConnectionState.Connected -> R.string.state_connected
         is ConnectionState.Connecting -> stage.labelRes()
         is ConnectionState.Failed -> reason.labelRes()
+        // Generic, not reason.labelRes(): unlike Failed, a Reconnecting attempt
+        // is not something the user needs to act on, so it gets one steady
+        // label rather than cycling through whichever reason triggered each
+        // retry. See ConnectionDetail's KDoc-adjacent comment for what the
+        // eventual blocked/open distinction (§7.3) still needs.
+        is ConnectionState.Reconnecting -> R.string.home_state_reconnecting
     }
 
 private fun StartupStage.labelRes(): Int =

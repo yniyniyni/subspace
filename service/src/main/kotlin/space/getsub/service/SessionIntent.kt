@@ -51,6 +51,7 @@ internal sealed interface ReconcileAction {
  * device every time, which makes every decision embedded in `TunnelService`
  * effectively untested. This is the decision; the service is the effects.
  */
+@Suppress("ReturnCount") // Each return is a distinct spec rule; order is load-bearing.
 internal fun reconcile(
     intent: SessionIntent,
     actual: ConnectionState,

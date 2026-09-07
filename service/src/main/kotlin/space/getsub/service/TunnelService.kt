@@ -385,6 +385,15 @@ class TunnelService : VpnService() {
      */
     private lateinit var networkMonitor: NetworkMonitor
 
+    /**
+     * The collector launched in [onCreate] that drives [networkMonitor]'s
+     * start/stop from [SettingsRepository.tunnelSessionWanted]. Captured so
+     * [onDestroy] can cancel it *before* anything else — see that cancellation
+     * for why a plain `scope.cancel()` at the end of teardown is not early
+     * enough on its own.
+     */
+    private var networkMonitorJob: Job? = null
+
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
             // §10.4: anything escaping the start sequence must still produce a
@@ -556,11 +565,19 @@ class TunnelService : VpnService() {
         // wanted session re-registers the callback without a fourth call site to
         // remember. `distinctUntilChanged` avoids a pointless re-register/
         // unregister when an unrelated settings write touches the same Room table.
-        scope.launch {
-            settingsRepository.tunnelSessionWanted.distinctUntilChanged().collect { wanted ->
-                if (wanted) networkMonitor.start() else networkMonitor.stop()
+        //
+        // The `Job` is captured, not discarded, so `onDestroy` can cancel this
+        // collector before doing anything else: with no suspension point inside
+        // the `if`/`else` below, a plain `scope.cancel()` at the end of teardown
+        // does not stop a `true` emission landing between an explicit
+        // `networkMonitor.stop()` and that final cancel from calling `start()`
+        // again and re-registering a callback nothing is left to unregister.
+        networkMonitorJob =
+            scope.launch {
+                settingsRepository.tunnelSessionWanted.distinctUntilChanged().collect { wanted ->
+                    if (wanted) networkMonitor.start() else networkMonitor.stop()
+                }
             }
-        }
     }
 
     /**
@@ -1711,10 +1728,18 @@ class TunnelService : VpnService() {
                 currentState as? ConnectionState.Failed ?: ConnectionState.Disconnected
             }
         cancelBackoffRetry()
-        // Explicit, not left to scope.cancel() below: cancelling the collector
-        // coroutine that drives this does not run any cleanup on its own, and an
-        // unregistered-but-still-live ConnectivityManager callback referencing a
-        // dying service is exactly the kind of leak §5.4 is about.
+        // Cancelled before networkMonitor.stop(), not left to scope.cancel() at the
+        // end: the collector's `if (wanted) start() else stop()` body has no
+        // suspension point, so a `true` emission landing after an explicit stop()
+        // but before scope.cancel() completes would call start() again and
+        // re-register a callback that nothing is left to unregister. Cancelling
+        // this job first means no *further* emission can reach that body at all.
+        // It does not preempt an invocation already mid-flight at the instant this
+        // runs — onDestroy() is not suspend, so there is no cancelAndJoin() to
+        // reach for here — but that residual window is far narrower than the
+        // ordering this replaces, which left it open until scope.cancel() at the
+        // very end of this function.
+        networkMonitorJob?.cancel()
         networkMonitor.stop()
         stopTunnel(finalState)
         commandCoordinator.close()

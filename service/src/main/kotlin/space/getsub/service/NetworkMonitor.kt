@@ -84,42 +84,58 @@ internal class NetworkMonitor(
     private val onNetworkLost: () -> Unit,
 ) {
     private val debouncer = NetworkTransitionDebouncer()
+
+    /**
+     * Guards [callback] against two threads calling [start]/[stop] at once — the
+     * `tunnelSessionWanted` collector on its own dispatcher, and `TunnelService
+     * .onDestroy()`'s direct [stop] call on whatever thread invokes it. Without
+     * this, both could observe a non-null [callback] before either nulls it and
+     * both would call `unregisterNetworkCallback` on the same instance. Harmless
+     * today — that call is wrapped in [runCatching] — but not a race worth
+     * leaving in a file that is otherwise careful about exactly this shape
+     * (compare [space.getsub.service.TunnelService]'s own `lock`).
+     */
+    private val lock = Any()
     private var callback: ConnectivityManager.NetworkCallback? = null
 
     fun start() {
-        if (callback != null) return
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
-        // Priming with whatever is already active before registering is what keeps
-        // registerDefaultNetworkCallback's immediate onAvailable replay of that same
-        // network from reading as a transition — see NetworkTransitionDebouncer.prime.
-        // A null activeNetwork (no connectivity yet) is left unprimed on purpose: the
-        // first real onAvailable is then a genuine nothing-to-something transition and
-        // must reconcile, whether the session became wanted before or after a network
-        // actually exists.
-        manager.activeNetwork?.let { active -> debouncer.prime(active.networkHandle) }
-        val registered =
-            object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    if (debouncer.shouldReconcile(network.networkHandle, SystemClock.elapsedRealtime())) {
-                        onChanged(network)
+        synchronized(lock) {
+            if (callback != null) return
+            val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
+            // Priming with whatever is already active before registering is what keeps
+            // registerDefaultNetworkCallback's immediate onAvailable replay of that same
+            // network from reading as a transition — see NetworkTransitionDebouncer.prime.
+            // A null activeNetwork (no connectivity yet) is left unprimed on purpose: the
+            // first real onAvailable is then a genuine nothing-to-something transition and
+            // must reconcile, whether the session became wanted before or after a network
+            // actually exists.
+            manager.activeNetwork?.let { active -> debouncer.prime(active.networkHandle) }
+            val registered =
+                object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        if (debouncer.shouldReconcile(network.networkHandle, SystemClock.elapsedRealtime())) {
+                            onChanged(network)
+                        }
+                    }
+
+                    override fun onLost(network: Network) {
+                        onNetworkLost()
                     }
                 }
-
-                override fun onLost(network: Network) {
-                    onNetworkLost()
-                }
-            }
-        manager.registerDefaultNetworkCallback(registered)
-        callback = registered
+            manager.registerDefaultNetworkCallback(registered)
+            callback = registered
+        }
     }
 
     fun stop() {
-        val registered = callback ?: return
-        callback = null
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
-        // Unregistering a callback that was never registered throws; guarded by
-        // the null check above, and swallowed here because a service tearing down
-        // must not crash on cleanup (§5.4).
-        runCatching { manager.unregisterNetworkCallback(registered) }
+        synchronized(lock) {
+            val registered = callback ?: return
+            callback = null
+            val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
+            // Unregistering a callback that was never registered throws; guarded by
+            // the null check above, and swallowed here because a service tearing down
+            // must not crash on cleanup (§5.4).
+            runCatching { manager.unregisterNetworkCallback(registered) }
+        }
     }
 }

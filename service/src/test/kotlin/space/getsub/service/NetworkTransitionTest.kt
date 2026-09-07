@@ -57,4 +57,28 @@ class NetworkTransitionTest {
 
         decisions shouldBe listOf(true, false, false, false)
     }
+
+    /**
+     * `NetworkMonitor.start()` primes the debouncer with `ConnectivityManager
+     * .activeNetwork` before registering, because `registerDefaultNetworkCallback`
+     * replays `onAvailable` immediately for whatever network is already current.
+     * Without priming, that replay reads as a genuine transition and restarts a
+     * tunnel that was never actually interrupted — a restart on every connect.
+     */
+    @Test
+    fun primingWithTheAlreadyActiveNetworkSuppressesItsImmediateReplay() {
+        val debouncer = NetworkTransitionDebouncer()
+        debouncer.prime(networkId = 1L)
+
+        debouncer.shouldReconcile(networkId = 1L, nowMillis = 0L) shouldBe false
+    }
+
+    /** Priming must not swallow a genuine transition arriving right after registration. */
+    @Test
+    fun primingDoesNotSuppressAGenuinelyDifferentNetwork() {
+        val debouncer = NetworkTransitionDebouncer()
+        debouncer.prime(networkId = 1L)
+
+        debouncer.shouldReconcile(networkId = 2L, nowMillis = 0L) shouldBe true
+    }
 }

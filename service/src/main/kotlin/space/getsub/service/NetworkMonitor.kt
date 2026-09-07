@@ -34,6 +34,35 @@ internal class NetworkTransitionDebouncer(
         lastAtMillis = nowMillis
         return true
     }
+
+    /**
+     * Seeds the last-seen id with [networkId] without counting as a reconcile.
+     *
+     * `NetworkMonitor.start()` calls this with `ConnectivityManager.activeNetwork`'s
+     * id before registering, because `registerDefaultNetworkCallback` replays
+     * `onAvailable` immediately for whatever network is already current. Left
+     * unprimed, that replay has no previous id to compare against, so
+     * [shouldReconcile]'s id-equality guard never applies and the very first
+     * callback of every session reads as a genuine transition — tearing down and
+     * rebuilding a tunnel that was never actually interrupted.
+     *
+     * [lastAtMillis] is set far enough in the past that the time-window guard
+     * never fires for a network arriving shortly after priming: only the
+     * id-equality guard is meant to apply to a primed value, so a genuinely
+     * different network right after start() must still reconcile.
+     */
+    fun prime(networkId: Long) {
+        lastNetworkId = networkId
+        lastAtMillis = PRIMED_AT_MILLIS
+    }
+
+    private companion object {
+        // Long.MIN_VALUE / 2, not Long.MIN_VALUE itself: shouldReconcile computes
+        // `nowMillis - lastAtMillis`, and subtracting from the true minimum would
+        // overflow for any nowMillis > 0 (wrapping back around to a small or
+        // negative result, which would wrongly re-suppress a real transition).
+        private const val PRIMED_AT_MILLIS = Long.MIN_VALUE / 2
+    }
 }
 
 /**
@@ -60,6 +89,14 @@ internal class NetworkMonitor(
     fun start() {
         if (callback != null) return
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
+        // Priming with whatever is already active before registering is what keeps
+        // registerDefaultNetworkCallback's immediate onAvailable replay of that same
+        // network from reading as a transition — see NetworkTransitionDebouncer.prime.
+        // A null activeNetwork (no connectivity yet) is left unprimed on purpose: the
+        // first real onAvailable is then a genuine nothing-to-something transition and
+        // must reconcile, whether the session became wanted before or after a network
+        // actually exists.
+        manager.activeNetwork?.let { active -> debouncer.prime(active.networkHandle) }
         val registered =
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {

@@ -8,6 +8,8 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 import space.getsub.core.model.FailureReason
+import space.getsub.core.parser.OverrideBlocker
+import space.getsub.core.parser.OverrideTarget
 import space.getsub.core.xray.ComposeFailure
 import space.getsub.core.xray.ComposeResult
 import space.getsub.core.xray.OverrideBlocks
@@ -104,20 +106,79 @@ class PassthroughStartTest {
         plan.overrideApplies shouldBe false
     }
 
+    private val balancerConfig =
+        """
+        {
+          "routing": {
+            "rules": [ { "type": "field", "network": "tcp,udp", "balancerTag": "Auto_Balancer" } ],
+            "balancers": [ { "tag": "Auto_Balancer", "selector": ["proxy"] } ]
+          },
+          "outbounds": [
+            { "tag": "proxy-auto", "protocol": "vless" },
+            { "tag": "proxy-auto-2", "protocol": "vless" }
+          ]
+        }
+        """.trimIndent()
+
     @Test
-    fun `an override is refused when the config has no exact proxy outbound`() {
-        val balancerConfig =
+    fun `a balancer config resolves to its balancer instead of being refused`() {
+        // Before M7.5 this returned MissingOverrideProxy: the document tags
+        // nothing `proxy`, so the whole override was unavailable to it.
+        overrideTargetFor(balancerConfig, dnsPlanPresent = true) shouldBe
+            OverrideTarget.ViaBalancer("Auto_Balancer")
+    }
+
+    @Test
+    fun `a lone server resolves to its own tag whatever it is called`() {
+        val json = """{ "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ] }"""
+
+        overrideTargetFor(json, dnsPlanPresent = false) shouldBe OverrideTarget.ViaOutbound("proxy-auto")
+    }
+
+    @Test
+    fun `dns-out is reserved only when a dns plan is present`() {
+        reservedOverrideTags(dnsPlanPresent = true) shouldBe setOf("direct", "block", "dns-out")
+        reservedOverrideTags(dnsPlanPresent = false) shouldBe setOf("direct", "block")
+    }
+
+    @Test
+    fun `a config with no nameable target composes into a loud refusal`() {
+        val json =
             """
             {
               "outbounds": [
-                { "tag": "proxy-auto", "protocol": "vless" },
                 { "tag": "direct", "protocol": "freedom" },
                 { "tag": "block", "protocol": "blackhole" }
               ]
             }
             """.trimIndent()
 
-        passthroughOverrideFailure(balancerConfig) shouldBe ComposeFailure.MissingOverrideProxy
+        overrideTargetFor(json, dnsPlanPresent = false) shouldBe
+            OverrideTarget.Unresolvable(OverrideBlocker.NoResolvableTarget)
+        compositionFailureReason(ComposeFailure.UnresolvableOverrideTarget) shouldBe
+            FailureReason.PassthroughOverrideUnavailable
+    }
+
+    @Test
+    fun `a reserved tag carrying the wrong protocol is still incompatible`() {
+        // This half of the old check survives: the override appends `direct`,
+        // `block` and `dns-out`, so a config defining one of those names with a
+        // different protocol gives that tag different semantics.
+        val json =
+            """
+            {
+              "outbounds": [
+                { "tag": "proxy-auto", "protocol": "vless" },
+                { "tag": "direct", "protocol": "vless" }
+              ]
+            }
+            """.trimIndent()
+
+        passthroughOverrideFailure(json) shouldBe ComposeFailure.IncompatibleOverrideOutbound
+    }
+
+    @Test
+    fun `an ordinary config passes the reserved-protocol check`() {
         passthroughOverrideFailure(config) shouldBe null
     }
 
@@ -125,7 +186,6 @@ class PassthroughStartTest {
     fun `an override is refused when a reserved tag has incompatible semantics`() {
         val incompatible =
             listOf(
-                """{ "tag": "proxy", "protocol": "freedom" }""",
                 """{ "tag": "proxy", "protocol": "vless" }, { "tag": "direct", "protocol": "blackhole" }""",
                 """{ "tag": "proxy", "protocol": "vless" }, { "tag": "block", "protocol": "freedom" }""",
                 """{ "tag": "proxy", "protocol": "vless" }, { "tag": "dns-out", "protocol": "freedom" }""",
@@ -140,8 +200,20 @@ class PassthroughStartTest {
     }
 
     @Test
+    fun `an outbound named proxy that is not a server is refused by resolution now`() {
+        // Pre-M7.5 this was the guard's `proxyProtocol in INFRASTRUCTURE_PROTOCOLS`
+        // arm. Resolution subsumes it: a freedom outbound is not a server the user
+        // chose, so nothing is left to name.
+        val json = """{ "outbounds": [ { "tag": "proxy", "protocol": "freedom" } ] }"""
+
+        passthroughOverrideFailure(json) shouldBe null
+        overrideTargetFor(json, dnsPlanPresent = false) shouldBe
+            OverrideTarget.Unresolvable(OverrideBlocker.NoResolvableTarget)
+    }
+
+    @Test
     fun `a missing override target gets its own user-actionable failure reason`() {
-        compositionFailureReason(ComposeFailure.MissingOverrideProxy) shouldBe
+        compositionFailureReason(ComposeFailure.UnresolvableOverrideTarget) shouldBe
             FailureReason.PassthroughOverrideUnavailable
         compositionFailureReason(ComposeFailure.NotJson) shouldBe FailureReason.ConfigGenerationFailed
     }

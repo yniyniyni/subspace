@@ -29,9 +29,12 @@ import space.getsub.core.model.VlessOutbound
 import space.getsub.core.model.VmessOutbound
 import space.getsub.core.parser.DetailField
 import space.getsub.core.parser.FailureDetail
+import space.getsub.core.parser.OverrideBlocker
+import space.getsub.core.parser.OverrideTarget
 import space.getsub.core.parser.PassthroughAdvisory
 import space.getsub.core.parser.PassthroughRejection
 import space.getsub.core.parser.analysePassthrough
+import space.getsub.core.parser.resolveOverrideTarget
 import space.getsub.core.parser.routing.RoutingConversion
 import space.getsub.core.parser.routing.convertXrayRouting
 import space.getsub.core.parser.validatePort
@@ -108,6 +111,27 @@ internal data class EditorState(
      * for something already derivable. Empty for every [ProfileKind.TYPED] row.
      */
     val advisories: List<PassthroughAdvisory> = emptyList(),
+    /**
+     * Why the app's routing and DNS cannot be applied on top of this config, or
+     * null when they can.
+     *
+     * **Only ever set for a row that [runsAsWritten].** `rawJson` is populated for
+     * every [ProfileKind.RAW_JSON] row, including ones the analyser rejected, and on
+     * such a row this message would be false twice over: the row does not run as
+     * written, and the app's routing and DNS *do* apply to it, through the typed
+     * projection. §10.4 — a result must not misdescribe what was measured.
+     *
+     * Computed at load from [rawJson] alongside [advisories], never stored — the
+     * verdict depends only on those bytes, and a stored one would go stale on the
+     * next subscription refresh.
+     *
+     * Resolved against the **unconditionally** appended tags only. `dns-out` is
+     * appended just when a DNS plan is active, which is a tunnel setting rather
+     * than a property of this config, so a `dns-out` collision is left to the
+     * connect-time refusal (`FailureReason.PassthroughOverrideUnavailable`)
+     * rather than reported here as though the config were broken.
+     */
+    val overrideBlocker: OverrideBlocker? = null,
     /** True when [runsAsWritten] and an app rule set or DNS resolver would replace this config's blocks. */
     val routingOverridesThisConfig: Boolean = false,
     /**
@@ -258,13 +282,25 @@ constructor(
                     // parse of the pasted config, and load() otherwise runs on Main.immediate — a
                     // large config would add a frame hitch on every RAW_JSON editor open. One hop,
                     // not two: both parses are pure and share nothing that forces a second dispatch.
-                    val (canConvertRouting, advisories) =
+                    // The whole analysis comes out of the block rather than just its advisories,
+                    // so overrideBlocker below is a second *derivation* from that one parse and
+                    // not a third parse — there is no third parse to go looking for.
+                    val (canConvertRouting, passthrough) =
                         withContext(conversionDispatcher) {
                             val canConvert = loaded.convertibleRouting() != null
-                            val advisories = loaded.rawJson?.let { analysePassthrough(it).advisories }.orEmpty()
-                            canConvert to advisories
+                            val analysis = loaded.rawJson?.let { analysePassthrough(it) }
+                            canConvert to analysis
                         }
-                    loaded.copy(canConvertRouting = canConvertRouting, advisories = advisories)
+                    loaded.copy(
+                        canConvertRouting = canConvertRouting,
+                        advisories = passthrough?.advisories.orEmpty(),
+                        overrideBlocker =
+                        passthrough
+                            ?.takeIf { loaded.runsAsWritten }
+                            ?.let { resolveOverrideTarget(it, EDITOR_RESERVED_TAGS) }
+                            ?.let { it as? OverrideTarget.Unresolvable }
+                            ?.reason,
+                    )
                 }
         }
     }
@@ -579,3 +615,10 @@ private fun EditorState.toOutbound(): Outbound {
             SocksOutbound(address, portValue, primaryCredential.ifBlank { null }, secondaryCredential.ifBlank { null })
     }
 }
+
+/**
+ * The outbound tags every override reserves, regardless of settings.
+ *
+ * `dns-out` is deliberately absent — see [EditorState.overrideBlocker].
+ */
+private val EDITOR_RESERVED_TAGS = setOf("direct", "block")

@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
+// TooManyFunctions counts this file's top-level helpers alongside the class's
+// own, which already carries the same suppression. M7.5 split the connect-time
+// guard into resolution and the reserved-tag check, which are two questions and
+// so two functions; merging them back to satisfy a count would be worse code.
+@file:Suppress("TooManyFunctions")
+
 package space.getsub.service
 
 import android.content.Intent
@@ -39,7 +45,9 @@ import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
 import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
+import space.getsub.core.parser.OverrideTarget
 import space.getsub.core.parser.analysePassthrough
+import space.getsub.core.parser.resolveOverrideTarget
 import space.getsub.core.xray.ComposeFailure
 import space.getsub.core.xray.ComposeResult
 import space.getsub.core.xray.ConfigResult
@@ -177,23 +185,54 @@ private val REQUIRED_OVERRIDE_PROTOCOLS =
         "dns-out" to "dns",
     )
 
-private val INFRASTRUCTURE_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
+/**
+ * The outbound tags the override branch **reserves**, which a config's balancer
+ * must not also select (design §3.4).
+ *
+ * Deliberately the *unfiltered* set, not the set actually appended.
+ * [composePassthrough] drops any stock outbound whose tag the config already
+ * defines, so a config carrying its own `direct` gets none of ours — but its own
+ * `direct` is still a `freedom` outbound, and a balancer selecting it leaks
+ * exactly the same way. Narrowing this to what is appended would trade a
+ * harmless over-refusal for a real leak.
+ *
+ * `dns-out` is conditional because `XrayConfigGenerator.overrideBlocks` only
+ * appends it when a DNS plan is present — so a config whose balancer selects on
+ * `dns-out` is refused with DNS on and accepted with it off, which is correct.
+ */
+internal fun reservedOverrideTags(dnsPlanPresent: Boolean): Set<String> =
+    if (dnsPlanPresent) setOf("direct", "block", "dns-out") else setOf("direct", "block")
 
-/** The failure that prevents generated rules from targeting a missing or misleading outbound. */
+/**
+ * What the app's generated rules should name for this config, decided fresh from
+ * the stored bytes.
+ *
+ * Never stored (design §3.2): M7's one Critical was a stored verdict going stale
+ * across a subscription refresh, and a stored target would go stale identically
+ * the moment a refresh renames an outbound.
+ */
+internal fun overrideTargetFor(
+    rawJson: String,
+    dnsPlanPresent: Boolean,
+): OverrideTarget = resolveOverrideTarget(analysePassthrough(rawJson), reservedOverrideTags(dnsPlanPresent))
+
+/**
+ * Whether a reserved tag the override appends already exists with a protocol
+ * that would give it different semantics.
+ *
+ * This is what remains of M7's connect-time guard after M7.5. Its `proxy`-tag
+ * half is gone — that question is now [overrideTargetFor]'s — but the override
+ * still appends `direct`, `block` and `dns-out`, and a config that already
+ * defines one of those names as something else is still a config we must not
+ * write rules against.
+ */
 internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? {
     val protocols = analysePassthrough(rawJson).outboundProtocolsByTag
-    val proxyProtocol = protocols["proxy"]
     val reservedTagIsIncompatible =
         REQUIRED_OVERRIDE_PROTOCOLS.any { (tag, expectedProtocol) ->
             protocols[tag]?.let { it != expectedProtocol } == true
         }
-    return when {
-        proxyProtocol == null -> ComposeFailure.MissingOverrideProxy
-        proxyProtocol.isBlank() || proxyProtocol in INFRASTRUCTURE_PROTOCOLS ->
-            ComposeFailure.IncompatibleOverrideOutbound
-        reservedTagIsIncompatible -> ComposeFailure.IncompatibleOverrideOutbound
-        else -> null
-    }
+    return ComposeFailure.IncompatibleOverrideOutbound.takeIf { reservedTagIsIncompatible }
 }
 
 /**
@@ -218,7 +257,7 @@ internal fun balancerLatencyRefusal(rawJson: String?): LatencyOutcome? =
 /** Maps composition failures to the user-actionable service reason they represent. */
 internal fun compositionFailureReason(reason: ComposeFailure): FailureReason =
     when (reason) {
-        ComposeFailure.MissingOverrideProxy,
+        ComposeFailure.UnresolvableOverrideTarget,
         ComposeFailure.IncompatibleOverrideOutbound,
         -> FailureReason.PassthroughOverrideUnavailable
         ComposeFailure.NotJson,
@@ -849,6 +888,7 @@ class TunnelService : VpnService() {
      * unfiltered duplicate tag (a `direct` freedom outbound is common) would be
      * a config the core is not obliged to accept.
      */
+    @Suppress("ReturnCount") // One early return per distinct refusal, same reasoning as startCore's own.
     private fun composePassthrough(
         rawJson: String,
         settings: TunnelSettings,
@@ -865,8 +905,19 @@ class TunnelService : VpnService() {
         val override =
             if (plan.overrideApplies) {
                 passthroughOverrideFailure(rawJson)?.let { return ComposeResult.Failed(it) }
+                val target =
+                    when (val resolved = overrideTargetFor(rawJson, dnsPlanPresent = dnsPlan != null)) {
+                        is OverrideTarget.Resolved -> resolved
+                        // A6 and the ambiguity gates are ours to catch; a balancer
+                        // tag we invented would be caught by `testXray` anyway (A3),
+                        // but a config we cannot resolve must never reach a rule
+                        // emitter — which `Resolved` makes a type error rather than
+                        // a discipline.
+                        is OverrideTarget.Unresolvable ->
+                            return ComposeResult.Failed(ComposeFailure.UnresolvableOverrideTarget)
+                    }
                 val existingTags = existingOutboundTags(rawJson)
-                XrayConfigGenerator.overrideBlocks(settings)
+                XrayConfigGenerator.overrideBlocks(settings, target)
                     .let { blocks ->
                         blocks.copy(
                             extraOutboundsJson = blocks.extraOutboundsJson.filter { it.tagOf() !in existingTags },

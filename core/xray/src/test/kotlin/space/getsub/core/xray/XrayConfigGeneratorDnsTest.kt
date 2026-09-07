@@ -6,6 +6,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
+import space.getsub.core.parser.OverrideTarget
 
 class XrayConfigGeneratorDnsTest {
     @Suppress("Indentation") // ktlint requires this nested constructor indentation; detekt disagrees.
@@ -21,6 +22,43 @@ class XrayConfigGeneratorDnsTest {
             directMatch = "8.8.8.8",
             proxyMatch = "cloudflare-dns.com",
         )
+
+    private val overrideSettings =
+        TunnelSettings(
+            socksPort = 10808,
+            dnsServer = "1.1.1.1",
+            enableSniffing = true,
+            dns = plan,
+        )
+
+    @Test
+    fun `every proxy-bound dns rule names a balancer when the target is one`() {
+        // A2, measured on device: the dns-module catch-all and both resolverRule
+        // forms take balancerTag exactly as the routing rules do.
+        val routing = XrayConfigGenerator.overrideBlocks(overrideSettings, OverrideTarget.ViaBalancer("B")).routingJson
+
+        routing shouldContain """{ "type": "field", "inboundTag": ["dns-module"], "balancerTag": "B" }"""
+        routing shouldContain """"domain": ["cloudflare-dns.com"], "balancerTag": "B""""
+        routing shouldNotContain """"outboundTag": "proxy""""
+    }
+
+    @Test
+    fun `every proxy-bound dns rule names an outbound when the target is one`() {
+        val routing =
+            XrayConfigGenerator.overrideBlocks(overrideSettings, OverrideTarget.ViaOutbound("proxy-auto")).routingJson
+
+        routing shouldContain """{ "type": "field", "inboundTag": ["dns-module"], "outboundTag": "proxy-auto" }"""
+        routing shouldContain """"domain": ["cloudflare-dns.com"], "outboundTag": "proxy-auto""""
+    }
+
+    @Test
+    fun `the domestic resolver rule still names direct whatever the target is`() {
+        // The direct match must never follow the target: sending a domestic
+        // resolver's traffic to the proxy is the inverse of what the split is for.
+        val routing = XrayConfigGenerator.overrideBlocks(overrideSettings, OverrideTarget.ViaBalancer("B")).routingJson
+
+        routing shouldContain """"ip": ["8.8.8.8"], "outboundTag": "direct""""
+    }
 
     @Test
     fun `a null plan reproduces the M1 dns block exactly`() {

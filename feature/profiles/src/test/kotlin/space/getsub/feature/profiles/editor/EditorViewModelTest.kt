@@ -30,7 +30,9 @@ import space.getsub.core.model.Profile
 import space.getsub.core.model.Security
 import space.getsub.core.model.StreamSettings
 import space.getsub.core.model.VlessOutbound
+import space.getsub.core.parser.OverrideBlocker
 import space.getsub.core.parser.PassthroughAdvisory
+import space.getsub.core.parser.PassthroughRejection
 import space.getsub.feature.profiles.ProfileSource
 
 /**
@@ -136,6 +138,50 @@ class EditorViewModelTest {
             """"outbounds":[{"tag":"proxy-auto","protocol":"vless"}]}"""
 
     private val danglingRoutingRawJsonProfile = rawJsonProfile.copy(id = 5L, rawJson = danglingRoutingRawJson)
+
+    private val balancerRawJsonProfile =
+        rawJsonProfile.copy(
+            id = 6L,
+            rawJson =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["proxy"] } ] }
+            }
+            """.trimIndent(),
+        )
+
+    /**
+     * A RAW_JSON row the analyser rejected. Its bytes would resolve to
+     * `Unresolvable(NoResolvableTarget)`, so it is exactly the shape that used to
+     * show an override-blocker message it had no business showing.
+     */
+    private val rejectedRawJsonProfile =
+        rawJsonProfile.copy(
+            id = 8L,
+            passthroughRejection = PassthroughRejection.SeveralServers,
+            rawJson =
+            """
+            {
+              "outbounds": [
+                { "tag": "direct", "protocol": "freedom" },
+                { "tag": "block", "protocol": "blackhole" }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+    private val emptyBalancerRawJsonProfile =
+        rawJsonProfile.copy(
+            id = 7L,
+            rawJson =
+            """
+            {
+              "outbounds": [ { "tag": "proxy-auto", "protocol": "vless" } ],
+              "routing": { "balancers": [ { "tag": "B", "selector": ["nothing"] } ] }
+            }
+            """.trimIndent(),
+        )
 
     private class FakeProfileSource(
         profiles: List<StoredProfile>,
@@ -369,6 +415,80 @@ class EditorViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.advisories shouldBe listOf(PassthroughAdvisory.DanglingRoutingReference)
+        }
+
+    @Test
+    fun `a balancer config that resolves carries no override blocker`() =
+        runTest {
+            val source = FakeProfileSource(listOf(balancerRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(balancerRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.overrideBlocker shouldBe null
+        }
+
+    @Test
+    fun `a balancer that selects nothing is reported to the user`() =
+        runTest {
+            // A6: the core accepts this config and then silently drops every
+            // packet, so this message is the only warning the user will get.
+            val source = FakeProfileSource(listOf(emptyBalancerRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(emptyBalancerRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.overrideBlocker shouldBe OverrideBlocker.BalancerSelectsNothing
+        }
+
+    // Branch review I1: `rawJson` is populated for every RAW_JSON row, rejected ones
+    // included, so an ungated blocker told the user "this profile still connects, but
+    // those settings will not apply" about a row that neither runs as written nor
+    // escapes the app's routing — it gets both, via the typed projection.
+    @Test
+    fun `a rejected raw json row carries no override blocker`() =
+        runTest {
+            val source = FakeProfileSource(listOf(rejectedRawJsonProfile))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(rejectedRawJsonProfile.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.runsAsWritten shouldBe false
+            viewModel.state.value.overrideBlocker shouldBe null
+        }
+
+    /**
+     * `EDITOR_RESERVED_TAGS` deliberately omits `dns-out`: whether the override
+     * appends it depends on a tunnel setting, not on this config, so a `dns-out`
+     * collision is left to the connect-time refusal instead of being shown here
+     * as though the file were broken. Documented in `EditorState.overrideBlocker`
+     * and, until now, pinned nowhere — so nothing would have caught the editor
+     * quietly starting to disagree with connect.
+     */
+    @Test
+    fun `a dns-out collision is not reported by the editor`() =
+        runTest {
+            val dnsOutCollision =
+                rawJsonProfile.copy(
+                    id = 9L,
+                    rawJson =
+                    """
+                    {
+                      "outbounds": [ { "tag": "dns-outer", "protocol": "vless" } ],
+                      "routing": { "balancers": [ { "tag": "B", "selector": ["dns-out"] } ] }
+                    }
+                    """.trimIndent(),
+                )
+            val source = FakeProfileSource(listOf(dnsOutCollision))
+            val viewModel = editorViewModel(source)
+
+            viewModel.load(dnsOutCollision.id)
+            advanceUntilIdle()
+
+            viewModel.state.value.overrideBlocker shouldBe null
         }
 
     // Fix round 1, Minor 5: renamed from "...whose references all resolve carries no

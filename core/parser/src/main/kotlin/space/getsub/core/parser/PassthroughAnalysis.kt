@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
+@file:Suppress("TooManyFunctions")
+
 package space.getsub.core.parser
 
 import kotlinx.serialization.SerializationException
@@ -61,16 +63,74 @@ public enum class PassthroughRejection {
  * Why the app's routing and DNS cannot be applied *on top of* a config that is
  * otherwise runnable.
  *
- * Distinct from [PassthroughRejection]: these configs run perfectly on their
- * own. The target panel's own balancer entry is one of them (research §5b.1),
- * which is why this is not an eligibility failure.
+ * Distinct from [PassthroughRejection]: these configs run perfectly on their own.
+ *
+ * This is [OverrideTarget.Unresolvable]'s reason vocabulary. Until M7.5 it was a
+ * field on [PassthroughAnalysis] that nothing read — `ARCHITECTURE.md` §6
+ * recorded it as dead. `NoProxyTag` is gone with that field: "no outbound tagged
+ * exactly `proxy`" stopped being a blocker the moment the target became
+ * resolvable, and a member naming a non-problem is how a stale check outlives
+ * its reason.
  */
 public enum class OverrideBlocker {
-    /** No outbound is tagged exactly `proxy`, so our rules have nothing to name. */
-    NoProxyTag,
-
-    /** An outbound tag is blank or repeated, so a reference to it is ambiguous. */
+    /** Two outbounds share a non-blank tag, so a reference to it names two things. */
     AmbiguousOutboundTags,
+
+    /** No single server outbound this app can name — none, several, or the only one is untagged. */
+    NoResolvableTarget,
+
+    /** Several usable balancers, and the config's own rules do not single one out. */
+    SeveralBalancers,
+
+    /**
+     * The config declares balancers, and not one of them carries a usable `tag`.
+     *
+     * Distinct from [BalancerSelectsNothing]: such a balancer's `selector` may
+     * match perfectly well. The defect is that no rule can name it — the
+     * config's own rules included — so a message about its selector would send
+     * the reader looking at the wrong half of the declaration.
+     */
+    BalancerHasNoTag,
+
+    /**
+     * Every balancer this app can name has a `selector` matching no server
+     * outbound, so it would carry nothing.
+     *
+     * "Can name" is the narrowing [BalancerHasNoTag] leaves behind: a balancer
+     * with a blank tag is not a candidate and is not evidence about selectors.
+     */
+    BalancerSelectsNothing,
+
+    /**
+     * A balancer's `selector` would also capture an outbound that does not reach a
+     * server, so a share of everything routed through it would leave the tunnel or
+     * be dropped.
+     *
+     * Both sources count: the `direct`/`block`/`dns-out` outbounds the override
+     * appends, and the config's **own** `freedom`/`blackhole` outbounds. One
+     * hazard, one reason.
+     */
+    TargetTagCollision,
+
+    /**
+     * A balancer's `fallbackTag` names an outbound that does not reach a server,
+     * so everything the override routes through that balancer leaves the tunnel
+     * or is dropped for as long as the fallback is in use.
+     *
+     * Deliberately **not** folded into [TargetTagCollision]. That member is
+     * about a `selector` **prefix** reaching further than its author meant; this
+     * one is about an exact declaration doing exactly what it says. The user's
+     * repair differs accordingly — narrow the selector there, repoint or drop
+     * the fallback here — and §10.4 wants the reason to be actionable rather
+     * than merely correct.
+     *
+     * A refusal only on the **override** branch, which is the only branch this
+     * enum describes. In pure passthrough the fallback is the config's own
+     * choice about the config's own rules; here the app's generated rules — the
+     * `dns-module` catch-all included — are what point at the balancer, so the
+     * leak would be ours.
+     */
+    BalancerFallbackNotAServer,
 }
 
 /**
@@ -112,22 +172,147 @@ public enum class PassthroughAdvisory {
  */
 public data class PassthroughAnalysis(
     val rejection: PassthroughRejection?,
-    val overrideBlocker: OverrideBlocker?,
     val advisories: List<PassthroughAdvisory>,
     val isBalancer: Boolean,
     val serverOutboundCount: Int,
     val outboundTags: List<String>,
     /** Exact protocol by tag, used to verify app-owned override targets before routing to them. */
     val outboundProtocolsByTag: Map<String, String>,
+    /** Every balancer this app could name, in document order. Empty when there are none. */
+    val balancers: List<BalancerSpec>,
+    /** The `balancerTag` of every rule that matches everything, in document order. */
+    val catchAllBalancerRefs: List<String>,
 ) {
     override fun toString(): String =
-        "PassthroughAnalysis(rejection=$rejection, overrideBlocker=$overrideBlocker, " +
-            "advisories=$advisories, isBalancer=$isBalancer, servers=$serverOutboundCount, " +
-            "tags=<redacted, ${outboundTags.size}>)"
+        "PassthroughAnalysis(rejection=$rejection, advisories=$advisories, " +
+            "isBalancer=$isBalancer, servers=$serverOutboundCount, " +
+            "tags=<redacted, ${outboundTags.size}>, balancers=<redacted, ${balancers.size}>, " +
+            "catchAllRefs=<redacted, ${catchAllBalancerRefs.size}>)"
 }
 
+/**
+ * One `routing.balancers` entry, reduced to what target resolution needs.
+ *
+ * Only balancers with a non-blank `tag` become a [BalancerSpec]: an untagged
+ * balancer cannot be named by a rule, so treating it as a candidate would invite
+ * emitting `"balancerTag": ""`. [PassthroughAnalysis.isBalancer] is deliberately
+ * *not* narrowed the same way — it drives the [PassthroughRejection.SeveralServers]
+ * exemption, which is a statement about the document's shape rather than about
+ * whether this app can address the balancer.
+ *
+ * §5.6: [selector] entries are outbound tag prefixes, which are routing
+ * identifiers rather than credentials — but see [PassthroughAnalysis.toString].
+ */
+public data class BalancerSpec(
+    val tag: String,
+    val selector: List<String>,
+    /**
+     * The balancer's declared `fallbackTag`, or null when it declares none.
+     *
+     * An **exact** outbound tag, unlike [selector]'s prefixes — the core's own
+     * refusal for a missing one calls it `outTag` (device record F9, Pixel 8,
+     * 2026-08-31), which is why `hasDanglingReference` already resolves it
+     * against outbound tags rather than balancer tags.
+     *
+     * Retained because a balancer that selects only servers can still carry a
+     * fallback that reaches none of them, and `RawConfigComposer.withDeclaredBalancers`
+     * carries the whole declaration — this field included — into the composed
+     * override config. Blank is normalised to null: `"fallbackTag": ""` names no
+     * outbound, and treating it as a reference would let a blank collide with an
+     * untagged outbound's placeholder.
+     */
+    val fallbackTag: String? = null,
+)
+
+/**
+ * The keys a rule may carry and still match everything.
+ *
+ * An **allow-list**, and the direction matters (design §3.3). A deny-list would
+ * treat an unrecognised selective key as non-narrowing, so a future or
+ * vendor-specific matcher would silently make a narrow rule look like a
+ * catch-all and resolve the wrong balancer. This way an unknown key stops the
+ * config disambiguating and it is refused instead.
+ *
+ * `network` is on the list because `"tcp,udp"` is the complete set a TUN
+ * carries — it is how this project writes its own catch-all
+ * (`RoutingRules.CATCH_ALL_DIRECT`), so treating it as a condition would discard
+ * the most common catch-all shape there is.
+ *
+ * It is the **only** key on the list whose *value* is also checked, by
+ * [coversEveryNetwork]: design §3.3 admits `network` on the strength of
+ * `"tcp,udp"` specifically, and `network: "tcp"` says nothing at all about where
+ * UDP should go.
+ */
+private val UNCONDITIONED_RULE_KEYS = setOf("type", "network", "balancerTag")
+
+/** The two networks a TUN carries; a `network` value covering both narrows nothing. */
+private val TUN_NETWORKS = setOf("tcp", "udp")
+
+/**
+ * Whether this rule's `network` value, if it has one, still leaves the rule
+ * matching everything a TUN carries.
+ *
+ * Design §3.3 puts `network` on [UNCONDITIONED_RULE_KEYS] because `"tcp,udp"` is
+ * the complete set — the justification is about that value, not about the key.
+ * A lone `network: "tcp"` is a genuine condition: it expresses no default for
+ * UDP, so reading it as the config naming its catch-all balancer would resolve
+ * the override off a rule that covers half the traffic, and a config that also
+ * carries a real `"tcp,udp"` catch-all would be refused as ambiguous when it is
+ * not.
+ *
+ * **Read as a statement of intent, not as a matcher.** The override branch
+ * replaces `routing.rules` wholesale (`RawConfigComposer`), so the config's own
+ * rule never executes — it is only evidence about which balancer the author
+ * meant to be the default. That is why the tokens are trimmed and compared
+ * case-insensitively rather than byte-for-byte: `"udp, TCP"` states the same
+ * intent as `"tcp,udp"`, and how xray-core itself tokenises the field is an
+ * upstream question this repo has no measurement for (§10.5) and does not need
+ * one for, because the answer cannot change what runs.
+ *
+ * A rule carrying no `network` at all, or an explicit `null`, states no network
+ * condition and stays a catch-all — as it was before this check existed. This
+ * narrowing exists to catch a *stated* condition, not to invent one.
+ */
+private fun JsonObject.coversEveryNetwork(): Boolean {
+    val network = this["network"]
+    if (network == null || network is JsonNull) return true
+    val named =
+        when (network) {
+            // The list form is read the same way as the comma-joined string. Both
+            // were catch-alls for free while only the key was checked; narrowing to
+            // the reported defect must not quietly refuse the shape it did not name.
+            is JsonArray -> network.mapNotNull { it.stringOrNull() }
+            else -> network.stringOrNull()?.split(',').orEmpty()
+        }
+    val normalised = named.mapTo(mutableSetOf()) { it.trim().lowercase() }
+    return TUN_NETWORKS.all { it in normalised }
+}
+
+/** Every balancer this app could name, in document order. */
+@Suppress("UnreachableCode")
+// UnreachableCode is flagged only by detektMain (type-resolution pass in `./gradlew check`),
+// not by plain `./gradlew :core:parser:detekt`. The labeled return is valid; detektMain
+// detektMain over-reports on this function's labelled return inside mapNotNull.
+private fun balancerSpecs(routing: JsonObject?): List<BalancerSpec> =
+    routing.arrayOf("balancers").filterIsInstance<JsonObject>().mapNotNull { balancer ->
+        val tag = balancer["tag"].stringOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        BalancerSpec(
+            tag = tag,
+            selector = balancer.arrayOf("selector").mapNotNull { it.stringOrNull() },
+            fallbackTag = balancer["fallbackTag"].stringOrNull()?.takeIf { it.isNotBlank() },
+        )
+    }
+
+/** The `balancerTag` of every rule that matches everything, in document order. */
+private fun catchAllBalancerRefs(routing: JsonObject?): List<String> =
+    routing
+        .arrayOf("rules")
+        .filterIsInstance<JsonObject>()
+        .filter { rule -> rule.keys.all { it in UNCONDITIONED_RULE_KEYS } && rule.coversEveryNetwork() }
+        .mapNotNull { rule -> rule["balancerTag"].stringOrNull()?.takeIf { it.isNotBlank() } }
+
 /** Protocols that are infrastructure rather than a server the user chose. */
-private val NON_SERVER_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
+internal val NON_SERVER_PROTOCOLS = setOf("freedom", "blackhole", "dns", "loopback")
 
 // ignoreUnknownKeys governs typed decodeFromString; the only use below is parseToJsonElement,
 // which it never affects, so it is left out rather than left looking load-bearing.
@@ -182,32 +367,27 @@ private fun analyseOutbounds(
 
     return PassthroughAnalysis(
         rejection = rejection,
-        overrideBlocker = overrideBlockerFor(tags),
         advisories = advisoriesFor(root, routing, tags),
         isBalancer = isBalancer,
         serverOutboundCount = serverCount,
         outboundTags = tags,
         outboundProtocolsByTag = tags.zip(protocols).toMap(),
+        balancers = balancerSpecs(routing),
+        catchAllBalancerRefs = catchAllBalancerRefs(routing),
     )
 }
 
 private fun rejectedAs(reason: PassthroughRejection): PassthroughAnalysis =
     PassthroughAnalysis(
         rejection = reason,
-        overrideBlocker = null,
         advisories = emptyList(),
         isBalancer = false,
         serverOutboundCount = 0,
         outboundTags = emptyList(),
         outboundProtocolsByTag = emptyMap(),
+        balancers = emptyList(),
+        catchAllBalancerRefs = emptyList(),
     )
-
-private fun overrideBlockerFor(tags: List<String>): OverrideBlocker? =
-    when {
-        tags.any { it.isBlank() } || tags.size != tags.toSet().size -> OverrideBlocker.AmbiguousOutboundTags
-        "proxy" !in tags -> OverrideBlocker.NoProxyTag
-        else -> null
-    }
 
 /**
  * Research §5b.5: whether the config's own sniffing settings can serve its own

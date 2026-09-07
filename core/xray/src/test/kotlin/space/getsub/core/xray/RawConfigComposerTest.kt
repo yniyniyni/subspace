@@ -10,6 +10,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
+import space.getsub.core.model.RoutingRuleSet
+import space.getsub.core.parser.OverrideTarget
 
 class RawConfigComposerTest {
     private val settings =
@@ -312,15 +314,45 @@ class RawConfigComposerTest {
         )
 
     @Test
-    fun `the override branch replaces the config's routing and dns wholesale`() {
+    fun `the override branch replaces the config's routing rules and dns wholesale`() {
         val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
         val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
 
         val routing = out["routing"] as JsonObject
-        routing["balancers"] shouldBe null
         routing["domainMatcher"] shouldBe null
+        (routing["rules"] as JsonArray).size shouldBe 1
         (routing["domainStrategy"]!!.jsonPrimitive.content) shouldBe "IPIfNonMatch"
         ((out["dns"] as JsonObject)["servers"] as JsonArray).size shouldBe 1
+    }
+
+    // M7.5: the override's rules may name the config's own balancer, and the core
+    // refuses a rule naming a balancer the config does not declare (A3, pinned in
+    // RawConfigComposerXrayTest). Replacing `routing` wholesale used to take the
+    // declaration with it, so every balancer config was refused at build for a
+    // name only this carry-forward preserves.
+    @Test
+    fun `the override branch carries the config's own balancer declarations forward`() {
+        val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+
+        val balancers = (out["routing"] as JsonObject)["balancers"] as JsonArray
+        balancers.size shouldBe 1
+        ((balancers[0] as JsonObject)["tag"]!!.jsonPrimitive.content) shouldBe "Auto_Balancer"
+    }
+
+    @Test
+    fun `a config with no balancers gets no balancers key`() {
+        val noBalancers =
+            """
+            {
+              "routing": { "rules": [ { "network": "tcp,udp", "outboundTag": "proxy" } ] },
+              "outbounds": [ { "tag": "proxy", "protocol": "vless" } ]
+            }
+            """.trimIndent()
+        val result = RawConfigComposer.compose(noBalancers, settings, "/data/geo", override)
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+
+        (out["routing"] as JsonObject)["balancers"] shouldBe null
     }
 
     @Test
@@ -377,7 +409,7 @@ class RawConfigComposerTest {
     // gap by wiring the two functions together the way Task 9 will.
     @Test
     fun `overrideBlocks feeds straight into compose as a valid override`() {
-        val blocks = XrayConfigGenerator.overrideBlocks(settings)
+        val blocks = XrayConfigGenerator.overrideBlocks(settings, OverrideTarget.ViaOutbound("proxy"))
         val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", blocks)
 
         result.shouldBeOk()
@@ -394,7 +426,7 @@ class RawConfigComposerTest {
     @Test
     fun `overrideBlocks with a fakeDns plan produces dns-out and a fakedns-aware override`() {
         val settingsWithFakeDns = settings.copy(dns = dnsPlanWithFakeDns)
-        val blocks = XrayConfigGenerator.overrideBlocks(settingsWithFakeDns)
+        val blocks = XrayConfigGenerator.overrideBlocks(settingsWithFakeDns, OverrideTarget.ViaOutbound("proxy"))
         val result = RawConfigComposer.compose(panelLike, settingsWithFakeDns, "/data/geo", blocks)
 
         result.shouldBeOk()
@@ -406,5 +438,56 @@ class RawConfigComposerTest {
         val overrides = ((socks["sniffing"] as JsonObject)["destOverride"] as JsonArray)
             .map { it.jsonPrimitive.content }
         overrides.contains("fakedns") shouldBe true
+    }
+
+    // A config that lists a `freedom` outbound first. Composing an override over
+    // it deletes its own catch-all while `compose` keeps `outbounds` in the order
+    // the document wrote them, so before the fallthrough rule existed every
+    // unmatched packet left through `direct` — a §5.2 leak introduced by us.
+    private val freedomFirst =
+        """
+        {
+          "routing": { "rules": [ { "network": "tcp,udp", "outboundTag": "proxy-auto" } ] },
+          "inbounds": [ { "tag": "socks", "port": 10808, "protocol": "socks" } ],
+          "outbounds": [
+            { "tag": "local", "protocol": "freedom" },
+            { "tag": "proxy-auto", "protocol": "vless" }
+          ]
+        }
+        """.trimIndent()
+
+    @Test
+    fun `a composed override names the target for unmatched traffic, not the config's first outbound`() {
+        val routed =
+            settings.copy(routing = RoutingRuleSet(name = "r", buckets = emptyMap(), globalProxy = true))
+        val blocks = XrayConfigGenerator.overrideBlocks(routed, OverrideTarget.ViaOutbound("proxy-auto"))
+        val result = RawConfigComposer.compose(freedomFirst, routed, "/data/geo", blocks)
+
+        result.shouldBeOk()
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val tags = (out["outbounds"] as JsonArray).map { (it as JsonObject)["tag"]!!.jsonPrimitive.content }
+        // The premise: `compose` only appends, so the document's own order
+        // survives and its `freedom` outbound is still the one in first position.
+        tags.take(2) shouldBe listOf("local", "proxy-auto")
+
+        val rules = (out["routing"] as JsonObject)["rules"] as JsonArray
+        val last = rules.last() as JsonObject
+        last["network"]!!.jsonPrimitive.content shouldBe "tcp,udp"
+        last["outboundTag"]!!.jsonPrimitive.content shouldBe "proxy-auto"
+    }
+
+    @Test
+    fun `a composed balancer override sends unmatched traffic through the balancer`() {
+        val routed =
+            settings.copy(routing = RoutingRuleSet(name = "r", buckets = emptyMap(), globalProxy = true))
+        val blocks = XrayConfigGenerator.overrideBlocks(routed, OverrideTarget.ViaBalancer("Auto_Balancer"))
+        val result = RawConfigComposer.compose(panelLike, routed, "/data/geo", blocks)
+
+        result.shouldBeOk()
+        val out = Json.parseToJsonElement((result as ComposeResult.Ok).json) as JsonObject
+        val rules = (out["routing"] as JsonObject)["rules"] as JsonArray
+        val last = rules.last() as JsonObject
+        last["balancerTag"]!!.jsonPrimitive.content shouldBe "Auto_Balancer"
+        last.containsKey("outboundTag") shouldBe false
     }
 }

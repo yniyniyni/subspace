@@ -1289,6 +1289,18 @@ class TunnelService : VpnService() {
      * §2.3: a `RetryableCapped` reason whose next attempt would reach
      * [space.getsub.core.model.TUN_ESTABLISH_ATTEMPT_CAP] settles as terminal
      * instead (fix round 1, Finding 2) — see [nextAttemptExceedsCap].
+     *
+     * Fix round 2: [trialAttempt] is a *peek*, not a commit. `failStart` is
+     * reachable with a [gen] that is already stale — the `Tun2Socks.start`
+     * failure path checks `if (gen == generation)` for [tunInterface] and
+     * then calls `failStart(gen, …)` unconditionally three lines later, and
+     * [resolveAndStartCore]'s catch block is a second such path — so this
+     * function cannot assume [gen] is current on entry. [ReconnectAttemptCounter.commit]
+     * therefore runs inside `lifecycle`, alongside `controller`/`configFile`/
+     * `liveSession`, so a superseded [gen] leaves the counter exactly as it
+     * found it: [ReconnectAttemptCounter.peekNext] has no side effect, and
+     * `terminalOutcome.settle` never runs `lifecycle` — hence never calls
+     * `commit` — for a generation that lost the race.
      */
     private suspend fun settleRetryableFailure(
         gen: Int,
@@ -1297,22 +1309,23 @@ class TunnelService : VpnService() {
         rowId: Long,
         retryability: Retryability,
     ) {
-        val nextAttempt = synchronized(lock) { reconnectAttempts.next() }
-        if (nextAttemptExceedsCap(retryability, nextAttempt)) {
+        val trialAttempt = synchronized(lock) { reconnectAttempts.peekNext() }
+        if (nextAttemptExceedsCap(retryability, trialAttempt)) {
             settleTerminalFailure(gen, failed, rowId)
             return
         }
         terminalOutcome.settle(
             gen = gen,
-            state = ConnectionState.Reconnecting(reason, nextAttempt),
+            state = ConnectionState.Reconnecting(reason, trialAttempt),
             lifecycle = {
                 configFile?.delete()
                 configFile = null
                 controller = null
                 liveSession = null
+                reconnectAttempts.commit(trialAttempt)
                 true
             },
-            persist = { scheduleBackoffRetry(nextAttempt) },
+            persist = { scheduleBackoffRetry(trialAttempt) },
         )
     }
 
@@ -1604,6 +1617,12 @@ class TunnelService : VpnService() {
      * is `stopSelf()`, which would run [onDestroy] and overwrite this Revoked
      * state with a plain Disconnected — losing the one piece of information the
      * user needs. We stop explicitly instead.
+     *
+     * The intent-clearing write below is fire-and-forget — `onRevoke()` is not
+     * suspend — so a revoke racing process death could in principle leave
+     * `wanted=true` persisted. Accepted rather than fixed: the practical risk
+     * is low, since a later connect attempt against still-revoked permission
+     * fails terminally and re-clears intent through that path instead.
      */
     override fun onRevoke() {
         // Spec §1.2: the second of three intent-clearing sites. Reconnecting into

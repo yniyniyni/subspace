@@ -13,6 +13,20 @@ package space.getsub.service
  * reviewer catches by reading and a device run never exercises twice in one
  * session — worth a real test.
  *
+ * Fix round 2: split into a read-only [peekNext] and an explicit [commit],
+ * with **no** combined increment-and-return. `TunnelService` calls a start
+ * sequence's `failStart` with a `gen` that can already be stale — the
+ * `Tun2Socks.start` failure path guards `tunInterface` with
+ * `if (gen == generation)` and calls `failStart(gen, …)` three lines later
+ * regardless of that check's outcome — so a superseded call must be able to
+ * *read* what the next attempt would be (to label the trial `Reconnecting`
+ * state and the backoff delay) without that read being able to leave a
+ * lasting increment behind if the generation turns out to be stale.
+ * [TunnelService] therefore calls [peekNext] freely, but calls [commit] only
+ * from inside `TerminalOutcome.settle`'s generation-gated `lifecycle` —
+ * exactly where every other mutation this counter's siblings
+ * (`controller`, `configFile`, `liveSession`) already lives.
+ *
  * Not thread-safe on its own. `TunnelService` guards every call with its own
  * `lock`, the same way it guards `generation`/`currentState`/every other
  * shared mutable field.
@@ -21,13 +35,21 @@ internal class ReconnectAttemptCounter {
     private var attempt = 0
 
     /**
-     * The number the attempt about to be published should carry. Call once per
-     * failure, immediately before publishing [space.getsub.core.model.ConnectionState.Reconnecting]
-     * with it — not before deciding whether this failure is retryable at all.
+     * The number the *next* attempt would carry, without committing to it.
+     * Safe to call from a generation that later turns out to be stale — it
+     * mutates nothing, so a call with no matching [commit] leaves no trace.
      */
-    fun next(): Int {
-        attempt += 1
-        return attempt
+    fun peekNext(): Int = attempt + 1
+
+    /**
+     * Makes [next] the current count. The only mutator — call it only once
+     * the caller has confirmed (by whatever means — a generation check, a
+     * committed `TerminalOutcome.settle`) that this attempt is the one that
+     * actually happened, or a superseded generation's trial value becomes
+     * durable state for a session it does not own.
+     */
+    fun commit(next: Int) {
+        attempt = next
     }
 
     /**

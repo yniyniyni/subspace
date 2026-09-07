@@ -605,6 +605,17 @@ class TunnelService : VpnService() {
         // discriminator rule R6 states for `connectProfileFrom`. The disconnect
         // path already clears session intent (Task 7 Step 6), so nothing extra
         // is needed here to stop the reconnect loop.
+        //
+        // Enqueued straight onto `commandCoordinator`, deliberately bypassing
+        // `commandIngress`'s startId tracking: this `startId` is the platform's
+        // own, freshest token for *this* call, which is exactly what
+        // `stopStartedService` needs to resolve via `stopSelfResult`. It is not
+        // recorded as `commandIngress.latestStartId()`, so a reconcile that
+        // follows and reads that field sees whatever it held before this tap —
+        // harmless, since the disconnect above already cleared intent to
+        // `wanted=false`, so any such reconcile resolves to `Stop` against an
+        // already-stopped generation. Do not "fix" this into going through
+        // `commandIngress` without re-checking that reasoning.
         if (intent?.action == ACTION_DISCONNECT) {
             commandCoordinator.enqueue(TunnelCommand.Disconnect(startId))
             return START_STICKY

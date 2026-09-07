@@ -1255,7 +1255,8 @@ class TunnelService : VpnService() {
      * in the clear while it does"), so this decision reads only
      * [FailureReason.retryability]; it never reads `SettingsRepository.failClosed`
      * or anything else that would make retrying conditional on that setting.
-     * TUN retention is a separate decision, owned by Task 9.
+     * TUN retention is a separate decision — [shouldRetainTun] — consulted only
+     * inside [settleRetryableFailure].
      *
      * §5.6: the config file holds the UUID and REALITY key. A failed start used
      * to leave it on disk indefinitely, because only teardown deleted it.
@@ -1326,9 +1327,12 @@ class TunnelService : VpnService() {
     /**
      * §2.2/§2.4: holds session intent, publishes `Reconnecting`, and schedules
      * the backoff — a retryable failure is not a reason to stop, and this is
-     * unconditional: nothing here reads the fail-closed setting (fix round 1,
-     * Finding 1 — reconnection happens whether or not it is on; only TUN
-     * retention, which Task 9 owns, depends on it).
+     * unconditional: nothing here makes *reconnection* conditional on the
+     * fail-closed setting (fix round 1, Finding 1 — reconnection happens
+     * whether or not it is on). Only TUN retention depends on it, decided by
+     * [shouldRetainTun] and applied nowhere else in this function's control
+     * flow — R17: gating `Reconnecting`/the backoff on that setting would
+     * silently delete reconnection for anyone who turns fail-closed off.
      *
      * Reuses [terminalOutcome]'s atomic gen-check-then-mutate-then-publish
      * transition — the same primitive [publishIfCurrent] is built on — rather
@@ -1375,6 +1379,19 @@ class TunnelService : VpnService() {
             settleTerminalFailure(gen, failed, rowId)
             return
         }
+        // Read before `terminalOutcome.settle`, not inside its `lifecycle`
+        // lambda: that lambda runs under `lock` and must not suspend, and both
+        // reads below are suspend. `tunnelSessionWantedNow()` — rather than
+        // assuming true because nothing in this function clears intent — is
+        // the same one-shot read `reconcileNow` uses, so this does not rely on
+        // every intent-clearing site continuing to pair with a generation bump
+        // to stay correct.
+        val retainTun =
+            shouldRetainTun(
+                failClosed = settingsRepository.failClosed.first(),
+                intentWanted = settingsRepository.tunnelSessionWantedNow(),
+                retryability = retryability,
+            )
         terminalOutcome.settle(
             gen = gen,
             state = ConnectionState.Reconnecting(reason, trialAttempt),
@@ -1384,7 +1401,11 @@ class TunnelService : VpnService() {
                 controller = null
                 liveSession = null
                 reconnectAttempts.commit(trialAttempt)
-                closeRetainedTunLocked()
+                // Spec §6.1: the kill switch itself. Skipping the close here —
+                // rather than adding any route or block — is what leaves a TUN
+                // with nothing servicing it as a blackhole for the wanted
+                // session's traffic instead of a torn-down interface.
+                if (!retainTun) closeRetainedTunLocked()
                 true
             },
             persist = { scheduleBackoffRetry(trialAttempt) },
@@ -1395,9 +1416,16 @@ class TunnelService : VpnService() {
      * Closes and clears [tunInterface] if a retained-fd restart
      * ([restartCoreRetainingTun]) left one behind when this generation's start
      * sequence failed instead of committing (§5.4: the fd must still close on
-     * every path where the session ends, and a `Failed`/`Reconnecting`-from-
-     * scratch outcome both end the retained TUN's life — the next `Start` re-
-     * establishes one via [attachTun]).
+     * every path where the session ends).
+     *
+     * Called unconditionally from [settleTerminalFailure] — a terminal outcome
+     * always ends the retained TUN's life, fail-closed or not (spec §6.1: no
+     * retry means holding it would leave the device with no connectivity and
+     * nothing working to restore it). Called *conditionally* from
+     * [settleRetryableFailure], guarded by [shouldRetainTun]: when that
+     * returns true this is skipped on purpose, and the fd it would have closed
+     * is the entire kill switch. Either way, the next `Start` establishes a
+     * fresh TUN via [attachTun] rather than reusing this one.
      *
      * A no-op for every ordinary start-sequence failure, which never retains a
      * TUN in the first place: [tunInterface] is already null by the time
@@ -2009,11 +2037,14 @@ class TunnelService : VpnService() {
      * or closes it on the success path. Only the old core and the old
      * tun2socks restart — a fresh [XrayController], freshly allocated ports
      * (the old ones die with the old core), and tun2socks repointed at
-     * whichever port the new core picked. A failure partway through does close
-     * it, via [closeRetainedTunLocked] inside [settleTerminalFailure]/
-     * [settleRetryableFailure]: at that point the session is either over or
-     * about to reconnect from scratch through [ReconcileAction.Start], which
-     * establishes its own TUN via [attachTun] rather than reusing this one.
+     * whichever port the new core picked. A failure partway through settles
+     * through [settleTerminalFailure]/[settleRetryableFailure], the same as
+     * any other failed start: a terminal outcome always closes it via
+     * [closeRetainedTunLocked]; a retryable one closes it unless
+     * [shouldRetainTun] says to hold it for the kill switch (spec §6.1). Either
+     * way a `Start` that follows — whether immediately or after the session
+     * reconnects from scratch through [ReconcileAction.Start] — establishes
+     * its own TUN via [attachTun] rather than reusing this one.
      */
     // ReturnCount: the missing-profile refusal, the no-retained-fd degrade, and the
     // superseded-generation bailout after resolveAndStartCore are three distinct outcomes,

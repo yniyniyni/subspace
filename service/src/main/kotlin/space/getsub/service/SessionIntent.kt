@@ -113,3 +113,30 @@ internal fun nextAttemptExceedsCap(
     retryability: Retryability,
     nextAttempt: Int,
 ): Boolean = retryability == Retryability.RetryableCapped && nextAttempt >= TUN_ESTABLISH_ATTEMPT_CAP
+
+/**
+ * Whether the TUN outlives a failed session (spec §6.1).
+ *
+ * Retaining it is the whole kill switch: the interface already carries
+ * `0.0.0.0/0` and `::/0`, and with nothing reading the fd a route to nothing is
+ * a blackhole. Nothing is added to `establishTun` to achieve this.
+ *
+ * Two consequences, both correct and both easy to mistake for bugs. **DNS
+ * blackholes too**, because the TUN is what advertises the resolver (§5.2,
+ * lever 1) — which is also what makes the failure visible rather than silently
+ * degraded. And **per-app deny-listed apps keep working**, because they are
+ * outside the TUN by construction (§8); fail-closed cannot reach them.
+ */
+internal fun shouldRetainTun(
+    failClosed: Boolean,
+    intentWanted: Boolean,
+    retryability: Retryability,
+): Boolean =
+    failClosed &&
+        intentWanted &&
+        when (retryability) {
+            Retryability.Retryable, Retryability.RetryableCapped -> true
+            // Nothing is retrying, so holding the TUN would leave the device
+            // with no connectivity and nothing working to restore it.
+            Retryability.Terminal -> false
+        }

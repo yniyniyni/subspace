@@ -117,4 +117,11 @@ dependencies {
     // than a real-clock sleep. The convention plugin puts this on androidTest only;
     // :feature:home already adds it to the JVM test set the same way.
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // ConnectionStateParcelRoundTripTest asserts on a data class (a real-Parcel
+    // round trip) rather than a handful of booleans, so it wants the same
+    // matcher library the JVM tests above already use instead of a pile of
+    // assertEquals. Declared here, not in the convention plugin — see
+    // feature/settings/build.gradle.kts for the same per-module shape.
+    androidTestImplementation(libs.kotest.assertions)
 }

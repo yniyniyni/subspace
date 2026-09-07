@@ -28,11 +28,9 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
 
     // First Compose UI instrumented test in this module (Task 14:
-    // HomeReconnectingTest). subspace.android.library already wires
-    // androidTestImplementation(kotest-assertions) for every Android library
-    // module, so only the Compose-test-specific pieces are added here — same
-    // shape as feature/settings/build.gradle.kts.
+    // HomeReconnectingTest). Same shape as feature/settings/build.gradle.kts.
     androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.kotest.assertions)
     debugImplementation(libs.compose.ui.test.manifest)
     androidTestImplementation(libs.androidx.test.espresso.core)
 }

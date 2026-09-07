@@ -21,6 +21,11 @@
          runtime, not at build time. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Spec §4.2: boot autostart, gated behind a user setting that defaults off.
+         Redundant when always-on VPN is enabled, since the platform starts the
+         service itself there; this serves the user who wants boot start without
+         granting always-on. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application>
         <!-- §3: :bg isolates the Go runtime's heap and keeps a native crash in
@@ -47,5 +52,16 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <!-- Runs in the default process, not :bg — it only starts TunnelService,
+             which lives there. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

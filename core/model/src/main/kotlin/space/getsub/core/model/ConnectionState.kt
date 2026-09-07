@@ -31,6 +31,23 @@ public sealed interface ConnectionState {
     public data object Disconnecting : ConnectionState
 
     /**
+     * A retryable failure is being worked through; session intent is still held.
+     *
+     * Spec §2.1. Distinct from [Connecting], which is the *first* attempt and has a
+     * [StartupStage] to show; and from [Failed], which is terminal and means the
+     * user must act. Rendering either of those here would be a lie the user acts on.
+     *
+     * @property reason what failed last, already classified retryable — see
+     *   [space.getsub.core.model.retryability].
+     * @property attempt 1-based, so the UI can say how long this has been going and
+     *   [TUN_ESTABLISH_ATTEMPT_CAP] has something to compare against.
+     */
+    public data class Reconnecting(
+        val reason: FailureReason,
+        val attempt: Int,
+    ) : ConnectionState
+
+    /**
      * A terminal failure, carrying a **redacted** [detail].
      *
      * Build these with [failure]. That is not a style note: the constructor is

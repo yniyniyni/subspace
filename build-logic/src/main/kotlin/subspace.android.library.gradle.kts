@@ -56,6 +56,11 @@ dependencies {
     // XrayController's API is suspend-based (§5.3 puts every libXray call on IO),
     // so instrumented tests need runTest to drive it.
     add("androidTestImplementation", libs.findLibrary("kotlinx-coroutines-test").get())
+    // M8 adds the first instrumented test that has to assert on a data class
+    // (ConnectionStateParcelRoundTripTest, a real-Parcel round trip) rather than
+    // a handful of booleans, so it wants the same matcher library the JVM tests
+    // above already use instead of a pile of assertEquals.
+    add("androidTestImplementation", libs.findLibrary("kotest-assertions").get())
 }
 
 // ktlint and detekt are both applied uniformly to every real module

@@ -79,6 +79,23 @@ class ReconcileTest {
         reconcile(wanted, connected, ReconcileTrigger.NetworkLost) shouldBe ReconcileAction.Nothing
     }
 
+    /**
+     * Pins the ordering, not just the outcome. The `NetworkLost` check deliberately
+     * precedes the intent check, so an unwanted session that loses its network
+     * yields `Nothing` rather than the `Stop` the intent check alone would give.
+     * Move that early return below the intent check and only this test fails.
+     *
+     * Spec §2.4 is why the ordering is that way round: no network means no timer and
+     * no attempt, unconditionally. A retry timer running in Doze is how the §11
+     * six-hour screen-off case fails.
+     */
+    @Test
+    fun losingTheNetworkSchedulesNothingEvenWhenNothingIsWanted() {
+        val connected = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080)
+
+        reconcile(unwanted, connected, ReconcileTrigger.NetworkLost) shouldBe ReconcileAction.Nothing
+    }
+
     @Test
     fun networkReturningStartsAReconnectingSession() {
         val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1)
@@ -91,23 +108,6 @@ class ReconcileTest {
         val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 3)
 
         reconcile(wanted, reconnecting, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Start(7L)
-    }
-
-    /**
-     * Spec §1.2: reconnecting after the user or another VPN app took the route
-     * would be a fight this app should lose, immediately and loudly.
-     */
-    @Test
-    fun revocationStopsRegardlessOfIntent() {
-        reconcile(wanted, failure(FailureReason.Revoked, "revoked"), ReconcileTrigger.Revoked) shouldBe
-            ReconcileAction.Stop
-    }
-
-    @Test
-    fun anExplicitDisconnectStops() {
-        val connected = ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080)
-
-        reconcile(wanted, connected, ReconcileTrigger.UserDisconnect) shouldBe ReconcileAction.Stop
     }
 
     /** A terminal failure is not retried even while intent is still being cleared. */

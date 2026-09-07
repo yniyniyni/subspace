@@ -26,9 +26,6 @@ internal enum class ReconcileTrigger {
     NetworkChanged,
     NetworkLost,
     BackoffElapsed,
-    UserConnect,
-    UserDisconnect,
-    Revoked,
 }
 
 /** What [reconcile] decided. Effects belong to `TunnelService`; this type does not perform them. */
@@ -44,7 +41,11 @@ internal sealed interface ReconcileAction {
 }
 
 /**
- * The whole state machine, as one pure function (spec §3.2).
+ * Decides the *autonomous* reconcile triggers: start, restart, backoff-elapsed,
+ * network change (spec §3.2). Human and external actions — the connect button,
+ * an explicit disconnect, `onRevoke` — act directly and merely update the
+ * persisted session intent, which the next reconcile then reads; they do not
+ * call this function.
  *
  * Pure so it can be tested at all: §11 says the tunnel is verified manually on a
  * device every time, which makes every decision embedded in `TunnelService`
@@ -55,12 +56,6 @@ internal fun reconcile(
     actual: ConnectionState,
     trigger: ReconcileTrigger,
 ): ReconcileAction {
-    // Revocation and an explicit disconnect outrank intent: both mean a human (or
-    // another VPN app) has spoken more recently than the stored flag.
-    if (trigger == ReconcileTrigger.Revoked || trigger == ReconcileTrigger.UserDisconnect) {
-        return ReconcileAction.Stop
-    }
-
     // Spec §2.4: no network means no timer and no attempt. Waiting costs nothing;
     // a retry loop in Doze costs the six-hour screen-off case.
     if (trigger == ReconcileTrigger.NetworkLost) return ReconcileAction.Nothing

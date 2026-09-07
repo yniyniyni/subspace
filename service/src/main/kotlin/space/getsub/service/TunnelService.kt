@@ -23,8 +23,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONException
@@ -36,6 +38,7 @@ import space.getsub.core.data.RoutingRepository
 import space.getsub.core.data.RuleSetAssets
 import space.getsub.core.data.SettingsRepository
 import space.getsub.core.data.StoredProfile
+import space.getsub.core.data.toProfile
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
 import space.getsub.core.model.LatencyOptions
@@ -43,8 +46,10 @@ import space.getsub.core.model.LatencyOutcome
 import space.getsub.core.model.LatencyResult
 import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
+import space.getsub.core.model.Retryability
 import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
+import space.getsub.core.model.retryability
 import space.getsub.core.parser.OverrideTarget
 import space.getsub.core.parser.analysePassthrough
 import space.getsub.core.parser.resolveOverrideTarget
@@ -94,7 +99,18 @@ private const val DNS_SERVER = "1.1.1.1"
 // change together because there is only one place to change.
 private const val SNIFFING_ENABLED = true
 
-/** Decodes only this service's explicit connect request without exposing/logging its payload. */
+/**
+ * Decodes only this service's explicit connect request without exposing/logging
+ * its payload.
+ *
+ * A null return covers two different intents on purpose: one with no
+ * `ACTION_CONNECT` at all (always-on, boot, or the sticky restart), and an
+ * `ACTION_CONNECT` whose extra is missing or unreadable. [onStartCommand] reads
+ * either as "no connect request in hand" and reconciles against persisted
+ * intent instead — this is the discriminator §1 of the M8 spec settled on,
+ * never `intent == null`, because AOSP's always-on start carries a non-null
+ * intent with a different action.
+ */
 @Suppress("DEPRECATION")
 internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
     if (intent?.action != ACTION_CONNECT) return null
@@ -401,6 +417,15 @@ class TunnelService : VpnService() {
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
     /**
+     * Spec §2.4's retry timer — a plain coroutine delay on [scope], never an
+     * alarm or a `WorkManager` job, so it cannot outlive the session it belongs
+     * to. Cancelled in exactly three places: [reconcileNow] on
+     * [ReconcileTrigger.NetworkLost], a committed [ConnectionState.Connected] in
+     * [attachTun], and [onDestroy] — see [cancelBackoffRetry].
+     */
+    private var backoffJob: Job? = null
+
+    /**
      * The profile the live session was started from, so a per-app change can
      * rebuild the tunnel without :main re-supplying one (§5.5: what is connected
      * is this process's fact, not the UI's).
@@ -444,10 +469,13 @@ class TunnelService : VpnService() {
             connect = ::connectFromCommand,
             rejectConnect = ::rejectConnectFromCommand,
             disconnect = { startId ->
+                // Spec §1.2: one of the three sites that clear session intent.
+                settingsRepository.setTunnelSessionWanted(false)
                 stopTunnel(ConnectionState.Disconnected)
                 stopStartedService(startId)
             },
             reapplyPerApp = ::reapplyPerAppFromCommand,
+            reconcile = ::reconcileNow,
             observeConnect = ::observeConnectFromCommand,
         )
     private val commandIngress = TunnelCommandIngress(commandCoordinator::enqueue)
@@ -485,8 +513,19 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §11 and §5.4: a started service must not be resurrected with a null intent
-     * after a kill, and it must not linger once the tunnel is down.
+     * §11 and §5.4.
+     *
+     * **`START_STICKY`, and a null intent is a legitimate entry point.** This
+     * previously returned `START_NOT_STICKY` because a null-intent start had no way
+     * to know what to connect to, so resurrection really was the bug. Spec §1
+     * removes that premise: session intent is persisted, so a null intent means
+     * *read the intent and reconcile*, and a restart with nothing wanted stops
+     * immediately — the same outcome, reached by asking rather than by refusing.
+     *
+     * Always-on VPN and the boot receiver both arrive this way, and so does a sticky
+     * restart after `:bg` is killed. That last one is what keeps fail-closed honest:
+     * without it, "hold the TUN while the session is wanted" would silently mean
+     * "until the process dies".
      */
     override fun onStartCommand(
         intent: Intent?,
@@ -496,11 +535,21 @@ class TunnelService : VpnService() {
         val request = connectProfileFrom(intent)
         val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
         val testObserver = testConnectObserverFrom(intent, debuggable)
-        if (!commandIngress.started(request, startId, testObserver)) {
+        // R6: branch on the absence of an explicit connect request
+        // (connectProfileFrom's own discriminator), never on `intent == null` —
+        // always-on VPN starts this with a non-null intent carrying no
+        // ACTION_CONNECT, and a null-intent check would silently ignore it.
+        val accepted =
+            if (request != null) {
+                commandIngress.started(request, startId, testObserver)
+            } else {
+                commandIngress.reconcile(ReconcileTrigger.NullIntentStart, startId)
+            }
+        if (!accepted) {
             Log.w(TAG, "connect request dropped: service command queue closed")
             stopStartedService(startId)
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     /** Reports actor receipt to a same-UID debug test without changing the connect path. */
@@ -1103,7 +1152,15 @@ class TunnelService : VpnService() {
                 gen = gen,
                 state = connected,
                 lifecycle = { goForeground(R.string.notification_connected) },
-                persist = { connectionRecorder.record(rowId, connected) },
+                persist = {
+                    connectionRecorder.record(rowId, connected)
+                    // Spec §2.4: the second of three cancellation sites — a
+                    // successful connect means whatever retry was pending for the
+                    // failure this replaces no longer applies. Inside `persist`,
+                    // not after it returns, for the same reason failStart's intent
+                    // clear is: only a generation that actually committed may act.
+                    cancelBackoffRetry()
+                },
                 onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
             )
         if (settlement != TerminalSettlement.Committed) return
@@ -1146,7 +1203,18 @@ class TunnelService : VpnService() {
                 stopStartedService(startId)
                 true
             },
-            persist = { connectionRecorder.record(rowId, failed) },
+            persist = {
+                connectionRecorder.record(rowId, failed)
+                // Spec §1.2/§2.2: the third of three intent-clearing sites, and the
+                // only one gated on the reason rather than unconditional — a
+                // retryable failure holds intent so the retry this milestone exists
+                // for still happens. Inside `persist` rather than beside `settle`
+                // so a superseded generation (this attempt lost the race) never
+                // clears intent for a session that is not this one's to clear.
+                if (reason.retryability() == Retryability.Terminal) {
+                    settingsRepository.setTunnelSessionWanted(false)
+                }
+            },
         )
         return null
     }
@@ -1436,6 +1504,10 @@ class TunnelService : VpnService() {
      * user needs. We stop explicitly instead.
      */
     override fun onRevoke() {
+        // Spec §1.2: the second of three intent-clearing sites. Reconnecting into
+        // a route another VPN app just took, or that the user just revoked, is a
+        // fight this app should lose, loudly and immediately — not retry into.
+        scope.launch { settingsRepository.setTunnelSessionWanted(false) }
         val startId = stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
         if (startId != null) stopStartedService(startId)
     }
@@ -1446,6 +1518,7 @@ class TunnelService : VpnService() {
             synchronized(lock) {
                 currentState as? ConnectionState.Failed ?: ConnectionState.Disconnected
             }
+        cancelBackoffRetry()
         stopTunnel(finalState)
         commandCoordinator.close()
         callbacks.kill()
@@ -1614,12 +1687,139 @@ class TunnelService : VpnService() {
         profile: ProfileParcel,
         startId: Int,
     ) {
+        // Spec §1.2: the first of three intent-writing sites. True the moment the
+        // command is *accepted* — not when it succeeds — so a boot-time or
+        // always-on connect that dies at StartingCore is still wanted and still
+        // retried; that ordering is the whole reason this milestone exists.
+        settingsRepository.setTunnelSessionWanted(true)
         val decoded = profile.toProfile()
         if (decoded == null) {
             rejectConnectFromCommand(startId, profile.rowId)
             return
         }
         startTunnel(decoded, profile.rowId, startId)
+    }
+
+    // ── Reconciliation ──────────────────────────────────────────────────────
+
+    /**
+     * Spec §3.1/§3.3: re-decides what should be running, from the reconcile
+     * channel's single ordering point (Task 5's pure [reconcile]).
+     *
+     * Reads [currentConnectionState] — the same holder [publishIfCurrent]
+     * writes — and [commandIngress]'s framework start token, never a second
+     * copy of either; see their own KDoc for why a duplicate would reintroduce
+     * bugs those mechanisms already close.
+     */
+    private suspend fun reconcileNow(trigger: ReconcileTrigger) {
+        // Spec §2.4: no network means no timer, unconditionally. A retry left
+        // over from just before the network dropped must not fire into a
+        // decision nobody is making until the network returns.
+        if (trigger == ReconcileTrigger.NetworkLost) cancelBackoffRetry()
+        val intent =
+            SessionIntent(
+                wanted = settingsRepository.tunnelSessionWantedNow(),
+                profileRowId = settingsRepository.activeProfileIdNow(),
+            )
+        when (val action = reconcile(intent, currentConnectionState(), trigger)) {
+            is ReconcileAction.Start -> startFromRow(action.profileRowId)
+            is ReconcileAction.Restart -> restartCoreRetainingTun(action.profileRowId)
+            ReconcileAction.Stop -> stopTunnelAndService()
+            ReconcileAction.Nothing -> Unit
+        }
+    }
+
+    /** [reconcileNow] reads the same state holder [publishIfCurrent] writes — no second copy. */
+    private fun currentConnectionState(): ConnectionState = synchronized(lock) { currentState }
+
+    /**
+     * [ReconcileAction.Start]'s effect: load the row fresh — never a profile a
+     * previous attempt held onto — and connect through the same accepted-command
+     * entry point a user-initiated connect uses, so the intent write and
+     * generation handling stay in the one place [connectFromCommand] already is.
+     */
+    private suspend fun startFromRow(rowId: Long) {
+        val profile = profileRepository.profile(rowId)?.toProfile()
+        if (profile == null) {
+            // §5.6: no name, no address. The row is gone or its config will not
+            // decode; either way there is nothing to connect to and holding the
+            // service open helps nobody.
+            Log.w(TAG, "reconcile: active profile row is not connectable")
+            settingsRepository.setTunnelSessionWanted(false)
+            stopTunnelAndService()
+            return
+        }
+        connectFromCommand(ProfileParcel.from(profile, rowId), startId = commandIngress.latestStartId())
+    }
+
+    /**
+     * [ReconcileAction.Stop]'s effect. Uses [commandIngress]'s framework start
+     * token rather than [stopTunnel]'s own return — that reflects the *session's*
+     * start id ([activeStartId], zero when nothing was ever started), and a
+     * reconcile deciding to stop must still resolve the started-service lifetime
+     * `onStartCommand` actually received, or the service lingers with
+     * `START_STICKY` and nothing to do.
+     */
+    private fun stopTunnelAndService() {
+        stopTunnel(ConnectionState.Disconnected)
+        stopStartedService(commandIngress.latestStartId())
+    }
+
+    /**
+     * [ReconcileAction.Restart]'s effect (spec §5.4).
+     *
+     * Task 8's `NetworkMonitor` is what sends [ReconcileTrigger.NetworkChanged] —
+     * nothing in this task does — so this path is unreached in production until
+     * that lands. The fallback below is a safe placeholder (a full stop and
+     * reconnect through [startFromRow]), deliberately **not** the fd-retaining
+     * restart spec §5.4 describes: naming and implementing that restart, so a
+     * network transition does not open a fail-closed window, is Task 8's job.
+     */
+    private suspend fun restartCoreRetainingTun(rowId: Long) {
+        stopTunnel(ConnectionState.Disconnected)
+        startFromRow(rowId)
+    }
+
+    /**
+     * Spec §2.4. A plain coroutine delay on the service scope — **not** an alarm and
+     * not a `WorkManager` job.
+     *
+     * Two reasons. The scope dies with the service, so a retry cannot outlive the
+     * session it belongs to. And §2.4's rule is that a session with no network
+     * schedules nothing at all: `NetworkLost` cancels this job and the service waits
+     * on the `NetworkCallback` instead, because a retry timer running in Doze is how
+     * §11's six-hour screen-off row fails.
+     *
+     * Not yet called from a live failure path: this task (M8 Task 7) wires
+     * reconcile, session intent, and the retry-scheduling machinery, but
+     * publishing [ConnectionState.Reconnecting] itself — the point that decides
+     * `Failed` vs. `Reconnecting`, tracks the attempt number, and keeps the
+     * foreground notification and started-service lifetime alive across a retry —
+     * is M8 Task 9's (`shouldRetainTun`, fail-closed), per that task's own brief.
+     * Suppressed rather than deleted so Task 9 finds this ready to call, and
+     * documented here rather than silently, per this task's own report.
+     */
+    @Suppress("UnusedPrivateMember")
+    private fun scheduleBackoffRetry(attempt: Int) {
+        cancelBackoffRetry()
+        val job =
+            scope.launch {
+                delay(ReconnectBackoff.delayMillisFor(attempt))
+                commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.BackoffElapsed))
+            }
+        synchronized(lock) { backoffJob = job }
+    }
+
+    /**
+     * Cancels a pending retry. Idempotent. Called on [ReconcileTrigger.NetworkLost],
+     * a committed successful connect, and [onDestroy] — missing any one of those
+     * three leaves a timer running against a session that is gone.
+     */
+    private fun cancelBackoffRetry() {
+        synchronized(lock) {
+            backoffJob?.cancel()
+            backoffJob = null
+        }
     }
 
     private fun reapplyPerAppFromCommand() {

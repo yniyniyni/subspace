@@ -184,6 +184,39 @@ class TunnelCommandCoordinatorTest {
             state shouldBe "failed"
         }
 
+    /**
+     * Spec §3.1: reconcile rides the existing channel rather than a second
+     * mechanism. Two orderings would give the service two answers to "what happens
+     * next" — the shape §5.5 forbids.
+     */
+    @Test
+    fun reconcileIsOrderedWithSessionCommands() =
+        runTest {
+            val seen = mutableListOf<String>()
+            val coordinator =
+                TunnelCommandCoordinator(
+                    // Not backgroundScope: this file's other coordinator tests already use
+                    // `this` (the TestScope), and it is proven to work with advanceUntilIdle()
+                    // here. backgroundScope's launch was verified NOT to run under
+                    // advanceUntilIdle() alone on this project's kotlinx-coroutines-test
+                    // 1.10.2 — only runCurrent() dispatched it in a minimal repro — so it is
+                    // not used, to avoid a flaky/silently-empty test.
+                    scope = this,
+                    connect = { _, _ -> seen += "connect" },
+                    rejectConnect = { _, _ -> seen += "reject" },
+                    disconnect = { seen += "disconnect" },
+                    reapplyPerApp = { seen += "reapply" },
+                    reconcile = { trigger -> seen += "reconcile:${trigger.name}" },
+                )
+
+            coordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.NullIntentStart)) shouldBe true
+            coordinator.enqueue(TunnelCommand.Disconnect(startId = 1)) shouldBe true
+            advanceUntilIdle()
+            coordinator.close()
+
+            seen shouldBe listOf("reconcile:NullIntentStart", "disconnect")
+        }
+
     private fun profileParcel(id: String): ProfileParcel =
         ProfileParcel.from(
             Profile(

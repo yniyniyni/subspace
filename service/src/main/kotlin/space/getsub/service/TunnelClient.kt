@@ -25,6 +25,7 @@ import javax.inject.Singleton
 
 private const val TAG = "TunnelClient"
 internal const val ACTION_CONNECT = "space.getsub.service.action.CONNECT"
+internal const val ACTION_DISCONNECT = "space.getsub.service.action.DISCONNECT"
 internal const val EXTRA_PROFILE = "space.getsub.service.extra.PROFILE"
 internal const val EXTRA_TEST_CONNECT_OBSERVER =
     "space.getsub.service.extra.TEST_CONNECT_OBSERVER"

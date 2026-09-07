@@ -5,5 +5,8 @@
     <string name="tunnel_session_name">Subspace</string>
     <string name="notification_channel_tunnel">Tunnel</string>
     <string name="notification_connecting">Connecting…</string>
-    <string name="notification_connected">Connected</string>
+    <string name="notification_state_connected">Connected</string>
+    <string name="notification_state_reconnecting_blocked">Reconnecting — traffic is blocked</string>
+    <string name="notification_state_reconnecting_open">Reconnecting — traffic is not protected</string>
+    <string name="notification_action_disconnect">Disconnect</string>
 </resources>

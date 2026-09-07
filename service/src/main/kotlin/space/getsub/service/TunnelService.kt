@@ -600,6 +600,15 @@ class TunnelService : VpnService() {
         flags: Int,
         startId: Int,
     ): Int {
+        // Spec §6.3: the notification's disconnect action, handled before the
+        // connect decode below — never an `intent == null` check, the same
+        // discriminator rule R6 states for `connectProfileFrom`. The disconnect
+        // path already clears session intent (Task 7 Step 6), so nothing extra
+        // is needed here to stop the reconnect loop.
+        if (intent?.action == ACTION_DISCONNECT) {
+            commandCoordinator.enqueue(TunnelCommand.Disconnect(startId))
+            return START_STICKY
+        }
         val request = connectProfileFrom(intent)
         val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
         val testObserver = testConnectObserverFrom(intent, debuggable)
@@ -1227,7 +1236,7 @@ class TunnelService : VpnService() {
             terminalOutcome.settleHandlingLifecycleRejection(
                 gen = gen,
                 state = connected,
-                lifecycle = { goForeground(R.string.notification_connected) },
+                lifecycle = { goForeground(R.string.notification_state_connected) },
                 persist = {
                     connectionRecorder.record(rowId, connected)
                     // Spec §2.4: the second of three cancellation sites — a
@@ -1406,6 +1415,21 @@ class TunnelService : VpnService() {
                 // with nothing servicing it as a blackhole for the wanted
                 // session's traffic instead of a torn-down interface.
                 if (!retainTun) closeRetainedTunLocked()
+                // §6.3: the notification's text is read from this same
+                // shouldRetainTun answer, never recomputed from the setting
+                // alone — a terminal failure releases the TUN even with
+                // fail-closed on, and recomputing from the setting would have
+                // the notification claim traffic is blocked while it flows in
+                // the clear. Its own success/failure does not gate this
+                // transition: a rejected foreground update here must not
+                // silently drop the Reconnecting state the user is waiting on.
+                goForeground(
+                    if (retainTun) {
+                        R.string.notification_state_reconnecting_blocked
+                    } else {
+                        R.string.notification_state_reconnecting_open
+                    },
+                )
                 true
             },
             persist = { scheduleBackoffRetry(trialAttempt) },
@@ -2161,7 +2185,7 @@ class TunnelService : VpnService() {
             terminalOutcome.settleHandlingLifecycleRejection(
                 gen = gen,
                 state = connected,
-                lifecycle = { goForeground(R.string.notification_connected) },
+                lifecycle = { goForeground(R.string.notification_state_connected) },
                 persist = {
                     connectionRecorder.record(rowId, connected)
                     cancelBackoffRetry()

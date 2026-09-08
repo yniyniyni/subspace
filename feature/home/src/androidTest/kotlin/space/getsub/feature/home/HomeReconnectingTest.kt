@@ -30,7 +30,12 @@ class HomeReconnectingTest {
     fun reconnectingIsNotRenderedAsFailed() {
         setContent(homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)))
 
-        composeRule.onNodeWithText("Disconnected", substring = true).assertDoesNotExist()
+        // "Disconnected" alone would not catch this: ConnectionState.Failed never renders that
+        // literal string — it renders reason.labelRes(), which for CoreStartFailed is exactly
+        // "The core failed to start". That is the text a Reconnecting-rendered-as-Failed
+        // regression would actually put on screen, so that is what must be absent.
+        composeRule.onNodeWithText("The core failed to start", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Reconnecting…", substring = true).assertIsDisplayed()
     }
 
     private fun setContent(state: HomeState) {

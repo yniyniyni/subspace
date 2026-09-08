@@ -121,6 +121,14 @@ constructor(
             .onEach { assets -> _state.update { it.copy(geoInstalledAssets = assets) } }
             .launchIn(viewModelScope)
 
+        settingsSource.bootAutostart
+            .onEach { enabled -> _state.update { it.copy(bootAutostart = enabled) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.failClosed
+            .onEach { enabled -> _state.update { it.copy(failClosed = enabled) } }
+            .launchIn(viewModelScope)
+
         viewModelScope.launch {
             val version = xraySource.version()
             _state.update {
@@ -144,6 +152,14 @@ constructor(
 
     fun onHwidEnabledChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setHwidEnabled(enabled) }
+    }
+
+    fun onBootAutostartChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setBootAutostart(enabled) }
+    }
+
+    fun onFailClosedChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setFailClosed(enabled) }
     }
 
     fun onPingModeChanged(mode: PingMode) {

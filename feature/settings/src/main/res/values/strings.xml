@@ -59,6 +59,17 @@
     <string name="settings_dns_bootstrap_summary">The resolver\'s own address, so its hostname can be looked up without querying itself</string>
     <string name="settings_dns_overridden">The active routing profile sets its own DNS</string>
 
+    <string name="settings_tunnel_title">Tunnel</string>
+    <string name="settings_always_on_title">Always-on VPN</string>
+    <string name="settings_always_on_summary">Open system settings to keep the tunnel running and to block connections when it is not.</string>
+    <string name="settings_boot_autostart_title">Connect at startup</string>
+    <string name="settings_boot_autostart_summary">Connect every time the device starts. Not needed if always-on VPN is enabled.</string>
+    <string name="settings_fail_closed_title">Block traffic when disconnected</string>
+    <!-- Names the per-app exception on purpose (spec §6.2): it is correct behaviour that looks like a leak. -->
+    <string name="settings_fail_closed_summary">While reconnecting, block all traffic instead of letting it leave unprotected. Apps excluded from the tunnel are unaffected.</string>
+    <string name="settings_battery_title">Battery optimisation</string>
+    <string name="settings_battery_summary">Android may stop the tunnel while the screen is off. Exempt Subspace to keep it running.</string>
+
     <string name="settings_section_routing">Routing</string>
     <string name="settings_routing_row_label">Rule sets</string>
     <string name="settings_routing_row_summary">Block, proxy or route traffic directly by domain or address</string>

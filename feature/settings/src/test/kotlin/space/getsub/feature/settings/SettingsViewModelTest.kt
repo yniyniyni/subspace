@@ -160,6 +160,29 @@ class SettingsViewModelTest {
             _selectedGeoSourceIds.value = ids
         }
 
+        private val _bootAutostart = MutableStateFlow(false)
+        override val bootAutostart: Flow<Boolean> = _bootAutostart.asStateFlow()
+
+        override suspend fun setBootAutostart(enabled: Boolean) {
+            _bootAutostart.value = enabled
+        }
+
+        private val _failClosed = MutableStateFlow(true)
+        override val failClosed: Flow<Boolean> = _failClosed.asStateFlow()
+
+        override suspend fun setFailClosed(enabled: Boolean) {
+            _failClosed.value = enabled
+        }
+
+        private val _batteryPromptShown = MutableStateFlow(false)
+        override val batteryPromptShown: Flow<Boolean> = _batteryPromptShown.asStateFlow()
+
+        override suspend fun setBatteryPromptShown(shown: Boolean) {
+            _batteryPromptShown.value = shown
+        }
+
+        override var isIgnoringBatteryOptimizations: Boolean = false
+
         private companion object {
             const val DEFAULT_TIMEOUT = 5
             const val MIN_TIMEOUT = 1

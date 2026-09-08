@@ -278,6 +278,10 @@ the user revokes permission. Tear down cleanly: stop libXray, stop
 tun2socks, close the fd, update persisted state, cancel the notification.
 Leaking the fd here wedges the VPN subsystem until reboot.
 
+`onRevoke` must also **clear session intent** (M8). Without that, the reconcile
+loop would immediately try to reconnect against the app that just took the
+route — a fight this app should lose, immediately and loudly.
+
 ### 5.5 One source of truth for connection state
 
 Connection state lives in the service and is published to the UI over IPC.
@@ -905,12 +909,24 @@ This is the least portable, most version-dependent part of the codebase.
   the current developer documentation and the actual behavior on device.
 - **Battery optimization** — prompt the user to exempt the app, or the
   tunnel dies in Doze. Prompt once, respect refusal.
-- **Boot start** — `RECEIVE_BOOT_COMPLETED` plus a receiver, gated behind a
-  user setting, and only meaningful together with always-on VPN.
+- **Boot start** — `RECEIVE_BOOT_COMPLETED` plus a receiver, gated behind a user
+  setting. Largely redundant when always-on VPN is enabled, because the platform
+  starts the service itself there; it exists for the user who wants boot start
+  without granting always-on. Connects on **every** boot when enabled, not only
+  when the session was up beforehand. VPN consent has no boot-time UI, so a
+  receiver that finds `VpnService.prepare()` non-null gives up quietly.
 - **Network changes** — register a `NetworkCallback`. On Wi-Fi ↔ cellular
-  transitions, the underlying network changes and the tunnel needs
-  re-establishing or at minimum a re-protect. Test this by physically
-  toggling Wi-Fi, repeatedly, not by unit test.
+  transitions the underlying network changes and the tunnel must react. **There
+  is no "re-protect".** §14.2's API surface is the reason: libXray's protector is
+  a *dial-time* callback (`registerDialerController`), so existing sockets cannot
+  be re-marked — an earlier revision of this bullet said otherwise. The two real
+  options are `setUnderlyingNetworks` alone, letting the core redial (new dials
+  are protected automatically), or restarting the core while retaining the TUN
+  fd. M8 ships the second, decided by `reconcile()`'s `NetworkChanged` branch
+  (`ReconcileAction.Restart`, effected by
+  `TunnelService.restartCoreRetainingTun`) — a single point a device run can
+  flip to the soft alternative if it turns out to suffice. Test this by
+  physically toggling Wi-Fi, repeatedly, not by unit test.
 
 ---
 
@@ -1412,7 +1428,10 @@ Mandatory rules:
       §5.1 failure mode, because libXray discards the protect result. It predates
       this milestone. Full evidence:
       `docs/agent/research/2026-08-19-m5.5-device-verification.md`.
-- [ ] Traffic counters, live log viewer
+- [ ] Traffic counters, live log viewer — **M8.5.** Split out of M8 because the
+      log viewer reads from `:bg`, whose `android.util.Log` output does not reach
+      logcat (mechanism unexplained; see M5.5's device record). That wants its own
+      investigation before it gets a spec.
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization
 

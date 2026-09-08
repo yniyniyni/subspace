@@ -22,6 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 
 private val ROW_PADDING = 16.dp
@@ -49,12 +53,25 @@ private val ICON_SIZE = 20.dp
  * @param onClick `null` renders a static, non-interactive row (About's
  *   version rows); non-null makes the whole row clickable (Appearance's
  *   three theme choices).
+ * @param labelCarriesSemantics opt-in, defaulting to `false` (every existing call site is
+ *   unaffected). This row otherwise lays icon, label and [trailing] out as flat semantics
+ *   siblings — confirmed on device (a live `printToLog` dump), a query like
+ *   `hasAnyAncestor(hasText(label))` finds no ancestor at all, because nothing here is a real
+ *   semantics ancestor of [trailing]'s content. When `true`, [label] is assigned directly to
+ *   the row itself via [Modifier.semantics] (not derived by merging descendants), turning the
+ *   row into a real ancestor node carrying [label] while [trailing] stays an independently
+ *   discoverable descendant — the shape a caller needs to assert "the switch belonging to
+ *   *this* label" rather than just "a switch somewhere on screen" (`SettingsTunnelSectionTest`
+ *   in `:feature:settings`). The label [Text]'s own semantics are cleared with
+ *   [clearAndSetSemantics] in that case so the string is not also discoverable a second time as
+ *   its own accessible node, which would turn a plain `onNodeWithText(label)` lookup elsewhere
+ *   into an ambiguous multi-match.
  *
- * Six orthogonal, independently-necessary parameters (including the
+ * Seven orthogonal, independently-necessary parameters (including the
  * idiomatic `modifier` slot every composable in this module carries) —
  * nothing left to fold without inventing an artificial grouping the way
  * [GroupCard]'s own `LongParameterList` suppression explains for the
- * identical count.
+ * identical shape.
  */
 @Suppress("LongParameterList")
 @Composable
@@ -64,9 +81,16 @@ fun SettingRow(
     modifier: Modifier = Modifier,
     supportingText: String? = null,
     onClick: (() -> Unit)? = null,
+    labelCarriesSemantics: Boolean = false,
     trailing: @Composable (() -> Unit)? = null,
 ) {
-    val rowModifier = if (onClick != null) modifier.clickable(onClick = onClick) else modifier
+    val clickableModifier = if (onClick != null) modifier.clickable(onClick = onClick) else modifier
+    val rowModifier =
+        if (labelCarriesSemantics) {
+            clickableModifier.semantics { text = AnnotatedString(label) }
+        } else {
+            clickableModifier
+        }
 
     Row(
         modifier = rowModifier.fillMaxWidth().padding(vertical = ROW_PADDING),
@@ -93,7 +117,11 @@ fun SettingRow(
                 .weight(1f)
                 .padding(horizontal = ROW_GAP),
         ) {
-            Text(text = label, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = if (labelCarriesSemantics) Modifier.clearAndSetSemantics {} else Modifier,
+            )
             if (supportingText != null) {
                 Text(
                     text = supportingText,

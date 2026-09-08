@@ -43,6 +43,12 @@ class SettingsTunnelSectionTest {
         // Spec §7.1: the app cannot enable always-on or its lockdown; both are
         // system settings. A switch here would lie about who owns the state.
         opened shouldBe true
+
+        // The click assertion above only proves the row is clickable — a regression that kept
+        // it clickable while also adding a Switch to the row would still pass it. Assert the
+        // absence directly: no toggle may exist anywhere under this row's label.
+        composeRule.onNode(isToggleable() and hasAnyAncestor(hasText("Always-on VPN")))
+            .assertDoesNotExist()
     }
 
     @Test

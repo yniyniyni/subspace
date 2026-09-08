@@ -72,6 +72,12 @@ internal data class SettingsState(
      * matches [space.getsub.core.data.SettingsRepository.failClosed]'s own default.
      */
     val failClosed: Boolean = true,
+    /**
+     * Spec §7.2, ARCHITECTURE.md §9: "prompt once, respect refusal" — true for the one moment
+     * between a survival setting (boot autostart or fail-closed) being switched on and the user
+     * responding, per [shouldPromptForBattery]'s own gate in [SettingsViewModel].
+     */
+    val showBatteryPrompt: Boolean = false,
 ) {
     /** One row per install filename. See [geoRowsFor]'s KDoc for exactly how ground truth is chosen. */
     val geoRows: List<GeoRow>

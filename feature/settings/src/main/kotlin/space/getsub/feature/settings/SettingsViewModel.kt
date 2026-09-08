@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -155,11 +156,43 @@ constructor(
     }
 
     fun onBootAutostartChanged(enabled: Boolean) {
-        viewModelScope.launch { settingsSource.setBootAutostart(enabled) }
+        viewModelScope.launch {
+            settingsSource.setBootAutostart(enabled)
+            if (enabled) maybePromptForBattery()
+        }
     }
 
     fun onFailClosedChanged(enabled: Boolean) {
-        viewModelScope.launch { settingsSource.setFailClosed(enabled) }
+        viewModelScope.launch {
+            settingsSource.setFailClosed(enabled)
+            if (enabled) maybePromptForBattery()
+        }
+    }
+
+    /**
+     * Spec §7.2, ARCHITECTURE.md §9: called only from the moment a survival setting (boot
+     * autostart or fail-closed) is switched *on* — never at construction, and never for an
+     * unrelated setting — since that is the one moment Doze is worth raising at all
+     * ([shouldPromptForBattery]'s own KDoc).
+     */
+    private suspend fun maybePromptForBattery() {
+        val show =
+            shouldPromptForBattery(
+                alreadyShown = settingsSource.batteryPromptShown.first(),
+                isIgnoringOptimisations = settingsSource.isIgnoringBatteryOptimizations,
+                survivalSettingJustEnabled = true,
+            )
+        if (show) _state.update { it.copy(showBatteryPrompt = true) }
+    }
+
+    /**
+     * Either response to the battery prompt — including a plain dismissal — records
+     * [SettingsSource.batteryPromptShown] so the prompt never returns. "Respect refusal" (§9)
+     * means this call happens whatever the user chose, not only on acceptance.
+     */
+    fun onBatteryPromptResolved() {
+        _state.update { it.copy(showBatteryPrompt = false) }
+        viewModelScope.launch { settingsSource.setBatteryPromptShown(true) }
     }
 
     fun onPingModeChanged(mode: PingMode) {
@@ -345,6 +378,20 @@ constructor(
         viewModelScope.launch { geoAssetSource.remove(fileName) }
     }
 }
+
+/**
+ * Spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.
+ * Prompt once, respect refusal."
+ *
+ * [survivalSettingJustEnabled] is the trigger — always-on, boot autostart or fail-closed being
+ * switched on. Those are the moments the user has said they want the tunnel to survive, which is
+ * when Doze is worth raising.
+ */
+internal fun shouldPromptForBattery(
+    alreadyShown: Boolean,
+    isIgnoringOptimisations: Boolean,
+    survivalSettingJustEnabled: Boolean,
+): Boolean = survivalSettingJustEnabled && !alreadyShown && !isIgnoringOptimisations
 
 private fun SettingsState.dnsResolverOrNull(): DnsResolver? =
     when (dnsTransport) {

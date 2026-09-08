@@ -19,12 +19,14 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -107,6 +109,7 @@ fun SettingsScreen(
             onRemoveCustomGeoSource = viewModel::onRemoveCustomGeoSource,
             onBootAutostartChanged = viewModel::onBootAutostartChanged,
             onFailClosedChanged = viewModel::onFailClosedChanged,
+            onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
         ),
         onNavigateToRouting = onNavigateToRouting,
         onNavigateToPerApp = onNavigateToPerApp,
@@ -144,6 +147,7 @@ internal data class SettingsActions(
     // fixture for a field it does not exercise.
     val onBootAutostartChanged: (Boolean) -> Unit = {},
     val onFailClosedChanged: (Boolean) -> Unit = {},
+    val onBatteryPromptResolved: () -> Unit = {},
 )
 
 /**
@@ -312,6 +316,12 @@ private fun HwidControl(
  * detekt's `LongMethod` threshold — no separate [SectionHeader] call here, since
  * [SettingsTunnelSection] renders its own "Tunnel" title internally, the same way
  * [SettingsDnsSection] does for "DNS".
+ *
+ * Also hosts the battery-optimisation prompt (Task 13, spec §7.2): [SettingsState.showBatteryPrompt]
+ * is true for the one moment between a survival setting being switched on and the user responding.
+ * Both the dialog's own dismiss and its "open battery settings" action resolve through
+ * [SettingsActions.onBatteryPromptResolved] — ARCHITECTURE.md §9's "respect refusal" means the
+ * prompt is marked seen whatever the user chooses, not only on acceptance.
  */
 @Composable
 private fun TunnelSection(
@@ -326,6 +336,29 @@ private fun TunnelSection(
         onOpenVpnSettings = { openVpnSettings(context) },
         onOpenBatterySettings = { openBatterySettings(context) },
     )
+
+    if (state.showBatteryPrompt) {
+        AlertDialog(
+            onDismissRequest = actions.onBatteryPromptResolved,
+            title = { Text(stringResource(R.string.settings_battery_prompt_title)) },
+            text = { Text(stringResource(R.string.settings_battery_prompt_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        actions.onBatteryPromptResolved()
+                        openBatterySettings(context)
+                    },
+                ) {
+                    Text(stringResource(R.string.settings_battery_prompt_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = actions.onBatteryPromptResolved) {
+                    Text(stringResource(R.string.settings_battery_prompt_dismiss))
+                }
+            },
+        )
+    }
 }
 
 private fun ThemePreference.labelRes(): Int =

@@ -11,6 +11,8 @@ package space.getsub.service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.VpnService
 import android.os.IBinder
 import android.os.Message
@@ -1229,6 +1231,14 @@ class TunnelService : VpnService() {
                 is PerAppGateResult.Proceed -> gate.plan
                 PerAppGateResult.Failed -> return
             }
+        // Spec §5.2, and read *before* establish(): once Builder.establish()
+        // returns, a VPN network exists, and reading `activeNetwork` after that
+        // point invites the ambiguity of asking the framework which network is
+        // default while we are the reason the answer might change. Sampled here
+        // the value can only be a physical network. A network that changes
+        // between this line and the call below is not lost — NetworkMonitor's
+        // onChanged sets the new one.
+        val underlying = activeNetwork()
         val fd = establishOrFail(gen, xray, plan, dnsPlan, rowId) ?: return
         synchronized(lock) {
             if (gen != generation) {
@@ -1247,6 +1257,20 @@ class TunnelService : VpnService() {
             closeRetainedTunLocked()
             tunInterface = fd
         }
+        // Spec §5.2, the case NetworkMonitor's callback cannot cover: a session
+        // that starts and never changes network never sees `onChanged`, because
+        // NetworkTransitionDebouncer.prime() deliberately suppresses
+        // registerDefaultNetworkCallback's replay of the already-current
+        // network. That is the common path, and until now it left the VPN with
+        // no underlying network declared at all — so metered-ness and transport
+        // reported to every app querying through the tunnel (including this
+        // app's own geoRefreshOnMetered and pingOnLaunchMetered) were whatever
+        // the platform inferred. Set here rather than by undoing prime(): the
+        // spurious start-time NetworkChanged reconcile that prime() exists to
+        // prevent would tear down and rebuild a tunnel that was never
+        // interrupted. Outside the lock — this is a binder round trip and
+        // nothing below reads it.
+        underlying?.let { setUnderlyingNetworks(arrayOf(it)) }
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingTunnel))) return
         val config = tun2socksConfig(socksPort = ports.socksPort, mtu = TUN_MTU)
@@ -1554,6 +1578,25 @@ class TunnelService : VpnService() {
             }
             ok
         }
+
+    /**
+     * The network the platform currently treats as this app's default, or null
+     * when there is none.
+     *
+     * Read directly from [ConnectivityManager] rather than through
+     * [networkMonitor]: the monitor's contract is two callbacks, and widening it
+     * with a "what is current" accessor would give a second, separately-aged
+     * copy of a fact the framework already answers authoritatively. It also
+     * cannot be null-by-lifecycle here the way the monitor can — the monitor is
+     * registered on [SettingsRepository.tunnelSessionWanted], which is written
+     * from a different coroutine than the start sequence runs on.
+     *
+     * This app excludes its own package from the TUN on every [BuilderPlan]
+     * (§8), so the answer is a physical network even while our own VPN is up.
+     * [attachTun] still samples it before `Builder.establish()` — see there.
+     */
+    private fun activeNetwork(): Network? =
+        getSystemService(ConnectivityManager::class.java)?.activeNetwork
 
     private fun writeConfig(json: String): File {
         // Internal storage, not cache: §5.6 — the config holds the UUID and
@@ -2277,15 +2320,33 @@ class TunnelService : VpnService() {
      *
      * Two reasons. The scope dies with the service, so a retry cannot outlive the
      * session it belongs to. And §2.4's rule is that a session with no network
-     * schedules nothing at all: `NetworkLost` cancels this job and the service waits
-     * on the `NetworkCallback` instead, because a retry timer running in Doze is how
-     * §11's six-hour screen-off row fails.
+     * schedules nothing at all — a retry timer running in Doze is how §11's
+     * six-hour screen-off row fails — which takes enforcement on both edges:
+     * `NetworkLost` cancels a job that was already running, and the guard below
+     * refuses to arm one when there is no network to retry over in the first
+     * place. Either way the service waits on the `NetworkCallback` instead.
      *
      * Called from [settleRetryableFailure]'s `persist`, so only once the
      * generation that failed is confirmed still current.
      */
     private fun scheduleBackoffRetry(attempt: Int) {
         cancelBackoffRetry()
+        // §2.4's rule, on the edge it was previously not enforced on. Cancelling
+        // on ReconcileTrigger.NetworkLost only covers a timer that was already
+        // running when the network went away; a failure arriving while there is
+        // *already* no network — the whole fail-closed-with-no-connectivity
+        // case — reached here and armed one anyway. That timer is what §11's
+        // six-hour screen-off row fails on. With none armed the service waits on
+        // NetworkMonitor's callback instead: it stays registered for as long as
+        // the session is wanted (see onCreate), and this failure has just
+        // published Reconnecting without clearing intent, so the callback is
+        // live. Its onAvailable enqueues Reconcile(NetworkChanged), which
+        // `reconcile` answers with Start for a Reconnecting state that may
+        // attempt again — the retry resumes from there, not from a clock.
+        if (activeNetwork() == null) {
+            Log.i(TAG, "backoff retry not scheduled: no network; waiting on the network callback")
+            return
+        }
         val job =
             scope.launch {
                 delay(ReconnectBackoff.delayMillisFor(attempt))

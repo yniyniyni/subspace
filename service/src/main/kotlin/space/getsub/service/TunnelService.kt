@@ -442,9 +442,10 @@ class TunnelService : VpnService() {
     /**
      * Spec §2.4's retry timer — a plain coroutine delay on [scope], never an
      * alarm or a `WorkManager` job, so it cannot outlive the session it belongs
-     * to. Cancelled in exactly three places: [reconcileNow] on
-     * [ReconcileTrigger.NetworkLost], a committed [ConnectionState.Connected] in
-     * [attachTun], and [onDestroy] — see [cancelBackoffRetry].
+     * to. Cancelled on every path where that session ends — see
+     * [cancelBackoffRetry] for the enumerated call sites, and for why
+     * missing one corrupts a later terminal state rather than merely
+     * wasting a wakeup.
      */
     private var backoffJob: Job? = null
 
@@ -655,6 +656,20 @@ class TunnelService : VpnService() {
         }
     }
 
+    /**
+     * §1.2: the three rejection paths below each publish a terminal `Failed`
+     * and stop, without going through [settleTerminalFailure] — so none of them
+     * inherits its `persist` block, and each has to clear session intent
+     * itself. Left set, the next always-on bind, boot start or sticky restart
+     * reads `wanted = true`, reconciles, and silently connects a session the
+     * user never got: exactly the resurrection §1 exists to make impossible.
+     *
+     * The two that take an `expectedGeneration` clear intent only *after*
+     * [stopTunnel] has confirmed this generation still owns the tunnel — a
+     * generation that lost the race must not clear intent belonging to the one
+     * that won, which is the same rule [settleTerminalFailure] encodes by
+     * putting its own clear inside `persist`.
+     */
     private suspend fun rejectConnectFromCommand(
         startId: Int,
         rowId: Long,
@@ -663,6 +678,7 @@ class TunnelService : VpnService() {
         val failed = failure(FailureReason.ProfileDecodeFailed, "connect request could not be decoded")
         stopTunnel(failed)
         stopStartedService(startId)
+        settingsRepository.setTunnelSessionWanted(false)
         connectionRecorder.record(rowId, failed)
     }
 
@@ -673,7 +689,15 @@ class TunnelService : VpnService() {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
         val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
         stopStartedService(startId)
-        scope.launch { connectionRecorder.record(rowId, failed) }
+        // Not made `suspend` to await these: this is [runAfterForegroundEstablished]'s
+        // synchronous rejection callback. The existing fire-and-forget shape the
+        // spec-D4 write already uses is extended to carry the intent clear rather
+        // than opening a second launch — both belong to the same settled outcome and
+        // ordering them against each other costs nothing.
+        scope.launch {
+            settingsRepository.setTunnelSessionWanted(false)
+            connectionRecorder.record(rowId, failed)
+        }
     }
 
     private suspend fun handleForegroundLifecycleRejection(
@@ -683,6 +707,7 @@ class TunnelService : VpnService() {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
         val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
         stopStartedService(startId)
+        settingsRepository.setTunnelSessionWanted(false)
         connectionRecorder.record(rowId, failed)
     }
 
@@ -1334,6 +1359,15 @@ class TunnelService : VpnService() {
                 controller = null
                 liveSession = null
                 reconnectAttempts.reset()
+                // A terminal outcome ends the retry sequence, so the timer that
+                // sequence armed must not outlive it — see [cancelBackoffRetry].
+                // A `RetryableCapped` failure at the cap reaches here from
+                // [settleRetryableFailure] with a job already scheduled by the
+                // attempt before it, and without this that job fires
+                // BackoffElapsed into the `Failed` this is publishing. Inline
+                // rather than cancelBackoffRetry(): this lambda runs under
+                // [lock] already.
+                cancelBackoffRetryLocked()
                 closeRetainedTunLocked()
                 val startId = activeStartId
                 activeStartId = 0
@@ -1748,6 +1782,13 @@ class TunnelService : VpnService() {
             // retry sequence was in progress; the next one starts at 1, not
             // wherever this one left off.
             reconnectAttempts.reset()
+            // …and the pending timer for that sequence dies with it. Resetting
+            // the counter without cancelling the job left a retry armed against
+            // a session this call is ending: it would later fire BackoffElapsed
+            // into a reconcile that can flatten a published Failed(Revoked)
+            // into Disconnected (§11 row 7). Inline rather than
+            // cancelBackoffRetry(), which takes [lock] this block already holds.
+            cancelBackoffRetryLocked()
             startId = activeStartId
             activeStartId = 0
             publishLocked(ConnectionState.Disconnecting)
@@ -2254,15 +2295,41 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * Cancels a pending retry. Idempotent. Called on [ReconcileTrigger.NetworkLost],
-     * a committed successful connect, and [onDestroy] — missing any one of those
-     * three leaves a timer running against a session that is gone.
+     * Cancels a pending retry. Idempotent.
+     *
+     * Every path on which the session this timer belongs to ends must reach
+     * this or [cancelBackoffRetryLocked], because a surviving timer later fires
+     * [ReconcileTrigger.BackoffElapsed] into a session that is gone — and a
+     * reconcile arriving after a published `Failed(Revoked)` flattens it to
+     * `Disconnected`, losing the one fact the user needs (§11 row 7).
+     *
+     * The call sites, in full:
+     *
+     *  - [reconcileNow] on [ReconcileTrigger.NetworkLost] — §2.4's no-network,
+     *    no-timer rule on the losing edge.
+     *  - a committed [ConnectionState.Connected], from both [attachTun] and
+     *    [attachRetainedTun] — the failure the pending retry was for is over.
+     *  - [onDestroy].
+     *  - [stopTunnel] and [settleTerminalFailure], which take [lock] already
+     *    and so call [cancelBackoffRetryLocked] inline instead.
      */
     private fun cancelBackoffRetry() {
-        synchronized(lock) {
-            backoffJob?.cancel()
-            backoffJob = null
-        }
+        synchronized(lock) { cancelBackoffRetryLocked() }
+    }
+
+    /**
+     * [cancelBackoffRetry]'s body for the two callers that already hold [lock].
+     *
+     * Split out rather than letting them call [cancelBackoffRetry] and rely on
+     * the monitor being reentrant: the two sites that need it — [stopTunnel]'s
+     * one-shot state capture and [settleTerminalFailure]'s `lifecycle` lambda —
+     * are exactly the places where "this runs under the lock" is load-bearing,
+     * and a helper that quietly re-takes it would invite someone to move a
+     * suspending or slow call in beside it.
+     */
+    private fun cancelBackoffRetryLocked() {
+        backoffJob?.cancel()
+        backoffJob = null
     }
 
     private fun reapplyPerAppFromCommand() {

@@ -1212,6 +1212,14 @@ class TunnelService : VpnService() {
                 fd.close()
                 return
             }
+            // §5.4/§6.1: a fail-closed retry reaches this line with the *previous*
+            // attempt's fd still in [tunInterface] — [settleRetryableFailure]
+            // deliberately left it open as the kill switch, and nothing between
+            // there and here closes it. Assigning over it would leak an fd per
+            // retry, unboundedly, which is the wedged-until-reboot outcome §5.4
+            // names. Closing first is not belt-and-braces: it is the only close
+            // that path ever gets.
+            closeRetainedTunLocked()
             tunInterface = fd
         }
 
@@ -1426,16 +1434,27 @@ class TunnelService : VpnService() {
                 // with nothing servicing it as a blackhole for the wanted
                 // session's traffic instead of a torn-down interface.
                 if (!retainTun) closeRetainedTunLocked()
-                // §6.3: the notification's text is read from this same
-                // shouldRetainTun answer, never recomputed from the setting
-                // alone — a terminal failure releases the TUN even with
-                // fail-closed on, and recomputing from the setting would have
-                // the notification claim traffic is blocked while it flows in
-                // the clear. Its own success/failure does not gate this
-                // transition: a rejected foreground update here must not
-                // silently drop the Reconnecting state the user is waiting on.
+                // §6.3/§6.4: the notification reports the **observed** TUN, not
+                // the fail-closed setting and not [shouldRetainTun]'s decision
+                // on its own. Those two are not the same fact. Four of the six
+                // reachable retryable shapes — PortAllocationFailed,
+                // CoreStartFailed, TunEstablishFailed and TunnelStartFailed —
+                // fail before or during [attachTun], so [tunInterface] is
+                // already null here however the setting reads and whatever
+                // `shouldRetainTun` decided: there is no TUN left to retain, and
+                // every packet leaves in the clear. §6.4 defends defaulting
+                // fail-closed *on* entirely on the promise that §6.3's
+                // notification tells the truth, so reading the retention
+                // decision alone made that promise false in the common case.
+                // Reading `tunInterface` here needs no extra synchronization:
+                // this lambda already runs under `lock`, after the
+                // `closeRetainedTunLocked()` above has settled what is left.
+                //
+                // Its own success/failure does not gate this transition: a
+                // rejected foreground update here must not silently drop the
+                // Reconnecting state the user is waiting on.
                 goForeground(
-                    if (retainTun) {
+                    if (retainTun && tunInterface != null) {
                         R.string.notification_state_reconnecting_blocked
                     } else {
                         R.string.notification_state_reconnecting_open
@@ -1460,7 +1479,11 @@ class TunnelService : VpnService() {
      * [settleRetryableFailure], guarded by [shouldRetainTun]: when that
      * returns true this is skipped on purpose, and the fd it would have closed
      * is the entire kill switch. Either way, the next `Start` establishes a
-     * fresh TUN via [attachTun] rather than reusing this one.
+     * fresh TUN via [attachTun] rather than reusing this one — which is why
+     * [attachTun] is the third caller: it closes whatever a retained-fd
+     * retry left behind immediately before adopting the fd it just
+     * established, and that is the only close a successful retry ever
+     * performs on the retained one.
      *
      * A no-op for every ordinary start-sequence failure, which never retains a
      * TUN in the first place: [tunInterface] is already null by the time

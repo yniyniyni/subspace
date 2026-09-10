@@ -81,4 +81,63 @@ class NetworkTransitionTest {
 
         debouncer.shouldReconcile(networkId = 2L, nowMillis = 0L) shouldBe true
     }
+
+    // ── Losing the network clears the suppression state ─────────────────────
+    //
+    // These pin an invariant that only became load-bearing once spec §2.4's
+    // no-network-no-timer rule was enforced on both edges. `scheduleBackoffRetry`
+    // now refuses to arm a timer while `activeNetwork` is null, so for a
+    // `Reconnecting` session with no network the `onAvailable` callback is the
+    // ONLY thing that can resume it. A suppressed callback used to cost one
+    // wasted wakeup; without the timer behind it, it strands the session for
+    // good — and with the kill switch on, that is a device with no connectivity
+    // and nothing working to restore it.
+
+    /**
+     * A network returning with the id it had before the loss must still reconcile.
+     * Without the reset, [NetworkTransitionDebouncer.shouldReconcile]'s id-equality
+     * guard sees the stale id and suppresses the one callback that could resume.
+     */
+    @Test
+    fun theSameNetworkReturningAfterALossReconciles() {
+        val debouncer = NetworkTransitionDebouncer()
+        debouncer.shouldReconcile(networkId = 1L, nowMillis = 0L) shouldBe true
+
+        debouncer.reset()
+
+        debouncer.shouldReconcile(networkId = 1L, nowMillis = 100L) shouldBe true
+    }
+
+    /**
+     * The handover case, which needs no id collision to strand: Wi-Fi is accepted,
+     * lost, and cellular arrives inside the debounce window. The window guard drops
+     * it *without recording it*, so the stale id stays in place — which is what
+     * would suppress it again on a later delivery.
+     */
+    @Test
+    fun aHandoverInsideTheWindowAfterALossReconciles() {
+        val debouncer = NetworkTransitionDebouncer()
+        debouncer.shouldReconcile(networkId = 1L, nowMillis = 0L) shouldBe true
+
+        debouncer.reset()
+
+        // 200ms after the accepted transition — inside the 1s window that would
+        // otherwise suppress a different network.
+        debouncer.shouldReconcile(networkId = 2L, nowMillis = 200L) shouldBe true
+    }
+
+    /**
+     * The reset must not disable the debouncer for what follows. Once a network is
+     * accepted after a loss, the ordinary flap collapsing resumes — otherwise this
+     * fix would trade a stranded session for §5.2's three tunnel restarts.
+     */
+    @Test
+    fun theDebouncerStillCollapsesAFlapAfterALoss() {
+        val debouncer = NetworkTransitionDebouncer()
+        debouncer.reset()
+
+        debouncer.shouldReconcile(networkId = 1L, nowMillis = 0L) shouldBe true
+        debouncer.shouldReconcile(networkId = 2L, nowMillis = 200L) shouldBe false
+        debouncer.shouldReconcile(networkId = 1L, nowMillis = 400L) shouldBe false
+    }
 }

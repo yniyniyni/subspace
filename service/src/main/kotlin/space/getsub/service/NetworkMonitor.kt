@@ -56,6 +56,36 @@ internal class NetworkTransitionDebouncer(
         lastAtMillis = PRIMED_AT_MILLIS
     }
 
+    /**
+     * Forgets the last-seen network, so the next one reported is treated as a
+     * genuine nothing-to-something transition.
+     *
+     * Called from `NetworkMonitor`'s `onLost`. Both guards in [shouldReconcile]
+     * exist to avoid restarting a *working* tunnel — the same network reported
+     * again, and a flap collapsing into one reconcile. Once the default network
+     * is gone there is no working tunnel to protect, and whatever arrives next
+     * is the thing the session has been waiting for.
+     *
+     * This became load-bearing when spec §2.4's no-network-no-timer rule started
+     * being enforced on both edges: `scheduleBackoffRetry` now refuses to arm a
+     * timer while `activeNetwork` is null, which makes this callback the *only*
+     * thing that can resume a `Reconnecting` session with no network. A
+     * suppressed `onAvailable` used to cost one wasted wakeup, because the timer
+     * would retry anyway; without that backstop it strands the session
+     * permanently — with the kill switch on, that is a device left with no
+     * connectivity and nothing working to restore it.
+     *
+     * Two reachable ways the suppression fires after a loss, both closed by this:
+     * a network returning with the `networkHandle` it had before, and a network
+     * arriving within [debounceMillis] of the *previous* acceptance (a Wi-Fi to
+     * cellular handover during a flap), which [shouldReconcile] drops without
+     * recording, leaving the stale id in place to suppress it again.
+     */
+    fun reset() {
+        lastNetworkId = null
+        lastAtMillis = 0L
+    }
+
     private companion object {
         // Long.MIN_VALUE / 2, not Long.MIN_VALUE itself: shouldReconcile computes
         // `nowMillis - lastAtMillis`, and subtracting from the true minimum would
@@ -119,6 +149,11 @@ internal class NetworkMonitor(
                     }
 
                     override fun onLost(network: Network) {
+                        // Before the callback, not after: onNetworkLost cancels the
+                        // pending retry timer, so from here until something is
+                        // accepted by the debouncer there is nothing else left to
+                        // resume this session. See NetworkTransitionDebouncer.reset.
+                        debouncer.reset()
                         onNetworkLost()
                     }
                 }

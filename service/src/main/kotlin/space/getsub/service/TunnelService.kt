@@ -26,12 +26,14 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
 import space.getsub.core.data.GeoAssetRepository
@@ -1468,12 +1470,21 @@ class TunnelService : VpnService() {
                 true
             },
             persist = {
-                connectionRecorder.record(rowId, failed)
-                // Spec §1.2/§2.2: one of the intent-clearing sites. Inside
-                // `persist` rather than beside `settle` so a superseded
-                // generation (this attempt lost the race) never clears intent
-                // for a session that is not this one's to clear.
-                settingsRepository.setTunnelSessionWanted(false)
+                // NonCancellable for the same reason onRevoke needs it, and it
+                // is the same race: `lifecycle` above has already called
+                // stopStartedService, which can destroy the service, and
+                // onDestroy calls scope.cancel() — so these two writes run in a
+                // window where the scope they belong to may already be gone.
+                // Not observed losing, and cheap to make independent of whether
+                // it would.
+                withContext(NonCancellable) {
+                    connectionRecorder.record(rowId, failed)
+                    // Spec §1.2/§2.2: one of the intent-clearing sites. Inside
+                    // `persist` rather than beside `settle` so a superseded
+                    // generation (this attempt lost the race) never clears intent
+                    // for a session that is not this one's to clear.
+                    settingsRepository.setTunnelSessionWanted(false)
+                }
             },
         )
     }
@@ -1971,17 +1982,29 @@ class TunnelService : VpnService() {
      * state with a plain Disconnected — losing the one piece of information the
      * user needs. We stop explicitly instead.
      *
-     * The intent-clearing write below is fire-and-forget — `onRevoke()` is not
-     * suspend — so a revoke racing process death could in principle leave
-     * `wanted=true` persisted. Accepted rather than fixed: the practical risk
-     * is low, since a later connect attempt against still-revoked permission
-     * fails terminally and re-clears intent through that path instead.
+     * The intent-clearing write below runs on [NonCancellable] because the race
+     * it closes is real, not because it was ever observed losing.
+     *
+     * `onRevoke()` is not suspend and `runBlocking` is not permitted here, so
+     * the write has to be launched rather than awaited. [stopTunnel] below then
+     * stops the started service, which destroys it, and [onDestroy] calls
+     * `scope.cancel()` — so a write launched as a child of [scope] is racing its
+     * own scope's cancellation. On device (§11 row 7) it won that race
+     * comfortably: an instrumented run showed `write DONE` before
+     * `onDestroy ENTER`. But winning is a property of how fast this particular
+     * Room write happens to be, not of the ordering, and losing it leaves
+     * `wanted = true` after a revoke — which is exactly what §1.2 exists to
+     * prevent, since the next boot or always-on bind would then reconnect and
+     * fight for the route the user just handed to another VPN app.
+     *
+     * [NonCancellable] gives the write its own job instead of a child of
+     * [scope], so the outcome no longer depends on that timing at all.
      */
     override fun onRevoke() {
         // Spec §1.2: the second of three intent-clearing sites. Reconnecting into
         // a route another VPN app just took, or that the user just revoked, is a
         // fight this app should lose, loudly and immediately — not retry into.
-        scope.launch { settingsRepository.setTunnelSessionWanted(false) }
+        scope.launch(NonCancellable) { settingsRepository.setTunnelSessionWanted(false) }
         val startId = stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
         if (startId != null) stopStartedService(startId)
     }

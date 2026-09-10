@@ -174,79 +174,43 @@ class NetworkTransitionTest {
         decisions shouldBe listOf(true, true, true)
     }
 
-    // ── This app's own VPN must never be its own underlying network ─────────
+    // ── The VPN is excluded by the request, not filtered downstream ─────────
     //
-    // Found on device (Pixel 8 / Android 17), not by review. `attachTun`
-    // correctly declared Wi-Fi as underlying; the `onAvailable` that followed
-    // the tunnel coming up handed back the VPN itself, which was then declared
-    // as its own underlying network. Two user-visible consequences, neither a
-    // routing failure: the tunnel reported itself metered while running over
-    // unmetered Wi-Fi (§5.2's whole purpose, and what `geoRefreshOnMetered` and
-    // `pingOnLaunchMetered` read), and the Wi-Fi/cellular status-bar icon
-    // vanished because the system had no transport to attribute the VPN to.
-
-    @Test
-    fun ourOwnVpnIsNotAnUnderlyingNetwork() {
-        val filter = UnderlyingNetworkFilter()
-
-        filter.accept(handle = 108L, isVpn = false) shouldBe true
-        filter.accept(handle = 110L, isVpn = true) shouldBe false
-    }
+    // NetworkMonitor no longer uses registerDefaultNetworkCallback: once this
+    // service's own tunnel is up, that API considers the app's default network
+    // unchanged when the physical network flips underneath it, so nothing fires
+    // — measured on device, the declared underlying stayed pinned to a dead
+    // Wi-Fi network across a full Wi-Fi -> LTE -> Wi-Fi cycle. It now listens on
+    // a NET_CAPABILITY_NOT_VPN request, so our own tunnel cannot match and the
+    // UnderlyingNetworkFilter that used to strip it downstream is gone.
+    //
+    // Both callbacks are triggers only; the value comes from activeNetwork. The
+    // debouncer below is the part that is still pure and still worth pinning.
 
     /**
-     * The filtered VPN must not become the debouncer's "last seen" network, or the
-     * physical network arriving next would be compared against it. This pins the
-     * ordering: filter first, debounce second.
+     * The trigger fires on every matching network, so the same physical network
+     * can be re-reported (a capability change, or a sibling network arriving
+     * while this one stays current). Re-reporting must not restart the tunnel.
      */
     @Test
-    fun aFilteredVpnDoesNotDisplaceTheLastSeenPhysicalNetwork() {
-        val filter = UnderlyingNetworkFilter()
+    fun reSettlingOnTheSameActiveNetworkDoesNotReconcile() {
         val debouncer = NetworkTransitionDebouncer()
         debouncer.prime(108L)
 
-        // The VPN comes up and is refused before it can reach the debouncer.
-        filter.accept(handle = 110L, isVpn = true) shouldBe false
-
-        // The same physical network reported again is still recognised as
-        // unchanged, so no tunnel restart.
         debouncer.shouldReconcile(networkId = 108L, nowMillis = 5_000L) shouldBe false
+        debouncer.shouldReconcile(networkId = 108L, nowMillis = 9_000L) shouldBe false
     }
 
     /**
-     * §2.4. Losing our own tunnel is not the device losing connectivity. By the
-     * time `onLost` arrives the capabilities are gone, so the VPN cannot be
-     * recognised from the network alone — hence the remembered handles. Reporting
-     * it would cancel the retry timer and reset the debouncer for a network that
-     * never went anywhere.
+     * The transition the old API never delivered: Wi-Fi goes away, cellular is
+     * already current, and `activeNetwork` resolves to it. That is a genuine
+     * change and must reconcile.
      */
     @Test
-    fun losingOurOwnVpnIsNotALostNetwork() {
-        val filter = UnderlyingNetworkFilter()
-        filter.accept(handle = 110L, isVpn = true)
+    fun aHandoverToTheNetworkUnderneathReconciles() {
+        val debouncer = NetworkTransitionDebouncer()
+        debouncer.prime(108L)
 
-        filter.lost(110L) shouldBe false
-    }
-
-    @Test
-    fun losingARealNetworkIsStillReported() {
-        val filter = UnderlyingNetworkFilter()
-        filter.accept(handle = 108L, isVpn = false)
-
-        filter.lost(108L) shouldBe true
-    }
-
-    /**
-     * A handle is remembered only until the loss that clears it: netIds are reused,
-     * and a physical network later given a retired VPN's handle must not be
-     * silently swallowed forever.
-     */
-    @Test
-    fun aReusedHandleIsNotIgnoredTwice() {
-        val filter = UnderlyingNetworkFilter()
-        filter.accept(handle = 110L, isVpn = true)
-        filter.lost(110L) shouldBe false
-
-        filter.accept(handle = 110L, isVpn = false) shouldBe true
-        filter.lost(110L) shouldBe true
+        debouncer.shouldReconcile(networkId = 100L, nowMillis = 5_000L) shouldBe true
     }
 }

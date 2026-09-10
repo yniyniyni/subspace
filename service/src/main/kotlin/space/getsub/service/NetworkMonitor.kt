@@ -6,6 +6,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.SystemClock
 
 /**
@@ -129,58 +130,8 @@ internal class NetworkTransitionDebouncer(
 }
 
 /**
- * Keeps this app's **own VPN** out of the default-network stream (spec §5.2).
- *
- * `registerDefaultNetworkCallback` reports the calling app's default network,
- * and when this service's own tunnel comes up the platform delivers that VPN
- * here — even though the app excludes itself from the TUN, which only governs
- * routing. Measured on a Pixel 8 (Android 17): `attachTun` correctly declared
- * the Wi-Fi network as underlying, and the `onAvailable` that followed handed
- * back the VPN, which was then declared as its own underlying network.
- *
- * The consequences were both user-visible and neither was a routing failure:
- * a self-referential underlying network has nothing to inherit
- * `NET_CAPABILITY_NOT_METERED` from, so the tunnel reported itself **metered
- * over unmetered Wi-Fi** — the exact fact §5.2 exists to get right, and one
- * this app's own `geoRefreshOnMetered` and `pingOnLaunchMetered` consume — and
- * the system had no transport to attribute the VPN to, so the Wi-Fi/cellular
- * status-bar icon disappeared while the tunnel was up.
- *
- * It also fed a spurious `NetworkChanged` reconcile immediately after every
- * connect: the VPN's id differs from the physical one the debouncer was primed
- * with, so it reads as a genuine transition and restarts a tunnel that just
- * finished starting.
- *
- * [lost] exists because the same filtering has to survive teardown. By the time
- * `onLost` arrives the capabilities are already gone, so the VPN cannot be
- * recognised from the [Network] alone — the handles that were filtered on the
- * way in are remembered, and their loss is not reported as the network going
- * away. Without that, this service's own tunnel closing would look like the
- * device losing connectivity: it would cancel the retry timer and reset the
- * debouncer (§2.4).
- */
-internal class UnderlyingNetworkFilter {
-    private val ignoredVpnHandles = mutableSetOf<Long>()
-
-    /** True when [handle] is a real underlying network this session may use. */
-    fun accept(
-        handle: Long,
-        isVpn: Boolean,
-    ): Boolean {
-        if (isVpn) {
-            ignoredVpnHandles += handle
-            return false
-        }
-        return true
-    }
-
-    /** True when losing [handle] is a genuine loss of the underlying network. */
-    fun lost(handle: Long): Boolean = !ignoredVpnHandles.remove(handle)
-}
-
-/**
- * Watches the default network for as long as a session is **wanted** — not for
- * as long as it is connected (spec §5.1).
+ * Watches the **physical** networks under the tunnel for as long as a session is
+ * **wanted** — not for as long as it is connected (spec §5.1).
  *
  * Fail-closed means sitting with no network and waiting, and this is the thing
  * being waited on. Registering only while connected would make the no-network
@@ -197,7 +148,6 @@ internal class NetworkMonitor(
     private val onNetworkLost: () -> Unit,
 ) {
     private val debouncer = NetworkTransitionDebouncer()
-    private val selfFilter = UnderlyingNetworkFilter()
 
     /**
      * Guards [callback] against two threads calling [start]/[stop] at once — the
@@ -226,32 +176,66 @@ internal class NetworkMonitor(
             manager.activeNetwork?.let { active -> debouncer.prime(active.networkHandle) }
             val registered =
                 object : ConnectivityManager.NetworkCallback() {
-                    override fun onAvailable(network: Network) {
-                        // Filtered before the debouncer, not after: an ignored
-                        // VPN must not become the debouncer's "last seen"
-                        // network, or the physical network arriving next would
-                        // be compared against it.
-                        val isVpn =
-                            manager.getNetworkCapabilities(network)
-                                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-                        if (!selfFilter.accept(network.networkHandle, isVpn)) return
-                        if (debouncer.shouldReconcile(network.networkHandle, SystemClock.elapsedRealtime())) {
-                            onChanged(network)
-                        }
-                    }
+                    // Both callbacks are triggers only: the [Network] they carry is
+                    // *a* matching network, not the one this session runs over.
+                    // A "listen" registration reports every network matching the
+                    // request, so with Wi-Fi and cellular both up, both arrive.
+                    // `activeNetwork` is the authoritative answer and is re-read
+                    // here — verified on device (Pixel 8 / Android 17) to return
+                    // the physical network even while this service's own VPN is
+                    // established, because §8 excludes this app's own package from
+                    // the TUN on every BuilderPlan.
+                    override fun onAvailable(network: Network) = settle(manager)
 
-                    override fun onLost(network: Network) {
-                        if (!selfFilter.lost(network.networkHandle)) return
-                        // Before the callback, not after: onNetworkLost cancels the
-                        // pending retry timer, so from here until something is
-                        // accepted by the debouncer there is nothing else left to
-                        // resume this session. See NetworkTransitionDebouncer.reset.
-                        debouncer.reset()
-                        onNetworkLost()
-                    }
+                    override fun onLost(network: Network) = settle(manager)
                 }
-            manager.registerDefaultNetworkCallback(registered)
+            // NOT registerDefaultNetworkCallback. That reports the *calling app's*
+            // default network, and once this service's own tunnel is up, that IS
+            // the VPN — so the platform considers the app's default unchanged when
+            // Wi-Fi gives way to cellular underneath it, and delivers nothing.
+            // Measured: across a full Wi-Fi -> LTE -> Wi-Fi cycle the declared
+            // underlying network stayed pinned to the dead Wi-Fi network, and
+            // since this callback is also the only source of
+            // ReconcileTrigger.NetworkChanged, restartCoreRetainingTun never ran
+            // on a real transition either. Traffic recovered anyway, by the core
+            // redialling through the new default on its own — the soft path (§5.4)
+            // arriving by accident rather than the hard path this milestone chose.
+            //
+            // NET_CAPABILITY_NOT_VPN makes our own tunnel unable to match, which
+            // is also why no VPN-filtering is needed downstream any more.
+            // This is a "listen" registration, not requestNetwork, so
+            // ACCESS_NETWORK_STATE is sufficient and nothing is kept alive by it.
+            val request =
+                NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build()
+            manager.registerNetworkCallback(request, registered)
             callback = registered
+        }
+    }
+
+    /**
+     * Resolves what the session is actually running over, and reports it once.
+     *
+     * Called from both callbacks because either can mean "the network under the
+     * tunnel changed": a new physical network arriving, or the current one
+     * going away and another taking over. Which of the two it was does not
+     * matter — only what is current afterwards does.
+     *
+     * A null [ConnectivityManager.getActiveNetwork] is a genuine no-connectivity
+     * state and takes §2.4's path: cancel the retry timer and wait, rather than
+     * arm a timer that would run in Doze.
+     */
+    private fun settle(manager: ConnectivityManager) {
+        val active = manager.activeNetwork
+        if (active == null) {
+            debouncer.reset()
+            onNetworkLost()
+            return
+        }
+        if (debouncer.shouldReconcile(active.networkHandle, SystemClock.elapsedRealtime())) {
+            onChanged(active)
         }
     }
 

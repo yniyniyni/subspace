@@ -79,10 +79,27 @@ internal data class HomeState(
             activeProfile?.connectable == true &&
                 (connection is ConnectionState.Disconnected || connection is ConnectionState.Failed)
 
+    /**
+     * True for [ConnectionState.Reconnecting] as well as [ConnectionState.Connected] and
+     * [ConnectionState.Connecting].
+     *
+     * Spec §7.3: a `Retryable` failure retries **indefinitely** while a network exists, so
+     * `Reconnecting` is not a state that ends on its own the way `Connecting` does. With the
+     * kill switch on (the default) the user is sitting with no connectivity while it retries.
+     * Excluding it here left the one state in the app that is both unbounded and
+     * connectivity-denying as the only one with no in-app way out — the ongoing
+     * notification's action was the sole exit, which is not sufficient for a control the
+     * user is looking straight at.
+     *
+     * Being true here is necessary but not sufficient: [HomeScreen]'s tap handler and
+     * `ConnectControl`'s own guard each independently refused the tap, and all three had to
+     * agree before the control actually did anything.
+     */
     val canDisconnect: Boolean
         get() =
             connection is ConnectionState.Connected ||
-                connection is ConnectionState.Connecting
+                connection is ConnectionState.Connecting ||
+                connection is ConnectionState.Reconnecting
 
     /**
      * Whether [activeProfile] decoded fine but [canConnect] is still false because

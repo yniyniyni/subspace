@@ -164,6 +164,12 @@ internal fun HomeScreenContent(
                     // refuses a tap of its own while Connecting, kept only
                     // so this `when` names every branch explicitly.
                     ConnectVisualState.Connecting -> Unit
+                    // Spec §7.3. Unlike Connecting, a reconnect has no bound —
+                    // a Retryable reason retries for as long as a network
+                    // exists — and with the kill switch on the user has no
+                    // connectivity while it does. This is that state's only
+                    // in-app exit, so unlike the branch above it must act.
+                    ConnectVisualState.Reconnecting -> if (state.canDisconnect) actions.onDisconnect()
                 }
             },
         )
@@ -236,13 +242,13 @@ private fun ConnectionDetail(connection: ConnectionState) {
             )
         }
 
-        // §7.3: whether traffic is currently blocked belongs here once a later
-        // task plumbs that signal through — ConnectionState.Reconnecting (Task 4)
-        // carries only reason and attempt, not whether the TUN was retained.
-        // Rendering the reason or attempt count on their own would be new
-        // information this milestone hasn't designed for, so this renders
-        // nothing extra beyond the "Reconnecting…" label, the same as the
-        // other non-terminal states below.
+        // §7.3: whether traffic is currently blocked or flowing in the clear is
+        // deliberately NOT shown here. That distinction is carried by the
+        // ongoing notification (§6.3), which is the surface a user actually
+        // sees while the app is backgrounded mid-reconnect; duplicating it on
+        // Home would mean widening ConnectionState.Reconnecting and its parcel
+        // discriminant to carry a fact the notification already reports.
+        // Deferred to M8.5 — see the roadmap, not a TODO here.
         ConnectionState.Disconnected,
         ConnectionState.Disconnecting,
         is ConnectionState.Connecting,
@@ -406,12 +412,19 @@ private fun ActiveServerTile(
  * mapping only decides the control's own colour and tap behaviour, not
  * whether the failure is communicated at all.
  *
- * [ConnectionState.Reconnecting] maps to [ConnectVisualState.Connecting] for the
- * same reason as [ConnectionState.Disconnecting]: it is a transient in-flight
- * action, not a state a tap should act on. [HomeState.canConnect] and
- * [HomeState.canDisconnect] already agree — neither is true for `Reconnecting` —
- * so this only makes the control's own colour and tap-guard match what those
- * booleans already decided.
+ * [ConnectionState.Reconnecting] maps to [ConnectVisualState.Reconnecting], its
+ * own visual state — not to [ConnectVisualState.Connecting], which is where it
+ * started (spec §7.3). `Connecting` renders identically but refuses every tap
+ * inside `ConnectControl` itself, and a reconnect is unbounded: a `Retryable`
+ * reason retries for as long as a network exists, and with the kill switch on
+ * the user has no connectivity meanwhile. That mapping therefore produced a
+ * state with no exit and no bound. [ConnectVisualState.Connected] was not the
+ * alternative — it renders the connected colour and would claim a tunnel that
+ * is down, the same false-reassurance defect §6.3's notification had.
+ *
+ * [HomeState.canDisconnect] is true for `Reconnecting` and this mapping is what
+ * lets that boolean reach the control: the tap handler and `ConnectControl`'s
+ * own guard each refused it independently, so all three had to change together.
  */
 private fun ConnectionState.toVisualState(): ConnectVisualState =
     when (this) {
@@ -420,7 +433,7 @@ private fun ConnectionState.toVisualState(): ConnectVisualState =
         is ConnectionState.Connected -> ConnectVisualState.Connected
         ConnectionState.Disconnecting -> ConnectVisualState.Connecting
         is ConnectionState.Failed -> ConnectVisualState.Disconnected
-        is ConnectionState.Reconnecting -> ConnectVisualState.Connecting
+        is ConnectionState.Reconnecting -> ConnectVisualState.Reconnecting
     }
 
 private fun ConnectionState.labelRes(): Int =
@@ -433,8 +446,8 @@ private fun ConnectionState.labelRes(): Int =
         // Generic, not reason.labelRes(): unlike Failed, a Reconnecting attempt
         // is not something the user needs to act on, so it gets one steady
         // label rather than cycling through whichever reason triggered each
-        // retry. See ConnectionDetail's KDoc-adjacent comment for what the
-        // eventual blocked/open distinction (§7.3) still needs.
+        // retry. The blocked/open distinction (§7.3) is the notification's to
+        // report, not this label's — see ConnectionDetail above.
         is ConnectionState.Reconnecting -> R.string.home_state_reconnecting
     }
 

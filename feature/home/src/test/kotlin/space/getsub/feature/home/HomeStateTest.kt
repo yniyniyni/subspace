@@ -153,4 +153,35 @@ class HomeStateTest {
     fun `activeProfileUnsupported is true for a decoded but unconnectable profile`() {
         HomeState(activeProfile = profile("kcp")).activeProfileUnsupported shouldBe true
     }
+
+    // ── Disconnecting out of a reconnect (spec §7.3, ruling R23) ────────────
+    //
+    // A Retryable reason retries for as long as a network exists, so Reconnecting has no
+    // bound, and with the kill switch on (the default) the user has no connectivity while
+    // it does. Excluding it here left the app's one unbounded, connectivity-denying state
+    // as the only one with no in-app exit. HomeReconnectingTest covers the other two
+    // refusals this had to be lifted alongside — the visual-state mapping and
+    // ConnectControl's own tap guard — which a JVM test cannot reach.
+
+    @Test
+    fun `canDisconnect is true while reconnecting`() {
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)
+        HomeState(connection = reconnecting, activeProfile = profile("tcp")).canDisconnect shouldBe true
+    }
+
+    @Test
+    fun `canDisconnect is true while reconnecting even at the attempt cap`() {
+        // The cap governs whether the *service* attempts again, never whether the user may
+        // leave. A capped reason still sits in Reconnecting until the service settles it.
+        val capped = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3)
+        HomeState(connection = capped, activeProfile = profile("tcp")).canDisconnect shouldBe true
+    }
+
+    @Test
+    fun `canConnect is false while reconnecting`() {
+        // Reconnecting is not a state a fresh connect stacks onto: the service already has
+        // an attempt sequence in flight. The exit is disconnect, not a second connect.
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)
+        HomeState(connection = reconnecting, activeProfile = profile("tcp")).canConnect shouldBe false
+    }
 }

@@ -61,6 +61,12 @@ internal fun SettingsTunnelSection(
             label = stringResource(R.string.settings_always_on_title),
             supportingText = stringResource(R.string.settings_always_on_summary),
             onClick = onOpenVpnSettings,
+            // Not cosmetic, and not copied from the row below by habit: without
+            // this the row is not a semantics *ancestor* of its own trailing
+            // content, so SettingsTunnelSectionTest's "no Switch under this
+            // label" assertion has no ancestor to match and can never fail —
+            // it passed against an injected Switch. See SettingRow's KDoc.
+            labelCarriesSemantics = true,
             trailing = {
                 Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             },

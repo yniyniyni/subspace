@@ -5,6 +5,7 @@ package space.getsub.service
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.SystemClock
 
 /**
@@ -128,6 +129,56 @@ internal class NetworkTransitionDebouncer(
 }
 
 /**
+ * Keeps this app's **own VPN** out of the default-network stream (spec §5.2).
+ *
+ * `registerDefaultNetworkCallback` reports the calling app's default network,
+ * and when this service's own tunnel comes up the platform delivers that VPN
+ * here — even though the app excludes itself from the TUN, which only governs
+ * routing. Measured on a Pixel 8 (Android 17): `attachTun` correctly declared
+ * the Wi-Fi network as underlying, and the `onAvailable` that followed handed
+ * back the VPN, which was then declared as its own underlying network.
+ *
+ * The consequences were both user-visible and neither was a routing failure:
+ * a self-referential underlying network has nothing to inherit
+ * `NET_CAPABILITY_NOT_METERED` from, so the tunnel reported itself **metered
+ * over unmetered Wi-Fi** — the exact fact §5.2 exists to get right, and one
+ * this app's own `geoRefreshOnMetered` and `pingOnLaunchMetered` consume — and
+ * the system had no transport to attribute the VPN to, so the Wi-Fi/cellular
+ * status-bar icon disappeared while the tunnel was up.
+ *
+ * It also fed a spurious `NetworkChanged` reconcile immediately after every
+ * connect: the VPN's id differs from the physical one the debouncer was primed
+ * with, so it reads as a genuine transition and restarts a tunnel that just
+ * finished starting.
+ *
+ * [lost] exists because the same filtering has to survive teardown. By the time
+ * `onLost` arrives the capabilities are already gone, so the VPN cannot be
+ * recognised from the [Network] alone — the handles that were filtered on the
+ * way in are remembered, and their loss is not reported as the network going
+ * away. Without that, this service's own tunnel closing would look like the
+ * device losing connectivity: it would cancel the retry timer and reset the
+ * debouncer (§2.4).
+ */
+internal class UnderlyingNetworkFilter {
+    private val ignoredVpnHandles = mutableSetOf<Long>()
+
+    /** True when [handle] is a real underlying network this session may use. */
+    fun accept(
+        handle: Long,
+        isVpn: Boolean,
+    ): Boolean {
+        if (isVpn) {
+            ignoredVpnHandles += handle
+            return false
+        }
+        return true
+    }
+
+    /** True when losing [handle] is a genuine loss of the underlying network. */
+    fun lost(handle: Long): Boolean = !ignoredVpnHandles.remove(handle)
+}
+
+/**
  * Watches the default network for as long as a session is **wanted** — not for
  * as long as it is connected (spec §5.1).
  *
@@ -146,6 +197,7 @@ internal class NetworkMonitor(
     private val onNetworkLost: () -> Unit,
 ) {
     private val debouncer = NetworkTransitionDebouncer()
+    private val selfFilter = UnderlyingNetworkFilter()
 
     /**
      * Guards [callback] against two threads calling [start]/[stop] at once — the
@@ -175,12 +227,21 @@ internal class NetworkMonitor(
             val registered =
                 object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
+                        // Filtered before the debouncer, not after: an ignored
+                        // VPN must not become the debouncer's "last seen"
+                        // network, or the physical network arriving next would
+                        // be compared against it.
+                        val isVpn =
+                            manager.getNetworkCapabilities(network)
+                                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                        if (!selfFilter.accept(network.networkHandle, isVpn)) return
                         if (debouncer.shouldReconcile(network.networkHandle, SystemClock.elapsedRealtime())) {
                             onChanged(network)
                         }
                     }
 
                     override fun onLost(network: Network) {
+                        if (!selfFilter.lost(network.networkHandle)) return
                         // Before the callback, not after: onNetworkLost cancels the
                         // pending retry timer, so from here until something is
                         // accepted by the debouncer there is nothing else left to

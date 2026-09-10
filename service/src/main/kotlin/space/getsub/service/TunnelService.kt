@@ -1726,6 +1726,27 @@ class TunnelService : VpnService() {
                 .addRoute("0.0.0.0", 0)
                 .addAddress(TUN_ADDRESS_V6, TUN_PREFIX_V6)
                 .addRoute("::", 0)
+        // Spec §5.2. Without this a VpnService network is **always** metered:
+        // that is the platform default, and it is applied on top of the
+        // underlying networks rather than derived from them, so declaring the
+        // right underlying network does not undo it. Measured on a Pixel 8
+        // (Android 17): with `underlying=[wlan0]` correctly declared and the
+        // Wi-Fi network carrying NET_CAPABILITY_NOT_METERED, the tunnel still
+        // reported itself metered until this call was added.
+        //
+        // `false` does not claim the tunnel is unmetered — it declines to force
+        // the answer. AOSP's `Vpn.applyUnderlyingCapabilities` ORs this flag
+        // with each underlying network's own metered state, so `false` means
+        // "inherit from what I am running over", which is exactly what §5.2
+        // asks for: apps querying through the tunnel, including this app's own
+        // geoRefreshOnMetered and pingOnLaunchMetered, see the real network's
+        // cost. On cellular the tunnel still reports metered, correctly.
+        //
+        // API 29+; minSdk is 26, and on 26-28 the platform simply has no way to
+        // express this, so those devices keep the always-metered behaviour.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
+        }
         builder.addDnsServerOrFallback(dnsPlan)
 
         when (plan) {

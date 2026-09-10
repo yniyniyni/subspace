@@ -16,14 +16,42 @@ import android.os.SystemClock
 internal class NetworkTransitionDebouncer(
     private val debounceMillis: Long = 1_000L,
 ) {
+    /**
+     * Every method body takes this. The two fields are one piece of state, not
+     * two — [shouldReconcile] reads both and then writes both — and they are
+     * touched from more than one thread: `ConnectivityManager` delivers
+     * `onAvailable` and `onLost` on its own handler, and `NetworkMonitor.start()`
+     * calls [prime] from whichever coroutine the `tunnelSessionWanted` collector
+     * is on. `@Volatile` on each field would not help; it would make each read
+     * fresh while still allowing a torn pair.
+     *
+     * This mattered less when a suppressed callback cost one wasted wakeup. It
+     * is load-bearing now that `TunnelService.scheduleBackoffRetry` arms no timer
+     * without a network: a lost update here can suppress the only callback that
+     * would resume a `Reconnecting` session, which strands it for good.
+     */
+    private val lock = Any()
     private var lastNetworkId: Long? = null
     private var lastAtMillis: Long = 0L
 
-    // Each return is a distinct verdict — the same network reported again, a different
-    // network arriving inside the debounce window, and a genuine change — and collapsing
-    // them into one boolean expression would lose which rule fired.
-    @Suppress("ReturnCount")
     fun shouldReconcile(
+        networkId: Long,
+        nowMillis: Long,
+    ): Boolean =
+        synchronized(lock) {
+            reconcileDecision(networkId, nowMillis)
+        }
+
+    /**
+     * [shouldReconcile]'s decision, with [lock] already held.
+     *
+     * Each return is a distinct verdict — the same network reported again, a
+     * different network arriving inside the debounce window, and a genuine
+     * change — and collapsing them into one boolean expression would lose which
+     * rule fired.
+     */
+    @Suppress("ReturnCount")
+    private fun reconcileDecision(
         networkId: Long,
         nowMillis: Long,
     ): Boolean {
@@ -52,8 +80,10 @@ internal class NetworkTransitionDebouncer(
      * different network right after start() must still reconcile.
      */
     fun prime(networkId: Long) {
-        lastNetworkId = networkId
-        lastAtMillis = PRIMED_AT_MILLIS
+        synchronized(lock) {
+            lastNetworkId = networkId
+            lastAtMillis = PRIMED_AT_MILLIS
+        }
     }
 
     /**
@@ -82,8 +112,10 @@ internal class NetworkTransitionDebouncer(
      * recording, leaving the stale id in place to suppress it again.
      */
     fun reset() {
-        lastNetworkId = null
-        lastAtMillis = 0L
+        synchronized(lock) {
+            lastNetworkId = null
+            lastAtMillis = 0L
+        }
     }
 
     private companion object {

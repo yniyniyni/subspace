@@ -672,6 +672,55 @@ class TunnelService : VpnService() {
      * that won, which is the same rule [settleTerminalFailure] encodes by
      * putting its own clear inside `persist`.
      */
+    /**
+     * What a generation-guarded [stopTunnel] hands back to the three §1.2
+     * rejection paths: the started-service token to release, and the generation
+     * the service was on *immediately after* the stop.
+     */
+    private data class OwnedStop(val startId: Int, val generationAfterStop: Int)
+
+    /**
+     * [stopTunnel] with `expectedGeneration`, plus the generation it left behind.
+     *
+     * Sampling the generation inside the same `synchronized` region that
+     * [stopTunnel]'s own capture used is what makes [clearIntentIfStillOwned]
+     * meaningful: [stopTunnel] increments the counter, so reading it afterwards
+     * from a second acquisition could already include a session that started in
+     * between — the very session the guard exists to protect.
+     */
+    private fun stopTunnelOwning(
+        finalState: ConnectionState,
+        expectedGeneration: Int,
+    ): OwnedStop? {
+        val startId = stopTunnel(finalState, expectedGeneration = expectedGeneration) ?: return null
+        return OwnedStop(startId = startId, generationAfterStop = synchronized(lock) { generation })
+    }
+
+    /**
+     * §1.2's clear, refused if this rejection no longer owns the session.
+     *
+     * `expectedGeneration` on [stopTunnel] proves only that this attempt was
+     * current *at the moment of the stop*. [stopTunnel] then increments the
+     * counter and returns, and these three paths go on to suspend — so a user
+     * connect, an always-on bind or a boot start can begin a whole new session
+     * before the clear runs. Clearing then would wipe intent belonging to a
+     * session that is live and wanted: the `tunnelSessionWanted` collector would
+     * unregister the network callback mid-session, [shouldRetainTun] would read
+     * `intentWanted = false` and release the kill switch, and the next reconcile
+     * would answer `Stop` — a tunnel torn down by the failure of the attempt
+     * before it.
+     *
+     * This narrows that window rather than closing it: the read and the write
+     * are not one atomic step, and cannot be while the write goes to Room in
+     * another process. The residual race needs a session to start between this
+     * check and the write landing, against a window that no longer spans a
+     * `stopStartedService` and a Room read.
+     */
+    private suspend fun clearIntentIfStillOwned(generationAfterStop: Int) {
+        if (synchronized(lock) { generation } != generationAfterStop) return
+        settingsRepository.setTunnelSessionWanted(false)
+    }
+
     private suspend fun rejectConnectFromCommand(
         startId: Int,
         rowId: Long,
@@ -679,8 +728,12 @@ class TunnelService : VpnService() {
         Log.e(TAG, "connect request refused: ProfileDecodeFailed")
         val failed = failure(FailureReason.ProfileDecodeFailed, "connect request could not be decoded")
         stopTunnel(failed)
-        stopStartedService(startId)
+        // Before stopStartedService, not after: that call can destroy the
+        // service, and onDestroy cancels [scope]. A clear left until afterwards
+        // races that cancellation and can simply not land, leaving wanted = true
+        // and the always-on resurrection this exists to prevent.
         settingsRepository.setTunnelSessionWanted(false)
+        stopStartedService(startId)
         connectionRecorder.record(rowId, failed)
     }
 
@@ -689,15 +742,15 @@ class TunnelService : VpnService() {
         rowId: Long,
     ) {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
-        val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
-        stopStartedService(startId)
+        val ownedGeneration = stopTunnelOwning(failed, gen) ?: return
         // Not made `suspend` to await these: this is [runAfterForegroundEstablished]'s
         // synchronous rejection callback. The existing fire-and-forget shape the
         // spec-D4 write already uses is extended to carry the intent clear rather
         // than opening a second launch — both belong to the same settled outcome and
         // ordering them against each other costs nothing.
         scope.launch {
-            settingsRepository.setTunnelSessionWanted(false)
+            clearIntentIfStillOwned(ownedGeneration.generationAfterStop)
+            stopStartedService(ownedGeneration.startId)
             connectionRecorder.record(rowId, failed)
         }
     }
@@ -707,9 +760,9 @@ class TunnelService : VpnService() {
         rowId: Long,
     ) {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
-        val startId = stopTunnel(failed, expectedGeneration = gen) ?: return
-        stopStartedService(startId)
-        settingsRepository.setTunnelSessionWanted(false)
+        val owned = stopTunnelOwning(failed, gen) ?: return
+        clearIntentIfStillOwned(owned.generationAfterStop)
+        stopStartedService(owned.startId)
         connectionRecorder.record(rowId, failed)
     }
 
@@ -772,10 +825,19 @@ class TunnelService : VpnService() {
                 //
                 // Reconnecting is allowed through alongside Disconnected/Failed:
                 // it means a retryable failure already ran settleRetryableFailure's
-                // cleanup (controller/configFile/liveSession all null, no core or
-                // TUN running) and is waiting out its backoff. Refusing here would
-                // silently swallow every retry the moment BackoffElapsed fires it —
-                // fix round 1, Finding 1's core bug.
+                // cleanup (controller/configFile/liveSession all null) and is
+                // waiting out its backoff. Refusing here would silently swallow
+                // every retry the moment BackoffElapsed fires it — fix round 1,
+                // Finding 1's core bug.
+                //
+                // It does NOT mean no TUN is running. With the kill switch on —
+                // the default — settleRetryableFailure deliberately keeps
+                // tunInterface open as the blackhole (§6.1), so this guard lets
+                // through the one state that can still hold a live fd. That is
+                // safe only because [attachTun] closes the retained fd before
+                // adopting its own; this comment previously claimed "no core or
+                // TUN running", and that belief is what hid the leak the final
+                // review found (C1). Do not restore it.
                 if (currentState !is ConnectionState.Disconnected &&
                     currentState !is ConnectionState.Failed &&
                     currentState !is ConnectionState.Reconnecting
@@ -1231,13 +1293,19 @@ class TunnelService : VpnService() {
                 is PerAppGateResult.Proceed -> gate.plan
                 PerAppGateResult.Failed -> return
             }
-        // Spec §5.2, and read *before* establish(): once Builder.establish()
-        // returns, a VPN network exists, and reading `activeNetwork` after that
-        // point invites the ambiguity of asking the framework which network is
-        // default while we are the reason the answer might change. Sampled here
-        // the value can only be a physical network. A network that changes
-        // between this line and the call below is not lost — NetworkMonitor's
-        // onChanged sets the new one.
+        // Spec §5.2, read *before* establish(): sampling after it means asking
+        // the framework which network is default at the moment we are adding one,
+        // and this app's own package is excluded from the TUN on every
+        // BuilderPlan (§8) — so the answer is a physical network either way, but
+        // only this ordering makes that true without depending on the exclusion.
+        //
+        // The window is not free. If NetworkMonitor's onChanged fires between
+        // this read and the setUnderlyingNetworks call below, this stale sample
+        // overwrites the fresher one. That is bounded and self-correcting rather
+        // than harmless: the value only feeds metered-ness and transport
+        // reporting, and the next transition re-sets it. It is not claimed to be
+        // impossible — an earlier draft of this comment said the fresher value
+        // could not be lost, which was wrong.
         val underlying = activeNetwork()
         val fd = establishOrFail(gen, xray, plan, dnsPlan, rowId) ?: return
         synchronized(lock) {
@@ -1494,13 +1562,17 @@ class TunnelService : VpnService() {
                 if (!retainTun) closeRetainedTunLocked()
                 // §6.3/§6.4: the notification reports the **observed** TUN, not
                 // the fail-closed setting and not [shouldRetainTun]'s decision
-                // on its own. Those two are not the same fact. Four of the six
-                // reachable retryable shapes — PortAllocationFailed,
-                // CoreStartFailed, TunEstablishFailed and TunnelStartFailed —
-                // fail before or during [attachTun], so [tunInterface] is
-                // already null here however the setting reads and whatever
-                // `shouldRetainTun` decided: there is no TUN left to retain, and
-                // every packet leaves in the clear. §6.4 defends defaulting
+                // on its own. Those two are not the same fact. On a *fresh*
+                // start sequence, four of the six reachable retryable shapes —
+                // PortAllocationFailed, CoreStartFailed, TunEstablishFailed and
+                // TunnelStartFailed — fail before or during [attachTun], so
+                // [tunInterface] is already null here however the setting reads
+                // and whatever `shouldRetainTun` decided: there is no TUN left
+                // to retain, and every packet leaves in the clear. The same four
+                // reasons reached through the retained-fd restart path can leave
+                // a TUN open, which is why this reads the field rather than
+                // enumerating reasons — the enumeration is the motivating case,
+                // not the rule being applied. §6.4 defends defaulting
                 // fail-closed *on* entirely on the promise that §6.3's
                 // notification tells the truth, so reading the retention
                 // decision alone made that promise false in the common case.
@@ -1549,8 +1621,10 @@ class TunnelService : VpnService() {
      * [attachTun] or because that function's own `Tun2Socks.start` failure path
      * already closed and nulled it before calling [failStart].
      *
-     * Must be called from inside a `lifecycle` block already holding [lock] —
-     * this does not take it itself.
+     * Must be called with [lock] already held — this does not take it itself.
+     * That is a `lifecycle` block for the two settle paths, and [attachTun]'s
+     * own plain `synchronized(lock)` region for the third; the requirement is
+     * the lock, not the lambda.
      */
     private fun closeRetainedTunLocked() {
         try {
@@ -2330,7 +2404,12 @@ class TunnelService : VpnService() {
      * generation that failed is confirmed still current.
      */
     private fun scheduleBackoffRetry(attempt: Int) {
-        cancelBackoffRetry()
+        // Read before taking the lock — a binder round trip — and acted on
+        // inside it. The value can go stale between the two, which is harmless:
+        // a network arriving in that window delivers onAvailable, and one
+        // leaving delivers onLost, both of which reach this timer's cancel or
+        // re-arm through the ordinary path.
+        val hasNetwork = activeNetwork() != null
         // §2.4's rule, on the edge it was previously not enforced on. Cancelling
         // on ReconcileTrigger.NetworkLost only covers a timer that was already
         // running when the network went away; a failure arriving while there is
@@ -2343,16 +2422,32 @@ class TunnelService : VpnService() {
         // live. Its onAvailable enqueues Reconcile(NetworkChanged), which
         // `reconcile` answers with Start for a Reconnecting state that may
         // attempt again — the retry resumes from there, not from a clock.
-        if (activeNetwork() == null) {
-            Log.i(TAG, "backoff retry not scheduled: no network; waiting on the network callback")
-            return
-        }
-        val job =
-            scope.launch {
-                delay(ReconnectBackoff.delayMillisFor(attempt))
-                commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.BackoffElapsed))
+        // Cancel and arm are one atomic step, under one acquisition of [lock].
+        // They were previously two — `cancelBackoffRetry()`, then `launch`, then
+        // publish the job — and `scope.launch` starts the coroutine immediately,
+        // so `backoffJob` was published a line *after* the timer already
+        // existed. A cancel landing in that window cancelled whatever the
+        // previous attempt had left, and this function then installed a live job
+        // over the top of it: armed, unreachable by every cancel site, and
+        // guaranteed to fire BackoffElapsed into a session that had just ended.
+        // That is exactly the §11 row 7 corruption I1 was raised to close —
+        // adding call sites to `cancelBackoffRetry` could not close it, because
+        // the job was not yet visible to any of them.
+        synchronized(lock) {
+            cancelBackoffRetryLocked()
+            if (!hasNetwork) {
+                Log.i(TAG, "backoff retry not scheduled: no network; waiting on the network callback")
+                return
             }
-        synchronized(lock) { backoffJob = job }
+            // `launch` dispatches rather than running inline (the default start
+            // mode, not UNDISPATCHED), so the body does not execute under [lock]
+            // — only the assignment does.
+            backoffJob =
+                scope.launch {
+                    delay(ReconnectBackoff.delayMillisFor(attempt))
+                    commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.BackoffElapsed))
+                }
+        }
     }
 
     /**

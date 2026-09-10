@@ -130,6 +130,11 @@ class NetworkTransitionTest {
      * The reset must not disable the debouncer for what follows. Once a network is
      * accepted after a loss, the ordinary flap collapsing resumes — otherwise this
      * fix would trade a stranded session for §5.2's three tunnel restarts.
+     *
+     * One `reset()`, then a burst: this models a single loss followed by a flap,
+     * which is the sequence `registerDefaultNetworkCallback` actually delivers
+     * when the default *switches* (onAvailable for the new network, with no
+     * onLost for the old one).
      */
     @Test
     fun theDebouncerStillCollapsesAFlapAfterALoss() {
@@ -139,5 +144,33 @@ class NetworkTransitionTest {
         debouncer.shouldReconcile(networkId = 1L, nowMillis = 0L) shouldBe true
         debouncer.shouldReconcile(networkId = 2L, nowMillis = 200L) shouldBe false
         debouncer.shouldReconcile(networkId = 1L, nowMillis = 400L) shouldBe false
+    }
+
+    /**
+     * The cost this fix knowingly accepts, pinned so it is a decision and not a
+     * surprise on device row 1.
+     *
+     * When each arrival IS bracketed by its own `onLost`, nothing collapses any
+     * more — every network is accepted, and each acceptance is a tunnel restart.
+     * That is the deliberate trade: §5.2's collapsing exists to avoid needless
+     * restarts of a *working* tunnel, and after a loss there is no working tunnel
+     * to protect, only a session that may be stranded forever if its one wake-up
+     * is suppressed. An extra restart is recoverable; a strand is not.
+     *
+     * If device row 1 shows this costing real restarts on an ordinary Wi-Fi
+     * toggle, the fix is to make the suppression conditional on there being a
+     * live tunnel to protect — not to drop the reset and reopen the strand.
+     */
+    @Test
+    fun everyLossBracketedArrivalIsAcceptedAndThatIsTheTrade() {
+        val debouncer = NetworkTransitionDebouncer()
+
+        val decisions =
+            listOf(1L to 0L, 2L to 200L, 1L to 400L).map { (id, now) ->
+                debouncer.reset()
+                debouncer.shouldReconcile(id, now)
+            }
+
+        decisions shouldBe listOf(true, true, true)
     }
 }

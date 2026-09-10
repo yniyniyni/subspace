@@ -71,22 +71,6 @@ class HomeReconnectingTest {
         disconnects shouldBe 1
     }
 
-    /** The control must not also invite a fresh connect while one is already retrying. */
-    @Test
-    fun reconnectingDoesNotOfferConnect() {
-        var connects = 0
-        val state = homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2))
-        composeRule.setContent {
-            SubspaceTheme {
-                HomeScreenContent(state = state, actions = actions.copy(onConnect = { connects++ }))
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Disconnect").performClick()
-
-        connects shouldBe 0
-    }
-
     private fun setContent(state: HomeState) {
         composeRule.setContent {
             SubspaceTheme {

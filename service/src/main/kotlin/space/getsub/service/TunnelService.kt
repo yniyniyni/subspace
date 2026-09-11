@@ -367,6 +367,14 @@ class TunnelService : VpnService() {
     // KDoc for why that indirection is what keeps it unit-testable.
     private lateinit var connectionRecorder: ConnectionRecorder
 
+    /**
+     * Spec §1.2's `wanted` writes that are conditional on still owning the
+     * session. Built in onCreate for the same reason [connectionRecorder] is,
+     * and wrapping the repository method as a plain suspend lambda for the same
+     * reason too — see [SessionIntentGate] for the race it closes.
+     */
+    private lateinit var sessionIntent: SessionIntentGate
+
     // Built in onCreate, once its data collaborators above are injected. Same
     // suspend-lambda indirection as connectionRecorder, for the same reason —
     // see RoutingResolver's KDoc.
@@ -442,6 +450,24 @@ class TunnelService : VpnService() {
     private var configFile: File? = null
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
+
+    /**
+     * The [SessionIntentGate] token the live session owns — captured in
+     * [startTunnel], beside the generation bump, and carried to
+     * [settleTerminalFailure]'s conditional intent clear.
+     *
+     * Paired with `generation` rather than read live at clear time, because the
+     * window this closes is exactly the one in which a newer connect has already
+     * written `wanted = true` (moving the gate's token) and has *not* yet bumped
+     * the generation — see [SessionIntentGate] for why the generation counter
+     * cannot be the guard.
+     *
+     * Deliberately **not** reset by [stopTunnel] or by
+     * [restartCoreRetainingTun]: a retained-fd restart is the same session
+     * intent under a new generation, and a stale settlement clearing an intent
+     * that is already false costs nothing.
+     */
+    private var sessionIntentToken = 0
 
     /**
      * Spec §2.4's retry timer — a plain coroutine delay on [scope], never an
@@ -522,6 +548,7 @@ class TunnelService : VpnService() {
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
         File(filesDir, CONFIG_NAME).delete()
+        sessionIntent = SessionIntentGate(writeWanted = settingsRepository::setTunnelSessionWanted)
         connectionRecorder =
             ConnectionRecorder(
                 recordConnected = profileRepository::recordConnected,
@@ -671,8 +698,11 @@ class TunnelService : VpnService() {
      * The two that take an `expectedGeneration` clear intent only *after*
      * [stopTunnel] has confirmed this generation still owns the tunnel — a
      * generation that lost the race must not clear intent belonging to the one
-     * that won, which is the same rule [settleTerminalFailure] encodes by
-     * putting its own clear inside `persist`.
+     * that won. That is the same *rule* [settleTerminalFailure] follows, but no
+     * longer the same *guard*: it now proves ownership with
+     * [SessionIntentGate]'s token, which these paths do not. See
+     * [clearIntentIfStillOwned] for what the generation check does and does not
+     * establish.
      */
     /**
      * What a generation-guarded [stopTunnel] hands back to the three §1.2
@@ -712,11 +742,20 @@ class TunnelService : VpnService() {
      * would answer `Stop` — a tunnel torn down by the failure of the attempt
      * before it.
      *
-     * This narrows that window rather than closing it: the read and the write
-     * are not one atomic step, and cannot be while the write goes to Room in
-     * another process. The residual race needs a session to start between this
-     * check and the write landing, against a window that no longer spans a
-     * `stopStartedService` and a Room read.
+     * This narrows that window rather than closing it, and it narrows it less
+     * than it appears to. [connectFromCommand] writes `wanted = true` *before*
+     * [startTunnel] bumps the generation, so a new session's intent can already
+     * be persisted while this check still passes — the generation counter does
+     * not move at the moment intent does. An earlier version of this paragraph
+     * attributed the residual to the write going to Room in another process;
+     * that is not where it comes from, and saying so hid a guard that does not
+     * hold.
+     *
+     * [SessionIntentGate] is the mechanism that closes it, by moving a token in
+     * the same critical section as the intent write. [settleTerminalFailure]
+     * uses it. These three rejection paths were left on the weaker check
+     * deliberately, as a change with its own reachability to reason about, and
+     * not because this one is sufficient.
      */
     private suspend fun clearIntentIfStillOwned(generationAfterStop: Int) {
         if (synchronized(lock) { generation } != generationAfterStop) return
@@ -821,6 +860,22 @@ class TunnelService : VpnService() {
     ) {
         val gen =
             synchronized(lock) {
+                // Claimed before the guard below, so both outcomes take it. If a
+                // second connect is folded into the live session rather than
+                // starting its own, that session now owns the newest accepted
+                // intent — and the settlement of the start already in flight
+                // must be allowed to clear it, because no separate session was
+                // ever created for it to belong to. Leaving the field behind on
+                // that branch would refuse a clear that spec §1.2 requires, and
+                // a terminal failure would settle with `wanted = true` still
+                // persisted.
+                //
+                // Reading [SessionIntentGate.currentToken] here cannot pick up a
+                // *later* connect's token: both callers of this function run on
+                // the command coordinator's single consumer coroutine, and this
+                // function does not suspend, so the next `want()` cannot begin
+                // until it has returned.
+                sessionIntentToken = sessionIntent.currentToken()
                 // §5.5 makes this service the source of truth, so it cannot rely
                 // on the UI to prevent a second connect. Without this guard the
                 // previous TUN fd leaks and the old core runs on unreferenced.
@@ -1462,16 +1517,26 @@ class TunnelService : VpnService() {
      * starting during it inherited this failure's teardown — its foreground state removed,
      * or its service stopped, by the previous attempt (PR #4 review, P1 finding A). Both are
      * now inside the generation-checked transition; nothing may be added after it.
+     *
+     * The intent clear inside `persist` is conditional on this settlement still
+     * owning the session — see [SessionIntentGate] for the window that makes an
+     * unconditional clear, or a generation re-check, wrong.
      */
     private suspend fun settleTerminalFailure(
         gen: Int,
         failed: ConnectionState.Failed,
         rowId: Long,
     ) {
+        // Assigned inside `lifecycle`, which runs under [lock] and only after
+        // `settle` has confirmed [gen] is still current — so the value read is
+        // the token belonging to the session this settlement is committing for,
+        // not whatever the gate has moved on to by the time `persist` runs.
+        var ownedIntentToken = 0
         terminalOutcome.settle(
             gen = gen,
             state = failed,
             lifecycle = {
+                ownedIntentToken = sessionIntentToken
                 configFile?.delete()
                 configFile = null
                 controller = null
@@ -1507,7 +1572,18 @@ class TunnelService : VpnService() {
                     // `persist` rather than beside `settle` so a superseded
                     // generation (this attempt lost the race) never clears intent
                     // for a session that is not this one's to clear.
-                    settingsRepository.setTunnelSessionWanted(false)
+                    //
+                    // Being inside `persist` is not sufficient on its own, and a
+                    // generation re-check here would not help either. The record
+                    // above suspends on a Room write, and the command coordinator
+                    // — a different coroutine — can accept a new connect during
+                    // it. That connect writes `wanted = true` *before* calling
+                    // startTunnel, so there is a window where the new session's
+                    // intent exists and the generation has not moved yet. The
+                    // gate's token moves with the write instead, and holds its
+                    // own mutex across both the check and the clear, so a
+                    // connect's write cannot land between them either.
+                    sessionIntent.clearIfOwned(ownedIntentToken)
                 }
             },
         )
@@ -2236,7 +2312,14 @@ class TunnelService : VpnService() {
         // command is *accepted* — not when it succeeds — so a boot-time or
         // always-on connect that dies at StartingCore is still wanted and still
         // retried; that ordering is the whole reason this milestone exists.
-        settingsRepository.setTunnelSessionWanted(true)
+        //
+        // Through [sessionIntent] rather than the repository directly: this write
+        // is what mints the session's ownership token, and the token has to move
+        // inside the same critical section as the write, or a settlement running
+        // concurrently could clear the intent this line just established. That it
+        // happens *before* startTunnel — and so before the generation bump — is
+        // exactly why the generation counter cannot guard that clear.
+        sessionIntent.want()
         val decoded = profile.toProfile()
         if (decoded == null) {
             rejectConnectFromCommand(startId, profile.rowId)

@@ -369,11 +369,18 @@ class TunnelService : VpnService() {
 
     /**
      * Spec §1.2's `wanted` writes that are conditional on still owning the
-     * session. Built in onCreate for the same reason [connectionRecorder] is,
-     * and wrapping the repository method as a plain suspend lambda for the same
-     * reason too — see [SessionIntentGate] for the race it closes.
+     * session — see [SessionIntentGate] for the race it closes.
+     *
+     * Injected, not built in [onCreate] like [connectionRecorder]: it is a
+     * `:bg`-process singleton ([ServiceModule]), shared by every instance of this
+     * service the process ever hosts. A clear that outlives this instance —
+     * [settleTerminalFailure]'s `NonCancellable` `persist` — must check its token
+     * against the gate the *next* instance's connect moves, and a per-instance
+     * gate is one no later connect ever touches. `internal`, not `private`,
+     * because Hilt's generated injector assigns it.
      */
-    private lateinit var sessionIntent: SessionIntentGate
+    @Inject
+    internal lateinit var sessionIntent: SessionIntentGate
 
     // Built in onCreate, once its data collaborators above are injected. Same
     // suspend-lambda indirection as connectionRecorder, for the same reason —
@@ -452,20 +459,28 @@ class TunnelService : VpnService() {
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
     /**
-     * The [SessionIntentGate] token the live session owns — captured in
-     * [startTunnel], beside the generation bump, and carried to
-     * [settleTerminalFailure]'s conditional intent clear.
+     * The [SessionIntentGate] token the live session owns — recorded by
+     * [startTunnel] under [lock], ahead of its already-active guard, and read
+     * back by [settleTerminalFailure] for its conditional intent clear.
      *
-     * Paired with `generation` rather than read live at clear time, because the
+     * Recorded on both of [startTunnel]'s branches, and only one of them bumps
+     * `generation`. The fold branch — a second connect absorbed into the live
+     * session instead of starting its own — moves this field with no bump, on
+     * purpose (see that branch). So this is not paired with the generation: it
+     * names whichever accepted connect the live session currently answers for.
+     *
+     * Read back rather than read live from the gate at clear time, because the
      * window this closes is exactly the one in which a newer connect has already
-     * written `wanted = true` (moving the gate's token) and has *not* yet bumped
-     * the generation — see [SessionIntentGate] for why the generation counter
+     * written `wanted = true` (moving the gate's token) and has not yet reached
+     * [startTunnel] — see [SessionIntentGate] for why the generation counter
      * cannot be the guard.
      *
-     * Deliberately **not** reset by [stopTunnel] or by
-     * [restartCoreRetainingTun]: a retained-fd restart is the same session
-     * intent under a new generation, and a stale settlement clearing an intent
-     * that is already false costs nothing.
+     * Not reset by [stopTunnel] or [restartCoreRetainingTun]. A retained-fd
+     * restart is the same session under a new generation and keeps its owner.
+     * After a [stopTunnel] nothing reads the stale value: a settlement reads this
+     * only once `settle` has confirmed its generation is current, and every
+     * generation that can settle came from [startTunnel], which records a fresh
+     * token first, or from [restartCoreRetainingTun], which keeps the live one.
      */
     private var sessionIntentToken = 0
 
@@ -548,7 +563,6 @@ class TunnelService : VpnService() {
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
         File(filesDir, CONFIG_NAME).delete()
-        sessionIntent = SessionIntentGate(writeWanted = settingsRepository::setTunnelSessionWanted)
         connectionRecorder =
             ConnectionRecorder(
                 recordConnected = profileRepository::recordConnected,
@@ -688,14 +702,16 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §1.2: the three rejection paths below each publish a terminal `Failed`
-     * and stop, without going through [settleTerminalFailure] — so none of them
-     * inherits its `persist` block, and each has to clear session intent
-     * itself. Left set, the next always-on bind, boot start or sticky restart
+     * §1.2: the three rejection functions below — [rejectConnectFromCommand],
+     * [rejectInitialForegroundLifecycle] and [handleForegroundLifecycleRejection]
+     * — each publish a terminal `Failed` and stop, without going through
+     * [settleTerminalFailure] — so none of them inherits its `persist` block,
+     * and each has to clear session intent itself. Left set, the next always-on bind, boot start or sticky restart
      * reads `wanted = true`, reconciles, and silently connects a session the
      * user never got: exactly the resurrection §1 exists to make impossible.
      *
-     * The two that take an `expectedGeneration` clear intent only *after*
+     * [rejectConnectFromCommand] clears unconditionally. The two that take an
+     * `expectedGeneration` clear intent only *after*
      * [stopTunnel] has confirmed this generation still owns the tunnel — a
      * generation that lost the race must not clear intent belonging to the one
      * that won. That is the same *rule* [settleTerminalFailure] follows, but no
@@ -705,8 +721,9 @@ class TunnelService : VpnService() {
      * establish.
      */
     /**
-     * What a generation-guarded [stopTunnel] hands back to the three §1.2
-     * rejection paths: the started-service token to release, and the generation
+     * What a generation-guarded [stopTunnel] hands back to the two
+     * generation-guarded §1.2 rejection functions (three call sites): the
+     * started-service token to release, and the generation
      * the service was on *immediately after* the stop.
      */
     private data class OwnedStop(val startId: Int, val generationAfterStop: Int)
@@ -753,7 +770,8 @@ class TunnelService : VpnService() {
      *
      * [SessionIntentGate] is the mechanism that closes it, by moving a token in
      * the same critical section as the intent write. [settleTerminalFailure]
-     * uses it. These three rejection paths were left on the weaker check
+     * uses it. The two functions that call this (three call sites) were left
+     * on the weaker check
      * deliberately, as a change with its own reachability to reason about, and
      * not because this one is sufficient.
      */
@@ -1424,15 +1442,21 @@ class TunnelService : VpnService() {
             // [closeRetainedTunLocked] unconditionally, and
             // [settleRetryableFailure]'s calls it whenever [shouldRetainTun] is
             // false — so both non-retaining outcomes close it once, under [lock].
-            // When it *is* retained, the close comes later from the next
-            // [attachTun]'s own [closeRetainedTunLocked], a terminal settlement,
-            // or [stopTunnel]. If [gen] is already stale, whatever superseded it
-            // owns [tunInterface] — [stopTunnel] has taken and closed it, a newer
-            // [attachTun] closes it before adopting its own, and
-            // [restartCoreRetainingTun] keeps it alive on purpose. Closing from
-            // here as well would be a second, unsynchronised close of an fd this
-            // generation no longer owns, which is the bug §5.4 warns about rather
-            // than a safety margin.
+            // When it *is* retained it stays in [tunInterface], and is closed
+            // once, later, by whichever of these comes first: the next
+            // [attachTun]'s [closeRetainedTunLocked] before it adopts its own
+            // fd; a later settlement that does not retain — any terminal one,
+            // or a retryable one once fail-closed is off or intent is cleared;
+            // or [stopTunnel].
+            //
+            // If [gen] is already stale, [stopTunnel] superseded it and has
+            // taken [tunInterface] and closed it. Nothing else can supersede an
+            // attempt that has not yet published `Connected`: a new
+            // [startTunnel] folds into it rather than bumping the generation,
+            // and [restartCoreRetainingTun] runs only after a reconcile read
+            // `Connected`. Closing from here as well would be a second,
+            // unsynchronised close of an fd this generation no longer owns,
+            // which is the bug §5.4 warns about rather than a safety margin.
             failStart(
                 gen,
                 FailureReason.TunnelStartFailed,
@@ -1621,13 +1645,15 @@ class TunnelService : VpnService() {
      * instead (fix round 1, Finding 2) — see [nextAttemptExceedsCap].
      *
      * Fix round 2: [trialAttempt] is a *peek*, not a commit. `failStart` is
-     * reachable with a [gen] that is already stale — [attachTun] and
-     * [attachRetainedTun] both call it from their `Tun2Socks.start` failure
-     * blocks without re-checking the generation first (deliberately: the fd
-     * those paths leave attached belongs to whoever holds the generation, and
-     * this settlement is where that is resolved), and [resolveAndStartCore]'s
-     * catch block is a third such path — so this function cannot assume [gen]
-     * is current on entry. [ReconnectAttemptCounter.commit]
+     * reachable with a [gen] that is already stale, and not from a few named
+     * sites but from nearly every one. Most of [startCore]'s failures return
+     * `failStart` with no generation check ahead of them (`allocatePorts` has
+     * none at all), [resolveAndStartCore]'s catch block is another, and
+     * [attachTun]/[attachRetainedTun] call it from their `Tun2Socks.start`
+     * failure blocks deliberately without one — the fd those paths leave
+     * attached belongs to whoever holds the generation, and this settlement is
+     * where that is resolved. So this function cannot assume [gen] is current
+     * on entry. [ReconnectAttemptCounter.commit]
      * therefore runs inside `lifecycle`, alongside `controller`/`configFile`/
      * `liveSession`, so a superseded [gen] leaves the counter exactly as it
      * found it: [ReconnectAttemptCounter.peekNext] has no side effect, and
@@ -1679,18 +1705,19 @@ class TunnelService : VpnService() {
                 // given [FailureReason] lands on depends on what ran before it,
                 // not on the reason.
                 //
-                // [tunInterface] is null here when this attempt neither attached
-                // a TUN nor inherited a retained one — a first attempt failing at
-                // PortAllocationFailed or CoreStartFailed inside [startCore], or
-                // at TunEstablishFailed inside [establishOrFail]. There is
-                // nothing to retain however the setting reads and whatever
-                // `shouldRetainTun` decided, and every packet leaves in the
-                // clear. It is non-null when a TUN is attached: TunnelStartFailed
-                // from [attachTun] or from [attachRetainedTun], both of which
-                // leave the fd in place for exactly this decision to make, and
-                // *any* retryable reason on a retry that a previous fail-closed
-                // settlement left holding the fd — including the three named
-                // above, which are only null-here on the first attempt.
+                // [tunInterface] is read *after* the conditional close above, so
+                // it is null whenever `retainTun` is false. When `retainTun` is
+                // true it is null only if there was nothing to retain: this
+                // attempt failed before adopting an fd — PortAllocationFailed or
+                // CoreStartFailed inside [startCore], TunEstablishFailed inside
+                // [establishOrFail] — and inherited none, which is the case on a
+                // sequence's first attempt and on any retry after a settlement
+                // that did not retain. Every packet then leaves in the clear
+                // however the setting reads. It is non-null when this attempt
+                // attached a TUN and failed afterwards — TunnelStartFailed from
+                // [attachTun] or [attachRetainedTun], both of which leave the fd
+                // in place for exactly this decision — or when it inherited one a
+                // previous retaining settlement held, whatever the reason.
                 //
                 // That is why this reads the field instead of enumerating
                 // reasons. §6.4 defends defaulting fail-closed *on* entirely on
@@ -2520,11 +2547,17 @@ class TunnelService : VpnService() {
         val config = tun2socksConfig(socksPort = ports.socksPort, mtu = TUN_MTU)
         if (!Tun2Socks.start(config, fd.fd)) {
             xray.stop()
-            // [fd] is not closed here: it is still `tunInterface`, and
-            // `closeRetainedTunLocked` inside the `failStart` this is about to
-            // reach closes it under the same generation gate a concurrent
-            // teardown uses. Closing it from two unsynchronised call sites is
-            // the double-close bug §5.4 warns about, not a safety margin.
+            // [fd] is not closed here. It is still [tunInterface], and whether
+            // it closes is the settlement's decision, not this block's:
+            // `TunnelStartFailed` is retryable, so [failStart] reaches
+            // [settleRetryableFailure], which closes it through
+            // [closeRetainedTunLocked] only when [shouldRetainTun] says not to
+            // retain — and with fail-closed on, the default, keeps it as §6.1's
+            // kill switch. [attachTun]'s own `Tun2Socks.start` failure block
+            // carries the same reasoning, including who closes a retained fd
+            // later. A close here as well would be a second, unsynchronised
+            // close of an fd a concurrent teardown can also reach — the
+            // double close §5.4 warns about, not a safety margin.
             failStart(
                 gen,
                 FailureReason.TunnelStartFailed,

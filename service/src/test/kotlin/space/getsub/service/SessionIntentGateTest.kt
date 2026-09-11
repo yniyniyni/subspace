@@ -4,8 +4,10 @@ package space.getsub.service
 
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -160,6 +162,49 @@ class SessionIntentGateTest {
             store.transcript shouldBe
                 listOf("enter:true", "wrote:true", "enter:false", "wrote:false", "enter:true", "wrote:true")
             // The connect's write is the last one, so the new session is wanted.
+            store.wanted shouldBe true
+        }
+
+    @Test
+    fun `the token has moved by the time a waiting clear is let in`() =
+        runTest {
+            // Pins the "same critical section" half of the ownership proof: the
+            // token must move before `want()` releases the mutex, not after it.
+            // With the increment moved below `withLock`, a clear waiting on the
+            // mutex is let in while the connect's `true` is already written and
+            // the token still names the previous session — the check passes and
+            // the clear overwrites the connect.
+            //
+            // Tests 3 and 4 cannot see that regression: on `runTest`'s
+            // dispatcher a resumed waiter is only *scheduled*, so the connecting
+            // coroutine always reaches its increment before the clear runs.
+            // The clear here resumes on `Dispatchers.Unconfined`, which runs a
+            // resumed continuation inline in the thread that resumed it — inside
+            // `want()`'s own `unlock()`, before `want()` reaches the next statement.
+            // That is the window a second thread would hit on a real dispatcher.
+            val store = RecordingIntent()
+            val gate = SessionIntentGate(store::write)
+            gate.want()
+            val previousSession = gate.currentToken()
+            store.transcript.clear()
+
+            var cleared: Boolean? = null
+            var settlementQueued = false
+            store.beforeWrite = { value ->
+                if (value && !settlementQueued) {
+                    settlementQueued = true
+                    // The previous session's settlement reaches the gate while
+                    // the new connect holds it, mid-write.
+                    launch(Dispatchers.Unconfined) { cleared = gate.clearIfOwned(previousSession) }
+                }
+            }
+
+            gate.want()
+            advanceUntilIdle()
+
+            settlementQueued shouldBe true
+            cleared shouldBe false
+            store.transcript shouldBe listOf("enter:true", "wrote:true")
             store.wanted shouldBe true
         }
 }

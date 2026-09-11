@@ -56,14 +56,55 @@ import java.util.concurrent.atomic.AtomicInteger
  *    wholly after (and its `true` is the last write). Ownership alone would
  *    leave that residual window open; the mutex is what closes it.
  *
+ * ## Scope: one gate per `:bg` process
+ *
+ * Provided as a Hilt `@Singleton` by `ServiceModule`, so there is one per
+ * `SingletonComponent`. Hilt keeps that component on the `@HiltAndroidApp`
+ * `Application` object (`Hilt_SubspaceApplication.componentManager` is an
+ * instance field), and Android creates one `Application` object per process —
+ * `SubspaceApplication` runs in both `:main` and `:bg`, which is why its
+ * `onCreate` checks which one it is in. `TunnelService` is injected from the
+ * component of the process it runs in (Hilt's `ServiceComponentManager` reaches
+ * it through the service's own `getApplication()`). So every `TunnelService`
+ * instance a `:bg` process hosts gets this one object. `:main` never builds
+ * one: a scoped binding is created on first request, and nothing there asks.
+ *
+ * That is the scope the ownership proof needs, and the per-instance gate this
+ * replaced did not have it. The proof holds only if every accepted connect
+ * moves the token a pending clear is checked against. A clear can outlive the
+ * service instance that issued it: `TunnelService.settleTerminalFailure`'s
+ * `persist` runs under `NonCancellable` precisely so `onDestroy`'s
+ * `scope.cancel()` cannot drop it. While it is suspended, the system can create
+ * a new `TunnelService` in the same process, and that instance can accept a
+ * connect. With a gate per instance, the late clear consulted the destroyed
+ * instance's gate — a token no connect would ever move again — so it always
+ * matched, and wrote `false` over the new session's `true`. With one gate per
+ * process, the new instance's [want] moves the token that clear checks.
+ *
+ * Nothing wider is needed. Room persists the intent, but a clear in flight
+ * cannot outlive its process, so a gate that dies with the process takes
+ * nothing with it.
+ *
  * ## What it does not cover
  *
- * The token is per-process. `BootReceiver` writes `wanted = true` from `:main`
- * before starting this service, and that write does not move this token. It does
- * not need to: at boot there is no settlement in flight in `:bg` to refuse, and
- * `:bg` may not even be running yet. A second in-process writer of
- * `wanted = true` added later would need to go through [want], and this is the
- * only reason that is not enforceable by the type system.
+ * `BootReceiver` runs in `:main` and writes `wanted = true` directly, without
+ * moving this token, so a terminal settlement in `:bg` that holds the current
+ * token can still clear over that write. That a settlement cannot be in flight
+ * at boot is not the reason it is harmless — always-on starts `:bg` around user
+ * unlock, when `BOOT_COMPLETED` is dispatched, and a sticky restart can have it
+ * running already.
+ *
+ * The reason is [reconcile]. A terminal settlement publishes `Failed` before it
+ * clears, and from `Failed` `reconcile` never starts anything: it answers
+ * [ReconcileAction.Nothing] whatever intent says, or [ReconcileAction.Stop] if
+ * intent already reads false, since that check runs first. So the `true`
+ * BootReceiver wrote could not have started a session from that state in any
+ * case. What the clear costs is the persisted `true` for a later start, and
+ * only when that boot's own session has just failed terminally — which is what
+ * pre-gate code did too.
+ *
+ * A second writer of `wanted = true` added inside `:bg` would need to go through
+ * [want]; that is the only reason this is not enforceable by the type system.
  *
  * Unconditional clears — an explicit disconnect, `onRevoke`, a rejected connect
  * — deliberately do **not** go through here. They run on the command
@@ -100,11 +141,13 @@ internal class SessionIntentGate(
     /**
      * The token a session started now would own.
      *
-     * Read by `TunnelService.startTunnel` under its own lock, alongside the
-     * generation bump, so the two are captured as one pair. That read cannot
-     * race a later [want]: both of `startTunnel`'s callers reach it from the
-     * command coordinator's single consumer coroutine, and `startTunnel` does
-     * not suspend, so the next connect's [want] cannot begin until it returns.
+     * Read by `TunnelService.startTunnel` under its own lock, ahead of its
+     * already-active guard, so both of its branches record it — the one that
+     * starts a session and bumps the generation, and the fold that absorbs a
+     * connect into the live session without a bump. That read cannot race a
+     * later [want]: both of `startTunnel`'s callers reach it from the command
+     * coordinator's single consumer coroutine, and `startTunnel` does not
+     * suspend, so the next connect's [want] cannot begin until it returns.
      */
     fun currentToken(): Int = token.get()
 

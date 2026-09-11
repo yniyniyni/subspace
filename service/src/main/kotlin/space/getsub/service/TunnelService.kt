@@ -1272,7 +1272,12 @@ class TunnelService : VpnService() {
      * Builds the TUN interface and hands its fd to tun2socks.
      *
      * Every failure stops the core [startCore] left running — §5.4: a
-     * half-started tunnel must not survive as a leaked fd plus a live runtime.
+     * half-started tunnel must not survive as a live runtime with nothing left
+     * to service. The fd is a separate question, and this function does not
+     * answer it once the fd has been adopted into [tunInterface]: from that
+     * point the failure policy [failStart] reaches owns its lifetime, which is
+     * what lets §6.1's kill switch retain it. See the `Tun2Socks.start` failure
+     * block below for the exactly-once argument.
      */
     // Same reasoning as startCore: each early return is a distinct §10.4 failure
     // or a supersede check, and collapsing them would hide which one fired.
@@ -1348,12 +1353,31 @@ class TunnelService : VpnService() {
         // is a real start failure, never something to ignore.
         if (!Tun2Socks.start(config, fd.fd)) {
             xray.stop()
-            synchronized(lock) {
-                if (gen == generation) {
-                    tunInterface = null
-                }
-            }
-            fd.close()
+            // [fd] is deliberately left attached as [tunInterface] and is not
+            // closed here — the same reasoning [attachRetainedTun]'s own
+            // `Tun2Socks.start` failure block carries, now that the two agree.
+            //
+            // §6.1: `TunnelStartFailed` is `Retryable`, so this reaches
+            // [settleRetryableFailure], which asks [shouldRetainTun] — true with
+            // the kill switch on, which is the default. Closing and nulling here
+            // left that decision with nothing to retain: the TUN came down,
+            // `0.0.0.0/0` and `::/0` went with it, and traffic ran in the clear
+            // while the user believed fail-closed was holding it.
+            //
+            // §5.4's exactly-once close still holds on every path out of here.
+            // If [gen] is current: [settleTerminalFailure]'s `lifecycle` calls
+            // [closeRetainedTunLocked] unconditionally, and
+            // [settleRetryableFailure]'s calls it whenever [shouldRetainTun] is
+            // false — so both non-retaining outcomes close it once, under [lock].
+            // When it *is* retained, the close comes later from the next
+            // [attachTun]'s own [closeRetainedTunLocked], a terminal settlement,
+            // or [stopTunnel]. If [gen] is already stale, whatever superseded it
+            // owns [tunInterface] — [stopTunnel] has taken and closed it, a newer
+            // [attachTun] closes it before adopting its own, and
+            // [restartCoreRetainingTun] keeps it alive on purpose. Closing from
+            // here as well would be a second, unsynchronised close of an fd this
+            // generation no longer owns, which is the bug §5.4 warns about rather
+            // than a safety margin.
             failStart(
                 gen,
                 FailureReason.TunnelStartFailed,
@@ -1521,11 +1545,13 @@ class TunnelService : VpnService() {
      * instead (fix round 1, Finding 2) — see [nextAttemptExceedsCap].
      *
      * Fix round 2: [trialAttempt] is a *peek*, not a commit. `failStart` is
-     * reachable with a [gen] that is already stale — the `Tun2Socks.start`
-     * failure path checks `if (gen == generation)` for [tunInterface] and
-     * then calls `failStart(gen, …)` unconditionally three lines later, and
-     * [resolveAndStartCore]'s catch block is a second such path — so this
-     * function cannot assume [gen] is current on entry. [ReconnectAttemptCounter.commit]
+     * reachable with a [gen] that is already stale — [attachTun] and
+     * [attachRetainedTun] both call it from their `Tun2Socks.start` failure
+     * blocks without re-checking the generation first (deliberately: the fd
+     * those paths leave attached belongs to whoever holds the generation, and
+     * this settlement is where that is resolved), and [resolveAndStartCore]'s
+     * catch block is a third such path — so this function cannot assume [gen]
+     * is current on entry. [ReconnectAttemptCounter.commit]
      * therefore runs inside `lifecycle`, alongside `controller`/`configFile`/
      * `liveSession`, so a superseded [gen] leaves the counter exactly as it
      * found it: [ReconnectAttemptCounter.peekNext] has no side effect, and
@@ -1573,20 +1599,27 @@ class TunnelService : VpnService() {
                 if (!retainTun) closeRetainedTunLocked()
                 // §6.3/§6.4: the notification reports the **observed** TUN, not
                 // the fail-closed setting and not [shouldRetainTun]'s decision
-                // on its own. Those two are not the same fact. On a *fresh*
-                // start sequence, four of the six reachable retryable shapes —
-                // PortAllocationFailed, CoreStartFailed, TunEstablishFailed and
-                // TunnelStartFailed — fail before or during [attachTun], so
-                // [tunInterface] is already null here however the setting reads
-                // and whatever `shouldRetainTun` decided: there is no TUN left
-                // to retain, and every packet leaves in the clear. The same four
-                // reasons reached through the retained-fd restart path can leave
-                // a TUN open, which is why this reads the field rather than
-                // enumerating reasons — the enumeration is the motivating case,
-                // not the rule being applied. §6.4 defends defaulting
-                // fail-closed *on* entirely on the promise that §6.3's
-                // notification tells the truth, so reading the retention
-                // decision alone made that promise false in the common case.
+                // on its own. Those two are not the same fact, and which side a
+                // given [FailureReason] lands on depends on what ran before it,
+                // not on the reason.
+                //
+                // [tunInterface] is null here when this attempt neither attached
+                // a TUN nor inherited a retained one — a first attempt failing at
+                // PortAllocationFailed or CoreStartFailed inside [startCore], or
+                // at TunEstablishFailed inside [establishOrFail]. There is
+                // nothing to retain however the setting reads and whatever
+                // `shouldRetainTun` decided, and every packet leaves in the
+                // clear. It is non-null when a TUN is attached: TunnelStartFailed
+                // from [attachTun] or from [attachRetainedTun], both of which
+                // leave the fd in place for exactly this decision to make, and
+                // *any* retryable reason on a retry that a previous fail-closed
+                // settlement left holding the fd — including the three named
+                // above, which are only null-here on the first attempt.
+                //
+                // That is why this reads the field instead of enumerating
+                // reasons. §6.4 defends defaulting fail-closed *on* entirely on
+                // the promise that §6.3's notification tells the truth, so
+                // reading the retention decision alone made that promise false.
                 // Reading `tunInterface` here needs no extra synchronization:
                 // this lambda already runs under `lock`, after the
                 // `closeRetainedTunLocked()` above has settled what is left.
@@ -1608,10 +1641,11 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * Closes and clears [tunInterface] if a retained-fd restart
-     * ([restartCoreRetainingTun]) left one behind when this generation's start
-     * sequence failed instead of committing (§5.4: the fd must still close on
-     * every path where the session ends).
+     * Closes and clears [tunInterface] when this generation's start sequence
+     * failed instead of committing and left an fd behind — a retained-fd restart
+     * ([restartCoreRetainingTun]), a fail-closed retry, or a `Tun2Socks.start`
+     * failure that attached its fd before failing (§5.4: the fd must still close
+     * on every path where the session ends).
      *
      * Called unconditionally from [settleTerminalFailure] — a terminal outcome
      * always ends the retained TUN's life, fail-closed or not (spec §6.1: no
@@ -1626,11 +1660,12 @@ class TunnelService : VpnService() {
      * established, and that is the only close a successful retry ever
      * performs on the retained one.
      *
-     * A no-op for every ordinary start-sequence failure, which never retains a
-     * TUN in the first place: [tunInterface] is already null by the time
-     * [failStart] runs there, either because the sequence never reached
-     * [attachTun] or because that function's own `Tun2Socks.start` failure path
-     * already closed and nulled it before calling [failStart].
+     * A no-op only for a start sequence that failed *before* adopting an fd and
+     * inherited none — [tunInterface] is then already null by the time
+     * [failStart] runs. It is not a no-op for a `Tun2Socks.start` failure in
+     * either [attachTun] or [attachRetainedTun]: both deliberately leave the fd
+     * attached and reach [failStart] with it still in [tunInterface], so this is
+     * the close those paths get when the settlement does not retain it.
      *
      * Must be called with [lock] already held — this does not take it itself.
      * That is a `lifecycle` block for the two settle paths, and [attachTun]'s

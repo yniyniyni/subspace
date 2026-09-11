@@ -544,10 +544,20 @@ class TunnelService : VpnService() {
         TunnelCommandCoordinator(
             scope = scope,
             connect = ::connectFromCommand,
-            rejectConnect = ::rejectConnectFromCommand,
+            // A connect [TunnelCommandIngress] refused before it could reach
+            // [connectFromCommand]: no `want()` ran for it, so the token to clear
+            // with is the gate's current one, read here on the coordinator.
+            rejectConnect = { startId, rowId ->
+                rejectConnectFromCommand(startId, rowId, sessionIntent.currentToken())
+            },
             disconnect = { startId ->
-                // Spec §1.2: one of the three sites that clear session intent.
-                settingsRepository.setTunnelSessionWanted(false)
+                // Spec §1.2: one of the three events that clear session intent.
+                // Through the gate like every other intent write in `:bg`. The
+                // token is read on the coordinator, where the only caller of
+                // `want()` also runs, so nothing can move it before the clear:
+                // an explicit disconnect is never refused.
+                val ownedToken = sessionIntent.currentToken()
+                sessionIntent.clearIfOwned(ownedToken)
                 stopTunnel(ConnectionState.Disconnected)
                 stopStartedService(startId)
             },
@@ -701,88 +711,40 @@ class TunnelService : VpnService() {
         }
     }
 
-    /**
-     * §1.2: the three rejection functions below — [rejectConnectFromCommand],
-     * [rejectInitialForegroundLifecycle] and [handleForegroundLifecycleRejection]
-     * — each publish a terminal `Failed` and stop, without going through
-     * [settleTerminalFailure] — so none of them inherits its `persist` block,
-     * and each has to clear session intent itself. Left set, the next always-on bind, boot start or sticky restart
-     * reads `wanted = true`, reconciles, and silently connects a session the
-     * user never got: exactly the resurrection §1 exists to make impossible.
-     *
-     * [rejectConnectFromCommand] clears unconditionally. The two that take an
-     * `expectedGeneration` clear intent only *after*
-     * [stopTunnel] has confirmed this generation still owns the tunnel — a
-     * generation that lost the race must not clear intent belonging to the one
-     * that won. That is the same *rule* [settleTerminalFailure] follows, but no
-     * longer the same *guard*: it now proves ownership with
-     * [SessionIntentGate]'s token, which these paths do not. See
-     * [clearIntentIfStillOwned] for what the generation check does and does not
-     * establish.
-     */
-    /**
-     * What a generation-guarded [stopTunnel] hands back to the two
-     * generation-guarded §1.2 rejection functions (three call sites): the
-     * started-service token to release, and the generation
-     * the service was on *immediately after* the stop.
-     */
-    private data class OwnedStop(val startId: Int, val generationAfterStop: Int)
+    // §1.2: the three rejection functions below — [rejectConnectFromCommand],
+    // [rejectInitialForegroundLifecycle] and [handleForegroundLifecycleRejection]
+    // — each publish a terminal `Failed` and stop without going through
+    // [settleTerminalFailure], so none of them inherits its `persist` block and
+    // each has to clear session intent itself. Left set, the next always-on
+    // bind, boot start or sticky restart reads `wanted = true`, reconciles, and
+    // silently connects a session the user never got: exactly the resurrection
+    // §1 exists to make impossible.
+    //
+    // Each clears through [SessionIntentGate.clearIfOwned], never the
+    // repository: a direct write can land after a newer connect's `want()` and
+    // wipe the intent of a session that is live and wanted. What differs is only
+    // where the token comes from, and each function says.
 
     /**
-     * [stopTunnel] with `expectedGeneration`, plus the generation it left behind.
+     * A connect whose profile would not decode.
      *
-     * Sampling the generation inside the same `synchronized` region that
-     * [stopTunnel]'s own capture used is what makes [clearIntentIfStillOwned]
-     * meaningful: [stopTunnel] increments the counter, so reading it afterwards
-     * from a second acquisition could already include a session that started in
-     * between — the very session the guard exists to protect.
+     * [intentToken] is the gate's token as the command coordinator holds it —
+     * the value [connectFromCommand]'s own `want()` just returned, or, for a
+     * connect [TunnelCommandIngress] refused before it reached
+     * [connectFromCommand], the gate's current one. The only caller of `want()`
+     * runs on the coordinator too, so nothing can move it before the clear, and
+     * this clear is never refused.
+     *
+     * Deliberately not the token [stopTunnel] hands back. On the
+     * [connectFromCommand] path that belongs to the session that was live
+     * *before* this connect, and this connect's `want()` has already moved the
+     * gate past it — so clearing with it would be refused, and a connect that
+     * could never start would be left wanted.
      */
-    private fun stopTunnelOwning(
-        finalState: ConnectionState,
-        expectedGeneration: Int,
-    ): OwnedStop? {
-        val startId = stopTunnel(finalState, expectedGeneration = expectedGeneration) ?: return null
-        return OwnedStop(startId = startId, generationAfterStop = synchronized(lock) { generation })
-    }
-
-    /**
-     * §1.2's clear, refused if this rejection no longer owns the session.
-     *
-     * `expectedGeneration` on [stopTunnel] proves only that this attempt was
-     * current *at the moment of the stop*. [stopTunnel] then increments the
-     * counter and returns, and these three paths go on to suspend — so a user
-     * connect, an always-on bind or a boot start can begin a whole new session
-     * before the clear runs. Clearing then would wipe intent belonging to a
-     * session that is live and wanted: the `tunnelSessionWanted` collector would
-     * unregister the network callback mid-session, [shouldRetainTun] would read
-     * `intentWanted = false` and release the kill switch, and the next reconcile
-     * would answer `Stop` — a tunnel torn down by the failure of the attempt
-     * before it.
-     *
-     * This narrows that window rather than closing it, and it narrows it less
-     * than it appears to. [connectFromCommand] writes `wanted = true` *before*
-     * [startTunnel] bumps the generation, so a new session's intent can already
-     * be persisted while this check still passes — the generation counter does
-     * not move at the moment intent does. An earlier version of this paragraph
-     * attributed the residual to the write going to Room in another process;
-     * that is not where it comes from, and saying so hid a guard that does not
-     * hold.
-     *
-     * [SessionIntentGate] is the mechanism that closes it, by moving a token in
-     * the same critical section as the intent write. [settleTerminalFailure]
-     * uses it. The two functions that call this (three call sites) were left
-     * on the weaker check
-     * deliberately, as a change with its own reachability to reason about, and
-     * not because this one is sufficient.
-     */
-    private suspend fun clearIntentIfStillOwned(generationAfterStop: Int) {
-        if (synchronized(lock) { generation } != generationAfterStop) return
-        settingsRepository.setTunnelSessionWanted(false)
-    }
-
     private suspend fun rejectConnectFromCommand(
         startId: Int,
         rowId: Long,
+        intentToken: Int,
     ) {
         Log.e(TAG, "connect request refused: ProfileDecodeFailed")
         val failed = failure(FailureReason.ProfileDecodeFailed, "connect request could not be decoded")
@@ -791,37 +753,59 @@ class TunnelService : VpnService() {
         // service, and onDestroy cancels [scope]. A clear left until afterwards
         // races that cancellation and can simply not land, leaving wanted = true
         // and the always-on resurrection this exists to prevent.
-        settingsRepository.setTunnelSessionWanted(false)
+        sessionIntent.clearIfOwned(intentToken)
         stopStartedService(startId)
         connectionRecorder.record(rowId, failed)
     }
 
+    /**
+     * [startTunnel]'s synchronous rejection callback, for when the initial
+     * foreground notification is refused.
+     *
+     * Clears with the token [stopTunnel] captured in the lock region that proved
+     * [gen] still owned the tunnel — this attempt's own, which [startTunnel]
+     * recorded moments earlier on this same call. The clear itself runs in a
+     * coroutine launched off the coordinator, so a token read when it runs could
+     * already belong to a connect queued behind this one. This one cannot.
+     */
     private fun rejectInitialForegroundLifecycle(
         gen: Int,
         rowId: Long,
     ) {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
-        val ownedGeneration = stopTunnelOwning(failed, gen) ?: return
+        val stopped = stopTunnel(failed, expectedGeneration = gen) ?: return
         // Not made `suspend` to await these: this is [runAfterForegroundEstablished]'s
         // synchronous rejection callback. The existing fire-and-forget shape the
         // spec-D4 write already uses is extended to carry the intent clear rather
         // than opening a second launch — both belong to the same settled outcome and
         // ordering them against each other costs nothing.
         scope.launch {
-            clearIntentIfStillOwned(ownedGeneration.generationAfterStop)
-            stopStartedService(ownedGeneration.startId)
+            sessionIntent.clearIfOwned(stopped.intentToken)
+            stopStartedService(stopped.startId)
             connectionRecorder.record(rowId, failed)
         }
     }
 
+    /**
+     * [TerminalOutcome.settleHandlingLifecycleRejection]'s rejection path, for
+     * both [attachTun] and [attachRetainedTun].
+     *
+     * Clears with the token [stopTunnel] captured in the lock region that proved
+     * [gen] still owned the tunnel: the session being ended, including any
+     * connect folded into it since it started (see [startTunnel]'s fold branch).
+     * [attachTun]'s call runs off the command coordinator, so a new connect can
+     * be accepted while this function runs; its `want()` moves the gate past the
+     * captured token, and this clear is refused rather than ending the session
+     * that connect is starting.
+     */
     private suspend fun handleForegroundLifecycleRejection(
         gen: Int,
         rowId: Long,
     ) {
         val failed = failure(FailureReason.CoreStartFailed, FOREGROUND_LIFECYCLE_REJECTED)
-        val owned = stopTunnelOwning(failed, gen) ?: return
-        clearIntentIfStillOwned(owned.generationAfterStop)
-        stopStartedService(owned.startId)
+        val stopped = stopTunnel(failed, expectedGeneration = gen) ?: return
+        sessionIntent.clearIfOwned(stopped.intentToken)
+        stopStartedService(stopped.startId)
         connectionRecorder.record(rowId, failed)
     }
 
@@ -871,14 +855,23 @@ class TunnelService : VpnService() {
      * §10.4: no broad catch — every step publishes its own specific failure and
      * unwinds what it already built.
      */
+    /**
+     * @param intentToken the [SessionIntentGate] token this session owns: the
+     *   value `want()` returned for the connect that led here
+     *   ([connectFromCommand]), or the live session's own for a per-app rebuild
+     *   that changes no intent ([reapplyPerAppFromCommand]). Handed in rather
+     *   than read from the gate here, so this cannot record a token some other
+     *   connect minted.
+     */
     private fun startTunnel(
         profile: Profile,
         rowId: Long,
         startId: Int,
+        intentToken: Int,
     ) {
         val gen =
             synchronized(lock) {
-                // Claimed before the guard below, so both outcomes take it. If a
+                // Recorded before the guard below, so both outcomes take it. If a
                 // second connect is folded into the live session rather than
                 // starting its own, that session now owns the newest accepted
                 // intent — and the settlement of the start already in flight
@@ -887,13 +880,7 @@ class TunnelService : VpnService() {
                 // that branch would refuse a clear that spec §1.2 requires, and
                 // a terminal failure would settle with `wanted = true` still
                 // persisted.
-                //
-                // Reading [SessionIntentGate.currentToken] here cannot pick up a
-                // *later* connect's token: both callers of this function run on
-                // the command coordinator's single consumer coroutine, and this
-                // function does not suspend, so the next `want()` cannot begin
-                // until it has returned.
-                sessionIntentToken = sessionIntent.currentToken()
+                sessionIntentToken = intentToken
                 // §5.5 makes this service the source of truth, so it cannot rely
                 // on the UI to prevent a second connect. Without this guard the
                 // previous TUN fd leaks and the old core runs on unreferenced.
@@ -2037,21 +2024,38 @@ class TunnelService : VpnService() {
     // ── Teardown ────────────────────────────────────────────────────────────
 
     /**
+     * What [stopTunnel] took from the session it ended, in its one lock region.
+     *
+     * @property startId the started-service token that session held.
+     * @property intentToken [sessionIntentToken] as it stood in that same region.
+     *   For a stop that passed `expectedGeneration`, that is the token of the very
+     *   session the stop proved it was ending — so a rejection path clears with
+     *   this, never with a value read after [stopTunnel] returns. By then the lock
+     *   has been released and the slow teardown has run, and a newer connect may
+     *   have moved the gate and had its token recorded.
+     */
+    private data class StoppedSession(val startId: Int, val intentToken: Int)
+
+    /**
      * Idempotent, and reachable from three unsynchronised places (§5.4).
      *
      * State is taken under [lock] in one shot; the slow work then runs outside it
      * so a wedged `quit()` cannot block publication. A second concurrent call
      * finds every field already null and does nothing twice.
+     *
+     * @return null when `expectedGeneration` no longer owns the tunnel;
+     *   otherwise what the stop took from the session it ended.
      */
     @Suppress("TooGenericExceptionCaught")
     private fun stopTunnel(
         finalState: ConnectionState,
         expectedGeneration: Int? = null,
-    ): Int? {
+    ): StoppedSession? {
         val xray: XrayController?
         val fd: ParcelFileDescriptor?
         val cfg: File?
         val startId: Int
+        val intentToken: Int
 
         synchronized(lock) {
             if (expectedGeneration != null && expectedGeneration != generation) return null
@@ -2078,6 +2082,9 @@ class TunnelService : VpnService() {
             cancelBackoffRetryLocked()
             startId = activeStartId
             activeStartId = 0
+            // Captured here, in the same region as the generation check above, and
+            // deliberately not reset: see [StoppedSession.intentToken].
+            intentToken = sessionIntentToken
             publishLocked(ConnectionState.Disconnecting)
         }
 
@@ -2104,7 +2111,7 @@ class TunnelService : VpnService() {
 
         removeForegroundSafely()
         publish(finalState)
-        return startId
+        return StoppedSession(startId = startId, intentToken = intentToken)
     }
 
     /** Stops only the started-service generation that owns the completed command. */
@@ -2137,14 +2144,24 @@ class TunnelService : VpnService() {
      *
      * [NonCancellable] gives the write its own job instead of a child of
      * [scope], so the outcome no longer depends on that timing at all.
+     *
+     * The clear is conditional, like every intent write in `:bg`, and that
+     * matters *because* it outlives this instance. The token is read here,
+     * synchronously, before the launch: a connect accepted after this line
+     * moves the gate's token, and the late clear is refused instead of
+     * ending the session that connect starts. The gate is one per `:bg`
+     * process ([ServiceModule]), so the check still holds when that connect
+     * lands on a new `TunnelService` created after this one was destroyed —
+     * the exact shape a per-instance gate missed (see [SessionIntentGate]).
      */
     override fun onRevoke() {
         // Spec §1.2: the second of three intent-clearing sites. Reconnecting into
         // a route another VPN app just took, or that the user just revoked, is a
         // fight this app should lose, loudly and immediately — not retry into.
-        scope.launch(NonCancellable) { settingsRepository.setTunnelSessionWanted(false) }
-        val startId = stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
-        if (startId != null) stopStartedService(startId)
+        val revokedToken = sessionIntent.currentToken()
+        scope.launch(NonCancellable) { sessionIntent.clearIfOwned(revokedToken) }
+        stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
+            ?.let { stopped -> stopStartedService(stopped.startId) }
     }
 
     override fun onDestroy() {
@@ -2346,13 +2363,17 @@ class TunnelService : VpnService() {
         // concurrently could clear the intent this line just established. That it
         // happens *before* startTunnel — and so before the generation bump — is
         // exactly why the generation counter cannot guard that clear.
-        sessionIntent.want()
+        //
+        // The token comes back from `want()` itself, taken inside that critical
+        // section, and is handed to whichever path this connect takes — so the
+        // session it starts owns exactly the intent this line wrote.
+        val intentToken = sessionIntent.want()
         val decoded = profile.toProfile()
         if (decoded == null) {
-            rejectConnectFromCommand(startId, profile.rowId)
+            rejectConnectFromCommand(startId, profile.rowId, intentToken)
             return
         }
-        startTunnel(decoded, profile.rowId, startId)
+        startTunnel(decoded, profile.rowId, startId, intentToken)
     }
 
     // ── Reconciliation ──────────────────────────────────────────────────────
@@ -2371,14 +2392,20 @@ class TunnelService : VpnService() {
         // over from just before the network dropped must not fire into a
         // decision nobody is making until the network returns.
         if (trigger == ReconcileTrigger.NetworkLost) cancelBackoffRetry()
+        // The gate's token for the intent this reconcile is about to read and act
+        // on, taken before that read. Only the two "row is not connectable"
+        // branches below use it, to clear intent through the gate. This runs on
+        // the command coordinator, which is where `want()`'s only caller runs, so
+        // the token cannot move while this reconcile is deciding.
+        val intentToken = sessionIntent.currentToken()
         val intent =
             SessionIntent(
                 wanted = settingsRepository.tunnelSessionWantedNow(),
                 profileRowId = settingsRepository.activeProfileIdNow(),
             )
         when (val action = reconcile(intent, currentConnectionState(), trigger)) {
-            is ReconcileAction.Start -> startFromRow(action.profileRowId)
-            is ReconcileAction.Restart -> restartCoreRetainingTun(action.profileRowId)
+            is ReconcileAction.Start -> startFromRow(action.profileRowId, intentToken)
+            is ReconcileAction.Restart -> restartCoreRetainingTun(action.profileRowId, intentToken)
             ReconcileAction.Stop -> stopTunnelAndService()
             ReconcileAction.Nothing -> Unit
         }
@@ -2392,15 +2419,21 @@ class TunnelService : VpnService() {
      * previous attempt held onto — and connect through the same accepted-command
      * entry point a user-initiated connect uses, so the intent write and
      * generation handling stay in the one place [connectFromCommand] already is.
+     *
+     * @param intentToken the gate token [reconcileNow] took for the intent it
+     *   read — used only to clear that intent when the row cannot be connected.
      */
-    private suspend fun startFromRow(rowId: Long) {
+    private suspend fun startFromRow(
+        rowId: Long,
+        intentToken: Int,
+    ) {
         val profile = profileRepository.profile(rowId)?.toProfile()
         if (profile == null) {
             // §5.6: no name, no address. The row is gone or its config will not
             // decode; either way there is nothing to connect to and holding the
             // service open helps nobody.
             Log.w(TAG, "reconcile: active profile row is not connectable")
-            settingsRepository.setTunnelSessionWanted(false)
+            sessionIntent.clearIfOwned(intentToken)
             stopTunnelAndService()
             return
         }
@@ -2457,15 +2490,19 @@ class TunnelService : VpnService() {
     // TooGenericExceptionCaught: Tun2Socks.stop()'s Throwable catch mirrors stopTunnel's own —
     // it must include NoClassDefFoundError from a failed System.loadLibrary, not just Exception.
     @Suppress("ReturnCount", "TooGenericExceptionCaught")
-    private suspend fun restartCoreRetainingTun(rowId: Long) {
+    private suspend fun restartCoreRetainingTun(
+        rowId: Long,
+        intentToken: Int,
+    ) {
         val profile = profileRepository.profile(rowId)?.toProfile()
         if (profile == null) {
             // §5.6: no name, no address — same reasoning as startFromRow's own
             // refusal. Nothing to restart onto, and the retained fd is still
             // live, so route through the ordinary teardown that closes it
-            // rather than leaving it dangling.
+            // rather than leaving it dangling. The intent clear goes through
+            // the gate with [reconcileNow]'s token, as startFromRow's does.
             Log.w(TAG, "reconcile: active profile row is not connectable")
-            settingsRepository.setTunnelSessionWanted(false)
+            sessionIntent.clearIfOwned(intentToken)
             stopTunnelAndService()
             return
         }
@@ -2492,7 +2529,7 @@ class TunnelService : VpnService() {
                 }
             }
         if (handoff == null) {
-            startFromRow(rowId)
+            startFromRow(rowId, intentToken)
             return
         }
 
@@ -2685,9 +2722,15 @@ class TunnelService : VpnService() {
 
     private fun reapplyPerAppFromCommand() {
         // Sample only when this command reaches the service-owned consumer.
-        val session = synchronized(lock) { liveSession.takeIf { ownTunnelActive() } } ?: return
+        // The intent token is sampled with the session, under the same lock: a
+        // per-app rebuild changes no intent, so the rebuilt session keeps the
+        // owner the live one already had rather than minting or reading one.
+        val (session, intentToken) =
+            synchronized(lock) {
+                liveSession.takeIf { ownTunnelActive() }?.let { it to sessionIntentToken }
+            } ?: return
         stopTunnel(ConnectionState.Disconnected)
-        startTunnel(session.profile, session.rowId, session.startId)
+        startTunnel(session.profile, session.rowId, session.startId, intentToken)
     }
 
     /**

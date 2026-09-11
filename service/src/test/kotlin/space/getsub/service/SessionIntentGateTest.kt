@@ -33,11 +33,19 @@ import org.junit.Test
  * which is a `VpnService` and cannot be driven from a JVM test in this project);
  * what is reproducible, and what these tests drive, is the rule that replaces it.
  *
- * Two properties under test:
+ * Properties under test:
  *
  *  1. **Ownership** — a clear whose token has been superseded writes nothing.
  *  2. **Serialisation** — a connect's write cannot land between the ownership
  *     check and the clear.
+ *  3. **Same critical section** — the token has moved before `want()` lets the
+ *     next waiter in, so no clear can see the new `true` with the old token.
+ *  4. **`want()` returns its own token** — the value a starting session records
+ *     is the one its own write minted, never one a later connect minted.
+ *
+ * 3 and 4 need a waiter that runs *inside* `want()`'s unlock, which `runTest`'s
+ * dispatcher never produces (it only schedules a resumed waiter); both use
+ * `Dispatchers.Unconfined` for that — see the first of them.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SessionIntentGateTest {
@@ -206,5 +214,36 @@ class SessionIntentGateTest {
             cleared shouldBe false
             store.transcript shouldBe listOf("enter:true", "wrote:true")
             store.wanted shouldBe true
+        }
+
+    @Test
+    fun `want returns the token it minted, not one a later connect minted`() =
+        runTest {
+            // `TunnelService.connectFromCommand` hands this value to
+            // `startTunnel` as the new session's owner. Were it read after the
+            // mutex is released — `withLock { … }; return token.get()` — a
+            // second connect let in by that release could already have moved
+            // it, and the first session would record the second's token.
+            // Same Unconfined mechanism as the previous test: the second
+            // connect resumes inline inside the first `want()`'s unlock.
+            val store = RecordingIntent()
+            val gate = SessionIntentGate(store::write)
+
+            var second: Int? = null
+            var secondQueued = false
+            store.beforeWrite = { value ->
+                if (value && !secondQueued) {
+                    secondQueued = true
+                    launch(Dispatchers.Unconfined) { second = gate.want() }
+                }
+            }
+
+            val first = gate.want()
+            advanceUntilIdle()
+
+            secondQueued shouldBe true
+            first shouldBe 1
+            second shouldBe 2
+            gate.currentToken() shouldBe 2
         }
 }

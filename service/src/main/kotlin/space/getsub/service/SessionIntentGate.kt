@@ -106,11 +106,29 @@ import java.util.concurrent.atomic.AtomicInteger
  * A second writer of `wanted = true` added inside `:bg` would need to go through
  * [want]; that is the only reason this is not enforceable by the type system.
  *
- * Unconditional clears — an explicit disconnect, `onRevoke`, a rejected connect
- * — deliberately do **not** go through here. They run on the command
- * coordinator's own coroutine (or, for `onRevoke`, describe an event that has
- * already taken the route away), so no connect can interleave with them, and
- * their intent to clear is not conditional on anything.
+ * ## Every write in `:bg` goes through here
+ *
+ * The gate protects a live session only if every write that can clear intent
+ * takes [mutex]. A direct repository write does not: it can land after a newer
+ * session's [want] and clobber it, and no token check ever sees it. So in `:bg`
+ * the repository's `setTunnelSessionWanted` has exactly one caller —
+ * [writeWanted], under [mutex] — and every clear is [clearIfOwned], with a
+ * token captured while the session being ended was still the live one:
+ *
+ *  - **A start-sequence settlement or rejection** uses the token
+ *    `TunnelService` recorded for that session, read under its lock in the
+ *    same region that confirms the generation is still current — never read
+ *    from here at clear time, which could already name a newer connect.
+ *  - **`onRevoke`** uses [currentToken], read synchronously before its clear is
+ *    launched. A connect accepted afterwards moves the token and the late
+ *    clear is refused, rather than ending the session that connect starts.
+ *  - **A disconnect, a rejected connect, and a reconcile that finds nothing to
+ *    connect to** use [currentToken] (or [want]'s return) read on the command
+ *    coordinator. [want]'s only caller runs there too, so nothing can move the
+ *    token between that read and the clear: these are never refused, and are
+ *    unconditional in effect. They come here anyway, so that "only the gate
+ *    writes" holds without exceptions to remember and every clear is ordered
+ *    by the same mutex.
  *
  * ## Why a separate class
  *
@@ -139,28 +157,33 @@ internal class SessionIntentGate(
     private val token = AtomicInteger(0)
 
     /**
-     * The token a session started now would own.
+     * The token of the most recently accepted connect.
      *
-     * Read by `TunnelService.startTunnel` under its own lock, ahead of its
-     * already-active guard, so both of its branches record it — the one that
-     * starts a session and bumps the generation, and the fold that absorbs a
-     * connect into the live session without a bump. That read cannot race a
-     * later [want]: both of `startTunnel`'s callers reach it from the command
-     * coordinator's single consumer coroutine, and `startTunnel` does not
-     * suspend, so the next connect's [want] cannot begin until it returns.
+     * Not how a starting session learns its own token — that is [want]'s return
+     * value, which cannot name a different connect. This is for a clear with no
+     * session-recorded token to hand: `onRevoke`, which reads it synchronously
+     * before launching its clear, and the command coordinator's own clears,
+     * where no [want] can interleave (see the class KDoc).
      */
     fun currentToken(): Int = token.get()
 
     /**
      * Spec §1.2: intent goes true when a connect is **accepted**, not when it
      * succeeds — and the token moves with it, in the same critical section.
+     *
+     * @return the token this call minted, taken inside that critical section.
+     *   The session this connect starts owns exactly this value. Reading
+     *   [currentToken] after this returns would not be equivalent: the mutex is
+     *   already released by then, and a second connect let in by that release
+     *   could have moved the token first — the first session would then record
+     *   the second's token, and its settlement could clear the second's intent.
      */
-    suspend fun want() {
+    suspend fun want(): Int =
         mutex.withLock {
-            token.incrementAndGet()
+            val minted = token.incrementAndGet()
             writeWanted(true)
+            minted
         }
-    }
 
     /**
      * Clears intent only if [ownedToken] is still the current session's.

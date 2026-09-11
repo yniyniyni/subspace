@@ -503,9 +503,16 @@ class TunnelService : VpnService() {
     private val reconnectAttempts = ReconnectAttemptCounter()
 
     /**
-     * The profile the live session was started from, so a per-app change can
-     * rebuild the tunnel without :main re-supplying one (§5.5: what is connected
-     * is this process's fact, not the UI's).
+     * The profile the live session is running, so a per-app change can rebuild
+     * the tunnel without :main re-supplying one (§5.5: what is connected is this
+     * process's fact, not the UI's).
+     *
+     * Set fresh by [startTunnel], and moved by [restartCoreRetainingTun] when a
+     * reconcile restart follows the active profile onto a different row (spec
+     * §1.1) — `startId` kept, the row and profile replaced. It has to name what
+     * the core is actually running: before the restart updated it, a restart
+     * onto another server left this on the old one, and the next per-app
+     * reapply silently reconnected there.
      *
      * Cleared by both terminal paths a start can take: [stopTunnel] (disconnect,
      * revoke, `onDestroy`) so a settled-down service cannot be restarted into a
@@ -2469,6 +2476,14 @@ class TunnelService : VpnService() {
      * toggling Wi-Fi, repeatedly — not by unit test and not by reasoning here.
      * Task 16 row 1 settles it.
      *
+     * It restarts onto the *active* profile ([rowId], from [reconcileNow]'s
+     * read), not necessarily the one the session started on. Spec §1.1 defines
+     * session intent as `(activeProfileId, wanted)`, so a server picked while
+     * connected is where the next reconcile restart goes — by design (ruling
+     * R37), and not to be pinned to the live session's profile. [liveSession]
+     * is moved onto it in the handoff below, so the service keeps one answer to
+     * "what is connected".
+     *
      * The TUN fd genuinely survives this: it is captured from [tunInterface]
      * before anything else runs, and neither this function nor
      * [resolveAndStartCore]/[attachRetainedTun] ever calls `Builder.establish()`
@@ -2524,6 +2539,20 @@ class TunnelService : VpnService() {
                     controller = null
                     configFile?.delete()
                     configFile = null
+                    // Spec §1.1: [rowId] is the *active* profile, which can differ
+                    // from the row this session started on if another server was
+                    // picked while connected (ruling R37: by design). [liveSession]
+                    // moves with it, in this same region as the generation bump —
+                    // otherwise the core runs the new row while [liveSession] still
+                    // names the old one, and [reapplyPerAppFromCommand], which
+                    // rebuilds from [liveSession], silently reconnects to the old
+                    // row. [LiveSession.startId] is kept: this is the same
+                    // started-service lifetime. [sessionIntentToken] is not touched
+                    // either — a restart changes what runs, not who owns the intent.
+                    // Non-null here: `Restart` only follows a published `Connected`,
+                    // and only a settlement or [stopTunnel] nulls it, neither of which
+                    // leaves `Connected` behind.
+                    liveSession = liveSession?.copy(profile = profile, rowId = rowId)
                     publishLocked(ConnectionState.Connecting(StartupStage.AllocatingPort))
                     RetainedRestart(nextGeneration, oldXray, fd)
                 }

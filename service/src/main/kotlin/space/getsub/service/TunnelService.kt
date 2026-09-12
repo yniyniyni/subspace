@@ -647,12 +647,39 @@ class TunnelService : VpnService() {
         // does not stop a `true` emission landing between an explicit
         // `networkMonitor.stop()` and that final cancel from calling `start()`
         // again and re-registering a callback nothing is left to unregister.
-        networkMonitorJob =
-            scope.launch {
-                settingsRepository.tunnelSessionWanted.distinctUntilChanged().collect { wanted ->
-                    if (wanted) networkMonitor.start() else networkMonitor.stop()
-                }
+        networkMonitorJob = scope.launch { collectSessionIntentForMonitor() }
+    }
+
+    /**
+     * The `tunnelSessionWanted` collector, with failure handling of its own.
+     *
+     * This collector is long-lived and shares [scope] with the start sequence,
+     * whose [errorHandler] publishes `Failed(CoreStartFailed)` — ungated by
+     * generation and performing no teardown. So a Room failure *here* used to be
+     * reported as a start-sequence crash **over a live `Connected` session**, and
+     * `reconcile` answers `Nothing` for `Failed` while intent is still wanted:
+     * the session would sit there with the UI saying failed, the tunnel up, and
+     * nothing retrying. §5.5's lying UI, reached by a route M8 opened when it put
+     * this coroutine on that scope.
+     *
+     * Catching here rather than widening [errorHandler] keeps that handler doing
+     * the one job its KDoc describes. A failure in this collector is not a start
+     * sequence crashing, and must not be published as one.
+     *
+     * Cancellation is rethrown — it is how [onDestroy] stops this collector. §5.6:
+     * the exception's class name only, never its message, which can quote a row.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun collectSessionIntentForMonitor() {
+        try {
+            settingsRepository.tunnelSessionWanted.distinctUntilChanged().collect { wanted ->
+                if (wanted) networkMonitor.start() else networkMonitor.stop()
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "session-intent collector failed: ${e.javaClass.simpleName}")
+        }
     }
 
     /**

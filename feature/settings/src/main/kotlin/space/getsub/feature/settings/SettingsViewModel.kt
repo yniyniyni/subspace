@@ -158,31 +158,53 @@ constructor(
     fun onBootAutostartChanged(enabled: Boolean) {
         viewModelScope.launch {
             settingsSource.setBootAutostart(enabled)
-            if (enabled) maybePromptForBattery()
+            maybePromptForBattery(justEnabled = enabled)
         }
     }
 
     fun onFailClosedChanged(enabled: Boolean) {
         viewModelScope.launch {
             settingsSource.setFailClosed(enabled)
-            if (enabled) maybePromptForBattery()
+            maybePromptForBattery(justEnabled = enabled)
         }
     }
 
     /**
-     * Spec §7.2, ARCHITECTURE.md §9: called only from the moment a survival setting (boot
-     * autostart or fail-closed) is switched *on* — never at construction, and never for an
-     * unrelated setting — since that is the one moment Doze is worth raising at all
+     * Spec §7.2, ARCHITECTURE.md §9: Doze is worth raising at the moment the user says they want
+     * the tunnel to survive, and nowhere else — not at construction, not on an unrelated setting
      * ([shouldPromptForBattery]'s own KDoc).
+     *
+     * [justEnabled] carries that decision rather than the call sites doing it. It used to be
+     * passed as a literal `true`, with each caller guarding itself with `if (enabled)` — so the
+     * parameter could not be false in production and [shouldPromptForBattery]'s first conjunct
+     * was decoration, tested but never exercised. Switching a survival setting *off* now reaches
+     * this function and is refused here, in the one place that decides.
      */
-    private suspend fun maybePromptForBattery() {
+    private suspend fun maybePromptForBattery(justEnabled: Boolean) {
+        // A binder round trip to PowerManager; SettingsSource does it on IO (§5.3), so this stays
+        // a plain suspending call rather than each caller choosing a dispatcher.
+        val ignoringOptimisations = settingsSource.isIgnoringBatteryOptimizations()
         val show =
             shouldPromptForBattery(
                 alreadyShown = settingsSource.batteryPromptShown.first(),
-                isIgnoringOptimisations = settingsSource.isIgnoringBatteryOptimizations,
-                survivalSettingJustEnabled = true,
+                isIgnoringOptimisations = ignoringOptimisations,
+                survivalSettingJustEnabled = justEnabled,
             )
         if (show) _state.update { it.copy(showBatteryPrompt = true) }
+    }
+
+    /**
+     * Spec §7.2 names three triggers — always-on, boot autostart and fail-closed — and only the
+     * latter two raised the prompt.
+     *
+     * Always-on is a deep link to system settings (§7.1: this app cannot set it, so it is a link
+     * and never a switch), which means the app never learns whether the user actually enabled it.
+     * Tapping the row is the strongest statement of "I want this tunnel to survive" that is
+     * observable here, so that is what the prompt is hung on. The prompt is shown once ever
+     * (`batteryPromptShown`), so treating the tap as intent cannot become nagging.
+     */
+    fun onAlwaysOnOpened() {
+        viewModelScope.launch { maybePromptForBattery(justEnabled = true) }
     }
 
     /**

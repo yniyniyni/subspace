@@ -5,8 +5,10 @@ package space.getsub.feature.settings
 import android.content.Context
 import android.os.PowerManager
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withContext
 import space.getsub.core.data.RoutingRepository
 import space.getsub.core.data.SettingsRepository
 import space.getsub.core.data.ThemePreference
@@ -120,8 +122,13 @@ internal interface SettingsSource {
      * optimization — not a [Flow], since the only caller needs its value at one instant (the
      * moment a survival setting is switched on), the same one-shot shape [hwid] already uses for
      * a value nothing here needs to observe changing.
+     *
+     * `suspend`, and not a plain property, because the implementation is a binder round trip to
+     * `PowerManager` — §5.3 keeps those off the Main dispatcher, and the dispatcher belongs to
+     * the implementation that knows it makes the call rather than to every caller. It also keeps
+     * a fake deterministic: no real dispatcher hop for a test scheduler to miss.
      */
-    val isIgnoringBatteryOptimizations: Boolean
+    suspend fun isIgnoringBatteryOptimizations(): Boolean
 }
 
 // Same shape as SettingsSource's own TooManyFunctions suppression above — this class implements
@@ -194,10 +201,11 @@ constructor(
 
     override suspend fun setBatteryPromptShown(shown: Boolean) = settingsRepository.setBatteryPromptShown(shown)
 
-    override val isIgnoringBatteryOptimizations: Boolean
-        get() =
+    override suspend fun isIgnoringBatteryOptimizations(): Boolean =
+        withContext(Dispatchers.IO) {
             context.getSystemService(PowerManager::class.java)
                 ?.isIgnoringBatteryOptimizations(context.packageName) == true
+        }
 }
 
 /** True only when a valid active profile materially changes DNS behavior (R21). */

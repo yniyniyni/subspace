@@ -110,6 +110,7 @@ fun SettingsScreen(
             onBootAutostartChanged = viewModel::onBootAutostartChanged,
             onFailClosedChanged = viewModel::onFailClosedChanged,
             onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
+            onAlwaysOnOpened = viewModel::onAlwaysOnOpened,
         ),
         onNavigateToRouting = onNavigateToRouting,
         onNavigateToPerApp = onNavigateToPerApp,
@@ -148,6 +149,9 @@ internal data class SettingsActions(
     val onBootAutostartChanged: (Boolean) -> Unit = {},
     val onFailClosedChanged: (Boolean) -> Unit = {},
     val onBatteryPromptResolved: () -> Unit = {},
+    // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
+    // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
+    val onAlwaysOnOpened: () -> Unit = {},
 )
 
 /**
@@ -333,7 +337,12 @@ private fun TunnelSection(
         state = state,
         onBootAutostartChange = actions.onBootAutostartChanged,
         onFailClosedChange = actions.onFailClosedChanged,
-        onOpenVpnSettings = { openVpnSettings(context) },
+        onOpenVpnSettings = {
+            // Spec §7.2: the prompt's third trigger. The deep link still opens whether or not a
+            // prompt is due — shouldPromptForBattery decides that, and never twice.
+            actions.onAlwaysOnOpened()
+            openVpnSettings(context)
+        },
         onOpenBatterySettings = { openBatterySettings(context) },
     )
 

@@ -731,8 +731,41 @@ class TunnelService : VpnService() {
         // ACTION_CONNECT, and a null-intent check would silently ignore it.
         val accepted =
             if (request != null) {
+                // ACTION_CONNECT: TunnelClient.connect uses startForegroundService,
+                // and startTunnel answers that contract inside
+                // runAfterForegroundEstablished. Nothing extra is owed here.
                 commandIngress.started(request, startId, testObserver)
             } else {
+                // Everything that is not an explicit connect — the boot receiver,
+                // always-on, and a sticky restart — reaches the service here, and
+                // BootReceiver arrives via startForegroundService. That arms the
+                // platform's ~10 s startForeground contract, and until now the only
+                // code that answered it was startTunnel. Every other outcome left it
+                // unanswered: an active profile row that has been deleted or no
+                // longer decodes makes startFromRow call stopTunnelAndService, and a
+                // reconcile answering Nothing or Stop never starts a tunnel at all —
+                // so a device with boot autostart on and a stale active row would
+                // take a ForegroundServiceDidNotStartInTimeException on every boot.
+                //
+                // Answered here, before the queue and before any Room read, because
+                // the slow-cold-boot case cannot be fixed per-branch: the contract
+                // can expire while the reconcile is still waiting on the database.
+                // Whatever the reconcile then decides, stopTunnel's
+                // removeForegroundSafely takes the notification back down.
+                //
+                // §14.1/§9: systemExempted is not among the six types Android 15
+                // forbids a BOOT_COMPLETED receiver to launch (dataSync, camera,
+                // mediaPlayback, phoneCall, mediaProjection, microphone), and the
+                // general BOOT_COMPLETED exemption from the background-start
+                // restriction still applies to it — sourced in
+                // docs/agent/research/2026-09-07-always-on-and-boot-fgs.md, Q3.
+                //
+                // A rejection is logged and not fatal: the reconcile below may well
+                // be about to stop the service anyway, and failing the start here
+                // would turn a recoverable boot into a crash.
+                if (!goForeground(R.string.notification_connecting)) {
+                    Log.w(TAG, "foreground contract not answered on a reconcile start")
+                }
                 commandIngress.reconcile(ReconcileTrigger.NullIntentStart, startId)
             }
         if (!accepted) {

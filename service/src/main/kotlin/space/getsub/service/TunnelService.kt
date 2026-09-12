@@ -454,6 +454,18 @@ class TunnelService : VpnService() {
     // All guarded by `lock`.
     private var controller: XrayController? = null
     private var tunInterface: ParcelFileDescriptor? = null
+
+    /**
+     * The DNS address [tunInterface] advertises (spec §5.2, lever 1), or null
+     * when there is no interface.
+     *
+     * One piece of state with [tunInterface], under the same [lock] and with the
+     * same lifetime: written where the fd is adopted, cleared everywhere the fd
+     * is. A restart that keeps the interface cannot change what it advertises,
+     * so this is what [restartCoreRetainingTun] compares the newly resolved plan
+     * against before deciding whether keeping it is still safe.
+     */
+    private var tunAdvertisedDns: String? = null
     private var configFile: File? = null
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
@@ -1398,6 +1410,10 @@ class TunnelService : VpnService() {
             // that path ever gets.
             closeRetainedTunLocked()
             tunInterface = fd
+            // Recorded with the fd, not derived later: [establishTun] built this
+            // interface from [dnsPlan], and once it exists nothing can change
+            // what it advertises without rebuilding it.
+            tunAdvertisedDns = advertisedTunDnsAddress(dnsPlan?.tunAdvertisedAddress(), DNS_SERVER)
         }
         // Spec §5.2, the case NetworkMonitor's callback cannot cover: a session
         // that starts and never changes network never sees `onChanged`, because
@@ -1776,6 +1792,7 @@ class TunnelService : VpnService() {
             Log.e(TAG, "closing retained tun fd failed: ${e.javaClass.simpleName}")
         }
         tunInterface = null
+        tunAdvertisedDns = null
     }
 
     /**
@@ -2073,6 +2090,7 @@ class TunnelService : VpnService() {
             cfg = configFile
             controller = null
             tunInterface = null
+            tunAdvertisedDns = null
             configFile = null
             liveSession = null
             // Every stopTunnel caller (explicit disconnect, onRevoke, a
@@ -2577,7 +2595,33 @@ class TunnelService : VpnService() {
         handoff.oldXray?.stopBlocking()
 
         val started = resolveAndStartCore(handoff.gen, profile, rowId) ?: return
-        attachRetainedTun(handoff.gen, started.xray, started.ports, handoff.fd, rowId)
+
+        // Spec §5.2, lever 1. The core has just been rebuilt from current
+        // settings; the retained interface still advertises what it was built
+        // with. Keeping it is only safe while those agree.
+        //
+        // When they do not, the interface is rebuilt through [attachTun] rather
+        // than documented as pinned. The case that forces this: the user turns
+        // DNS off mid-session, so the new config emits no port-53 hijack, while
+        // the TUN goes on advertising the old plan's address — typically the
+        // domestic resolver, which a `geoip:<country>` DIRECT rule set then
+        // sends out through `freedom`. Every lookup would leave in the clear,
+        // proxied sites included. A rebuilt interface advertises DNS_SERVER,
+        // which no such rule matches.
+        //
+        // [attachTun] is the path that already establishes a replacement and
+        // retires the old fd under [lock] (`closeRetainedTunLocked`), so this
+        // adds a branch, not a new fd lifetime. It also re-resolves the per-app
+        // gate, which the retained path deliberately does not: a rebuild
+        // therefore applies the current selection, and can fail terminally with
+        // `PerAppAllowListEmpty` where the retained path would have carried on
+        // with the selection baked into the old interface.
+        val nextAdvertisedDns = advertisedTunDnsAddress(started.dnsPlan?.tunAdvertisedAddress(), DNS_SERVER)
+        if (retainedTunKeepsAdvertisedDns(synchronized(lock) { tunAdvertisedDns }, nextAdvertisedDns)) {
+            attachRetainedTun(handoff.gen, started.xray, started.ports, handoff.fd, rowId)
+        } else {
+            attachTun(handoff.gen, started.xray, started.ports, started.dnsPlan, rowId)
+        }
     }
 
     /** [restartCoreRetainingTun]'s atomically-captured handoff from the old generation to the new one. */
@@ -2598,6 +2642,13 @@ class TunnelService : VpnService() {
      * new fd to race a superseding generation for, and per-app selection is
      * baked into the retained interface — unaffected by the network change
      * that triggered this restart.
+     *
+     * DNS is **not** in that category, and used to be treated as though it were.
+     * The interface advertises the resolver it was built with (§5.2, lever 1)
+     * while the core is rebuilt from current settings, so this path is taken
+     * only when [restartCoreRetainingTun] has confirmed the two still name the
+     * same address — see [retainedTunKeepsAdvertisedDns] for what goes wrong
+     * when they do not. Otherwise the caller rebuilds through [attachTun].
      */
     // Each return is a distinct outcome — a superseded generation, a tun2socks restart
     // failure, and a lifecycle-rejected settlement — same reasoning as attachTun's own.

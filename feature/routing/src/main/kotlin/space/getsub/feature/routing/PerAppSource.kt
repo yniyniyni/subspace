@@ -82,8 +82,35 @@ constructor(
         perAppRepository.setMode(mode)
     }
 
+    /**
+     * Whether a per-app change has a live session to reapply to.
+     *
+     * Exhaustive with no `else`: M8 added `Reconnecting` and an `is`-chain
+     * absorbed it silently (spec §2.2 chose this shape for
+     * `FailureReason.retryability` for the same reason).
+     *
+     * `Reconnecting` is **false**, and deliberately not "true because a retained
+     * TUN exists". The value answers what a reapply would accomplish, not what
+     * interfaces are up: `TunnelService.reapplyPerAppFromCommand` samples
+     * `liveSession`, which `settleRetryableFailure` has already nulled by then,
+     * so the command returns without doing anything. Reporting active here would
+     * put an affordance on screen that the service silently ignores. The next
+     * successful attempt applies the current selection anyway.
+     */
     override val isTunnelActive: Flow<Boolean> =
-        tunnelClient.state.map { it is ConnectionState.Connected || it is ConnectionState.Connecting }
+        tunnelClient.state.map { state ->
+            when (state) {
+                is ConnectionState.Connected,
+                is ConnectionState.Connecting,
+                -> true
+
+                is ConnectionState.Reconnecting,
+                is ConnectionState.Failed,
+                ConnectionState.Disconnected,
+                ConnectionState.Disconnecting,
+                -> false
+            }
+        }
 
     override suspend fun reapply() = tunnelClient.reapplyPerApp()
 }

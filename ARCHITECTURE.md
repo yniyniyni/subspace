@@ -240,6 +240,25 @@ particular config does not leak *its own* traffic — but the TUN-level
 1.1.1.1 advertisement above is independent of what any given config does.
 Source: `docs/agent/research/2026-08-25-remnawave-xray-json-and-balancers.md`.
 
+**A restart that keeps the TUN is the exception to "every connect", and was a
+leak until M8 closed it.** `TunnelService.restartCoreRetainingTun` rebuilds the
+core on a network change without re-running `Builder.establish()`, so the
+interface goes on advertising the resolver it was built with while levers 2 and
+3 are recomputed from current settings. That is harmless while a plan exists —
+every non-null plan emits the port-53 hijack, which matches by port and catches
+the pinned address like any other. It is a leak when the plan has become null:
+no hijack is emitted, and the pinned address is whatever the *old* plan
+advertised, which `DnsPlan.tunAdvertisedAddress` takes from the first server
+carrying a literal — typically the domestic resolver, precisely the address a
+`geoip:<country>` DIRECT rule matches. Turning DNS off mid-session and then
+changing network therefore sent every lookup to that resolver in the clear,
+proxied sites included, while a freshly connected session would have advertised
+`DNS_SERVER` and routed it to the proxy. Since `576b2fa` the retained path is
+taken only while the interface's advertised address still matches what the new
+plan would advertise; otherwise the interface is rebuilt. Lever 1 is coherent
+across restarts as well as connects — but note this is verified by reading and
+by a unit test on the decision, **not yet on hardware**.
+
 **The hijack is a loop hazard unless something claims the resolver's own
 traffic first.** The built-in resolver's query *to a DoU server* is itself
 UDP to port 53, so if nothing ahead of the hijack claims it, it matches the

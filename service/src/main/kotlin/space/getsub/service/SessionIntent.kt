@@ -61,11 +61,11 @@ internal fun reconcile(
     // a retry loop in Doze costs the six-hour screen-off case.
     if (trigger == ReconcileTrigger.NetworkLost) return ReconcileAction.Nothing
 
-    if (!intent.wanted) return ReconcileAction.Stop
+    if (!intent.wanted) return stopUnlessItWouldEraseAFailure(actual)
 
     // Wanted, but the row it named is gone. Nothing to start, and holding a
     // foreground service open for a profile that does not exist helps nobody.
-    val rowId = intent.profileRowId ?: return ReconcileAction.Stop
+    val rowId = intent.profileRowId ?: return stopUnlessItWouldEraseAFailure(actual)
 
     return when (actual) {
         // A start already in flight must not be started on top of itself; the
@@ -86,6 +86,49 @@ internal fun reconcile(
         is ConnectionState.Failed -> ReconcileAction.Nothing
     }
 }
+
+/**
+ * `Stop`, unless stopping would erase a terminal failure.
+ *
+ * Answering `Stop` from [ConnectionState.Failed] is not a harmless no-op:
+ * `stopTunnelAndService` publishes `Disconnected`, which lands **over** the
+ * failure. `TunnelService.onRevoke`'s KDoc calls the `Revoked` reason "the one
+ * piece of information the user needs", and deliberately skips
+ * `super.onRevoke()` to preserve it — and this erased it anyway.
+ *
+ * It was reachable by an ordinary `NetworkChanged`: every terminal settlement
+ * clears session intent, so `!wanted` was already true when the next trigger
+ * arrived, and the `Failed` arm in [reconcile] was never reached. Observed on a
+ * device during the §11 revocation row, where Home read `Disconnected` after
+ * another VPN app took the route; the observation went unexplained for a day
+ * because the row's other assertion — intent cleared — passed.
+ *
+ * Nothing is lost by declining: a terminal settlement has already run its own
+ * teardown and called `stopStartedService`, so there is no core, no TUN and no
+ * foreground notification left for a `Stop` to clean up.
+ *
+ * **[ConnectionState.Disconnected] still stops, and that is load-bearing** —
+ * do not fold it in with `Failed` as "already down". Spec §1.3 answers a sticky
+ * restart by reconciling a null intent, and with nothing wanted the `Stop` is
+ * what shuts the service down; that is the outcome `START_NOT_STICKY` used to
+ * protect, reached by asking rather than by refusing. `Disconnected` carries no
+ * reason to erase, so preserving it buys nothing.
+ *
+ * Exhaustive with no `else`, for the reason spec §2.2 gives for
+ * `FailureReason.retryability`: a state added later must not be silently
+ * absorbed by whichever branch happens to catch it.
+ */
+private fun stopUnlessItWouldEraseAFailure(actual: ConnectionState): ReconcileAction =
+    when (actual) {
+        is ConnectionState.Failed -> ReconcileAction.Nothing
+
+        is ConnectionState.Connecting,
+        is ConnectionState.Connected,
+        is ConnectionState.Reconnecting,
+        ConnectionState.Disconnected,
+        ConnectionState.Disconnecting,
+        -> ReconcileAction.Stop
+    }
 
 /** Spec §2.3: the capped reason is the only one with a ceiling. */
 private fun ConnectionState.Reconnecting.mayAttemptAgain(): Boolean =

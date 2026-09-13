@@ -414,13 +414,58 @@ class TunnelService : VpnService() {
      */
     private var networkMonitorJob: Job? = null
 
+    /**
+     * §10.4: anything escaping a coroutine on [scope] must still produce a
+     * legible state. Without this the failure is invisible — spec §0.3, `:bg`
+     * logging never reaches logcat — and the UI sits on `Connecting` until it
+     * notices binder death.
+     *
+     * **It ends the session before publishing, and that is the difference
+     * between a legible state and a false one.** This was a bare `publish`:
+     * ungated by generation, stopping no core, closing no fd, cancelling no
+     * backoff and removing no notification. A crash landing after `Connected`
+     * therefore left a terminal `Failed` standing over a live tunnel — §5.5's
+     * lying UI — and everything downstream reads `Failed` as a session that has
+     * already settled down: `reconcile` answers [ReconcileAction.Release] for it,
+     * and [releaseServiceWithoutPublishing] then takes the ongoing notification
+     * off a `VpnService` that was still carrying traffic (§9 requires one for the
+     * life of the tunnel).
+     *
+     * [stopTunnel] is what makes the published state true. It supersedes the
+     * generation, closes the fd, stops the core and tun2socks, cancels the retry,
+     * removes the foreground notification and publishes the state it is handed —
+     * the same teardown `onRevoke` and `onDestroy` already use, not a third one.
+     *
+     * **Safe to call from here.** A `CoroutineExceptionHandler` runs on the
+     * failing coroutine's thread after that coroutine has unwound, so it holds
+     * nothing of its own that [lock] could deadlock against, and every coroutine
+     * on [scope] is dispatched on [Dispatchers.IO] — so `stopBlocking()` blocks a
+     * pool thread and never the main one (§5.3). [onDestroy] already calls the
+     * same function on the main thread.
+     *
+     * Session intent is deliberately **not** cleared: a crash is not the user
+     * asking to disconnect, and spec §1.2 names the three sites that clear it.
+     * The started-service lifetime *is* resolved, exactly as `onRevoke` resolves
+     * it and for the same reason — a terminal publication that leaves a started
+     * service nothing will ever stop is a defect in its own right.
+     * `stopSelfResult` refuses a token a newer start has superseded, so this
+     * cannot stop a service a later connect is starting.
+     *
+     * What can reach here is bounded and every member of it owns the session: the
+     * start sequence, the `tunnelSessionWanted` collector's body (see
+     * [collectSessionIntentForMonitor] — [NetworkMonitor.start]'s registration
+     * failure rethrows deliberately), the command coordinator's consumer loop, the
+     * backoff timer, and the two launched intent clears. A measurement cannot:
+     * [LatencyRunner] catches broadly on purpose so a failed probe never publishes
+     * a tunnel failure.
+     */
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
-            // §10.4: anything escaping the start sequence must still produce a
-            // legible state. Without this the process dies mid-start and the UI
-            // sits on Connecting until it notices binder death.
-            Log.e(TAG, "start sequence crashed: ${e.javaClass.simpleName}")
-            publish(failure(FailureReason.CoreStartFailed, e.javaClass.simpleName))
+            // §5.6: the class name only, never the message — a Room or libXray
+            // error quotes the config straight back.
+            Log.e(TAG, "coroutine on the service scope crashed: ${e.javaClass.simpleName}")
+            stopTunnel(failure(FailureReason.CoreStartFailed, e.javaClass.simpleName))
+                ?.let { stopped -> stopStartedService(stopped.startId) }
         }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
@@ -2700,9 +2745,16 @@ class TunnelService : VpnService() {
      * does — the session's own id is zero once a settlement has cleared it, and
      * the token that needs resolving is the one `onStartCommand` just received.
      *
-     * Nothing is torn down here because there is nothing left to tear down: this
-     * is only reached from a terminal `Failed`, whose settlement already stopped
-     * the core, closed the TUN and cancelled the backoff.
+     * **This tears nothing down, and it does not check whether anything is left
+     * to tear down.** What makes that safe is a property of every site that
+     * publishes a terminal `Failed`, not of anything here: both settlement paths
+     * ([settleTerminalFailure], which [settleRetryableFailure] also routes
+     * through at the cap) stop the core, close the TUN and cancel the backoff
+     * before they publish, and [errorHandler] goes through [stopTunnel] for the
+     * same reason. A future publisher of `Failed` that skips that teardown makes
+     * this function strip the ongoing notification from a running tunnel — an
+     * earlier version of this KDoc asserted the teardown *had* already happened,
+     * which was false on exactly the [errorHandler] route.
      */
     private fun releaseServiceWithoutPublishing() {
         removeForegroundSafely()

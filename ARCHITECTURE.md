@@ -270,7 +270,11 @@ publishing it here would close the retained TUN and release the kill switch
 on an ordinary Wi-Fi↔cellular change. A stale advertised resolver is the
 smaller harm, and it is the harm the retained path always carried.
 
-So lever 1 is coherent across a restart **on the same terms as on a connect**,
+So lever 1 is coherent across a restart on the same terms as on a connect —
+**except on the per-app fallback path directly above**, which is the one case
+where a restart really is worse than a connect: the interface it keeps goes on
+advertising the old plan's literal, where a fresh connect with the same inputs
+would advertise `DNS_SERVER`. Everywhere else the rebuild rule closes the gap,
 no better and no worse — which for a `RAW_JSON` passthrough session still means
 levers 2 and 3 are the config author's, exactly as the paragraph above says. A
 restart neither repairs that incoherence nor widens it. Note this is verified by

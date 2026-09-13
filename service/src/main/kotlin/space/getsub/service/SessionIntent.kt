@@ -41,8 +41,10 @@ internal sealed interface ReconcileAction {
      * Give back the foreground notification and the started-service lifetime,
      * and **publish nothing**.
      *
-     * The answer for a terminal [ConnectionState.Failed], where the other two are
-     * both wrong. `Stop` publishes `Disconnected` over the reason the user needs
+     * The answer from a terminal [ConnectionState.Failed] — for every trigger but
+     * [ReconcileTrigger.NetworkLost], which returns [Nothing] from spec §2.4's
+     * early return before intent or state is read at all. Wherever it *is* the
+     * answer, the other two are both wrong: `Stop` publishes `Disconnected` over the reason the user needs
      * — the erasure [stopUnlessItWouldEraseAFailure] exists to prevent. `Nothing`
      * releases nothing, which strands a framework start's notification and start
      * token on a service that will then never stop (see that function's KDoc for
@@ -172,13 +174,13 @@ private fun stopUnlessItWouldEraseAFailure(actual: ConnectionState): ReconcileAc
  * `Reconnecting` always carries `attempt < TUN_ESTABLISH_ATTEMPT_CAP`; and only a
  * `Retryable` or `RetryableCapped` reason reaches that function at all, so the
  * terminal arm has no producer either. A prior review and a prior fix report both
- * listed the capped arm as a live "keeps `Nothing`, deliberately" case. It is not
+ * listed the capped arm as a live "keeps `Nothing`, deliberately" case; it is not
  * one, and this says so rather than leaving the next reader to re-derive it.
  *
  * They stay because this function cannot see the rule that makes them
- * unreachable: that rule lives in a `VpnService` no JVM test can drive, so
- * dropping it would fail nothing here. A reader tracing *where the retry actually
- * stops* wants [nextAttemptExceedsCap], not this.
+ * unreachable: that rule lives in a `VpnService` no JVM test can drive, so a
+ * change there would fail nothing here. A reader tracing *where the retry
+ * actually stops* wants [nextAttemptExceedsCap], not this.
  */
 private fun ConnectionState.Reconnecting.mayAttemptAgain(): Boolean =
     when (reason.retryability()) {

@@ -341,11 +341,15 @@ private fun TunnelSection(
             // Spec §7.2: the prompt's third trigger. The deep link still opens whether or not a
             // prompt is due — shouldPromptForBattery decides that, and never twice.
             //
-            // Deep-link first, prompt second, and that is the chosen order rather than an
-            // accident of line order. onAlwaysOnOpened only raises a flag in state; the system
-            // VPN screen then covers this one, so the dialog is composed behind it and the user
-            // meets it on return — after they have done the thing the prompt is about. Swapping
-            // these two would put the dialog in front of the screen the tap asked for.
+            // The order of these two statements is not load-bearing, and an earlier version of
+            // this comment claimed it was. onAlwaysOnOpened() does not raise a flag in state: it
+            // launches a coroutine that performs a PowerManager binder round trip and a Room
+            // read before it may set showBatteryPrompt, so when — and whether — the dialog
+            // appears is governed by that suspension, not by which line ran first.
+            // openVpnSettings starts the system VPN screen synchronously, and in practice covers
+            // this one well before the prompt can resolve, so the user meets the prompt on
+            // return, after doing the thing it is about. That is the experience wanted; it is
+            // what the asynchrony produces rather than something this ordering guarantees.
             actions.onAlwaysOnOpened()
             openVpnSettings(context)
         },

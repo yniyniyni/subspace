@@ -181,16 +181,16 @@ constructor(
      * this function and is refused here, in the one place that decides.
      */
     private suspend fun maybePromptForBattery(justEnabled: Boolean) {
-        // Gathering inputs for a decision that is already determined is work no outcome depends
-        // on: [shouldPromptForBattery] short-circuits on this conjunct, so with it false the
-        // PowerManager binder round trip and the Room read below are both performed and thrown
-        // away on every survival-setting toggle *off*.
+        // No early return on [justEnabled], deliberately. One was added here to skip the two
+        // reads below when the outcome is already determined, and it reinstated precisely the
+        // property `be1ee7f` removed: with it, [shouldPromptForBattery]'s first conjunct could
+        // not be false in production, so the conjunct was decoration again and
+        // `turning a survival setting off does not prompt` passed for two independent reasons —
+        // delete that conjunct and the test still passed, pinning nothing. Its cost is a
+        // PowerManager binder round trip and a Room read, performed and discarded, on a
+        // user-initiated toggle *off*; that is cheaper than a predicate whose decisive input no
+        // call site can produce.
         //
-        // This declines to gather those inputs; it does not make the decision. The predicate is
-        // still the one place that decides, still receives this value rather than a literal
-        // `true`, and BatteryPromptTest still exercises the conjunct directly — which is what
-        // keeps the call sites from drifting back to guarding themselves with `if (enabled)`.
-        if (!justEnabled) return
         // A binder round trip to PowerManager; SettingsSource does it on IO (§5.3), so this stays
         // a plain suspending call rather than each caller choosing a dispatcher.
         val ignoringOptimisations = settingsSource.isIgnoringBatteryOptimizations()

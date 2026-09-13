@@ -95,18 +95,21 @@ import java.util.concurrent.atomic.AtomicInteger
  * running already.
  *
  * The reason is [reconcile]. A terminal settlement publishes `Failed` before it
- * clears, and from `Failed` `reconcile` never starts anything: it answers
- * [ReconcileAction.Release] whatever intent says. So the `true` BootReceiver
- * wrote could not have started a session from that state in any case. What the
- * clear costs is the persisted `true` for a later start, and only when that
- * boot's own session has just failed terminally — which is what pre-gate code
- * did too.
+ * clears, and from `Failed` `reconcile` never answers [ReconcileAction.Start],
+ * whatever intent says. So the `true` BootReceiver wrote could not have started a
+ * session from that state in any case. What the clear costs is the persisted
+ * `true` for a later start, and only when that boot's own session has just failed
+ * terminally — which is what pre-gate code did too.
  *
  * Only "never starts anything" is load-bearing here, and it has held throughout.
- * The action named has not: this sentence said `Nothing`-or-`Stop` when it was
- * written, `a4e3e14` made both arms answer `Nothing`, and the third outcome made
- * both answer `Release`. Stating the property the argument needs, rather than
- * the arm that happens to deliver it, is what stops this drifting a fourth time.
+ * The arm named has not, and this is the fourth correction: the sentence said
+ * `Nothing`-or-`Stop` when it was written, `a4e3e14` made both arms answer
+ * `Nothing`, the third outcome made both answer `Release` — and `Release` was
+ * wrong too, for [ReconcileTrigger.NetworkLost], which returns `Nothing` from
+ * spec §2.4's early return before intent is read
+ * (`ReconcileTest.anUnwantedFailureSurvivesEveryTrigger` pins both halves).
+ * Naming the property the argument needs, rather than whichever arm happens to
+ * deliver it, is what stops a fifth.
  *
  * A second writer of `wanted = true` added inside `:bg` would need to go through
  * [want]; that is the only reason this is not enforceable by the type system.

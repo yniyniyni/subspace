@@ -136,10 +136,10 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
  * *before* the reconcile it enqueues is decided. Only `Start`, `Stop` and
  * `Release` resolve that token; `Nothing` is the answer when the session is live
  * and must not be disturbed, and the session's own settlement stops with
- * `activeStartId` — the older token it captured at `startTunnel`. Left diverged,
- * `stopSelfResult` is called for a superseded token, returns false, and the
- * service is left running with no notification, no fd, no core, and nothing that
- * would ever stop it.
+ * [TunnelService.activeStartId] — the older token it captured at `startTunnel`.
+ * Left diverged, `stopSelfResult` is called for a superseded token, returns
+ * false, and the service is left running with no notification, no fd, no core
+ * and nothing that would ever stop it.
  *
  * Adopting is what [TunnelService.startTunnel]'s already-active guard does for a
  * duplicate connect, for the same reason: one live session, answering for the
@@ -152,7 +152,7 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
  * @param frameworkStartId [TunnelCommandIngress.latestStartId]. Adopted only when
  *   it is genuinely newer: framework start ids ascend, so an equal or lower value
  *   means no start has arrived since this session claimed its own, and moving
- *   backwards would hand the settlement a token `stopSelfResult` may already have
+ *   backwards would hand the settlement a token `stopSelfResult` has already
  *   resolved.
  */
 internal fun adoptedStartId(
@@ -480,17 +480,17 @@ class TunnelService : VpnService() {
      * asking to disconnect, and spec §1.2 names the three sites that clear it.
      * The started-service lifetime *is* resolved, exactly as `onRevoke` resolves
      * it and for the same reason — a terminal publication that leaves a started
-     * service nothing will ever stop is a defect in its own right.
-     * `stopSelfResult` refuses a token a newer start has superseded, so this
-     * cannot stop a service a later connect is starting.
+     * service nothing will ever stop is the defect F2 is about. `stopSelfResult`
+     * refuses a token a newer start has superseded, so this cannot stop a service
+     * a later connect is starting.
      *
      * What can reach here is bounded and every member of it owns the session: the
      * start sequence, the `tunnelSessionWanted` collector's body (see
      * [collectSessionIntentForMonitor] — [NetworkMonitor.start]'s registration
      * failure rethrows deliberately), the command coordinator's consumer loop, the
      * backoff timer, and the two launched intent clears. A measurement cannot:
-     * [LatencyRunner] catches broadly on purpose so a failed probe never publishes
-     * a tunnel failure.
+     * [LatencyRunner] catches broadly on purpose so it never publishes a tunnel
+     * failure for a failed probe.
      */
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
@@ -1761,26 +1761,32 @@ class TunnelService : VpnService() {
         // the write, and called goForeground() on the way out — so a teardown during the
         // write left this coroutine to restore the connected notification over a tunnel that
         // was already down (§5.5). Nothing may be added after the `persist` lambda.
-        val settlement =
-            terminalOutcome.settleHandlingLifecycleRejection(
-                gen = gen,
-                state = connected,
-                lifecycle = { goForeground(R.string.notification_state_connected) },
-                persist = {
-                    connectionRecorder.record(rowId, connected)
-                    // Spec §2.4: the second of three cancellation sites — a
-                    // successful connect means whatever retry was pending for the
-                    // failure this replaces no longer applies. Inside `persist`,
-                    // not after it returns, for the same reason failStart's intent
-                    // clear is: only a generation that actually committed may act.
-                    cancelBackoffRetry()
-                    // Fix round 1, Finding 1: the counter the next outage should
-                    // start from zero, not from wherever this one left off.
-                    synchronized(lock) { reconnectAttempts.reset() }
-                },
-                onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
-            )
-        if (settlement != TerminalSettlement.Committed) return TunAttachOutcome.Settled
+        terminalOutcome.settleHandlingLifecycleRejection(
+            gen = gen,
+            state = connected,
+            lifecycle = { goForeground(R.string.notification_state_connected) },
+            persist = {
+                connectionRecorder.record(rowId, connected)
+                // Spec §2.4: the second of three cancellation sites — a
+                // successful connect means whatever retry was pending for the
+                // failure this replaces no longer applies. Inside `persist`,
+                // not after it returns, for the same reason failStart's intent
+                // clear is: only a generation that actually committed may act.
+                cancelBackoffRetry()
+                // Fix round 1, Finding 1: the counter the next outage should
+                // start from zero, not from wherever this one left off.
+                synchronized(lock) { reconnectAttempts.reset() }
+            },
+            onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
+        )
+        // The settlement's own outcome needs no branch here: all three leave this
+        // attempt with nothing further owed. `Committed` published `Connected`;
+        // `Superseded` means a newer generation owns the tunnel and this one must
+        // not touch it; `LifecycleRejected` has already been settled by
+        // [handleForegroundLifecycleRejection]. That is exactly what
+        // [TunAttachOutcome.Settled] says — and the `if` that stood here returned
+        // it from both branches, reading as though the call site could tell the
+        // committed case from the other two.
         return TunAttachOutcome.Settled
     }
 
@@ -2767,12 +2773,12 @@ class TunnelService : VpnService() {
      *
      * A framework start that lands on a live session is answered `Nothing` —
      * correctly: the session is up and wanted, and releasing it would strip its
-     * notification. But [TunnelCommandIngress.reconcile] has already recorded that
-     * start as the latest framework token, while the session's eventual settlement
-     * stops with [activeStartId]. See [adoptedStartId] for what that divergence
-     * costs; this is where it is closed, by moving the live session onto the newer
-     * token rather than by resolving it here. Resolving it would be
-     * `stopSelfResult` on the newest lifetime of a session that is alive and
+     * notification (W2). But [TunnelCommandIngress.reconcile] has already recorded
+     * that start as the latest framework token, while the session's eventual
+     * settlement stops with [activeStartId]. See [adoptedStartId] for what the
+     * divergence costs; this is where it is closed, by moving the live session
+     * onto the newer token rather than by resolving it here. Resolving it would
+     * be `stopSelfResult` on the newest lifetime of a session that is alive and
      * wanted.
      *
      * Unconditional rather than restricted to [ReconcileTrigger.NullIntentStart]:
@@ -2782,13 +2788,13 @@ class TunnelService : VpnService() {
      * themselves, and is a no-op whenever there is nothing newer.
      *
      * [liveSession] follows [activeStartId] for the reason [startTunnel]'s fold
-     * branch moves both together: [reapplyPerAppFromCommand] restarts from
-     * [LiveSession.startId], so leaving it behind would resume a per-app rebuild
-     * under a token the settlement no longer names. The two are moved
-     * independently rather than gated on each other because
-     * [settleRetryableFailure] nulls [liveSession] and deliberately keeps
-     * [activeStartId] — a `Reconnecting` session is exactly a case this must still
-     * adopt for.
+     * branch moves both together: `reapplyPerAppFromCommand` restarts from
+     * [LiveSession.startId], so leaving it behind would make a per-app rebuild
+     * resume under a token the settlement no longer names. It is null while a
+     * session is `Reconnecting` — [settleRetryableFailure] clears it and
+     * deliberately keeps [activeStartId] — which is exactly a case this must
+     * still adopt for, so the two are moved independently rather than gated on
+     * each other.
      */
     private fun adoptFrameworkStartId() {
         val frameworkStartId = commandIngress.latestStartId()
@@ -2816,6 +2822,25 @@ class TunnelService : VpnService() {
      * token rather than [activeStartId] for the same reason [stopTunnelAndService]
      * does — the session's own id is zero once a settlement has cleared it, and
      * the token that needs resolving is the one `onStartCommand` just received.
+     *
+     * **That token can belong to a connect which has not run yet, and it is
+     * reachable.** [TunnelCommandIngress.started] records `latestStartId` and
+     * enqueues the `Connect` under one lock, but intent is written when the
+     * coordinator *dequeues* it — so a `Reconcile` already ahead of that connect
+     * in the channel reads the pre-connect intent (`wanted = false`, after a
+     * terminal settlement), answers `Release`, and resolves the queued connect's
+     * token. The `Nothing` this arm answered before `46ff3ff` could not.
+     *
+     * The cost is bounded by who issues connects. A user-initiated one comes from
+     * `:main` through [TunnelClient.connect], and the UI that taps it is bound
+     * ([TunnelClient.bind]); a bound service survives `stopSelfResult`, so the
+     * queued `Connect` still runs and starts its own lifetime. With nothing bound
+     * it would be worse — the service could be destroyed with the `Connect` still
+     * in the channel, so the tap would do nothing and `startForegroundService`'s
+     * contract would go unanswered — and no such caller exists today: the only
+     * unbound starts are the framework's own, which carry no `ACTION_CONNECT`.
+     * Recorded rather than guarded, because a guard here would have to know what
+     * is queued behind it, and the channel does not expose that.
      *
      * **This tears nothing down, and it does not check whether anything is left
      * to tear down.** What makes that safe is a property of every site that

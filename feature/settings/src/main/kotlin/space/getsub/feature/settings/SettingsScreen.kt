@@ -340,6 +340,12 @@ private fun TunnelSection(
         onOpenVpnSettings = {
             // Spec §7.2: the prompt's third trigger. The deep link still opens whether or not a
             // prompt is due — shouldPromptForBattery decides that, and never twice.
+            //
+            // Deep-link first, prompt second, and that is the chosen order rather than an
+            // accident of line order. onAlwaysOnOpened only raises a flag in state; the system
+            // VPN screen then covers this one, so the dialog is composed behind it and the user
+            // meets it on return — after they have done the thing the prompt is about. Swapping
+            // these two would put the dialog in front of the screen the tap asked for.
             actions.onAlwaysOnOpened()
             openVpnSettings(context)
         },

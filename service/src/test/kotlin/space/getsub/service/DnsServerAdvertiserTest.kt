@@ -37,7 +37,20 @@ class DnsServerAdvertiserTest {
     //
     // A restart that keeps the interface never re-runs Builder.establish(), so
     // the TUN goes on advertising what it was built with while the core is
-    // rebuilt from current settings. These pin when that is still safe.
+    // rebuilt from current settings. These pin the *decision*: two total
+    // functions of their arguments, answering "what would this plan advertise"
+    // and "do the recorded and the next answer still agree".
+    //
+    // What they deliberately do NOT cover, stated so nobody reads them as wider
+    // than they are: the wiring that acts on that decision. The branch lives in
+    // TunnelService.restartCoreRetainingTun and the recording in attachTun, and
+    // neither is reachable from a JVM test — a VpnService.Builder cannot be
+    // constructed off-device. Delete the branch and always take the retained
+    // path, or never record the address, and every test in this file still
+    // passes. Coverage for the effect is device row W8 in
+    // docs/agent/research/2026-09-07-m8-device-verification.md, which has not
+    // been run; that row is the debt, and these tests are not a substitute for
+    // it (§10.1).
 
     private fun planAdvertising(address: String) =
         DnsPlan(

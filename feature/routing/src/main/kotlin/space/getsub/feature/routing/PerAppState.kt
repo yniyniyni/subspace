@@ -17,9 +17,11 @@ import space.getsub.core.model.PerAppMode
  *   screen believes they have chosen.
  * @param isDirty whether the draft differs from what is stored. Drives both the
  *   Save affordance and the leave-confirmation (spec §7.3).
- * @param isTunnelActive whether a tunnel is up **or coming up**, so the screen
- *   can say a save will reconnect it before the user commits rather than after.
- *   See [PerAppSource.isTunnelActive] for why `Connecting` counts.
+ * @param isTunnelActive whether a tunnel is up, or is coming up for the first
+ *   time, so the screen can say a save will reconnect it before the user commits
+ *   rather than after. `Connecting` counts; `Reconnecting` does **not**, despite
+ *   reading as "coming up" — a reapply offered mid-reconnect would do nothing.
+ *   See [PerAppSource.isTunnelActive] for both halves.
  */
 internal data class PerAppState(
     val mode: PerAppMode = PerAppMode.Off,

@@ -457,8 +457,22 @@ class TunnelService : VpnService() {
     private var tunInterface: ParcelFileDescriptor? = null
 
     /**
-     * The DNS address [tunInterface] advertises (spec §5.2, lever 1), or null
-     * when there is no interface.
+     * The **planned** DNS address recorded for [tunInterface] (spec §5.2, lever
+     * 1), or null when there is no interface.
+     *
+     * Planned, not accepted, and the difference is real: this is
+     * [advertisedTunDnsAddress]'s answer for the plan the interface was built
+     * from, and if `Builder.addDnsServer` rejected that literal then
+     * `addDnsServerOrFallback` advertised [DNS_SERVER] while this field went on
+     * naming the rejected one. So this is not a record of what the interface is
+     * doing, and a future reader must not compare it against one.
+     *
+     * The asymmetry is deliberate and safe in exactly one direction — see
+     * [advertisedTunDnsAddress], which argues it: rejection is a function of the
+     * address, so two plans resolving to the same planned address resolve to the
+     * same advertised one. [retainedTunKeepsAdvertisedDns] can therefore rebuild
+     * an interface it did not need to, and can never keep one it should have
+     * rebuilt, which is the only direction that leaks.
      *
      * One piece of state with [tunInterface], under the same [lock] and with the
      * same lifetime: written where the fd is adopted, cleared everywhere the fd

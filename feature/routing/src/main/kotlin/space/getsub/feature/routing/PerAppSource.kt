@@ -46,13 +46,18 @@ internal interface PerAppSource {
      * Whether there is a tunnel a save would disturb, so the screen can say so
      * before the user commits.
      *
-     * Deliberately wider than "connected": it mirrors the service's own
-     * `ownTunnelActive()` gate, which `reapplyPerApp` uses to decide whether a
-     * rebuild happens, and that includes every `Connecting` stage. A start
-     * sequence takes seconds (geo resolution, config validation), and a save
-     * landing in that window really does restart it — a notice that appeared
-     * only once `Connected` arrived would be silent for exactly the case the
-     * user is most likely to be surprised by.
+     * Deliberately wider than "connected": every `Connecting` stage counts. A
+     * start sequence takes seconds (geo resolution, config validation), and a
+     * save landing in that window really does restart it — a notice that
+     * appeared only once `Connected` arrived would be silent for exactly the
+     * case the user is most likely to be surprised by.
+     *
+     * It is **not** the service's `ownTunnelActive()` gate, though it was once
+     * described as mirroring it. That gate is "not `Disconnected` and not
+     * `Failed`", which includes `Reconnecting`; this excludes `Reconnecting`
+     * deliberately, because a reapply offered there would do nothing. See
+     * [BoundPerAppSource.isTunnelActive] for the argument, which is about what a
+     * reapply would accomplish rather than what interfaces are up.
      */
     val isTunnelActive: Flow<Boolean>
 

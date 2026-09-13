@@ -254,10 +254,27 @@ carrying a literal — typically the domestic resolver, precisely the address a
 changing network therefore sent every lookup to that resolver in the clear,
 proxied sites included, while a freshly connected session would have advertised
 `DNS_SERVER` and routed it to the proxy. Since `576b2fa` the retained path is
-taken only while the interface's advertised address still matches what the new
-plan would advertise; otherwise the interface is rebuilt. Lever 1 is coherent
-across restarts as well as connects — but note this is verified by reading and
-by a unit test on the decision, **not yet on hardware**.
+taken only while the *planned* address recorded for the live interface still
+matches what the new plan would advertise; otherwise the interface is rebuilt.
+That comparison is planned-against-planned and never consults what the interface
+is actually advertising — which is safe in the one direction that matters,
+because rejection of an address literal is a function of the address, so equal
+planned addresses imply equal advertised ones. The rule can therefore rebuild
+needlessly, and cannot keep an interface it should have replaced.
+
+**One exception, added once that rebuild turned out to be able to end the
+session.** If the rebuild's per-app gate yields no plan at all — allow-list mode
+with nothing selected, or an allow list whose packages have all been uninstalled
+— the old interface is kept instead. `PerAppAllowListEmpty` is terminal, and
+publishing it here would close the retained TUN and release the kill switch
+on an ordinary Wi-Fi↔cellular change. A stale advertised resolver is the
+smaller harm, and it is the harm the retained path always carried.
+
+So lever 1 is coherent across a restart **on the same terms as on a connect**,
+no better and no worse — which for a `RAW_JSON` passthrough session still means
+levers 2 and 3 are the config author's, exactly as the paragraph above says. A
+restart neither repairs that incoherence nor widens it. Note this is verified by
+reading and by a unit test on the decision, **not yet on hardware**.
 
 **The hijack is a loop hazard unless something claims the resolver's own
 traffic first.** The built-in resolver's query *to a DoU server* is itself

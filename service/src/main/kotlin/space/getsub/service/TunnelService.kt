@@ -453,36 +453,32 @@ class TunnelService : VpnService() {
      * logging never reaches logcat — and the UI sits on `Connecting` until it
      * notices binder death.
      *
-     * **It ends the session before publishing, and that is the difference
-     * between a legible state and a false one.** This was a bare `publish`:
-     * ungated by generation, stopping no core, closing no fd, cancelling no
-     * backoff and removing no notification. A crash landing after `Connected`
-     * therefore left a terminal `Failed` standing over a live tunnel — §5.5's
-     * lying UI — and everything downstream reads `Failed` as a session that has
-     * already settled down: `reconcile` answers [ReconcileAction.Release] for it,
-     * and [releaseServiceWithoutPublishing] then takes the ongoing notification
-     * off a `VpnService` that was still carrying traffic (§9 requires one for the
-     * life of the tunnel).
+     * **It publishes and does not tear down, and that is deliberate.** An earlier
+     * version routed this through [stopTunnel] to make the published `Failed`
+     * true. That was worse than the problem it solved:
+     * [FailureReason.CoreStartFailed] is `Retryable` (§2.2), and every other path
+     * in this service settles it as `Reconnecting` with the TUN retained under
+     * fail-closed — so tearing down here closed the fd, released §6.1's kill
+     * switch and armed no retry, for a reason the rest of the service recovers
+     * from. [stopTunnel] also defaults `expectedGeneration` to null, so it ended
+     * whichever session happened to be current rather than the one that crashed.
      *
-     * [stopTunnel] is what makes the published state true. It supersedes the
-     * generation, closes the fd, stops the core and tun2socks, cancels the retry,
-     * removes the foreground notification and publishes the state it is handed —
-     * the same teardown `onRevoke` and `onDestroy` already use, not a third one.
+     * What that leaves is a real gap, recorded rather than papered over: a crash
+     * landing after `Connected` leaves a terminal `Failed` standing over a live
+     * tunnel — §5.5's lying UI. Closing it properly means settling *retryably*
+     * from a non-suspend handler that does not know the failing generation, which
+     * is a design worth making with a device in the loop rather than inferring at
+     * a milestone's tail. M8.5 owns it.
      *
-     * **Safe to call from here.** A `CoroutineExceptionHandler` runs on the
-     * failing coroutine's thread after that coroutine has unwound, so it holds
-     * nothing of its own that [lock] could deadlock against, and every coroutine
-     * on [scope] is dispatched on [Dispatchers.IO] — so `stopBlocking()` blocks a
-     * pool thread and never the main one (§5.3). [onDestroy] already calls the
-     * same function on the main thread.
+     * The one consequence that could not wait is closed at its own site instead:
+     * everything downstream reads `Failed` as a session that has already settled,
+     * so `reconcile` answers [ReconcileAction.Release] for it and
+     * [releaseServiceWithoutPublishing] would take the ongoing notification off a
+     * `VpnService` still carrying traffic (§9 requires one for the life of the
+     * tunnel). That function refuses while a TUN is attached.
      *
      * Session intent is deliberately **not** cleared: a crash is not the user
      * asking to disconnect, and spec §1.2 names the three sites that clear it.
-     * The started-service lifetime *is* resolved, exactly as `onRevoke` resolves
-     * it and for the same reason — a terminal publication that leaves a started
-     * service nothing will ever stop is the defect F2 is about. `stopSelfResult`
-     * refuses a token a newer start has superseded, so this cannot stop a service
-     * a later connect is starting.
      *
      * What can reach here is bounded and every member of it owns the session: the
      * start sequence, the `tunnelSessionWanted` collector's body (see
@@ -497,8 +493,7 @@ class TunnelService : VpnService() {
             // §5.6: the class name only, never the message — a Room or libXray
             // error quotes the config straight back.
             Log.e(TAG, "coroutine on the service scope crashed: ${e.javaClass.simpleName}")
-            stopTunnel(failure(FailureReason.CoreStartFailed, e.javaClass.simpleName))
-                ?.let { stopped -> stopStartedService(stopped.startId) }
+            publish(failure(FailureReason.CoreStartFailed, e.javaClass.simpleName))
         }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
@@ -2842,18 +2837,25 @@ class TunnelService : VpnService() {
      * Recorded rather than guarded, because a guard here would have to know what
      * is queued behind it, and the channel does not expose that.
      *
-     * **This tears nothing down, and it does not check whether anything is left
-     * to tear down.** What makes that safe is a property of every site that
-     * publishes a terminal `Failed`, not of anything here: both settlement paths
-     * ([settleTerminalFailure], which [settleRetryableFailure] also routes
-     * through at the cap) stop the core, close the TUN and cancel the backoff
-     * before they publish, and [errorHandler] goes through [stopTunnel] for the
-     * same reason. A future publisher of `Failed` that skips that teardown makes
-     * this function strip the ongoing notification from a running tunnel — an
-     * earlier version of this KDoc asserted the teardown *had* already happened,
-     * which was false on exactly the [errorHandler] route.
+     * **This refuses while a TUN is attached, and that guard is load-bearing.**
+     * Both settlement paths ([settleTerminalFailure], which
+     * [settleRetryableFailure] also routes through at the cap) stop the core,
+     * close the TUN and cancel the backoff before they publish, so on those arms
+     * the check simply passes. [errorHandler] does not: it publishes a terminal
+     * `Failed` over a session it deliberately leaves running — see its KDoc,
+     * `CoreStartFailed` is `Retryable` and tearing down there released §6.1's
+     * kill switch. Without this guard, a framework start arriving after such a
+     * crash would take the ongoing notification off a `VpnService` that is still
+     * carrying traffic, which §9 requires for the life of the tunnel.
+     *
+     * It is a property check rather than a claim about callers, and that is the
+     * point. An earlier version of this KDoc asserted the teardown *had* already
+     * happened; it was false on exactly the [errorHandler] route, and the next
+     * publisher of a `Failed` that skips teardown would have falsified it again.
+     * Checking the fd cannot go stale that way.
      */
     private fun releaseServiceWithoutPublishing() {
+        if (synchronized(lock) { tunInterface } != null) return
         removeForegroundSafely()
         stopStartedService(commandIngress.latestStartId())
     }

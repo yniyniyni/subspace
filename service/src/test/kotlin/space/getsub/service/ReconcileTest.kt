@@ -3,6 +3,7 @@
 package space.getsub.service
 
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.Test
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
@@ -110,13 +111,19 @@ class ReconcileTest {
         reconcile(wanted, reconnecting, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Start(7L)
     }
 
-    /** A terminal failure is not retried even while intent is still being cleared. */
+    /**
+     * A terminal failure is not retried even while intent is still being cleared.
+     *
+     * `Release` rather than `Nothing`: not retried, and not published over either,
+     * but the foreground notification and start token a framework start may have
+     * just armed are handed back. See [ReconcileAction.Release].
+     */
     @Test
     fun aTerminalFailureIsNotRetried() {
         val rejected = failure(FailureReason.ConfigRejected, "core refused it")
 
-        reconcile(wanted, rejected, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Nothing
-        reconcile(wanted, rejected, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Nothing
+        reconcile(wanted, rejected, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Release
+        reconcile(wanted, rejected, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Release
     }
 
     /** Spec §2.3's cap: TunEstablishFailed retries, but not forever. */
@@ -141,16 +148,27 @@ class ReconcileTest {
     fun anUnwantedRevocationKeepsItsReason() {
         val revoked = failure(FailureReason.Revoked, "redacted")
 
-        reconcile(unwanted, revoked, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Nothing
+        reconcile(unwanted, revoked, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Release
     }
 
-    /** Whichever trigger arrives after the clear, the failure survives it. */
+    /**
+     * Whichever trigger arrives after the clear, the failure survives it — that
+     * is, no trigger answers `Stop`, which is the action that would publish
+     * `Disconnected` over the reason.
+     *
+     * `NetworkLost` is the one that answers `Nothing`, because §2.4's no-network
+     * rule returns before the intent is even read; the rest release. Both are
+     * non-publishing, which is what "survives" means here.
+     */
     @Test
     fun anUnwantedFailureSurvivesEveryTrigger() {
         val rejected = failure(FailureReason.ConfigRejected, "redacted")
 
         ReconcileTrigger.entries.forEach { trigger ->
-            reconcile(unwanted, rejected, trigger) shouldBe ReconcileAction.Nothing
+            val expected =
+                if (trigger == ReconcileTrigger.NetworkLost) ReconcileAction.Nothing else ReconcileAction.Release
+
+            reconcile(unwanted, rejected, trigger) shouldBe expected
         }
     }
 
@@ -160,7 +178,53 @@ class ReconcileTest {
         val orphaned = SessionIntent(wanted = true, profileRowId = null)
         val rejected = failure(FailureReason.ConfigRejected, "redacted")
 
-        reconcile(orphaned, rejected, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Nothing
+        reconcile(orphaned, rejected, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Release
+    }
+
+    // ── A failure must be released, not merely declined ─────────────────────
+    //
+    // `Nothing` releases nothing. Every non-ACTION_CONNECT start puts the service
+    // back into the foreground and records a fresh start id before the reconcile
+    // runs, so answering `Nothing` from a settled-down `Failed` left a foreground
+    // service over a dead session with an unresolved start token and nothing that
+    // would ever stop it — the service outlives its own `stopSelfResult` while
+    // `:main` is bound. `Stop` is not the answer either: it publishes
+    // `Disconnected` over the reason. Hence the third action.
+
+    /**
+     * The exact strand: a terminal failure settles and clears intent, then a boot,
+     * always-on or sticky start arrives at the still-running service.
+     *
+     * Revert either `Failed` arm to `Nothing` and this is the test that fails.
+     */
+    @Test
+    fun aNullIntentStartOnAnUnwantedFailureReleasesTheService() {
+        val rejected = failure(FailureReason.ConfigRejected, "redacted")
+
+        reconcile(unwanted, rejected, ReconcileTrigger.NullIntentStart) shouldBe ReconcileAction.Release
+    }
+
+    /** The same start arriving before the intent clear has landed. */
+    @Test
+    fun aNullIntentStartOnAWantedFailureReleasesTheService() {
+        val rejected = failure(FailureReason.ConfigRejected, "redacted")
+
+        reconcile(wanted, rejected, ReconcileTrigger.NullIntentStart) shouldBe ReconcileAction.Release
+    }
+
+    /**
+     * Releasing is not stopping, and the difference is the whole reason this
+     * action exists: `Stop` publishes `Disconnected` over the reason the user
+     * needs. Nothing reachable from a `Failed` state may answer it.
+     */
+    @Test
+    fun noTriggerEverStopsAFailure() {
+        val revoked = failure(FailureReason.Revoked, "redacted")
+
+        ReconcileTrigger.entries.forEach { trigger ->
+            reconcile(wanted, revoked, trigger) shouldNotBe ReconcileAction.Stop
+            reconcile(unwanted, revoked, trigger) shouldNotBe ReconcileAction.Stop
+        }
     }
 
     /**

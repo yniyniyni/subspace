@@ -37,6 +37,23 @@ internal sealed interface ReconcileAction {
 
     data object Stop : ReconcileAction
 
+    /**
+     * Give back the foreground notification and the started-service lifetime,
+     * and **publish nothing**.
+     *
+     * The answer for a terminal [ConnectionState.Failed], where the other two are
+     * both wrong. `Stop` publishes `Disconnected` over the reason the user needs
+     * — the erasure [stopUnlessItWouldEraseAFailure] exists to prevent. `Nothing`
+     * releases nothing, which strands a framework start's notification and start
+     * token on a service that will then never stop (see that function's KDoc for
+     * how a start arrives at a settled-down session in the first place).
+     *
+     * Whoever performs this must not publish: `Failed` surviving it is the
+     * property `ReconcileTest` pins, and the only reason this member exists
+     * rather than reusing `Stop`.
+     */
+    data object Release : ReconcileAction
+
     data object Nothing : ReconcileAction
 }
 
@@ -81,9 +98,10 @@ internal fun reconcile(
             if (actual.mayAttemptAgain()) ReconcileAction.Start(rowId) else ReconcileAction.Nothing
 
         // Terminal by construction: intent is cleared alongside publishing this,
-        // so reaching here means a trigger raced the clear. Do nothing rather
-        // than retry a config the core has already refused.
-        is ConnectionState.Failed -> ReconcileAction.Nothing
+        // so reaching here means a trigger raced the clear. Not retried — the
+        // core has already refused this config — and not stopped either, which
+        // would publish over the reason. Released: see [ReconcileAction.Release].
+        is ConnectionState.Failed -> ReconcileAction.Release
     }
 }
 
@@ -103,9 +121,20 @@ internal fun reconcile(
  * another VPN app took the route; the observation went unexplained for a day
  * because the row's other assertion — intent cleared — passed.
  *
- * Nothing is lost by declining: a terminal settlement has already run its own
- * teardown and called `stopStartedService`, so there is no core, no TUN and no
- * foreground notification left for a `Stop` to clean up.
+ * **Declining is not free, and this KDoc used to claim it was.** The claim was
+ * that a terminal settlement has already run its own teardown and called
+ * `stopStartedService`, so there is no core, no TUN and no foreground
+ * notification left for a `Stop` to clean up. That is true of the settlement's
+ * *own* notification and start token. It stopped being true of a framework start
+ * that arrives afterwards: `TunnelService.onStartCommand` puts the service back
+ * into the foreground and records a fresh start id **before** this decision is
+ * reached, so answering `Nothing` here left a foreground service showing a
+ * notification over a dead session, with an unresolved start token and nothing
+ * that would ever stop it. The service survives its own `stopSelfResult` while
+ * `:main` is bound, so this is not hypothetical.
+ *
+ * [ReconcileAction.Release] is the third answer that was missing: hand both back
+ * without publishing over the reason.
  *
  * **[ConnectionState.Disconnected] still stops, and that is load-bearing** —
  * do not fold it in with `Failed` as "already down". Spec §1.3 answers a sticky
@@ -120,7 +149,7 @@ internal fun reconcile(
  */
 private fun stopUnlessItWouldEraseAFailure(actual: ConnectionState): ReconcileAction =
     when (actual) {
-        is ConnectionState.Failed -> ReconcileAction.Nothing
+        is ConnectionState.Failed -> ReconcileAction.Release
 
         is ConnectionState.Connecting,
         is ConnectionState.Connected,

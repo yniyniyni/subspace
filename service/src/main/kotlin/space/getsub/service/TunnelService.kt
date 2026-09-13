@@ -750,8 +750,28 @@ class TunnelService : VpnService() {
                 // Answered here, before the queue and before any Room read, because
                 // the slow-cold-boot case cannot be fixed per-branch: the contract
                 // can expire while the reconcile is still waiting on the database.
-                // Whatever the reconcile then decides, stopTunnel's
-                // removeForegroundSafely takes the notification back down.
+                //
+                // **The text is chosen from the current state, never a fixed
+                // "Connecting…".** TunnelNotification.ID is one shared id, so this
+                // call does not add a notification — it overwrites whatever the
+                // live session is showing. An earlier revision passed
+                // notification_connecting unconditionally and claimed the reconcile
+                // would put it back; that is false on every arm which answers
+                // Nothing, and the worst case is the one §6.4 rests on: a
+                // fail-closed Reconnecting session showing "traffic is blocked"
+                // becomes a permanent "Connecting…" over a session that is still
+                // holding traffic. §6.4 defends defaulting fail-closed *on* entirely
+                // on §6.3's notification telling the truth.
+                //
+                // Re-asserting the current state's own text instead is what makes
+                // this call safe on a live session, and answering the contract
+                // unconditionally is what keeps it safe on a dead one: a boot start
+                // can reach a service that always-on already brought up (the device
+                // record measured BOOT_COMPLETED arriving ~4m23s after boot), and
+                // whether the platform re-arms its ~10 s timeout for a second
+                // startForegroundService on an already-foreground service is not
+                // documented anywhere in docs/agent/research/. §10.5: this does not
+                // guess — it answers the contract either way.
                 //
                 // §14.1/§9: systemExempted is not among the six types Android 15
                 // forbids a BOOT_COMPLETED receiver to launch (dataSync, camera,
@@ -761,9 +781,9 @@ class TunnelService : VpnService() {
                 // docs/agent/research/2026-09-07-always-on-and-boot-fgs.md, Q3.
                 //
                 // A rejection is logged and not fatal: the reconcile below may well
-                // be about to stop the service anyway, and failing the start here
-                // would turn a recoverable boot into a crash.
-                if (!goForeground(R.string.notification_connecting)) {
+                // be about to stop or release the service anyway, and failing the
+                // start here would turn a recoverable boot into a crash.
+                if (!goForeground(entryForegroundText())) {
                     Log.w(TAG, "foreground contract not answered on a reconcile start")
                 }
                 commandIngress.reconcile(ReconcileTrigger.NullIntentStart, startId)
@@ -2167,6 +2187,52 @@ class TunnelService : VpnService() {
             false
         }
 
+    /**
+     * The notification text a framework start should assert, given what this
+     * service is currently doing (§6.3).
+     *
+     * [onStartCommand] must answer `startForegroundService`'s contract on a start
+     * that carries no connect request, and [TunnelNotification.ID] is a single
+     * shared id — so that call *replaces* the live session's text rather than
+     * adding to it. Returning the current state's own text is what stops an
+     * unrelated always-on or boot start falsifying it.
+     *
+     * `Reconnecting` reproduces [settleRetryableFailure]'s rule rather than
+     * restating the setting: it reports the **observed** TUN, because
+     * `shouldRetainTun` returning true and an fd actually being held are not the
+     * same fact — an attempt that failed before adopting one retains nothing
+     * however the setting reads. [tunInterface] is sampled in the same lock region
+     * as [currentState], so the pair cannot disagree.
+     *
+     * `Failed` gets the connecting text, which is momentarily untrue: it is the
+     * one state where the reconcile that follows answers
+     * [ReconcileAction.Release] and takes the notification straight back down.
+     * Publishing a truthful text for it would mean a "failed" string that exists
+     * only to be removed milliseconds later.
+     *
+     * Exhaustive with no `else`, for spec §2.2's reason: a state added later must
+     * not inherit whichever text happens to catch it.
+     */
+    private fun entryForegroundText(): Int =
+        synchronized(lock) {
+            when (currentState) {
+                is ConnectionState.Connected -> R.string.notification_state_connected
+
+                is ConnectionState.Reconnecting ->
+                    if (tunInterface != null) {
+                        R.string.notification_state_reconnecting_blocked
+                    } else {
+                        R.string.notification_state_reconnecting_open
+                    }
+
+                is ConnectionState.Connecting,
+                ConnectionState.Disconnecting,
+                ConnectionState.Disconnected,
+                is ConnectionState.Failed,
+                -> R.string.notification_connecting
+            }
+        }
+
     @Suppress("TooGenericExceptionCaught") // RuntimeException is the Android framework boundary here.
     private fun goForeground(textRes: Int): Boolean =
         try {
@@ -2581,8 +2647,34 @@ class TunnelService : VpnService() {
             is ReconcileAction.Start -> startFromRow(action.profileRowId, intentToken)
             is ReconcileAction.Restart -> restartCoreRetainingTun(action.profileRowId, intentToken)
             ReconcileAction.Stop -> stopTunnelAndService()
+            ReconcileAction.Release -> releaseServiceWithoutPublishing()
             ReconcileAction.Nothing -> Unit
         }
+    }
+
+    /**
+     * [ReconcileAction.Release]'s effect: give back the foreground notification
+     * and the started-service lifetime, and **publish nothing**.
+     *
+     * The deliberate absence of a `publish` call is the whole point — see
+     * [ReconcileAction.Release]. `currentState` keeps whatever terminal `Failed`
+     * it holds, so the reason survives for a `:main` that binds and reads it.
+     *
+     * Both calls are idempotent, which is what makes this safe on the arms where
+     * the terminal settlement has already run them: `stopForeground` on a service
+     * that is not in the foreground does nothing, and `stopSelfResult` for an
+     * already-resolved token simply reports it. Uses [commandIngress]'s framework
+     * token rather than [activeStartId] for the same reason [stopTunnelAndService]
+     * does — the session's own id is zero once a settlement has cleared it, and
+     * the token that needs resolving is the one `onStartCommand` just received.
+     *
+     * Nothing is torn down here because there is nothing left to tear down: this
+     * is only reached from a terminal `Failed`, whose settlement already stopped
+     * the core, closed the TUN and cancelled the backoff.
+     */
+    private fun releaseServiceWithoutPublishing() {
+        removeForegroundSafely()
+        stopStartedService(commandIngress.latestStartId())
     }
 
     /** [reconcileNow] reads the same state holder [publishIfCurrent] writes — no second copy. */

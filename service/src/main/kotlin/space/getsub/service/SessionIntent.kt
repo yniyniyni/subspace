@@ -94,6 +94,9 @@ internal fun reconcile(
         is ConnectionState.Connected ->
             if (trigger == ReconcileTrigger.NetworkChanged) ReconcileAction.Restart(rowId) else ReconcileAction.Nothing
 
+        // [mayAttemptAgain] is always true for a `Reconnecting` this app
+        // published — see there. The `Nothing` this can yield is a guard, not a
+        // live arm, and is deliberately kept.
         is ConnectionState.Reconnecting ->
             if (actual.mayAttemptAgain()) ReconcileAction.Start(rowId) else ReconcileAction.Nothing
 
@@ -159,7 +162,24 @@ private fun stopUnlessItWouldEraseAFailure(actual: ConnectionState): ReconcileAc
         -> ReconcileAction.Stop
     }
 
-/** Spec §2.3: the capped reason is the only one with a ceiling. */
+/**
+ * Spec §2.3: the capped reason is the only one with a ceiling.
+ *
+ * **Neither `false` answer is reachable from a `Reconnecting` this app
+ * published, and both are kept on purpose.** `TunnelService.settleRetryableFailure`
+ * consults [nextAttemptExceedsCap] *before* publishing and settles as terminal
+ * instead when the next attempt would reach the cap, so a published
+ * `Reconnecting` always carries `attempt < TUN_ESTABLISH_ATTEMPT_CAP`; and only a
+ * `Retryable` or `RetryableCapped` reason reaches that function at all, so the
+ * terminal arm has no producer either. A prior review and a prior fix report both
+ * listed the capped arm as a live "keeps `Nothing`, deliberately" case. It is not
+ * one, and this says so rather than leaving the next reader to re-derive it.
+ *
+ * They stay because this function cannot see the rule that makes them
+ * unreachable: that rule lives in a `VpnService` no JVM test can drive, so
+ * dropping it would fail nothing here. A reader tracing *where the retry actually
+ * stops* wants [nextAttemptExceedsCap], not this.
+ */
 private fun ConnectionState.Reconnecting.mayAttemptAgain(): Boolean =
     when (reason.retryability()) {
         Retryability.Retryable -> true

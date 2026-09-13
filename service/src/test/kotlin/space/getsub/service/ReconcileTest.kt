@@ -126,7 +126,16 @@ class ReconcileTest {
         reconcile(wanted, rejected, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Release
     }
 
-    /** Spec §2.3's cap: TunEstablishFailed retries, but not forever. */
+    /**
+     * Spec §2.3's cap: TunEstablishFailed retries, but not forever.
+     *
+     * The at-cap half pins an input production cannot produce, and that is stated here
+     * rather than left to be rediscovered: `settleRetryableFailure` asks
+     * `nextAttemptExceedsCap` *before* publishing and settles as terminal instead, so every
+     * published `Reconnecting` carries `attempt < TUN_ESTABLISH_ATTEMPT_CAP`. This pins the
+     * second line of defence — if that conversion is ever removed, `reconcile` still refuses
+     * to spin — and is not evidence that the arm is live.
+     */
     @Test
     fun tunEstablishFailedStopsRetryingAtTheCap() {
         val underCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 2)

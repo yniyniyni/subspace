@@ -127,6 +127,39 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
     }
 }
 
+/**
+ * Which started-service token a live session should answer for, once a framework
+ * start has landed on it and been answered with [ReconcileAction.Nothing].
+ *
+ * Spec §1.3/§4: every start that carries no `ACTION_CONNECT` — always-on, boot,
+ * a sticky restart — records a fresh `latestStartId` in [TunnelCommandIngress]
+ * *before* the reconcile it enqueues is decided. Only `Start`, `Stop` and
+ * `Release` resolve that token; `Nothing` is the answer when the session is live
+ * and must not be disturbed, and the session's own settlement stops with
+ * `activeStartId` — the older token it captured at `startTunnel`. Left diverged,
+ * `stopSelfResult` is called for a superseded token, returns false, and the
+ * service is left running with no notification, no fd, no core, and nothing that
+ * would ever stop it.
+ *
+ * Adopting is what [TunnelService.startTunnel]'s already-active guard does for a
+ * duplicate connect, for the same reason: one live session, answering for the
+ * newest accepted start.
+ *
+ * @param sessionStartId the live session's own token, or 0 when no session holds
+ *   one — in which case nothing is adopted, because a token written against no
+ *   session would be resolved by whichever teardown ran next for a lifetime it
+ *   never belonged to.
+ * @param frameworkStartId [TunnelCommandIngress.latestStartId]. Adopted only when
+ *   it is genuinely newer: framework start ids ascend, so an equal or lower value
+ *   means no start has arrived since this session claimed its own, and moving
+ *   backwards would hand the settlement a token `stopSelfResult` may already have
+ *   resolved.
+ */
+internal fun adoptedStartId(
+    sessionStartId: Int,
+    frameworkStartId: Int,
+): Int = if (sessionStartId != 0 && frameworkStartId > sessionStartId) frameworkStartId else sessionStartId
+
 /** [passthroughPlanFor]'s answer: what a passthrough compose call should do about routing/DNS. */
 internal data class PassthroughPlan(
     /** Spec §4.3: what `xray.location.asset` must name — see [passthroughPlanFor]. */
@@ -2725,7 +2758,46 @@ class TunnelService : VpnService() {
             is ReconcileAction.Restart -> restartCoreRetainingTun(action.profileRowId, intentToken)
             ReconcileAction.Stop -> stopTunnelAndService()
             ReconcileAction.Release -> releaseServiceWithoutPublishing()
-            ReconcileAction.Nothing -> Unit
+            ReconcileAction.Nothing -> adoptFrameworkStartId()
+        }
+    }
+
+    /**
+     * [ReconcileAction.Nothing]'s effect, which is not nothing.
+     *
+     * A framework start that lands on a live session is answered `Nothing` —
+     * correctly: the session is up and wanted, and releasing it would strip its
+     * notification. But [TunnelCommandIngress.reconcile] has already recorded that
+     * start as the latest framework token, while the session's eventual settlement
+     * stops with [activeStartId]. See [adoptedStartId] for what that divergence
+     * costs; this is where it is closed, by moving the live session onto the newer
+     * token rather than by resolving it here. Resolving it would be
+     * `stopSelfResult` on the newest lifetime of a session that is alive and
+     * wanted.
+     *
+     * Unconditional rather than restricted to [ReconcileTrigger.NullIntentStart]:
+     * a framework start can arrive after a `NetworkChanged` reconcile is enqueued
+     * and before it is dequeued, so the trigger does not identify which reconciles
+     * have a newer token to adopt. [adoptedStartId] answers that from the tokens
+     * themselves, and is a no-op whenever there is nothing newer.
+     *
+     * [liveSession] follows [activeStartId] for the reason [startTunnel]'s fold
+     * branch moves both together: [reapplyPerAppFromCommand] restarts from
+     * [LiveSession.startId], so leaving it behind would resume a per-app rebuild
+     * under a token the settlement no longer names. The two are moved
+     * independently rather than gated on each other because
+     * [settleRetryableFailure] nulls [liveSession] and deliberately keeps
+     * [activeStartId] — a `Reconnecting` session is exactly a case this must still
+     * adopt for.
+     */
+    private fun adoptFrameworkStartId() {
+        val frameworkStartId = commandIngress.latestStartId()
+        synchronized(lock) {
+            val adopted = adoptedStartId(sessionStartId = activeStartId, frameworkStartId = frameworkStartId)
+            if (adopted != activeStartId) {
+                activeStartId = adopted
+                liveSession = liveSession?.copy(startId = adopted)
+            }
         }
     }
 

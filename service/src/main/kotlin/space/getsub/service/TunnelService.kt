@@ -1004,7 +1004,23 @@ class TunnelService : VpnService() {
             launchStartup = {
                 scope.launch {
                     val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
-                    attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)
+                    when (val outcome = attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)) {
+                        TunAttachOutcome.Settled -> Unit
+                        // §8's refusal is published *here*, not inside
+                        // [attachTun], and this is the call site that makes it
+                        // the right answer: a fresh connect with nothing left to
+                        // allow is the terminal, user-actionable failure it has
+                        // always been. Nothing about this path changes — the same
+                        // reason, from the same core-stopping helper, as before.
+                        is TunAttachOutcome.NoPerAppPlan ->
+                            failAfterCore(
+                                gen,
+                                started.xray,
+                                FailureReason.PerAppAllowListEmpty,
+                                outcome.detail,
+                                rowId,
+                            )
+                    }
                 }
             },
         )
@@ -1310,6 +1326,50 @@ class TunnelService : VpnService() {
 
         /** [failStart] has already run — [attachTun] must return without doing anything else. */
         data object Failed : PerAppGateResult
+
+        /**
+         * §8 yielded no plan to build with, and **nothing has been published or
+         * stopped**.
+         *
+         * Deliberately not a [Failed]: which failure this is — or whether it is a
+         * failure at all — depends on who asked. A fresh connect publishes
+         * [FailureReason.PerAppAllowListEmpty] for it; a rebuild keeps the
+         * interface it already has. See [TunAttachOutcome.NoPerAppPlan].
+         */
+        data class NoPlan(val detail: String) : PerAppGateResult
+    }
+
+    /**
+     * How [attachTun] ended, for the one question its two callers answer
+     * differently.
+     *
+     * [attachTun] publishes every failure it can name on its own. The single
+     * exception is §8's gate: the same condition is a terminal, user-visible
+     * refusal on a fresh connect and a *non-event* on a network-change rebuild,
+     * which must keep running over the interface it already has rather than end
+     * the session. Returning that one case instead of publishing it is what lets
+     * each caller decide, without creating a second code path that can publish a
+     * failure.
+     */
+    private sealed interface TunAttachOutcome {
+        /**
+         * This attempt is over and nothing is owed: it committed `Connected`, it
+         * was superseded, or it published its own failure through [failStart].
+         */
+        data object Settled : TunAttachOutcome
+
+        /**
+         * §8 produced no usable plan. **Nothing was published, nothing was
+         * stopped, and no interface was established** — the core [startCore] left
+         * running is still running, and [tunInterface] is untouched.
+         *
+         * Reached two ways, and neither is answerable before the attempt starts:
+         * allow-list mode with nothing selected ([builderPlan] returns null), and
+         * an allow list whose every package has since been uninstalled, which
+         * only a real `VpnService.Builder` discovers
+         * ([TunResult.AllowListEmptied]).
+         */
+        data class NoPerAppPlan(val detail: String) : TunAttachOutcome
     }
 
     /**
@@ -1345,14 +1405,10 @@ class TunnelService : VpnService() {
             }
         val plan = builderPlan(resolution)
         return if (plan == null) {
-            failAfterCore(
-                gen,
-                xray,
-                FailureReason.PerAppAllowListEmpty,
-                "allow-list mode with no application selected",
-                rowId,
-            )
-            PerAppGateResult.Failed
+            // Returned rather than published: on a rebuild this must not end the
+            // session — see [TunAttachOutcome.NoPerAppPlan]. The core is left
+            // running on purpose, because the rebuild goes on to use it.
+            PerAppGateResult.NoPlan("allow-list mode with no application selected")
         } else {
             PerAppGateResult.Proceed(plan)
         }
@@ -1373,12 +1429,28 @@ class TunnelService : VpnService() {
         failStart(gen, reason, IllegalStateException(detail), rowId)
     }
 
+    /** How [establishOrFail] ended. Mirrors [TunAttachOutcome]'s split, one step lower. */
+    private sealed interface EstablishOutcome {
+        data class Established(val fd: ParcelFileDescriptor) : EstablishOutcome
+
+        /** [failStart] has already run. */
+        data object Settled : EstablishOutcome
+
+        /**
+         * The allow list emptied out at the builder. Nothing published, and **no
+         * fd exists** — [establishTun] returns this before it calls
+         * `Builder.establish()`, so there is nothing here for §5.4 to close.
+         */
+        data class NoPerAppPlan(val detail: String) : EstablishOutcome
+    }
+
     /**
-     * [establishTun] plus its two §10.4 failures, kept out of [attachTun] so that
+     * [establishTun] plus its §10.4 failure, kept out of [attachTun] so that
      * function stays under detekt's length threshold.
      *
-     * @return null when [failStart] has already run. There is no third outcome
-     *   to conflate, so a nullable fd says exactly what a sealed type would.
+     * [TunResult.AllowListEmptied] is deliberately **not** published here: it is
+     * §8's gate arriving one step later than [resolvePerApp]'s, and it is the
+     * same non-event on a rebuild. See [TunAttachOutcome.NoPerAppPlan].
      */
     private suspend fun establishOrFail(
         gen: Int,
@@ -1386,24 +1458,17 @@ class TunnelService : VpnService() {
         plan: BuilderPlan,
         dnsPlan: DnsPlan?,
         rowId: Long,
-    ): ParcelFileDescriptor? =
+    ): EstablishOutcome =
         when (val result = establishTun(plan, dnsPlan)) {
-            is TunResult.Established -> result.fd
+            is TunResult.Established -> EstablishOutcome.Established(result.fd)
             // §10.4: the same reason an empty selection gets, because after the
-            // skipping there is genuinely no application left to allow.
-            TunResult.AllowListEmptied -> {
-                failAfterCore(
-                    gen,
-                    xray,
-                    FailureReason.PerAppAllowListEmpty,
-                    "every allow-listed application is no longer installed",
-                    rowId,
-                )
-                null
-            }
+            // skipping there is genuinely no application left to allow — but
+            // whether that is fatal is the caller's call, not this function's.
+            TunResult.AllowListEmptied ->
+                EstablishOutcome.NoPerAppPlan("every allow-listed application is no longer installed")
             TunResult.Failed -> {
                 failAfterCore(gen, xray, FailureReason.TunEstablishFailed, "establish() returned null", rowId)
-                null
+                EstablishOutcome.Settled
             }
         }
 
@@ -1417,6 +1482,19 @@ class TunnelService : VpnService() {
      * point the failure policy [failStart] reaches owns its lifetime, which is
      * what lets §6.1's kill switch retain it. See the `Tun2Socks.start` failure
      * block below for the exactly-once argument.
+     *
+     * §5.4 across the [TunAttachOutcome.NoPerAppPlan] returns specifically:
+     * **neither of them has established anything.** The first happens before
+     * `Builder.establish()` is reached at all; the second happens inside
+     * [establishTun], which returns [TunResult.AllowListEmptied] *before* its own
+     * `establish()` call. So no fd exists to close on either, and [tunInterface]
+     * is whatever it already was — closed later by exactly the sites that closed
+     * it before: the connect caller's [failStart] settlement, or, on a rebuild,
+     * whichever settlement or [stopTunnel] ends the session that kept it.
+     *
+     * @return [TunAttachOutcome.NoPerAppPlan] when §8 yielded no plan, in which
+     *   case **this function has published nothing and stopped nothing** and the
+     *   caller owes a decision; [TunAttachOutcome.Settled] otherwise.
      */
     // Same reasoning as startCore: each early return is a distinct §10.4 failure
     // or a supersede check, and collapsing them would hide which one fired.
@@ -1432,12 +1510,15 @@ class TunnelService : VpnService() {
         ports: StartedPorts,
         dnsPlan: DnsPlan?,
         rowId: Long,
-    ) {
-        if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) return
+    ): TunAttachOutcome {
+        if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.EstablishingTun))) {
+            return TunAttachOutcome.Settled
+        }
         val plan =
             when (val gate = resolvePerApp(gen, xray, rowId)) {
                 is PerAppGateResult.Proceed -> gate.plan
-                PerAppGateResult.Failed -> return
+                PerAppGateResult.Failed -> return TunAttachOutcome.Settled
+                is PerAppGateResult.NoPlan -> return TunAttachOutcome.NoPerAppPlan(gate.detail)
             }
         // Spec §5.2, read *before* establish(): sampling after it means asking
         // the framework which network is default at the moment we are adding one,
@@ -1453,13 +1534,18 @@ class TunnelService : VpnService() {
         // impossible — an earlier draft of this comment said the fresher value
         // could not be lost, which was wrong.
         val underlying = activeNetwork()
-        val fd = establishOrFail(gen, xray, plan, dnsPlan, rowId) ?: return
+        val fd =
+            when (val established = establishOrFail(gen, xray, plan, dnsPlan, rowId)) {
+                is EstablishOutcome.Established -> established.fd
+                EstablishOutcome.Settled -> return TunAttachOutcome.Settled
+                is EstablishOutcome.NoPerAppPlan -> return TunAttachOutcome.NoPerAppPlan(established.detail)
+            }
         synchronized(lock) {
             if (gen != generation) {
                 // Superseded while establishing. Close what we just made rather
                 // than letting teardown miss it — it never saw this fd.
                 fd.close()
-                return
+                return TunAttachOutcome.Settled
             }
             // §5.4/§6.1: a fail-closed retry reaches this line with the *previous*
             // attempt's fd still in [tunInterface] — [settleRetryableFailure]
@@ -1490,7 +1576,9 @@ class TunnelService : VpnService() {
         // nothing below reads it.
         underlying?.let { setUnderlyingNetworks(arrayOf(it)) }
 
-        if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingTunnel))) return
+        if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.StartingTunnel))) {
+            return TunAttachOutcome.Settled
+        }
         val config = tun2socksConfig(socksPort = ports.socksPort, mtu = TUN_MTU)
         // The shim refuses a bad fd rather than aborting the process; false here
         // is a real start failure, never something to ignore.
@@ -1533,7 +1621,7 @@ class TunnelService : VpnService() {
                 IllegalStateException("tun2socks refused to start"),
                 rowId,
             )
-            return
+            return TunAttachOutcome.Settled
         }
 
         val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
@@ -1562,7 +1650,8 @@ class TunnelService : VpnService() {
                 },
                 onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
             )
-        if (settlement != TerminalSettlement.Committed) return
+        if (settlement != TerminalSettlement.Committed) return TunAttachOutcome.Settled
+        return TunAttachOutcome.Settled
     }
 
     /**
@@ -2673,14 +2762,41 @@ class TunnelService : VpnService() {
         // retires the old fd under [lock] (`closeRetainedTunLocked`), so this
         // adds a branch, not a new fd lifetime. It also re-resolves the per-app
         // gate, which the retained path deliberately does not: a rebuild
-        // therefore applies the current selection, and can fail terminally with
-        // `PerAppAllowListEmpty` where the retained path would have carried on
-        // with the selection baked into the old interface.
+        // therefore applies the current selection.
+        //
+        // **A rebuild must not end a session the retained path would have
+        // survived.** §8's gate can produce no plan at all — allow-list mode with
+        // nothing selected, or an allow list whose packages have all been
+        // uninstalled — and `PerAppAllowListEmpty` is `Terminal`, so publishing it
+        // here would route through [settleTerminalFailure], which closes the
+        // retained TUN unconditionally and clears session intent. The user would
+        // lose the tunnel *and* §6.1's blackhole to an ordinary Wi-Fi↔cellular
+        // change, with nothing on screen explaining why. That is strictly worse
+        // than the leak this branch exists to close, which needs DNS off *and* a
+        // `geoip:<country>` DIRECT rule to bite.
+        //
+        // So [attachTun] returns that one case instead of publishing it, and this
+        // branch degrades to exactly what the retained path would have done: keep
+        // the interface, stale advertised resolver and all. A stale resolver is a
+        // real cost; no tunnel and no kill switch is a larger one.
         val nextAdvertisedDns = advertisedTunDnsAddress(started.dnsPlan?.tunAdvertisedAddress(), DNS_SERVER)
         if (retainedTunKeepsAdvertisedDns(synchronized(lock) { tunAdvertisedDns }, nextAdvertisedDns)) {
             attachRetainedTun(handoff.gen, started.xray, started.ports, handoff.fd, rowId)
         } else {
-            attachTun(handoff.gen, started.xray, started.ports, started.dnsPlan, rowId)
+            when (attachTun(handoff.gen, started.xray, started.ports, started.dnsPlan, rowId)) {
+                TunAttachOutcome.Settled -> Unit
+                is TunAttachOutcome.NoPerAppPlan -> {
+                    // §5.6: the reason only. No package names, no counts that
+                    // could identify a selection, no addresses.
+                    Log.w(TAG, "per-app gate yielded no plan on a rebuild; keeping the existing interface")
+                    // [handoff.fd] is still [tunInterface] — [attachTun] returns
+                    // this outcome before establishing anything and before
+                    // [closeRetainedTunLocked] — so this reattaches the interface
+                    // that never went away. §5.4: no fd was opened, so none leaks,
+                    // and none is closed twice.
+                    attachRetainedTun(handoff.gen, started.xray, started.ports, handoff.fd, rowId)
+                }
+            }
         }
     }
 

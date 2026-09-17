@@ -330,6 +330,38 @@ private fun String.tagOf(): String? =
         null
     }
 
+/**
+ * The decision [TunnelService.attachTun] and [TunnelService.attachRetainedTun] share for a
+ * connect that establishes its foreground notification: retire whatever retry sequence
+ * preceded it. Pure — no lock, no Android call — so it is checkable outside [TunnelService],
+ * which cannot be instantiated in a JVM test (`VpnService`, and this project carries no
+ * Robolectric or mocking library per §10.7).
+ *
+ * What this function cannot pin by itself is *where* it is called from. Both call sites invoke
+ * it from inside `lifecycle`, under `TunnelService.lock`, before `persist` ever suspends — that
+ * placement, not this gate, is what closes the P1 race (a generation that has *committed* is
+ * not necessarily still *current* once a suspension gives a newer generation room to run), and
+ * it is a call-site fact this function has no way to verify. This only pins the other half of
+ * that fix: cancellation must not run on a rejected transition.
+ *
+ * @param established the result of establishing foreground state (`goForeground`). `false`
+ *   means the transition did not commit, so [retireRetry] must not run — the rejection handoff
+ *   to `handleForegroundLifecycleRejection` owns whether the retry dies with the session it is
+ *   about to stop, not this call.
+ * @param retireRetry cancels the pending backoff job and resets the attempt counter. Run only
+ *   when [established] is true.
+ * @return [established], unchanged — callers use this directly as `lifecycle`'s own result.
+ */
+internal fun retireRetryIfEstablished(
+    established: Boolean,
+    retireRetry: () -> Unit,
+): Boolean {
+    if (established) {
+        retireRetry()
+    }
+    return established
+}
+
 /** Returns the same-UID debug-test callback only; release builds ignore this extra. */
 @Suppress("DEPRECATION")
 internal fun testConnectObserverFrom(
@@ -1781,28 +1813,30 @@ class TunnelService : VpnService() {
             gen = gen,
             state = connected,
             lifecycle = {
-                val established = goForeground(R.string.notification_state_connected)
-                if (established) {
-                    // Spec §2.4: a successful connect means whatever retry was pending
-                    // for the failure this replaces no longer applies. This runs here,
-                    // inside the generation-checked transition under [lock], and not in
-                    // `persist` — `persist` runs after `record()` suspends, and a newer
-                    // generation can arm its own retry during that suspension. Committed
-                    // and still-current are different properties: cancelling from
-                    // `persist` cancelled whichever generation's timer happened to be
-                    // live when the write finally resumed, which is not necessarily this
-                    // one's. From here a superseded generation cannot reach this line at
-                    // all. `Locked`, not the `synchronized` wrapper: [lock] is already
-                    // held by [TerminalOutcome.settle].
-                    cancelBackoffRetryLocked()
-                    // Fix round 1, Finding 1: the counter the next outage should start
-                    // from zero, not from wherever this one left off. Gated on
-                    // `established`: a rejected foreground hands off to
-                    // [handleForegroundLifecycleRejection] instead, and must not clear a
-                    // retry that belongs to a session which never came up.
-                    reconnectAttempts.reset()
-                }
-                established
+                // Spec §2.4: a successful connect means whatever retry was pending for the
+                // failure this replaces no longer applies. [retireRetryIfEstablished] runs
+                // here, inside the generation-checked transition under [lock], and not in
+                // `persist` — `persist` runs after `record()` suspends, and a newer generation
+                // can arm its own retry during that suspension. Committed and still-current
+                // are different properties: cancelling from `persist` cancelled whichever
+                // generation's timer happened to be live when the write finally resumed,
+                // which is not necessarily this one's. From here a superseded generation
+                // cannot reach this line at all.
+                //
+                // Fix round 1, Finding 1: the counter reset (bundled into `retireRetry` below)
+                // means the next outage starts from zero, not from wherever this one left off.
+                // Gated on `established`: a rejected foreground hands off to
+                // [handleForegroundLifecycleRejection], which owns whether the retry dies with
+                // the session it is about to stop — not this call.
+                retireRetryIfEstablished(
+                    established = goForeground(R.string.notification_state_connected),
+                    retireRetry = {
+                        // `Locked`, not the `synchronized` wrapper: [lock] is already held by
+                        // [TerminalOutcome.settle].
+                        cancelBackoffRetryLocked()
+                        reconnectAttempts.reset()
+                    },
+                )
             },
             persist = { connectionRecorder.record(rowId, connected) },
             onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
@@ -3200,16 +3234,17 @@ class TunnelService : VpnService() {
                 gen = gen,
                 state = connected,
                 lifecycle = {
-                    val established = goForeground(R.string.notification_state_connected)
-                    if (established) {
-                        // See [attachTun]'s matching site: the cancel and the attempt
-                        // counter reset belong to the generation-checked transition, not
-                        // to `persist` — a superseded generation must not be able to
-                        // reach either after `persist` suspends in `record()`.
-                        cancelBackoffRetryLocked()
-                        reconnectAttempts.reset()
-                    }
-                    established
+                    // See [attachTun]'s matching site: the cancel and the attempt counter
+                    // reset belong to the generation-checked transition, not to `persist` — a
+                    // superseded generation must not be able to reach either after `persist`
+                    // suspends in `record()`.
+                    retireRetryIfEstablished(
+                        established = goForeground(R.string.notification_state_connected),
+                        retireRetry = {
+                            cancelBackoffRetryLocked()
+                            reconnectAttempts.reset()
+                        },
+                    )
                 },
                 persist = { connectionRecorder.record(rowId, connected) },
                 onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
@@ -3229,8 +3264,14 @@ class TunnelService : VpnService() {
      * refuses to arm one when there is no network to retry over in the first
      * place. Either way the service waits on the `NetworkCallback` instead.
      *
-     * Called from [settleRetryableFailure]'s `persist`, so only once the
-     * generation that failed is confirmed still current.
+     * Called from [settleRetryableFailure]'s `persist` — which confirms the generation
+     * *committed*, not that it is still *current* when this runs. `persist` suspends before
+     * this call, the same gap the cancel-side P1 fix closed by moving cancellation into the
+     * generation-checked `lifecycle` instead of `persist` (see [retireRetryIfEstablished]);
+     * this arming call was not moved with it. Neither this function nor its caller re-checks
+     * the generation, so a superseded generation can still arm a timer here — the arming-side
+     * mirror of that race, reaching the same §11 row 7 corruption named on
+     * [cancelBackoffRetry]. Known, pre-existing, and out of scope for that fix.
      */
     private fun scheduleBackoffRetry(attempt: Int) {
         // Read before taking the lock — a binder round trip — and acted on
@@ -3299,19 +3340,27 @@ class TunnelService : VpnService() {
      *    All four already hold [lock] at the point they act — the last two
      *    inside the generation-checked `lifecycle` lambda [TerminalOutcome]
      *    runs — and so call [cancelBackoffRetryLocked] inline instead.
+     *
+     * [scheduleBackoffRetry] also cancels, first thing, before arming its own replacement —
+     * named here rather than counted above, because that one is cancel-then-replace
+     * bookkeeping for the *arming* side rather than a session-end cancellation, and it is not
+     * generation-checked (see its KDoc).
      */
     private fun cancelBackoffRetry() {
         synchronized(lock) { cancelBackoffRetryLocked() }
     }
 
     /**
-     * [cancelBackoffRetry]'s body for the two callers that already hold [lock].
+     * [cancelBackoffRetry]'s body for callers that already hold [lock]. Five in this file:
+     * [stopTunnel]'s one-shot state capture, [settleTerminalFailure]'s `lifecycle` lambda,
+     * [scheduleBackoffRetry]'s own cancel-then-arm, and — since the P1 fix — [attachTun] and
+     * [attachRetainedTun]'s committed-`Connected` `lifecycle` lambdas (via
+     * [retireRetryIfEstablished]; see [cancelBackoffRetry]'s call-site list for why those two
+     * moved here).
      *
-     * Split out rather than letting them call [cancelBackoffRetry] and rely on
-     * the monitor being reentrant: the two sites that need it — [stopTunnel]'s
-     * one-shot state capture and [settleTerminalFailure]'s `lifecycle` lambda —
-     * are exactly the places where "this runs under the lock" is load-bearing,
-     * and a helper that quietly re-takes it would invite someone to move a
+     * Split out rather than letting any of them call [cancelBackoffRetry] and rely on the
+     * monitor being reentrant: every one of these is a place where "this runs under the lock"
+     * is load-bearing, and a helper that quietly re-takes it would invite someone to move a
      * suspending or slow call in beside it.
      */
     private fun cancelBackoffRetryLocked() {

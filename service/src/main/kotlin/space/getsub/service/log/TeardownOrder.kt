@@ -8,18 +8,37 @@
 package space.getsub.service.log
 
 /**
- * The teardown steps whose *relative order* is load-bearing.
+ * `TunnelService.stopTunnel`'s teardown steps, in the order that function
+ * actually executes them as of this commit — not a scheduler and not a state
+ * machine; `stopTunnel` still performs the work, and a future change to that
+ * function's body is what could make this list stale.
  *
- * Not a scheduler and not a state machine — `TunnelService.stopTunnel` still
- * performs the work. This exists so the one ordering rule that cannot be seen
- * by reading `stopTunnel` top to bottom has a test, without adding Robolectric
- * to reach a `VpnService` (ARCHITECTURE.md §10.7). Spec §6 item #9 prescribes
- * exactly this move for the P1 ordering half; this is its first application.
+ * **What is actually tested, and what is not.** [teardownOrder]'s ordering
+ * test constrains exactly one thing: [TeardownStep.StopLogCapture] is last,
+ * after every phase that logs. It does **not** constrain the relative order
+ * of [StopTun2Socks], [CloseTun] and [StopCore] against each other — read
+ * `LogCaptureLifecycleTest` before trusting this list for anything beyond
+ * that. The list is written to mirror `stopTunnel`'s real sequence anyway,
+ * because a teardown-ordering type that misdescribes the teardown it names is
+ * exactly the trap `CLAUDE.md`'s citation-hazard note records: a reader who
+ * trusts the order here over the source it claims to describe.
+ *
+ * Exists so the one ordering rule that *is* tested cannot be seen by reading
+ * `stopTunnel` top to bottom without adding Robolectric to reach a
+ * `VpnService` (ARCHITECTURE.md §10.7). Spec §6 item #9 prescribes exactly
+ * this move for the P1 ordering half; this is its first application.
  */
 internal enum class TeardownStep {
-    StopCore,
+    /** `Tun2Socks.stop()`. Stops feeding packets in before removing their destination. */
     StopTun2Socks,
+
+    /** `fd?.close()`. */
     CloseTun,
+
+    /** `xray?.stopBlocking()`. */
+    StopCore,
+
+    /** `removeForegroundSafely()`. */
     ClearNotification,
 
     /**
@@ -33,9 +52,9 @@ internal enum class TeardownStep {
 
 internal fun teardownOrder(): List<TeardownStep> =
     listOf(
-        TeardownStep.StopCore,
         TeardownStep.StopTun2Socks,
         TeardownStep.CloseTun,
+        TeardownStep.StopCore,
         TeardownStep.ClearNotification,
         TeardownStep.StopLogCapture,
     )

@@ -5,7 +5,9 @@ package space.getsub.feature.profiles.list
 import io.kotest.matchers.shouldBe
 import org.junit.Test
 import space.getsub.core.model.ConnectionState
+import space.getsub.core.model.FailureReason
 import space.getsub.core.model.StartupStage
+import space.getsub.core.model.failure
 
 class LaunchPingerTest {
     private fun pinger(
@@ -107,5 +109,30 @@ class LaunchPingerTest {
         off.shouldRun(1L, enabledGlobally = false, allowMetered = false, providerValue = null) shouldBe false
         // Turning the setting on mid-session must be able to take effect.
         off.shouldRun(1L, enabledGlobally = true, allowMetered = false, providerValue = null) shouldBe true
+    }
+
+    /**
+     * M8 added `Reconnecting`, and the `is`-chain this gate used to be absorbed it
+     * silently: a reconnect is a start sequence pending or in flight, so navigating
+     * to Servers mid-reconnect could launch a proxy-head burst — one Xray instance
+     * per server — against the retrying core, which is §5.3's territory.
+     */
+    @Test
+    fun `a reconnect in flight suppresses it without burning the claim`() {
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)
+        val subject = pinger(state = reconnecting)
+
+        subject.shouldRun(1L, enabledGlobally = true, allowMetered = false, providerValue = null) shouldBe false
+
+        // The claim is unspent, so the run still happens once the retry settles.
+        pinger().shouldRun(1L, enabledGlobally = true, allowMetered = false, providerValue = null) shouldBe true
+    }
+
+    /** A settled failure is not a start sequence: nothing is in flight to compete with. */
+    @Test
+    fun `a settled failure does not suppress it`() {
+        val subject = pinger(state = failure(FailureReason.ConfigRejected, "redacted"))
+
+        subject.shouldRun(1L, enabledGlobally = true, allowMetered = false, providerValue = null) shouldBe true
     }
 }

@@ -47,7 +47,27 @@ internal class LaunchPinger(
         val state = connectionState()
         // Four concurrent measurements competing with the start sequence is
         // §5.3's territory. Settled Connected and settled Disconnected both pass.
-        if (state is ConnectionState.Connecting || state is ConnectionState.Disconnecting) return false
+        //
+        // Exhaustive with no `else`: M8 added Reconnecting, and an `is`-chain
+        // absorbed it silently — a reconnect is a start sequence pending or in
+        // flight, so navigating here mid-reconnect could launch a proxy-head
+        // burst (one Xray instance per server) against the retrying core. Spec
+        // §2.2 chose this shape for FailureReason.retryability for the same
+        // reason: a state added later must not fall through whichever branch
+        // happens to catch it.
+        val startSequenceBusy =
+            when (state) {
+                is ConnectionState.Connecting,
+                ConnectionState.Disconnecting,
+                is ConnectionState.Reconnecting,
+                -> true
+
+                is ConnectionState.Connected,
+                ConnectionState.Disconnected,
+                is ConnectionState.Failed,
+                -> false
+            }
+        if (startSequenceBusy) return false
 
         // §A.1's boolean rule, through the shared predicate: only `true` or `1`
         // enables, and any other value — including blank — disables. A provider

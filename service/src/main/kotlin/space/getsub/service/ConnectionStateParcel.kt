@@ -26,6 +26,7 @@ public data class ConnectionStateParcel(
     val httpProxyPort: Int,
     val reason: Int,
     val detail: String,
+    val attempt: Int,
 ) : Parcelable {
     constructor(parcel: Parcel) : this(
         kind = parcel.readInt(),
@@ -35,6 +36,7 @@ public data class ConnectionStateParcel(
         httpProxyPort = parcel.readInt(),
         reason = parcel.readInt(),
         detail = parcel.readString().orEmpty(),
+        attempt = parcel.readInt(),
     )
 
     override fun writeToParcel(
@@ -48,6 +50,7 @@ public data class ConnectionStateParcel(
         dest.writeInt(httpProxyPort)
         dest.writeInt(reason)
         dest.writeString(detail)
+        dest.writeInt(attempt)
     }
 
     override fun describeContents(): Int = 0
@@ -71,6 +74,7 @@ public data class ConnectionStateParcel(
             KIND_CONNECTED -> ConnectionState.Connected(sinceEpochMillis, socksPort, httpProxyPort)
             KIND_DISCONNECTING -> ConnectionState.Disconnecting
             KIND_FAILED -> failure(FailureReason.entries[reason], detail)
+            KIND_RECONNECTING -> ConnectionState.Reconnecting(FailureReason.entries[reason], attempt)
             else -> ConnectionState.Disconnected
         }
 
@@ -80,6 +84,7 @@ public data class ConnectionStateParcel(
         const val KIND_CONNECTED = 2
         const val KIND_DISCONNECTING = 3
         const val KIND_FAILED = 4
+        const val KIND_RECONNECTING = 5
 
         @JvmField
         val CREATOR =
@@ -92,10 +97,10 @@ public data class ConnectionStateParcel(
         fun from(state: ConnectionState): ConnectionStateParcel =
             when (state) {
                 is ConnectionState.Disconnected ->
-                    ConnectionStateParcel(KIND_DISCONNECTED, 0, 0L, 0, 0, 0, "")
+                    ConnectionStateParcel(KIND_DISCONNECTED, 0, 0L, 0, 0, 0, "", 0)
 
                 is ConnectionState.Connecting ->
-                    ConnectionStateParcel(KIND_CONNECTING, state.stage.ordinal, 0L, 0, 0, 0, "")
+                    ConnectionStateParcel(KIND_CONNECTING, state.stage.ordinal, 0L, 0, 0, 0, "", 0)
 
                 is ConnectionState.Connected ->
                     ConnectionStateParcel(
@@ -106,13 +111,17 @@ public data class ConnectionStateParcel(
                         state.httpProxyPort,
                         0,
                         "",
+                        0,
                     )
 
                 is ConnectionState.Disconnecting ->
-                    ConnectionStateParcel(KIND_DISCONNECTING, 0, 0L, 0, 0, 0, "")
+                    ConnectionStateParcel(KIND_DISCONNECTING, 0, 0L, 0, 0, 0, "", 0)
 
                 is ConnectionState.Failed ->
-                    ConnectionStateParcel(KIND_FAILED, 0, 0L, 0, 0, state.reason.ordinal, state.detail)
+                    ConnectionStateParcel(KIND_FAILED, 0, 0L, 0, 0, state.reason.ordinal, state.detail, 0)
+
+                is ConnectionState.Reconnecting ->
+                    ConnectionStateParcel(KIND_RECONNECTING, 0, 0L, 0, 0, state.reason.ordinal, "", state.attempt)
             }
     }
 }

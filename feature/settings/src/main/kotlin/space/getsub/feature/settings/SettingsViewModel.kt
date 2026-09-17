@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -121,6 +122,14 @@ constructor(
             .onEach { assets -> _state.update { it.copy(geoInstalledAssets = assets) } }
             .launchIn(viewModelScope)
 
+        settingsSource.bootAutostart
+            .onEach { enabled -> _state.update { it.copy(bootAutostart = enabled) } }
+            .launchIn(viewModelScope)
+
+        settingsSource.failClosed
+            .onEach { enabled -> _state.update { it.copy(failClosed = enabled) } }
+            .launchIn(viewModelScope)
+
         viewModelScope.launch {
             val version = xraySource.version()
             _state.update {
@@ -144,6 +153,78 @@ constructor(
 
     fun onHwidEnabledChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setHwidEnabled(enabled) }
+    }
+
+    fun onBootAutostartChanged(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsSource.setBootAutostart(enabled)
+            maybePromptForBattery(justEnabled = enabled)
+        }
+    }
+
+    fun onFailClosedChanged(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsSource.setFailClosed(enabled)
+            maybePromptForBattery(justEnabled = enabled)
+        }
+    }
+
+    /**
+     * Spec §7.2, ARCHITECTURE.md §9: Doze is worth raising at the moment the user says they want
+     * the tunnel to survive, and nowhere else — not at construction, not on an unrelated setting
+     * ([shouldPromptForBattery]'s own KDoc).
+     *
+     * [justEnabled] carries that decision rather than the call sites doing it. It used to be
+     * passed as a literal `true`, with each caller guarding itself with `if (enabled)` — so the
+     * parameter could not be false in production and [shouldPromptForBattery]'s first conjunct
+     * was decoration, tested but never exercised. Switching a survival setting *off* now reaches
+     * this function and is refused here, in the one place that decides.
+     */
+    private suspend fun maybePromptForBattery(justEnabled: Boolean) {
+        // No early return on [justEnabled], deliberately. One was added here to skip the two
+        // reads below when the outcome is already determined, and it reinstated precisely the
+        // property `be1ee7f` removed: with it, [shouldPromptForBattery]'s first conjunct could
+        // not be false in production, so the conjunct was decoration again and
+        // `turning a survival setting off does not prompt` passed for two independent reasons —
+        // delete that conjunct and the test still passed, pinning nothing. Its cost is a
+        // PowerManager binder round trip and a Room read, performed and discarded, on a
+        // user-initiated toggle *off*; that is cheaper than a predicate whose decisive input no
+        // call site can produce.
+        //
+        // A binder round trip to PowerManager; SettingsSource does it on IO (§5.3), so this stays
+        // a plain suspending call rather than each caller choosing a dispatcher.
+        val ignoringOptimisations = settingsSource.isIgnoringBatteryOptimizations()
+        val show =
+            shouldPromptForBattery(
+                alreadyShown = settingsSource.batteryPromptShown.first(),
+                isIgnoringOptimisations = ignoringOptimisations,
+                survivalSettingJustEnabled = justEnabled,
+            )
+        if (show) _state.update { it.copy(showBatteryPrompt = true) }
+    }
+
+    /**
+     * Spec §7.2 names three triggers — always-on, boot autostart and fail-closed — and only the
+     * latter two raised the prompt.
+     *
+     * Always-on is a deep link to system settings (§7.1: this app cannot set it, so it is a link
+     * and never a switch), which means the app never learns whether the user actually enabled it.
+     * Tapping the row is the strongest statement of "I want this tunnel to survive" that is
+     * observable here, so that is what the prompt is hung on. The prompt is shown once ever
+     * (`batteryPromptShown`), so treating the tap as intent cannot become nagging.
+     */
+    fun onAlwaysOnOpened() {
+        viewModelScope.launch { maybePromptForBattery(justEnabled = true) }
+    }
+
+    /**
+     * Either response to the battery prompt — including a plain dismissal — records
+     * [SettingsSource.batteryPromptShown] so the prompt never returns. "Respect refusal" (§9)
+     * means this call happens whatever the user chose, not only on acceptance.
+     */
+    fun onBatteryPromptResolved() {
+        _state.update { it.copy(showBatteryPrompt = false) }
+        viewModelScope.launch { settingsSource.setBatteryPromptShown(true) }
     }
 
     fun onPingModeChanged(mode: PingMode) {
@@ -329,6 +410,20 @@ constructor(
         viewModelScope.launch { geoAssetSource.remove(fileName) }
     }
 }
+
+/**
+ * Spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.
+ * Prompt once, respect refusal."
+ *
+ * [survivalSettingJustEnabled] is the trigger — always-on, boot autostart or fail-closed being
+ * switched on. Those are the moments the user has said they want the tunnel to survive, which is
+ * when Doze is worth raising.
+ */
+internal fun shouldPromptForBattery(
+    alreadyShown: Boolean,
+    isIgnoringOptimisations: Boolean,
+    survivalSettingJustEnabled: Boolean,
+): Boolean = survivalSettingJustEnabled && !alreadyShown && !isIgnoringOptimisations
 
 private fun SettingsState.dnsResolverOrNull(): DnsResolver? =
     when (dnsTransport) {

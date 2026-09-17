@@ -22,15 +22,27 @@ internal sealed interface TunnelCommand {
     data class Disconnect(val startId: Int) : TunnelCommand
 
     data object ReapplyPerApp : TunnelCommand
+
+    /** Spec §3.1: re-decide what should be running, on the one ordering point. */
+    data class Reconcile(val trigger: ReconcileTrigger) : TunnelCommand
 }
 
-/** The single service-owned ordering point for tunnel session commands. */
+/**
+ * The single service-owned ordering point for tunnel session commands.
+ *
+ * One lambda per [TunnelCommand] variant plus [observeConnect]'s debug-test hook —
+ * seven genuinely distinct handlers, not one bundle hiding as several. Spec §3.1
+ * added [reconcile] here rather than a second channel precisely so a reconnect is
+ * a session mutation like any other, ordered against the rest by this one class.
+ */
+@Suppress("LongParameterList")
 internal class TunnelCommandCoordinator(
     scope: CoroutineScope,
     private val connect: suspend (ProfileParcel, Int) -> Unit,
     private val rejectConnect: suspend (Int, Long) -> Unit,
     private val disconnect: suspend (Int) -> Unit,
     private val reapplyPerApp: suspend () -> Unit,
+    private val reconcile: suspend (ReconcileTrigger) -> Unit = {},
     private val observeConnect: (TunnelCommand.Connect) -> Unit = {},
 ) {
     private val commands = Channel<TunnelCommand>(capacity = Channel.UNLIMITED)
@@ -46,6 +58,7 @@ internal class TunnelCommandCoordinator(
                     is TunnelCommand.RejectConnect -> rejectConnect(command.startId, command.rowId)
                     is TunnelCommand.Disconnect -> disconnect(command.startId)
                     TunnelCommand.ReapplyPerApp -> reapplyPerApp()
+                    is TunnelCommand.Reconcile -> reconcile(command.trigger)
                 }
             }
         }
@@ -101,4 +114,28 @@ internal class TunnelCommandIngress(
         synchronized(lock) {
             enqueue(TunnelCommand.ReapplyPerApp)
         }
+
+    /**
+     * A framework start with no connect request in hand: always-on, boot, or the
+     * sticky restart after `:bg` dies (spec §1.3/§4). Records [startId] the same
+     * way [started] does, under the same lock, so a later disconnect or a
+     * reconcile-decided start resolves against this framework lifetime rather
+     * than a stale one.
+     */
+    fun reconcile(
+        trigger: ReconcileTrigger,
+        startId: Int,
+    ): Boolean =
+        synchronized(lock) {
+            latestStartId = startId
+            enqueue(TunnelCommand.Reconcile(trigger))
+        }
+
+    /**
+     * The most recent framework start token — what a reconcile-decided
+     * [TunnelCommand.Connect] resumes under. Exposed rather than duplicated: a
+     * second copy of this field would reintroduce the ordering bug this class
+     * exists to prevent.
+     */
+    fun latestStartId(): Int = synchronized(lock) { latestStartId }
 }

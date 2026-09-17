@@ -240,6 +240,50 @@ particular config does not leak *its own* traffic — but the TUN-level
 1.1.1.1 advertisement above is independent of what any given config does.
 Source: `docs/agent/research/2026-08-25-remnawave-xray-json-and-balancers.md`.
 
+**A restart that keeps the TUN is the exception to "every connect", and was a
+leak until M8 closed it.** `TunnelService.restartCoreRetainingTun` rebuilds the
+core on a network change without re-running `Builder.establish()`, so the
+interface goes on advertising the resolver it was built with while levers 2 and
+3 are recomputed from current settings. That is harmless while a plan exists —
+every non-null plan emits the port-53 hijack, which matches by port and catches
+the pinned address like any other. It is a leak when the plan has become null:
+no hijack is emitted, and the pinned address is whatever the *old* plan
+advertised, which `DnsPlan.tunAdvertisedAddress` takes from the first server
+carrying a literal — typically the domestic resolver, precisely the address a
+`geoip:<country>` DIRECT rule matches. Turning DNS off mid-session and then
+changing network therefore sent every lookup to that resolver in the clear,
+proxied sites included, while a freshly connected session would have advertised
+`DNS_SERVER` and routed it to the proxy. Since `576b2fa` the retained path is
+taken only while the *planned* address recorded for the live interface still
+matches what the new plan would advertise; otherwise the interface is rebuilt.
+That comparison is planned-against-planned and never consults what the interface
+is actually advertising — which is safe in the one direction that matters,
+because rejection of an address literal is a function of the address, so equal
+planned addresses imply equal advertised ones. The rule can therefore rebuild
+needlessly, and cannot keep an interface it should have replaced.
+
+**One exception, added once that rebuild turned out to be able to end the
+session.** If the rebuild's per-app gate yields no plan at all — allow-list mode
+with nothing selected, or an allow list whose packages have all been uninstalled
+— the old interface is kept instead. `PerAppAllowListEmpty` is terminal, and
+publishing it here would close the retained TUN and release the kill switch
+on an ordinary Wi-Fi↔cellular change. A stale advertised resolver is the
+smaller harm, and it is the harm the retained path always carried.
+
+So lever 1 is coherent across a restart on the same terms as on a connect —
+**except on the per-app fallback path directly above**, which is the one case
+where a restart really is worse than a connect: the interface it keeps goes on
+advertising the old plan's literal. A fresh connect with the same inputs does not
+advertise anything at all — it reaches
+`failAfterCore(FailureReason.PerAppAllowListEmpty, …)` and fails terminally, which
+is the whole reason the restart path declines to publish that failure. So the
+comparison is between a stale resolver and no session, not between two
+resolvers. Everywhere else the rebuild rule closes the gap,
+no better and no worse — which for a `RAW_JSON` passthrough session still means
+levers 2 and 3 are the config author's, exactly as the paragraph above says. A
+restart neither repairs that incoherence nor widens it. Note this is verified by
+reading and by a unit test on the decision, **not yet on hardware**.
+
 **The hijack is a loop hazard unless something claims the resolver's own
 traffic first.** The built-in resolver's query *to a DoU server* is itself
 UDP to port 53, so if nothing ahead of the hijack claims it, it matches the
@@ -277,6 +321,10 @@ The system calls `VpnService.onRevoke()` when another VPN app takes over or
 the user revokes permission. Tear down cleanly: stop libXray, stop
 tun2socks, close the fd, update persisted state, cancel the notification.
 Leaking the fd here wedges the VPN subsystem until reboot.
+
+`onRevoke` must also **clear session intent** (M8). Without that, the reconcile
+loop would immediately try to reconnect against the app that just took the
+route — a fight this app should lose, immediately and loudly.
 
 ### 5.5 One source of truth for connection state
 
@@ -905,12 +953,24 @@ This is the least portable, most version-dependent part of the codebase.
   the current developer documentation and the actual behavior on device.
 - **Battery optimization** — prompt the user to exempt the app, or the
   tunnel dies in Doze. Prompt once, respect refusal.
-- **Boot start** — `RECEIVE_BOOT_COMPLETED` plus a receiver, gated behind a
-  user setting, and only meaningful together with always-on VPN.
+- **Boot start** — `RECEIVE_BOOT_COMPLETED` plus a receiver, gated behind a user
+  setting. Largely redundant when always-on VPN is enabled, because the platform
+  starts the service itself there; it exists for the user who wants boot start
+  without granting always-on. Connects on **every** boot when enabled, not only
+  when the session was up beforehand. VPN consent has no boot-time UI, so a
+  receiver that finds `VpnService.prepare()` non-null gives up quietly.
 - **Network changes** — register a `NetworkCallback`. On Wi-Fi ↔ cellular
-  transitions, the underlying network changes and the tunnel needs
-  re-establishing or at minimum a re-protect. Test this by physically
-  toggling Wi-Fi, repeatedly, not by unit test.
+  transitions the underlying network changes and the tunnel must react. **There
+  is no "re-protect".** §14.2's API surface is the reason: libXray's protector is
+  a *dial-time* callback (`registerDialerController`), so existing sockets cannot
+  be re-marked — an earlier revision of this bullet said otherwise. The two real
+  options are `setUnderlyingNetworks` alone, letting the core redial (new dials
+  are protected automatically), or restarting the core while retaining the TUN
+  fd. M8 ships the second, decided by `reconcile()`'s `NetworkChanged` branch
+  (`ReconcileAction.Restart`, effected by
+  `TunnelService.restartCoreRetainingTun`) — a single point a device run can
+  flip to the soft alternative if it turns out to suffice. Test this by
+  physically toggling Wi-Fi, repeatedly, not by unit test.
 
 ---
 
@@ -1412,7 +1472,10 @@ Mandatory rules:
       §5.1 failure mode, because libXray discards the protect result. It predates
       this milestone. Full evidence:
       `docs/agent/research/2026-08-19-m5.5-device-verification.md`.
-- [ ] Traffic counters, live log viewer
+- [ ] Traffic counters, live log viewer — **M8.5.** Split out of M8 because the
+      log viewer reads from `:bg`, whose `android.util.Log` output does not reach
+      logcat (mechanism unexplained; see M5.5's device record). That wants its own
+      investigation before it gets a spec.
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization
 

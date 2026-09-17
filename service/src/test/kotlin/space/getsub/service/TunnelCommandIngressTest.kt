@@ -68,6 +68,38 @@ class TunnelCommandIngressTest {
             )
     }
 
+    // ── Adopting a framework start into a live session ──────────────────────
+    //
+    // [TunnelCommandIngress.reconcile] records a framework start's token before the
+    // reconcile it enqueues is decided. When that reconcile answers `Nothing` — the
+    // session is live and must not be disturbed — the session goes on settling
+    // against the older token it captured at `startTunnel`, `stopSelfResult` refuses
+    // the superseded one, and the service is left running with nothing that would
+    // ever stop it. [adoptedStartId] is the rule that closes that.
+
+    @Test
+    fun `a live session adopts a newer framework start token`() {
+        adoptedStartId(sessionStartId = 5, frameworkStartId = 6) shouldBe 6
+    }
+
+    /** Nothing holds a started-service lifetime, so there is nothing to move onto it. */
+    @Test
+    fun `a session with no started lifetime adopts nothing`() {
+        adoptedStartId(sessionStartId = 0, frameworkStartId = 6) shouldBe 0
+    }
+
+    /**
+     * Framework start ids ascend, so anything not newer means no start has arrived since
+     * this session claimed its own — and moving backwards would hand the settlement a
+     * token `stopSelfResult` may already have resolved.
+     */
+    @Test
+    fun `adoption never moves a session onto an older or repeated token`() {
+        adoptedStartId(sessionStartId = 6, frameworkStartId = 6) shouldBe 6
+        adoptedStartId(sessionStartId = 6, frameworkStartId = 5) shouldBe 6
+        adoptedStartId(sessionStartId = 6, frameworkStartId = 0) shouldBe 6
+    }
+
     private fun profileParcel(id: String): ProfileParcel =
         ProfileParcel.from(
             Profile(

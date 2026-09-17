@@ -22,6 +22,12 @@
     <string name="state_disconnected">Disconnected</string>
     <string name="state_disconnecting">Disconnecting…</string>
     <string name="state_connected">Connected</string>
+    <!-- Spec §7.3: Reconnecting is its own state, mirrored from the service, never
+         Connected or Failed. One steady label, with no blocked/open variant: whether
+         traffic is blocked is the ongoing notification's to report (§6.3), and Home
+         showing it too would mean widening ConnectionState.Reconnecting and its parcel
+         discriminant. Deferred to M8.5. -->
+    <string name="home_state_reconnecting">Reconnecting…</string>
 
     <string name="stage_allocating_port">Allocating port…</string>
     <string name="stage_generating_config">Generating config…</string>

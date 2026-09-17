@@ -13,8 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import space.getsub.core.data.StoredProfile
-import space.getsub.core.model.Profile
+import space.getsub.core.data.toProfile
 import javax.inject.Inject
 
 @HiltViewModel
@@ -131,17 +130,3 @@ internal class HomeViewModel @Inject constructor(
         tunnel.disconnect()
     }
 }
-
-/**
- * Rebuilds the domain [Profile] this row's persisted config decodes to, or
- * `null` for a corrupt row ([StoredProfile.outbound] is only ever null when
- * the stored JSON failed to parse — see its own KDoc).
- *
- * [Profile.id] wants a String and [StoredProfile] only carries a Room
- * [Long] primary key, so this stringifies it. That id is opaque wire
- * plumbing only [space.getsub.service.ProfileParcel] reads back,
- * never the row identity — the row id travels separately, as
- * [TunnelConnection.connect]'s own `rowId` parameter.
- */
-private fun StoredProfile.toProfile(): Profile? =
-    outbound?.let { decoded -> Profile(id = id.toString(), name = name, outbound = decoded) }

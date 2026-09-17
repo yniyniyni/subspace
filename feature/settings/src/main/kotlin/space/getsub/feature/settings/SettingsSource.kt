@@ -2,8 +2,13 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.feature.settings
 
+import android.content.Context
+import android.os.PowerManager
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withContext
 import space.getsub.core.data.RoutingRepository
 import space.getsub.core.data.SettingsRepository
 import space.getsub.core.data.ThemePreference
@@ -26,6 +31,10 @@ import javax.inject.Singleton
  * [SettingsViewModel] goes through this interface instead, so a plain JVM
  * test can exercise it against a fake.
  */
+// One property/setter pair per persisted preference this screen needs — the same shape
+// SettingsViewModel's own TooManyFunctions suppression documents: splitting this interface by
+// preference would only move the count into more, smaller interfaces, not reduce it.
+@Suppress("TooManyFunctions")
 internal interface SettingsSource {
     /** The current theme preference. See [SettingsRepository.theme]. */
     val theme: Flow<ThemePreference>
@@ -92,14 +101,46 @@ internal interface SettingsSource {
     val selectedGeoSourceIds: Flow<Set<String>>
 
     suspend fun setSelectedGeoSourceIds(ids: Set<String>)
+
+    /** Connect on every boot. See [SettingsRepository.bootAutostart]. */
+    val bootAutostart: Flow<Boolean>
+
+    suspend fun setBootAutostart(enabled: Boolean)
+
+    /** Whether the TUN is retained while a wanted session is down. See [SettingsRepository.failClosed]. */
+    val failClosed: Flow<Boolean>
+
+    suspend fun setFailClosed(enabled: Boolean)
+
+    /** §9's "prompt once, respect refusal" (spec §7.2). See [SettingsRepository.batteryPromptShown]. */
+    val batteryPromptShown: Flow<Boolean>
+
+    suspend fun setBatteryPromptShown(shown: Boolean)
+
+    /**
+     * A fresh platform read of whether Android already exempts this app from battery
+     * optimization — not a [Flow], since the only caller needs its value at one instant (the
+     * moment a survival setting is switched on), the same one-shot shape [hwid] already uses for
+     * a value nothing here needs to observe changing.
+     *
+     * `suspend`, and not a plain property, because the implementation is a binder round trip to
+     * `PowerManager` — §5.3 keeps those off the Main dispatcher, and the dispatcher belongs to
+     * the implementation that knows it makes the call rather than to every caller. It also keeps
+     * a fake deterministic: no real dispatcher hop for a test scheduler to miss.
+     */
+    suspend fun isIgnoringBatteryOptimizations(): Boolean
 }
 
+// Same shape as SettingsSource's own TooManyFunctions suppression above — this class implements
+// every one of that interface's members, so the count cannot come down without moving it there.
+@Suppress("TooManyFunctions")
 @Singleton
 internal class BoundSettingsSource
 @Inject
 constructor(
     private val settingsRepository: SettingsRepository,
     private val routingRepository: RoutingRepository,
+    @param:ApplicationContext private val context: Context,
 ) : SettingsSource {
     override val theme: Flow<ThemePreference> = settingsRepository.theme
     override val hwidEnabled: Flow<Boolean> = settingsRepository.hwidEnabled
@@ -147,6 +188,24 @@ constructor(
 
     override suspend fun setSelectedGeoSourceIds(ids: Set<String>) =
         settingsRepository.setSelectedGeoSourceIds(ids)
+
+    override val bootAutostart: Flow<Boolean> = settingsRepository.bootAutostart
+
+    override suspend fun setBootAutostart(enabled: Boolean) = settingsRepository.setBootAutostart(enabled)
+
+    override val failClosed: Flow<Boolean> = settingsRepository.failClosed
+
+    override suspend fun setFailClosed(enabled: Boolean) = settingsRepository.setFailClosed(enabled)
+
+    override val batteryPromptShown: Flow<Boolean> = settingsRepository.batteryPromptShown
+
+    override suspend fun setBatteryPromptShown(shown: Boolean) = settingsRepository.setBatteryPromptShown(shown)
+
+    override suspend fun isIgnoringBatteryOptimizations(): Boolean =
+        withContext(Dispatchers.IO) {
+            context.getSystemService(PowerManager::class.java)
+                ?.isIgnoringBatteryOptimizations(context.packageName) == true
+        }
 }
 
 /** True only when a valid active profile materially changes DNS behavior (R21). */

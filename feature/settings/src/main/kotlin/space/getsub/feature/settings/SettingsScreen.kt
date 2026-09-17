@@ -2,6 +2,10 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.feature.settings
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,15 +19,18 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -100,6 +107,10 @@ fun SettingsScreen(
             onAddCustomGeoSource = viewModel::onAddCustomGeoSource,
             onGeoRefreshOnMeteredChanged = viewModel::onGeoRefreshOnMeteredChanged,
             onRemoveCustomGeoSource = viewModel::onRemoveCustomGeoSource,
+            onBootAutostartChanged = viewModel::onBootAutostartChanged,
+            onFailClosedChanged = viewModel::onFailClosedChanged,
+            onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
+            onAlwaysOnOpened = viewModel::onAlwaysOnOpened,
         ),
         onNavigateToRouting = onNavigateToRouting,
         onNavigateToPerApp = onNavigateToPerApp,
@@ -131,6 +142,16 @@ internal data class SettingsActions(
     val onAddCustomGeoSource: (url: String, fileName: String, geoType: GeoDataKind) -> Unit,
     val onGeoRefreshOnMeteredChanged: (Boolean) -> Unit,
     val onRemoveCustomGeoSource: (String) -> Unit,
+    // Defaulted (unlike every field above): Task 12 landed after SettingsHwidLayoutTest's own
+    // full positional SettingsActions(...) construction, and neither of these two setters bears
+    // on what that test asserts (HWID layout) — a default avoids editing an unrelated file's test
+    // fixture for a field it does not exercise.
+    val onBootAutostartChanged: (Boolean) -> Unit = {},
+    val onFailClosedChanged: (Boolean) -> Unit = {},
+    val onBatteryPromptResolved: () -> Unit = {},
+    // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
+    // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
+    val onAlwaysOnOpened: () -> Unit = {},
 )
 
 /**
@@ -147,6 +168,7 @@ internal fun SettingsScreenContent(
 ) {
     val onThemeChanged = actions.onThemeChanged
     val onHwidEnabledChanged = actions.onHwidEnabledChanged
+    val context = LocalContext.current
     Column(
         modifier =
         modifier
@@ -174,6 +196,8 @@ internal fun SettingsScreenContent(
         LatencyControls(state = state, actions = actions)
 
         SettingsDnsSection(state = state, actions = actions)
+
+        TunnelSection(state = state, actions = actions, context = context)
 
         SectionHeader(stringResource(R.string.settings_section_routing))
         SettingRow(
@@ -291,6 +315,71 @@ private fun HwidControl(
     }
 }
 
+/**
+ * A thin wrapper around [SettingsTunnelSection] so [SettingsScreenContent] itself stays under
+ * detekt's `LongMethod` threshold — no separate [SectionHeader] call here, since
+ * [SettingsTunnelSection] renders its own "Tunnel" title internally, the same way
+ * [SettingsDnsSection] does for "DNS".
+ *
+ * Also hosts the battery-optimisation prompt (Task 13, spec §7.2): [SettingsState.showBatteryPrompt]
+ * is true for the one moment between a survival setting being switched on and the user responding.
+ * Both the dialog's own dismiss and its "open battery settings" action resolve through
+ * [SettingsActions.onBatteryPromptResolved] — ARCHITECTURE.md §9's "respect refusal" means the
+ * prompt is marked seen whatever the user chooses, not only on acceptance.
+ */
+@Composable
+private fun TunnelSection(
+    state: SettingsState,
+    actions: SettingsActions,
+    context: Context,
+) {
+    SettingsTunnelSection(
+        state = state,
+        onBootAutostartChange = actions.onBootAutostartChanged,
+        onFailClosedChange = actions.onFailClosedChanged,
+        onOpenVpnSettings = {
+            // Spec §7.2: the prompt's third trigger. The deep link still opens whether or not a
+            // prompt is due — shouldPromptForBattery decides that, and never twice.
+            //
+            // The order of these two statements is not load-bearing, and an earlier version of
+            // this comment claimed it was. onAlwaysOnOpened() does not raise a flag in state: it
+            // launches a coroutine that performs a PowerManager binder round trip and a Room
+            // read before it may set showBatteryPrompt, so when — and whether — the dialog
+            // appears is governed by that suspension, not by which line ran first.
+            // openVpnSettings starts the system VPN screen synchronously, and in practice covers
+            // this one well before the prompt can resolve, so the user meets the prompt on
+            // return, after doing the thing it is about. That is the experience wanted; it is
+            // what the asynchrony produces rather than something this ordering guarantees.
+            actions.onAlwaysOnOpened()
+            openVpnSettings(context)
+        },
+        onOpenBatterySettings = { openBatterySettings(context) },
+    )
+
+    if (state.showBatteryPrompt) {
+        AlertDialog(
+            onDismissRequest = actions.onBatteryPromptResolved,
+            title = { Text(stringResource(R.string.settings_battery_prompt_title)) },
+            text = { Text(stringResource(R.string.settings_battery_prompt_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        actions.onBatteryPromptResolved()
+                        openBatterySettings(context)
+                    },
+                ) {
+                    Text(stringResource(R.string.settings_battery_prompt_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = actions.onBatteryPromptResolved) {
+                    Text(stringResource(R.string.settings_battery_prompt_dismiss))
+                }
+            },
+        )
+    }
+}
+
 private fun ThemePreference.labelRes(): Int =
     when (this) {
         ThemePreference.System -> R.string.settings_theme_system
@@ -305,3 +394,34 @@ private fun XrayVersionState.displayText(): String =
         is XrayVersionState.Available -> version
         XrayVersionState.Unavailable -> stringResource(R.string.settings_about_xray_version_unavailable)
     }
+
+/** Spec §7.1: the app cannot set always-on VPN or its lockdown itself — both are system settings. */
+private fun openVpnSettings(context: Context) {
+    launchSettingsIntent(context, Settings.ACTION_VPN_SETTINGS)
+}
+
+/**
+ * Spec §7.2: the settings *list*, not `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — that direct
+ * prompt needs the `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission, one of the most
+ * policy-sensitive on Android, and ARCHITECTURE.md §14.7 says nothing here should foreclose Google
+ * Play. One extra tap is cheaper than that permission, and no new permission is declared for it.
+ */
+private fun openBatterySettings(context: Context) {
+    launchSettingsIntent(context, Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+}
+
+/**
+ * Both settings rows launch an implicit system intent this app does not control the target of —
+ * [FLAG_ACTIVITY_NEW_TASK][Intent.FLAG_ACTIVITY_NEW_TASK] since [context] here is not itself an
+ * `Activity`, and a caught [ActivityNotFoundException] rather than an uncaught crash for the rare
+ * OEM build missing the target settings Activity: a row that only ever opens elsewhere must not be
+ * able to take the whole settings screen down with it.
+ */
+private fun launchSettingsIntent(context: Context, action: String) {
+    val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        // No target Activity on this device/build — nothing more this row can do.
+    }
+}

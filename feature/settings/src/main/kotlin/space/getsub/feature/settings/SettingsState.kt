@@ -65,6 +65,19 @@ internal data class SettingsState(
     val geoUpdateResults: Map<String, GeoInstallResult> = emptyMap(),
     /** Whether a *scheduled* geo refresh may run on a metered network. A manual update always can. */
     val geoRefreshOnMetered: Boolean = false,
+    /** Connect every time the device starts (spec §4.2). See [SettingsSource.bootAutostart]. */
+    val bootAutostart: Boolean = false,
+    /**
+     * Whether the TUN is retained while a wanted session is down (spec §6). Defaults to on —
+     * matches [space.getsub.core.data.SettingsRepository.failClosed]'s own default.
+     */
+    val failClosed: Boolean = true,
+    /**
+     * Spec §7.2, ARCHITECTURE.md §9: "prompt once, respect refusal" — true for the one moment
+     * between a survival setting (boot autostart or fail-closed) being switched on and the user
+     * responding, per [shouldPromptForBattery]'s own gate in [SettingsViewModel].
+     */
+    val showBatteryPrompt: Boolean = false,
 ) {
     /** One row per install filename. See [geoRowsFor]'s KDoc for exactly how ground truth is chosen. */
     val geoRows: List<GeoRow>

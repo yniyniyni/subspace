@@ -9,14 +9,16 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import space.getsub.core.data.GeoAssetRepository
+import space.getsub.core.data.SettingsRepository
 import space.getsub.core.xray.XrayController
 import javax.inject.Singleton
 
 /**
- * Hilt bindings for this module's own seams — currently just [PassthroughValidator].
+ * Hilt bindings for this module's own seams: [PassthroughValidator] and [SessionIntentGate].
  * [TunnelClient] and friends are bound by construction (`@Inject constructor`) and need no
- * entry here; this exists for the one seam that cannot be, per [BoundPassthroughValidator]'s
- * own KDoc on why its `testConfig` lambda is not a constructor-injected dependency.
+ * entry here; these are the two that cannot be, each because its collaborator is a plain
+ * lambda so a JVM test can supply a fake — see [BoundPassthroughValidator]'s and
+ * [SessionIntentGate]'s own KDoc.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -24,6 +26,27 @@ internal object ServiceModule {
     @Provides
     @Singleton
     fun passthroughValidator(impl: BoundPassthroughValidator): PassthroughValidator = impl
+
+    /**
+     * `@Singleton` is the point of this binding, not a default: it is what makes the gate one
+     * per `:bg` process instead of one per `TunnelService` instance. [SessionIntentGate]'s KDoc
+     * says which clear outlives its service instance and why it must then consult the same gate
+     * the next instance's connect moves.
+     */
+    @Provides
+    @Singleton
+    fun sessionIntentGate(settingsRepository: SettingsRepository): SessionIntentGate =
+        SessionIntentGate(writeWanted = settingsRepository::setTunnelSessionWanted)
+
+    /**
+     * `@Singleton` for the same reason as the gate above, and it is equally load-bearing:
+     * the terminal state has to survive the `TunnelService` instance that published it,
+     * because on device (§11 row 7) the instance is replaced while the process lives on.
+     * One per instance would reproduce exactly the bug [TerminalStateMemory] closes.
+     */
+    @Provides
+    @Singleton
+    fun terminalStateMemory(): TerminalStateMemory = TerminalStateMemory()
 
     /**
      * Wires the real core into [BoundPassthroughValidator]'s `testConfig` lambda. The actual

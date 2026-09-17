@@ -547,6 +547,18 @@ internal fun Outbound.protocolName(): String =
     }
 
 /**
+ * The stored row as something the tunnel can be asked to connect to, or `null`
+ * when its persisted config failed to decode (a corrupt row — see
+ * [StoredProfile.outbound]).
+ *
+ * Lives here rather than in a caller because `:feature:home` and `:service`
+ * both need it and `:feature:*` cannot be depended on. Two copies would be two
+ * answers to what makes a row connectable.
+ */
+public fun StoredProfile.toProfile(): Profile? =
+    outbound?.let { decoded -> Profile(id = id.toString(), name = name, outbound = decoded) }
+
+/**
  * The dot-separated display string the Servers screen shows, e.g. `ws · tls · 8443` or
  * `tcp · reality · 443`.
  *

@@ -160,6 +160,31 @@ class SettingsViewModelTest {
             _selectedGeoSourceIds.value = ids
         }
 
+        private val _bootAutostart = MutableStateFlow(false)
+        override val bootAutostart: Flow<Boolean> = _bootAutostart.asStateFlow()
+
+        override suspend fun setBootAutostart(enabled: Boolean) {
+            _bootAutostart.value = enabled
+        }
+
+        private val _failClosed = MutableStateFlow(true)
+        override val failClosed: Flow<Boolean> = _failClosed.asStateFlow()
+
+        override suspend fun setFailClosed(enabled: Boolean) {
+            _failClosed.value = enabled
+        }
+
+        private val _batteryPromptShown = MutableStateFlow(false)
+        override val batteryPromptShown: Flow<Boolean> = _batteryPromptShown.asStateFlow()
+
+        override suspend fun setBatteryPromptShown(shown: Boolean) {
+            _batteryPromptShown.value = shown
+        }
+
+        var ignoringBatteryOptimizations: Boolean = false
+
+        override suspend fun isIgnoringBatteryOptimizations(): Boolean = ignoringBatteryOptimizations
+
         private companion object {
             const val DEFAULT_TIMEOUT = 5
             const val MIN_TIMEOUT = 1
@@ -721,5 +746,66 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             geoAssetSource.removed shouldBe emptyList()
+        }
+
+    // ── The battery prompt's trigger (spec §7.2) ────────────────────────────
+    //
+    // `survivalSettingJustEnabled` used to be passed as a literal `true`, with each caller
+    // guarding itself with `if (enabled)`. The parameter could not be false in production, so
+    // BatteryPromptTest's `doesNotPromptOutOfNowhere` was pinning a value no call site could
+    // produce. These cover the call sites instead of the pure function.
+
+    @Test
+    fun `turning a survival setting on prompts about battery`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onBootAutostartChanged(true)
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe true
+        }
+
+    @Test
+    fun `turning a survival setting off does not prompt`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onFailClosedChanged(false)
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe false
+        }
+
+    /**
+     * §7.2's third trigger, which raised no prompt at all. Always-on is a deep link and never a
+     * switch (§7.1), so the tap is the strongest statement of intent the app can observe.
+     */
+    @Test
+    fun `opening always-on prompts about battery`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onAlwaysOnOpened()
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe true
+        }
+
+    /** An app already exempt from Doze has nothing to ask for. */
+    @Test
+    fun `an already exempt app is not prompted`() =
+        runTest {
+            val settingsSource = FakeSettingsSource().apply { ignoringBatteryOptimizations = true }
+            val viewModel =
+                SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onAlwaysOnOpened()
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe false
         }
 }

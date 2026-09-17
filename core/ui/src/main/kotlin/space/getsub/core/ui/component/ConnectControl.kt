@@ -67,7 +67,7 @@ private const val CONNECT_HALO_BREATH_DURATION_MILLIS = 3200
 internal const val CONNECT_HALO_TEST_TAG = "connect-halo"
 
 /**
- * The three states [ConnectControl] renders.
+ * The four states [ConnectControl] renders.
  *
  * A visual-only projection of the richer connection state the service
  * publishes ([space.getsub.core.model.ConnectionState] on the
@@ -77,10 +77,22 @@ internal const val CONNECT_HALO_TEST_TAG = "connect-halo"
  * component's — `:core:ui` stays free of `:core:model`'s richer state
  * machine so the button's own state-to-color table doesn't grow a case for
  * every stage a screen might be in.
+ *
+ * [Reconnecting] earns a member of its own rather than folding into
+ * [Connecting], which is where it started. The two look alike and differ in
+ * the one way that matters: [Connecting] refuses taps, because a second tap
+ * mid-start would queue a second connect attempt, and a start is bounded — it
+ * finishes on its own. A reconnect is **not** bounded (a retryable failure
+ * retries indefinitely while a network exists), and with the kill switch on it
+ * is exactly the state in which the user has no connectivity and most needs a
+ * way out. Folding it into [Connecting] therefore produced a state with no
+ * exit and no bound. It could not be folded into [Connected] either: that
+ * renders the connected colour and would claim a tunnel that is down.
  */
 enum class ConnectVisualState {
     Disconnected,
     Connecting,
+    Reconnecting,
     Connected,
 }
 
@@ -115,7 +127,12 @@ internal fun ConnectVisualState.colors(): ConnectControlColors {
         // reading of it (fix round 1, flagged in code review): secondary
         // pairs with its own already-defined guaranteed-contrast partner,
         // onSecondary, so nothing here needs inventing.
-        ConnectVisualState.Connecting ->
+        // Reconnecting shares Connecting's pair deliberately. It *is* a
+        // transient not-connected state, colours.css defines no token of its
+        // own for it, and inventing one here would be a design decision this
+        // component has no mandate to make. The two are distinguished by the
+        // action they announce and by whether a tap is accepted, not by hue.
+        ConnectVisualState.Connecting, ConnectVisualState.Reconnecting ->
             ConnectControlColors(container = scheme.secondary, content = scheme.onSecondary)
         // connected/onConnected, not connectedContainer/onConnected: Color.kt's
         // KDoc only verifies contrast for the (connected, onConnected) pair —
@@ -135,6 +152,12 @@ private fun ConnectVisualState.actionDescription(): String =
             // ConnectControl's guard below) — so there is nothing to
             // announce but the transient status itself.
             ConnectVisualState.Connecting -> R.string.connect_control_action_connecting
+            // "Disconnect", not "Reconnecting": this control reports the action
+            // a tap performs, not the state it is in (see this component's
+            // KDoc), and here a tap genuinely disconnects. Announcing the
+            // status would leave a screen-reader user with no way to discover
+            // the one exit from an unbounded state.
+            ConnectVisualState.Reconnecting -> R.string.connect_control_action_disconnect
             ConnectVisualState.Connected -> R.string.connect_control_action_disconnect
         },
     )
@@ -157,6 +180,12 @@ private fun ConnectVisualState.actionDescription(): String =
  * second connect attempt (§5.3: the start sequence is already slow and
  * async; a queued second start is a race, not a retry).
  *
+ * [ConnectVisualState.Reconnecting] is deliberately **not** covered by that
+ * guard. The guard's whole justification is that a start finishes on its own,
+ * so refusing the tap costs the user nothing; a reconnect has no such bound,
+ * so refusing it there would cost the user their only exit. See the enum's
+ * KDoc.
+ *
  * The halo — `--color-connected` at [CONNECT_HALO_BLUR_RADIUS] blur,
  * breathing over [CONNECT_HALO_BREATH_DURATION_MILLIS] — exists in
  * composition *only* while [ConnectVisualState.Connected]. It is not merely
@@ -169,7 +198,7 @@ private fun ConnectVisualState.actionDescription(): String =
  * six-hour screen-off drain; this is the mechanism that keeps that cost from
  * existing in the two states that are not an established tunnel.
  *
- * @param state which of the three visual states to render.
+ * @param state which of the four visual states to render.
  * @param onClick invoked on tap, except while [ConnectVisualState.Connecting].
  */
 @Composable

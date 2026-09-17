@@ -263,6 +263,36 @@ class ParcelMappingTest {
             httpProxyPort = 0,
             reason = 0,
             detail = "",
+            attempt = 0,
         ).toState() shouldBe ConnectionState.Disconnected
+    }
+
+    @Test
+    fun reconnectingRoundTripsThroughTheMapping() {
+        val state = ConnectionState.Reconnecting(reason = FailureReason.CoreStartFailed, attempt = 2)
+
+        val restored = ConnectionStateParcel.from(state).toState()
+
+        restored shouldBe state
+    }
+
+    /**
+     * The discriminant is what tells the two sides apart. A collision silently turns
+     * one state into another across the binder — §5.5's "an app showing Disconnected
+     * while the tunnel is up is worse than one that crashes", by mis-numbering.
+     */
+    @Test
+    fun everyStateGetsItsOwnDiscriminant() {
+        val kinds =
+            listOf(
+                ConnectionState.Disconnected,
+                ConnectionState.Connecting(StartupStage.StartingCore),
+                ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080),
+                ConnectionState.Disconnecting,
+                ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1),
+                failure(FailureReason.ConfigRejected, "detail"),
+            ).map { state -> ConnectionStateParcel.from(state).kind }
+
+        kinds.toSet().size shouldBe kinds.size
     }
 }

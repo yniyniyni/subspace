@@ -122,6 +122,25 @@ class LogCaptureTest {
     }
 
     @Test
+    fun `an embedded newline in the tag position does not leak the secret that follows it`() {
+        val ring = LogRing(tmp.newFolder())
+        // The tag group is a negated character class, which matches \n and \r
+        // regardless of DOTALL. Without excluding them explicitly, a "line"
+        // whose first physical line has no colon lets the tag group run past
+        // the newline and swallow real content — including a secret — into
+        // the prefix this class preserves verbatim. Captured lines never
+        // legitimately contain an embedded newline (LogcatReader.lines() uses
+        // BufferedReader.readLine(), which strips every terminator), but this
+        // seam (captureOnce(Sequence<String>)) accepts arbitrary strings, and
+        // the guard belongs to this class, not to what a caller happens to do.
+        val line = "09-17 19:40:00.123  1234  5678 W Tag no colon\n203.0.113.44 secret: rest"
+        LogCapture(ring).captureOnce(sequenceOf(line))
+
+        val written = ring.readAll().joinToString("\n")
+        assertFalse("raw IP leaked through the tag group: $written", "203.0.113.44" in written)
+    }
+
+    @Test
     fun `redaction is idempotent across a second pass on a realistically-prefixed line`() {
         val ring = LogRing(tmp.newFolder())
         val capture = LogCapture(ring)

@@ -29,9 +29,37 @@ private const val ABNORMAL_END_MARKER = "log capture ended abnormally (stream re
  * The tag group stops at the first `:`: threadtime never puts a colon inside
  * the tag, that colon is the field separator, so a body that itself starts
  * with a label like `stopTunnel:` is not swallowed into the prefix.
+ *
+ * The tag group is `[^:\n\r]*`, not the simpler `[^:]*` — a negated character
+ * class matches a line terminator regardless of whether `DOTALL` is set, so
+ * `[^:]*` would let the tag run past an embedded `\n` or `\r` and swallow
+ * real content — a secret included — into the prefix this pattern preserves
+ * verbatim. [LogcatReader.lines] never hands this a line with an embedded
+ * terminator (`BufferedReader.readLine()` strips every one), but
+ * `captureOnce(Sequence<String>)` is a seam that accepts arbitrary strings,
+ * and this is the single enforcement point for ARCHITECTURE.md §5.6 — a
+ * safety property that held only because of what some other class happened
+ * to do would not be a property. Excluding both explicitly means a line
+ * shaped like the prefix but carrying a stray terminator fails to match at
+ * all and falls back to whole-line [redact] instead, which is the safe
+ * direction: an over-redacted multi-line payload, never an under-redacted
+ * one.
+ *
+ * **The assumption this whole split rests on:** every tag captured through
+ * this pattern is a compile-time constant — this codebase's own `TAG` vals
+ * (`TunnelService`, `TunnelClient`, `BootReceiver`, `SubscriptionSyncer`,
+ * `SubspaceApplication`, …) or a bundled native library's fixed `LOG_TAG`
+ * (`subspace-tun2socks`) — never a value built from user or network data.
+ * That is what makes preserving the prefix verbatim safe. Nothing enforces
+ * it: the tag group is otherwise unbounded and admits spaces, so a future
+ * `Log.w(someHostname, …)` anywhere in `:service` or `:core` would have that
+ * hostname preserved on disk, and no test here would catch it. There is no
+ * code fix for that — it is a property of how `Log` calls are written, not
+ * of this pattern — so this note exists to make the assumption visible to
+ * whoever next adds one.
  */
 private val LOGCAT_PREFIX_PATTERN =
-    Regex("""^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+\d+\s+\d+\s+[VDIWEF]\s+[^:\s][^:]*:\s*)(.*)$""")
+    Regex("""^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+\d+\s+\d+\s+[VDIWEF]\s+[^:\s\n\r][^:\n\r]*:\s*)(.*)$""")
 
 /**
  * Redacts a captured line's message body only, leaving its logcat prefix —

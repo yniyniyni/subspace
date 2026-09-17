@@ -23,9 +23,18 @@ internal class LogcatReader(
     @Volatile
     private var process: Process? = null
 
+    @Volatile
+    private var reader: BufferedReader? = null
+
+    @Volatile
+    var endedWithError: Boolean = false
+        private set
+
     /**
      * Blocking, and consumed on a dedicated thread — this follows the
      * subprocess until [close].
+     *
+     * Called at most once per instance — the capture thread is its only caller.
      *
      * A spawn failure yields an empty sequence rather than throwing: capture is
      * a diagnostic, and ARCHITECTURE.md §10.4's rule about failing loudly is
@@ -38,12 +47,21 @@ internal class LogcatReader(
                 return emptySequence()
             }
         process = proc
-        val reader = BufferedReader(InputStreamReader(proc.inputStream))
-        return generateSequence { runCatching { reader.readLine() }.getOrNull() }
+        val newReader = BufferedReader(InputStreamReader(proc.inputStream))
+        reader = newReader
+        return generateSequence {
+            runCatching { newReader.readLine() }
+                .onFailure {
+                    endedWithError = true
+                }
+                .getOrNull()
+        }
     }
 
     fun close() {
+        runCatching { reader?.close() }
         runCatching { process?.destroy() }
+        reader = null
         process = null
     }
 }

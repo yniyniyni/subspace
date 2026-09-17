@@ -63,17 +63,30 @@ class LogRingTest {
     @Test
     fun `rotation failure clears current to stay bounded`() {
         val dir = tmp.newFolder()
-        // Pre-create log.1 as a directory so renameTo(previous) will fail.
-        File(dir, "log.1").mkdirs()
+        // Pre-create log.1 as a non-empty directory to block rotation. This forces
+        // renameTo to fail without throwing (it returns false). File.delete() fails on
+        // non-empty directories, so it survives the delete() call.
+        val log1Dir = File(dir, "log.1")
+        log1Dir.mkdirs()
+        File(log1Dir, "placeholder").writeText("x")
 
         val ring = LogRing(dir, maxBytesPerFile = 200)
-        // Append enough lines to trigger rotation multiple times.
+        // Append enough lines to trigger rotation multiple times. Rotations will fail
+        // because log.1 exists as a non-empty directory, exercising the fallback.
         repeat(50) { ring.append("line-$it".padEnd(90, '.')) }
 
-        // Despite rotation failures, totalBytes must stay bounded. Verify that the
+        // Verify totalBytes stays bounded despite rotation failures. This proves the
         // fallback (clearing current when rename fails) prevents unbounded growth.
-        assertTrue("grew to ${ring.totalBytes()}", ring.totalBytes() <= 600)
-        // The newest line must still be present, even after rotation failures.
+        val totalBytes = ring.totalBytes()
+        assertTrue("grew to $totalBytes", totalBytes <= 600)
+
+        // Clean up the blocking directory so we can verify the newest line was kept.
+        log1Dir.listFiles()?.forEach { it.delete() }
+        log1Dir.delete()
+
+        // The newest line must still be present, even after many failed rotations.
+        // This verifies that clearing current on failed rotation still allows the
+        // line being appended to land.
         val lines = ring.readAll()
         assertTrue("ring must not be empty", lines.isNotEmpty())
         assertTrue(lines.last().startsWith("line-49"))

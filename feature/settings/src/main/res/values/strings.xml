@@ -126,4 +126,15 @@
     <string name="settings_geo_add_custom_action">Add</string>
     <string name="settings_geo_metered_title">Update over mobile data</string>
     <string name="settings_geo_metered_summary">Off by default — the largest database is over 70 MB. \"Update now\" always works, on any network.</string>
+
+    <string name="log_viewer_title">Session log</string>
+    <string name="log_viewer_empty">Nothing logged yet. Connect, and the session\'s log appears here.</string>
+    <string name="log_viewer_refresh">Refresh</string>
+    <string name="log_viewer_clear">Clear</string>
+    <string name="log_viewer_share">Share</string>
+    <string name="log_viewer_redaction_notice">Server addresses, IDs, keys and subscription links are removed before anything is written to this log.</string>
+    <string name="log_viewer_back">Back</string>
+    <string name="settings_section_diagnostics">Diagnostics</string>
+    <string name="settings_logs_title">Session log</string>
+    <string name="settings_logs_summary">Read or share what the tunnel recorded</string>
 </resources>

@@ -59,4 +59,23 @@ class LogRingTest {
         ring.clear()
         assertEquals(emptyList<String>(), ring.readAll())
     }
+
+    @Test
+    fun `rotation failure clears current to stay bounded`() {
+        val dir = tmp.newFolder()
+        // Pre-create log.1 as a directory so renameTo(previous) will fail.
+        File(dir, "log.1").mkdirs()
+
+        val ring = LogRing(dir, maxBytesPerFile = 200)
+        // Append enough lines to trigger rotation multiple times.
+        repeat(50) { ring.append("line-$it".padEnd(90, '.')) }
+
+        // Despite rotation failures, totalBytes must stay bounded. Verify that the
+        // fallback (clearing current when rename fails) prevents unbounded growth.
+        assertTrue("grew to ${ring.totalBytes()}", ring.totalBytes() <= 600)
+        // The newest line must still be present, even after rotation failures.
+        val lines = ring.readAll()
+        assertTrue("ring must not be empty", lines.isNotEmpty())
+        assertTrue(lines.last().startsWith("line-49"))
+    }
 }

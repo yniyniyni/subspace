@@ -16,6 +16,13 @@ import java.io.File
  * starts. So the ring holds between one and two files' worth of lines, and the
  * line lost to rotation is always the oldest one.
  *
+ * **Rotation failure fallback:** [File.renameTo] and [File.delete] return false on
+ * failure rather than throwing. If rotation fails (e.g. because [previous] cannot be
+ * replaced), [current] is cleared instead of growing unbounded. This preserves the
+ * bounded guarantee and keeps the newest line: what is lost is older history, which
+ * was about to be discarded anyway. Logging must never abort a teardown, and bounded
+ * beats keeping the most history.
+ *
  * Every operation swallows [java.io.IOException]. Logging is a diagnostic, and
  * a diagnostic that can abort a tunnel teardown is worse than one that silently
  * misses a line — ARCHITECTURE.md §5.4 requires teardown to finish anyway.
@@ -35,7 +42,12 @@ internal class LogRing(
                 if (!dir.exists()) dir.mkdirs()
                 if (current.exists() && current.length() >= maxBytesPerFile) {
                     if (previous.exists()) previous.delete()
-                    current.renameTo(previous)
+                    if (!current.renameTo(previous)) {
+                        // Rotation failed (renameTo returns false on failure). Clear
+                        // current to prevent unbounded growth. Oldest history is lost,
+                        // but bounded is the guarantee that matters.
+                        current.delete()
+                    }
                 }
                 current.appendText(line + "\n")
             }

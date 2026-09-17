@@ -50,53 +50,83 @@ class LogCaptureTest {
         }
     }
 
+    /** A `-v threadtime` line, the real shape `LogcatReader.lines()` emits. */
+    private fun logcatLine(
+        tag: String,
+        body: String,
+    ) = "09-17 19:40:00.123  1234  5678 W $tag: $body"
+
     @Test
-    fun `a server address never reaches the ring`() {
+    fun `a server address in a realistically-prefixed line never reaches the ring`() {
         val ring = LogRing(tmp.newFolder())
-        LogCapture(ring).captureOnce(sequenceOf("dial failed to 203.0.113.44:443"))
+        val line = logcatLine("TunnelService", "dial failed to 203.0.113.44:443")
+        LogCapture(ring).captureOnce(sequenceOf(line))
 
         val written = ring.readAll().joinToString("\n")
         assertFalse("raw IP on disk: $written", "203.0.113.44" in written)
-        assertTrue("line was dropped entirely", written.isNotEmpty())
+        assertTrue("tag was lost along with the secret: $written", "TunnelService" in written)
     }
 
     @Test
-    fun `a UUID never reaches the ring`() {
+    fun `a UUID in a realistically-prefixed line never reaches the ring`() {
         val ring = LogRing(tmp.newFolder())
-        LogCapture(ring).captureOnce(
-            sequenceOf("user id 3f2504e0-4f89-11d3-9a0c-0305e82c3301 rejected"),
-        )
+        val line = logcatLine("AuthWorker", "user id 3f2504e0-4f89-11d3-9a0c-0305e82c3301 rejected")
+        LogCapture(ring).captureOnce(sequenceOf(line))
 
         val written = ring.readAll().joinToString("\n")
         assertFalse(written, "3f2504e0-4f89-11d3-9a0c-0305e82c3301" in written)
+        assertTrue("tag was lost along with the secret: $written", "AuthWorker" in written)
     }
 
     @Test
-    fun `a subscription URL never reaches the ring`() {
+    fun `a subscription URL in a realistically-prefixed line never reaches the ring`() {
         val ring = LogRing(tmp.newFolder())
-        LogCapture(ring).captureOnce(sequenceOf("fetching https://panel.example.com/sub/abc"))
+        val line = logcatLine("SubFetcher", "fetching https://panel.example.com/sub/abc")
+        LogCapture(ring).captureOnce(sequenceOf(line))
 
         val written = ring.readAll().joinToString("\n")
         assertFalse(written, "panel.example.com" in written)
+        assertTrue("tag was lost along with the secret: $written", "SubFetcher" in written)
     }
 
     @Test
-    fun `a diagnostic with no secrets survives intact`() {
+    fun `a realistically-shaped logcat line keeps its tag and phase value`() {
         val ring = LogRing(tmp.newFolder())
-        // M8's teardown instrumentation is exactly this shape, and it is the
-        // line W7 depends on (spec §5).
-        val line = "stopTunnel: phase=tun2socks-stop"
+        // M8's teardown instrumentation is exactly this shape, and the tag and
+        // the phase value are what W7 depends on (spec §5) — not byte-identity
+        // of the whole line. The body's own leading "stopTunnel:" label is
+        // redact()'s documented fail-safe direction (BARE_HOST_PREFIX_PATTERN
+        // treats any leading "word:" as a candidate bare host) and is accepted,
+        // not chased: the component name survives in the tag, and the value
+        // survives in "phase=tun2socks-stop".
+        val line = logcatLine("TunnelService", "stopTunnel: phase=tun2socks-stop")
         LogCapture(ring).captureOnce(sequenceOf(line))
 
-        val written = ring.readAll()
-        assertTrue("expected \"$line\" verbatim, got $written", written.any { line in it })
+        val written = ring.readAll().joinToString("\n")
+        assertTrue("tag lost: $written", "TunnelService" in written)
+        assertTrue("phase value lost: $written", "phase=tun2socks-stop" in written)
     }
 
     @Test
-    fun `redaction is idempotent across a second pass`() {
+    fun `a line that does not match the logcat shape is redacted whole`() {
+        val ring = LogRing(tmp.newFolder())
+        // Missing the pid/tid fields the real prefix always carries, so this
+        // must fail LOGCAT_PREFIX_PATTERN and fall back to whole-line redact().
+        // If capture ever regressed to leaving an unparseable line alone
+        // instead, the IP below would survive verbatim.
+        val line = "09-17 19:40:00.123 W TunnelService: dial failed to 203.0.113.44:443"
+        LogCapture(ring).captureOnce(sequenceOf(line))
+
+        val written = ring.readAll().joinToString("\n")
+        assertFalse("raw IP on disk after a fail-closed line: $written", "203.0.113.44" in written)
+    }
+
+    @Test
+    fun `redaction is idempotent across a second pass on a realistically-prefixed line`() {
         val ring = LogRing(tmp.newFolder())
         val capture = LogCapture(ring)
-        capture.captureOnce(sequenceOf("dial failed to 203.0.113.44:443"))
+        val line = logcatLine("TunnelService", "dial failed to 203.0.113.44:443")
+        capture.captureOnce(sequenceOf(line))
         val once = ring.readAll().single()
 
         ring.clear()

@@ -2,13 +2,13 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.service
 
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import space.getsub.service.log.LogRing
+import java.io.File
 
 class LogRingTest {
     @get:Rule val tmp = TemporaryFolder()

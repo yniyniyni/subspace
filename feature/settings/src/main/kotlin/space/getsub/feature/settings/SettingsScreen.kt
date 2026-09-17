@@ -216,6 +216,7 @@ internal fun SettingsScreenContent(
 
         TunnelSection(state = state, actions = actions, context = context)
 
+        SectionHeader(stringResource(R.string.settings_section_routing))
         SettingsRoutingSection(navigation = navigation)
 
         SectionHeader(stringResource(R.string.settings_section_geo))

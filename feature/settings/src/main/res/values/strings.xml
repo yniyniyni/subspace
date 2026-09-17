@@ -134,6 +134,9 @@
     <string name="log_viewer_share">Share</string>
     <string name="log_viewer_redaction_notice">Server addresses, IDs, keys and subscription links are removed before anything is written to this log.</string>
     <string name="log_viewer_back">Back</string>
+    <!-- Prepended to a shared log that was too large to send in full (log_viewer_share
+         truncates to the newest portion — see shareLogText's own KDoc). -->
+    <string name="log_viewer_share_truncated">Only the most recent part of this log is included below — it was too large to share in full.</string>
     <string name="settings_section_diagnostics">Diagnostics</string>
     <string name="settings_logs_title">Session log</string>
     <string name="settings_logs_summary">Read or share what the tunnel recorded</string>

@@ -9,7 +9,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import space.getsub.core.ui.component.SectionHeader
 import space.getsub.core.ui.component.SettingRow
 
 /**
@@ -19,6 +18,10 @@ import space.getsub.core.ui.component.SettingRow
  * [SettingsGeoSection] were, both for `LongMethod` and because adding this
  * task's [SettingsNavigation] parameter pushed [SettingsScreenContent] past
  * detekt's `LongParameterList`/`LongMethod` thresholds together.
+ *
+ * Deliberately **not** a `SectionHeader` plus this content in one composable —
+ * [SettingsScreen] places the header itself, the same split
+ * [SettingsGeoSection]'s own KDoc documents for that section.
  */
 @Composable
 internal fun SettingsRoutingSection(
@@ -26,7 +29,6 @@ internal fun SettingsRoutingSection(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
-        SectionHeader(stringResource(R.string.settings_section_routing))
         SettingRow(
             icon = Icons.AutoMirrored.Filled.List,
             label = stringResource(R.string.settings_routing_row_label),

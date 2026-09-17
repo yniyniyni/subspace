@@ -243,6 +243,21 @@ private fun LogLineList(
 }
 
 /**
+ * Plain-text `ACTION_SEND` share cap, in characters of [LogViewerState.lines] joined.
+ *
+ * Binder's transaction buffer is roughly 1 MB **per process, shared** across every
+ * in-flight transaction, not 1 MB per call, and a Kotlin `String` marshals through a
+ * `Parcel` as UTF-16 — two bytes per character — so raw byte count understates the
+ * marshalled size by roughly half. A near-full ring could therefore approach or exceed
+ * that shared budget and throw `TransactionTooLargeException`, crashing the calling
+ * Activity, on exactly the large-log case this screen exists to serve. This cap keeps
+ * the shared text — and so its UTF-16 `Parcel` encoding — an order of magnitude under
+ * that limit, with headroom for whatever else shares the process's Binder budget at the
+ * same moment.
+ */
+private const val SHARE_TEXT_CHAR_LIMIT = 100_000
+
+/**
  * Spec §3.4: `ACTION_SEND` with the ring's contents as plain text, never a
  * `FileProvider` attachment — see [LogViewerScreen]'s own KDoc for the full
  * reasoning. The chooser lets the user pick where it goes; this function
@@ -255,8 +270,39 @@ private fun shareLogText(
     val shareIntent =
         Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, lines.joinToString("\n"))
+            putExtra(Intent.EXTRA_TEXT, buildShareText(context, lines))
         }
     val chooserTitle = context.getString(R.string.log_viewer_share)
     context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
+}
+
+/**
+ * Truncates to [SHARE_TEXT_CHAR_LIMIT], newest lines first and whole lines only — never a
+ * line cut in half. Walks [lines] from the end (the newest, and the part most likely to
+ * explain a failure — the same priority the ring itself keeps, oldest evicted first) and
+ * stops once one more line would exceed the budget; the one exception is the first line
+ * considered, which is always kept even if it alone exceeds the budget, so a share is
+ * never empty. When anything was dropped, [R.string.log_viewer_share_truncated] is
+ * prepended so the recipient knows they are not looking at the whole session.
+ */
+private fun buildShareText(
+    context: Context,
+    lines: List<String>,
+): String {
+    val kept = mutableListOf<String>()
+    var length = 0
+    for (line in lines.asReversed()) {
+        val addedLength = line.length + 1 // +1 for the newline that will join it
+        if (kept.isNotEmpty() && length + addedLength > SHARE_TEXT_CHAR_LIMIT) break
+        kept.add(line)
+        length += addedLength
+    }
+    kept.reverse()
+
+    val body = kept.joinToString("\n")
+    return if (kept.size < lines.size) {
+        context.getString(R.string.log_viewer_share_truncated) + "\n\n" + body
+    } else {
+        body
+    }
 }

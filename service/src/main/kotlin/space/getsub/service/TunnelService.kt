@@ -74,6 +74,8 @@ import space.getsub.core.xray.TunnelSettings
 import space.getsub.core.xray.XrayConfigGenerator
 import space.getsub.core.xray.XrayController
 import space.getsub.core.xray.XrayException
+import space.getsub.service.log.LogCapture
+import space.getsub.service.log.LogRing
 import java.io.File
 import javax.inject.Inject
 
@@ -538,6 +540,20 @@ class TunnelService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
     private val callbacks = RemoteCallbackList<ITunnelCallback>()
+
+    /**
+     * Spec §3.3: on-disk ring a session's log is captured into, and the
+     * capture that reads logcat, redacts, and appends to it. Tied to session
+     * lifetime — [logCapture] starts when the service enters foreground for a
+     * connect ([startTunnel]) and stops last in [stopTunnel], after every
+     * phase that logs.
+     *
+     * `by lazy`, not an eager initialiser: [filesDir] is a `Context` method,
+     * and a field initialiser runs before `attachBaseContext()` — the same
+     * reason [foreignVpn] just below is `by lazy` rather than built inline.
+     */
+    private val logRing by lazy { LogRing(File(filesDir, LOG_DIR_NAME)) }
+    private val logCapture by lazy { LogCapture(logRing) }
 
     /** Guards measurement against another app's VPN holding the route — see [ForeignVpn]. */
     private val foreignVpn by lazy { ForeignVpn(applicationContext) }
@@ -1180,6 +1196,11 @@ class TunnelService : VpnService() {
             establishForeground = { goForeground(R.string.notification_connecting) },
             onRejected = { rejectInitialForegroundLifecycle(gen, rowId) },
             launchStartup = {
+                // Spec §3.3: capture starts here, once the service has actually
+                // entered foreground and before the start sequence below runs —
+                // not inside it, so a session that never reaches resolveAndStartCore
+                // is still captured.
+                logCapture.start()
                 scope.launch {
                     val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
                     when (val outcome = attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)) {
@@ -2555,6 +2576,11 @@ class TunnelService : VpnService() {
         removeForegroundSafely()
         publish(finalState)
         Log.i(TAG, "teardown: done +${sinceStart()}ms")
+        // Spec §3.3: stopped last, after every phase above has logged — a
+        // capture that stops first would go quiet before the teardown becomes
+        // interesting. Guarded like the native calls above: a diagnostic must
+        // not stop this teardown from finishing.
+        runCatching { logCapture.stop() }
         return StoppedSession(startId = startId, intentToken = intentToken)
     }
 
@@ -3392,6 +3418,7 @@ class TunnelService : VpnService() {
     private companion object {
         const val CONFIG_NAME = "xray-config.json"
         const val FOREGROUND_LIFECYCLE_REJECTED = "ForegroundLifecycleRejected"
+        const val LOG_DIR_NAME = "logs"
     }
 }
 

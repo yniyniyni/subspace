@@ -416,6 +416,14 @@ class TunnelService : VpnService() {
     @Inject
     internal lateinit var sessionIntent: SessionIntentGate
 
+    /**
+     * §11 row 7. One per `:bg` process, so a terminal failure survives *this*
+     * instance — see [TerminalStateMemory], and [ServiceModule] for why the
+     * `@Singleton` scope is the whole point of the binding.
+     */
+    @Inject
+    internal lateinit var terminalState: TerminalStateMemory
+
     // Built in onCreate, once its data collaborators above are injected. Same
     // suspend-lambda indirection as connectionRecorder, for the same reason —
     // see RoutingResolver's KDoc.
@@ -676,6 +684,13 @@ class TunnelService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        // §11 row 7. A terminal failure published by the *previous* instance is
+        // this instance's starting state: on device the service object is replaced
+        // while the process survives, and seeding the field's default here is what
+        // made a revoke read as `Disconnected` to anyone who opened the app after
+        // the fact. Seeding the remembered failure makes this instance answer the
+        // binder exactly as the destroyed one would have.
+        synchronized(lock) { currentState = terminalState.seedState() }
         // §5.6: a config left by a start that failed, or by a process the system
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
@@ -1021,6 +1036,12 @@ class TunnelService : VpnService() {
 
     private fun publishLocked(next: ConnectionState) {
         currentState = next
+        // §11 row 7: hand the terminal state to the process-scoped memory so the
+        // *next* instance can seed from it. Recording every state, not only
+        // failures, is deliberate — [TerminalStateMemory.record] clears itself on
+        // anything non-terminal, which is what makes a stale revoke impossible
+        // without a timestamp.
+        terminalState.record(next)
         val parcel = ConnectionStateParcel.from(next)
         val count = callbacks.beginBroadcast()
         repeat(count) { i ->

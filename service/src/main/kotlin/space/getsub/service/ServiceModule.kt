@@ -39,6 +39,16 @@ internal object ServiceModule {
         SessionIntentGate(writeWanted = settingsRepository::setTunnelSessionWanted)
 
     /**
+     * `@Singleton` for the same reason as the gate above, and it is equally load-bearing:
+     * the terminal state has to survive the `TunnelService` instance that published it,
+     * because on device (§11 row 7) the instance is replaced while the process lives on.
+     * One per instance would reproduce exactly the bug [TerminalStateMemory] closes.
+     */
+    @Provides
+    @Singleton
+    fun terminalStateMemory(): TerminalStateMemory = TerminalStateMemory()
+
+    /**
      * Wires the real core into [BoundPassthroughValidator]'s `testConfig` lambda. The actual
      * file lifecycle — write, call, delete, convert a real refusal to `false` — lives in
      * [validateOnCore], which is a plain top-level `suspend fun` precisely so it can be unit

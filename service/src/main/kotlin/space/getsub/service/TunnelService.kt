@@ -1780,19 +1780,31 @@ class TunnelService : VpnService() {
         terminalOutcome.settleHandlingLifecycleRejection(
             gen = gen,
             state = connected,
-            lifecycle = { goForeground(R.string.notification_state_connected) },
-            persist = {
-                connectionRecorder.record(rowId, connected)
-                // Spec §2.4: the second of three cancellation sites — a
-                // successful connect means whatever retry was pending for the
-                // failure this replaces no longer applies. Inside `persist`,
-                // not after it returns, for the same reason failStart's intent
-                // clear is: only a generation that actually committed may act.
-                cancelBackoffRetry()
-                // Fix round 1, Finding 1: the counter the next outage should
-                // start from zero, not from wherever this one left off.
-                synchronized(lock) { reconnectAttempts.reset() }
+            lifecycle = {
+                val established = goForeground(R.string.notification_state_connected)
+                if (established) {
+                    // Spec §2.4: a successful connect means whatever retry was pending
+                    // for the failure this replaces no longer applies. This runs here,
+                    // inside the generation-checked transition under [lock], and not in
+                    // `persist` — `persist` runs after `record()` suspends, and a newer
+                    // generation can arm its own retry during that suspension. Committed
+                    // and still-current are different properties: cancelling from
+                    // `persist` cancelled whichever generation's timer happened to be
+                    // live when the write finally resumed, which is not necessarily this
+                    // one's. From here a superseded generation cannot reach this line at
+                    // all. `Locked`, not the `synchronized` wrapper: [lock] is already
+                    // held by [TerminalOutcome.settle].
+                    cancelBackoffRetryLocked()
+                    // Fix round 1, Finding 1: the counter the next outage should start
+                    // from zero, not from wherever this one left off. Gated on
+                    // `established`: a rejected foreground hands off to
+                    // [handleForegroundLifecycleRejection] instead, and must not clear a
+                    // retry that belongs to a session which never came up.
+                    reconnectAttempts.reset()
+                }
+                established
             },
+            persist = { connectionRecorder.record(rowId, connected) },
             onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
         )
         // The settlement's own outcome needs no branch here: all three leave this
@@ -3187,12 +3199,19 @@ class TunnelService : VpnService() {
             terminalOutcome.settleHandlingLifecycleRejection(
                 gen = gen,
                 state = connected,
-                lifecycle = { goForeground(R.string.notification_state_connected) },
-                persist = {
-                    connectionRecorder.record(rowId, connected)
-                    cancelBackoffRetry()
-                    synchronized(lock) { reconnectAttempts.reset() }
+                lifecycle = {
+                    val established = goForeground(R.string.notification_state_connected)
+                    if (established) {
+                        // See [attachTun]'s matching site: the cancel and the attempt
+                        // counter reset belong to the generation-checked transition, not
+                        // to `persist` — a superseded generation must not be able to
+                        // reach either after `persist` suspends in `record()`.
+                        cancelBackoffRetryLocked()
+                        reconnectAttempts.reset()
+                    }
+                    established
                 },
+                persist = { connectionRecorder.record(rowId, connected) },
                 onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
             )
         if (settlement != TerminalSettlement.Committed) return
@@ -3273,11 +3292,13 @@ class TunnelService : VpnService() {
      *
      *  - [reconcileNow] on [ReconcileTrigger.NetworkLost] — §2.4's no-network,
      *    no-timer rule on the losing edge.
-     *  - a committed [ConnectionState.Connected], from both [attachTun] and
-     *    [attachRetainedTun] — the failure the pending retry was for is over.
      *  - [onDestroy].
-     *  - [stopTunnel] and [settleTerminalFailure], which take [lock] already
-     *    and so call [cancelBackoffRetryLocked] inline instead.
+     *  - [stopTunnel], [settleTerminalFailure], and a committed
+     *    [ConnectionState.Connected] in both [attachTun] and
+     *    [attachRetainedTun] — the failure the pending retry was for is over.
+     *    All four already hold [lock] at the point they act — the last two
+     *    inside the generation-checked `lifecycle` lambda [TerminalOutcome]
+     *    runs — and so call [cancelBackoffRetryLocked] inline instead.
      */
     private fun cancelBackoffRetry() {
         synchronized(lock) { cancelBackoffRetryLocked() }

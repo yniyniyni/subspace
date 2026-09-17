@@ -63,6 +63,27 @@ class TerminalOutcomeTest {
         }
     }
 
+    /**
+     * Stands in for `backoffJob` plus which generation armed it.
+     *
+     * [TunnelService.cancelBackoffRetryLocked] has no idea which generation armed the job it
+     * cancels — that is exactly the defect this fake exists to expose: an unconditional
+     * `cancel()` called from the wrong generation's cleanup wipes out whichever generation is
+     * currently armed, not the caller's own.
+     */
+    private class FakeRetry {
+        var armedByGen: Int? = null
+            private set
+
+        fun arm(gen: Int) {
+            armedByGen = gen
+        }
+
+        fun cancel() {
+            armedByGen = null
+        }
+    }
+
     /** The service's `generation` and `publishLocked`, which [TerminalOutcome] is given access to. */
     private class FakeService {
         val lock = Any()
@@ -270,5 +291,99 @@ class TerminalOutcomeTest {
             )
 
             stateAtWriteTime shouldBe "connected"
+        }
+
+    /**
+     * Pins the P1 fix: `attachTun`/`attachRetainedTun` used to cancel the pending backoff
+     * retry and reset the attempt counter inside `persist`, after the suspending
+     * `connectionRecorder.record` write. `persist` runs only once `settle` has committed, but
+     * committed and *still current* are different properties — a newer generation can arm its
+     * own retry while an older generation's `persist` is still suspended, and an unconditional
+     * cancel issued once that suspension resumes cancels the newer generation's timer instead
+     * of the (nonexistent, by then) older one.
+     *
+     * The fix moves the cancel into `lifecycle`, gated on `established`, so it runs under
+     * `settle`'s lock as part of the generation-checked transition — before `persist` ever
+     * suspends, and unreachable by a superseded generation at all. This test drives `lifecycle`
+     * and `persist` shaped exactly that way and asserts a newer generation's retry survives.
+     */
+    @Test
+    fun `a retry armed by a newer generation survives an older generation's settlement`() =
+        runTest {
+            val service = FakeService()
+            val retry = FakeRetry()
+            val oldGen = service.startNewGeneration()
+            val writeStarted = CompletableDeferred<Unit>()
+            val letWriteFinish = CompletableDeferred<Unit>()
+
+            // Stands in for a retry armed by a prior failed attempt of `oldGen` itself —
+            // the successful connect below is what should clear it.
+            retry.arm(oldGen)
+
+            val oldSettle =
+                launch {
+                    service.outcome.settle(
+                        gen = oldGen,
+                        state = connected,
+                        lifecycle = {
+                            service.lifecycle.goForeground("connected")
+                            // The fixed shape: cancel while [lock] is still held, before
+                            // `persist` gets anywhere near suspending.
+                            retry.cancel()
+                            true
+                        },
+                        persist = {
+                            writeStarted.complete(Unit)
+                            letWriteFinish.await()
+                        },
+                    )
+                }
+
+            writeStarted.await()
+            // A newer generation starts — e.g. `restartCoreRetainingTun` on a network
+            // change — fails retryably, and arms its own timer, all while `oldGen`'s
+            // `persist` is still suspended in the write.
+            val newGen = service.startNewGeneration()
+            retry.arm(newGen)
+
+            letWriteFinish.complete(Unit)
+            oldSettle.join()
+
+            // `oldGen`'s cancel already ran, under lock, before `persist` ever suspended —
+            // it cannot reach `newGen`'s timer no matter how long the write takes.
+            retry.armedByGen shouldBe newGen
+        }
+
+    /**
+     * The other half of the fix's contract: cancellation only when [lifecycle] actually
+     * establishes the transition. A rejected foreground hands off to
+     * [TunnelService.handleForegroundLifecycleRejection] instead of committing, and must not
+     * discard a retry that belongs to a session which never came up.
+     */
+    @Test
+    fun `a rejected lifecycle establishment leaves a pending retry untouched`() =
+        runTest {
+            val service = FakeService()
+            val retry = FakeRetry()
+            val gen = service.startNewGeneration()
+            retry.arm(gen)
+
+            val settled =
+                service.outcome.settleHandlingLifecycleRejection(
+                    gen = gen,
+                    state = connected,
+                    lifecycle = {
+                        val established = false // stands in for goForeground() refusing
+                        if (established) {
+                            retry.cancel()
+                        }
+                        established
+                    },
+                    persist = { service.lifecycle.transcript += "persist" },
+                    onLifecycleRejected = { service.lifecycle.transcript += "cleanup" },
+                )
+
+            settled shouldBe TerminalSettlement.LifecycleRejected
+            retry.armedByGen shouldBe gen
         }
 }

@@ -48,7 +48,11 @@ internal class HomeViewModel @Inject constructor(
                 latency = activeProfile?.let { latencies[it.id] },
                 isMeasuringLatency = activeProfile != null && activeProfile.id in measuring,
             )
-        }.onEach { _state.value = it }
+            // Chained rather than folded into the combine above: the five-flow
+            // overload tops out at five, and traffic (§5.5, mirrored verbatim
+            // like connection) is the sixth source.
+        }.combine(tunnel.traffic) { partial, traffic -> partial.copy(traffic = traffic) }
+            .onEach { _state.value = it }
             .launchIn(viewModelScope)
     }
 

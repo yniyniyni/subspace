@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.LatencyResult
 import space.getsub.core.model.Profile
+import space.getsub.core.model.TrafficSample
 
 /**
  * The tunnel, as this screen needs to see it.
@@ -49,6 +50,15 @@ internal interface TunnelConnection {
 
     /** Profile ids with a measurement in flight. */
     val measuring: StateFlow<Set<Long>>
+
+    /**
+     * This session's traffic, or null when nothing is connected.
+     *
+     * Counted at the TUN, so it is everything the tunnel carries, including
+     * traffic routed `direct`. It is deliberately not a proxied-vs-direct
+     * split — that is the opt-in breakdown in Settings (M8.5 spec §2).
+     */
+    val traffic: StateFlow<TrafficSample?>
 
     /** The user's ping-on-launch setting, so Home can join that run rather than sit empty. */
     val pingOnLaunch: Flow<Boolean>

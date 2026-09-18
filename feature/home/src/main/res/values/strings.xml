@@ -62,4 +62,11 @@
     <string name="home_latency_unsupported">Not testable</string>
     <string name="home_latency_foreign_vpn">Another VPN</string>
     <string name="home_latency_test_description">Latency. Tap to test the active server.</string>
+    <!-- Counted at the TUN (hev-socks5-tunnel's own counters), so this is everything
+         the tunnel carries, including traffic routed direct — not a proxied-vs-direct
+         split. Rendered only for a live session (ConnectionState.Connected); "0 B" is
+         a real measurement, never a placeholder, so unlike latency there is no
+         em-dash variant (§10.1). -->
+    <string name="home_traffic_down">Downloaded</string>
+    <string name="home_traffic_up">Uploaded</string>
 </resources>

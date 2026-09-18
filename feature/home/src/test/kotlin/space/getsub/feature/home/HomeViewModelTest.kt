@@ -30,6 +30,7 @@ import space.getsub.core.model.Profile
 import space.getsub.core.model.Security
 import space.getsub.core.model.StartupStage
 import space.getsub.core.model.StreamSettings
+import space.getsub.core.model.TrafficSample
 import space.getsub.core.model.VlessOutbound
 import space.getsub.core.model.failure
 
@@ -160,6 +161,13 @@ class HomeViewModelTest {
 
         private val _measuring = MutableStateFlow<Set<Long>>(emptySet())
         override val measuring: StateFlow<Set<Long>> = _measuring.asStateFlow()
+
+        private val _traffic = MutableStateFlow<TrafficSample?>(null)
+        override val traffic: StateFlow<TrafficSample?> = _traffic.asStateFlow()
+
+        fun emitTraffic(next: TrafficSample?) {
+            _traffic.value = next
+        }
 
         /** Off by default here so existing tests keep their "nothing measured yet" baseline. */
         var launchPingEnabled: Boolean = false
@@ -335,6 +343,22 @@ class HomeViewModelTest {
             tunnel.emit(ConnectionState.Connected(sinceEpochMillis = 1_000L, socksPort = 10808))
 
             viewModel.state.value.connection shouldBe ConnectionState.Connected(1_000L, 10808)
+        }
+
+    @Test
+    fun `traffic mirrors the tunnel's, verbatim`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+
+            val sample =
+                TrafficSample(uplinkBytes = 1_024, downlinkBytes = 2_048, uplinkPackets = 4, downlinkPackets = 8)
+            tunnel.emitTraffic(sample)
+
+            viewModel.state.value.traffic shouldBe sample
         }
 
     @Test

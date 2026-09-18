@@ -112,6 +112,11 @@ dependencies {
     implementation(project(":core:xray"))
     implementation(project(":core:data"))
 
+    // MetricsClient parses xray's JSON metrics endpoint using just JsonElement
+    // navigation (no @Serializable class) — already an implementation dependency of
+    // :core:parser, but declared explicitly here since this module uses it directly.
+    implementation(libs.kotlinx.serialization.json)
+
     // TerminalOutcomeTest drives a deliberately-delayed persistence write against a
     // concurrent teardown, which needs runTest's scheduler to be deterministic rather
     // than a real-clock sleep. The convention plugin puts this on androidTest only;

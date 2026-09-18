@@ -14,12 +14,18 @@ import space.getsub.core.model.TrafficSample
  * **Why deltas rather than the raw value** (spec §1.3): hev's counters are
  * plain `static size_t`, and we build `armeabi-v7a` and `x86`, where `size_t`
  * is 32 bits. A byte counter therefore wraps at 4 GiB and the display would
- * fall back to near zero mid-session. A falling reading is read as a wrap, not
- * as a reset — the alternative silently loses 4 GiB of a long session.
+ * fall back to near zero mid-session. A falling reading distinguishes a wrap
+ * from a genuine reset by examining the previous value: only values above 2³²
+ * can reset (the 32-bit counter cannot have held such a value), so a falling
+ * reading from there is not a wrap. The alternative to this distinction
+ * silently loses 4 GiB of a long session.
  *
  * The first reading is a baseline, not traffic: a sampler attached to a session
  * already in flight must not report the counter's whole history as this
  * session's.
+ *
+ * **Not thread-safe.** Must be driven from a single coroutine or dispatcher;
+ * concurrent calls to [accept] or [reset] are not synchronized.
  */
 internal class TrafficSampler {
     private var previous: TunnelCounters? = null
@@ -54,15 +60,27 @@ internal class TrafficSampler {
     }
 
     /**
-     * A reading that fell has wrapped a 32-bit counter, not restarted.
+     * Computes the difference between consecutive counter readings, handling
+     * both 32-bit wraps and genuine resets on 64-bit ABIs.
      *
-     * 64-bit ABIs never reach this branch in any realistic session, so the
-     * correction is unconditionally against `2^32`.
+     * A falling reading (curr < prev) can mean either:
+     *
+     * - A 32-bit wrap: prev ≤ 2³², counter rolled over, add the gap to 2³² plus curr
+     * - A genuine reset: prev > 2³², impossible in a 32-bit counter, so it must
+     *   have been a 64-bit cumulative value before the tunnel teardown reset it to 0.
+     *   Return curr as-is.
+     *
+     * 64-bit ABIs can accumulate counters exceeding 4 GiB in multi-hour sessions,
+     * so this distinction is load-bearing on real devices.
      */
     private fun delta(
-        previous: Long,
-        current: Long,
-    ): Long = if (current >= previous) current - previous else (UINT32_SPAN - previous) + current
+        prev: Long,
+        curr: Long,
+    ): Long = when {
+        curr >= prev -> curr - prev
+        prev >= UINT32_SPAN -> curr
+        else -> (UINT32_SPAN - prev) + curr
+    }
 
     private companion object {
         const val UINT32_SPAN = 1L shl 32

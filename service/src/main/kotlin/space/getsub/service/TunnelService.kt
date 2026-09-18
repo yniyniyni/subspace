@@ -66,6 +66,7 @@ import space.getsub.core.xray.ConfigResult
 import space.getsub.core.xray.DnsPlan
 import space.getsub.core.xray.DnsPlanner
 import space.getsub.core.xray.LibXrayPingApi
+import space.getsub.core.xray.METRICS_RESERVED_TAG
 import space.getsub.core.xray.ProxyHeadProbe
 import space.getsub.core.xray.RawConfigComposer
 import space.getsub.core.xray.SocketProtector
@@ -275,6 +276,26 @@ internal fun overrideTargetFor(
 ): OverrideTarget = resolveOverrideTarget(analysePassthrough(rawJson), reservedOverrideTags(dnsPlanPresent))
 
 /**
+ * The outbound tags this app appends and therefore reserves.
+ *
+ * `Metrics` is conditional: a `metrics` block always registers an outbound of
+ * that name (`infra/conf/metrics.go:17-20`), but no `metrics` block is emitted
+ * while the breakdown is off, so reserving it unconditionally would refuse
+ * configs this app can run perfectly well. M8.5 spec §2.3.
+ */
+internal fun reservedOutboundTags(breakdownEnabled: Boolean): Set<String> =
+    buildSet {
+        addAll(setOf("direct", "block", "dns-out"))
+        if (breakdownEnabled) add(METRICS_RESERVED_TAG)
+    }
+
+/** Whether a config's own outbound tags already claim one this app reserves. */
+internal fun collidesWithReservedTag(
+    configTags: Set<String>,
+    breakdownEnabled: Boolean,
+): Boolean = configTags.intersect(reservedOutboundTags(breakdownEnabled)).isNotEmpty()
+
+/**
  * Whether a reserved tag the override appends already exists with a protocol
  * that would give it different semantics.
  *
@@ -283,12 +304,24 @@ internal fun overrideTargetFor(
  * still appends `direct`, `block` and `dns-out`, and a config that already
  * defines one of those names as something else is still a config we must not
  * write rules against.
+ *
+ * `Metrics` (only while [breakdownEnabled]) is checked differently from the
+ * other three: the override never adds a `Metrics` *outbound* to dedupe
+ * against — `metrics.listen` alone makes the core register that handler — so
+ * there is no compatible protocol to reuse and any existing tag of that name
+ * is a collision regardless of its protocol. [REQUIRED_OVERRIDE_PROTOCOLS]
+ * carries no entry for it, and the `?: true` below is what turns bare
+ * existence into a refusal for exactly that tag.
  */
-internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? {
+internal fun passthroughOverrideFailure(
+    rawJson: String,
+    breakdownEnabled: Boolean = false,
+): ComposeFailure? {
     val protocols = analysePassthrough(rawJson).outboundProtocolsByTag
     val reservedTagIsIncompatible =
-        REQUIRED_OVERRIDE_PROTOCOLS.any { (tag, expectedProtocol) ->
-            protocols[tag]?.let { it != expectedProtocol } == true
+        reservedOutboundTags(breakdownEnabled).any { tag ->
+            val existingProtocol = protocols[tag] ?: return@any false
+            REQUIRED_OVERRIDE_PROTOCOLS[tag]?.let { it != existingProtocol } ?: true
         }
     return ComposeFailure.IncompatibleOverrideOutbound.takeIf { reservedTagIsIncompatible }
 }
@@ -1487,7 +1520,8 @@ class TunnelService : VpnService() {
                     FailureReason.ConfigGenerationFailed,
                     IllegalStateException("a runsAsWritten row stored no bytes"),
                 )
-            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan)) {
+            val breakdownEnabled = settingsRepository.perTagBreakdown.first()
+            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan, breakdownEnabled)) {
                 is ComposeResult.Ok -> ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true)
                 // Distinct from PassthroughRejectedAtConnect, which startCore uses when the
                 // *core* refuses a well-formed config (§10.4): this means composition itself
@@ -1531,6 +1565,7 @@ class TunnelService : VpnService() {
         settings: TunnelSettings,
         routing: RoutingResolution,
         dnsPlan: DnsPlan?,
+        breakdownEnabled: Boolean,
     ): ComposeResult {
         val plan =
             passthroughPlanFor(
@@ -1541,7 +1576,7 @@ class TunnelService : VpnService() {
             )
         val override =
             if (plan.overrideApplies) {
-                passthroughOverrideFailure(rawJson)?.let { return ComposeResult.Failed(it) }
+                passthroughOverrideFailure(rawJson, breakdownEnabled)?.let { return ComposeResult.Failed(it) }
                 val target =
                     when (val resolved = overrideTargetFor(rawJson, dnsPlanPresent = dnsPlan != null)) {
                         is OverrideTarget.Resolved -> resolved

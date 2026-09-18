@@ -38,6 +38,7 @@ private const val PER_APP_PACKAGE_DELIMITER = ","
 private const val KEY_TUNNEL_SESSION_WANTED = "tunnel_session_wanted"
 private const val KEY_BOOT_AUTOSTART = "boot_autostart"
 private const val KEY_FAIL_CLOSED = "fail_closed"
+private const val KEY_PER_TAG_BREAKDOWN = "per_tag_breakdown"
 private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
 
 /**
@@ -401,6 +402,27 @@ internal constructor(
 
     public suspend fun setFailClosed(enabled: Boolean) {
         dao.put(SettingEntity(key = KEY_FAIL_CLOSED, value = enabled.toString()))
+    }
+
+    /**
+     * Whether to emit xray's `stats`/`policy`/`metrics` blocks so traffic can be
+     * broken down per outbound tag (M8.5 spec §2).
+     *
+     * **Defaults to off, and that default is a security decision rather than a
+     * taste one.** xray's metrics listener serves `/debug/vars` and
+     * `/debug/pprof/` from the same `http.ServeMux`
+     * (`app/metrics/metrics.go:135`), with no flag separating them. Android
+     * loopback is not app-isolated, so any app on the device that finds the port
+     * can pull a Go heap profile out of the VPN process — ARCHITECTURE.md §5.6
+     * material — or trigger repeated 30-second CPU profiles. ARCHITECTURE.md §6
+     * already strips these three blocks from a *config's own* copy on exactly
+     * this reasoning.
+     */
+    public val perTagBreakdown: Flow<Boolean> =
+        dao.observe(KEY_PER_TAG_BREAKDOWN).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    public suspend fun setPerTagBreakdown(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_PER_TAG_BREAKDOWN, value = enabled.toString()))
     }
 
     /** §9's "prompt once, respect refusal" (spec §7.2). */

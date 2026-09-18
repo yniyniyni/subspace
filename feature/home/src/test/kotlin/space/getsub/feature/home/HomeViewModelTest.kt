@@ -173,6 +173,10 @@ class HomeViewModelTest {
         var launchPingEnabled: Boolean = false
         override val pingOnLaunch: Flow<Boolean> get() = MutableStateFlow(launchPingEnabled)
 
+        /** Off by default, mirroring `SettingsRepository.perTagBreakdown`'s own default. */
+        var perTagBreakdownEnabled: Boolean = false
+        override val perTagBreakdown: Flow<Boolean> get() = MutableStateFlow(perTagBreakdownEnabled)
+
         /** Settable so a test can drive the failure branch, not only the happy one. */
         var resultToReturn: LatencyResult = LatencyResult.ok(42)
 
@@ -359,6 +363,31 @@ class HomeViewModelTest {
             tunnel.emitTraffic(sample)
 
             viewModel.state.value.traffic shouldBe sample
+        }
+
+    @Test
+    fun `the per-tag breakdown setting mirrors the tunnel's, off by default`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+
+            viewModel.state.value.perTagBreakdownEnabled shouldBe false
+        }
+
+    @Test
+    fun `the per-tag breakdown setting is surfaced when on`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            tunnel.perTagBreakdownEnabled = true
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+
+            viewModel.state.value.perTagBreakdownEnabled shouldBe true
         }
 
     @Test

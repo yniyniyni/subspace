@@ -43,6 +43,8 @@ internal class BoundTunnelConnection @Inject constructor(
 
     override val pingOnLaunch: Flow<Boolean> get() = settings.pingOnLaunch
 
+    override val perTagBreakdown: Flow<Boolean> get() = settings.perTagBreakdown
+
     override fun connect(
         profile: Profile,
         rowId: Long,

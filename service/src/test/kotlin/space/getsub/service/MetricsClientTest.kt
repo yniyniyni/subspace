@@ -4,6 +4,7 @@ package space.getsub.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import space.getsub.core.model.TagTraffic
 
 class MetricsClientTest {
     // Shape read from app/metrics/metrics.go:175-201 at xray-core v26.7.11.

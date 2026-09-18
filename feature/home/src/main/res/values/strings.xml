@@ -69,4 +69,19 @@
          em-dash variant (§10.1). -->
     <string name="home_traffic_down">Downloaded</string>
     <string name="home_traffic_up">Uploaded</string>
+
+    <!-- M8.5 spec §2: the opt-in per-tag breakdown, beneath the tiles above. Nothing
+         under this header renders at all while the developer setting is off — see
+         BreakdownSection's own KDoc for the three states an empty row list can mean. -->
+    <string name="home_breakdown_header">By server</string>
+    <!-- %1$s and %2$s are already-formatted byte counts (formatByteCount), same as the
+         DOWN/UP tiles above — never raw numbers (§10.1). -->
+    <string name="home_breakdown_row_traffic">%1$s down · %2$s up</string>
+    <!-- Shown in place of rows when the setting is on but the active server is a
+         pasted config running unmodified (ARCHITECTURE.md §6's pure passthrough
+         branch, spec §2.4) — that branch cannot carry a stats block at all, so this
+         names why rather than leaving a blank space where rows would otherwise be.
+         Not phrased as broken or missing: nothing failed, this profile kind simply
+         runs as written. -->
+    <string name="home_breakdown_unavailable_passthrough">This server\'s config runs unmodified, so per-server traffic isn\'t available</string>
 </resources>

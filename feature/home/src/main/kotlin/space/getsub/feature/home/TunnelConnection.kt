@@ -64,6 +64,13 @@ internal interface TunnelConnection {
     val pingOnLaunch: Flow<Boolean>
 
     /**
+     * The user's per-tag breakdown setting (M8.5 spec §2), so Home can tell
+     * "off" apart from "on, but [TrafficSample.perTag] has nothing yet" —
+     * both render an empty list, and only this flow says which one it is.
+     */
+    val perTagBreakdown: Flow<Boolean>
+
+    /**
      * Measures one profile — a one-element run, the same path the Servers list
      * takes.
      *

@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import space.getsub.core.model.TagTraffic
 import space.getsub.core.model.TrafficSample
 
 /**
@@ -46,12 +47,19 @@ import space.getsub.core.model.TrafficSample
  *   `TunnelService`'s own lock**: `RemoteCallbackList.beginBroadcast()` throws
  *   when a broadcast is already in flight, so an unsynchronised per-second push
  *   would race state publication and take the service down.
+ * @param readTags reads the current per-tag breakdown, or null while the
+ *   breakdown is off (M8.5 spec §2). Called once per tick, only when [read]
+ *   produced a reading — a session with nothing to sample has nothing to
+ *   attribute either. Absent entirely by default so every existing caller
+ *   keeps compiling; [TunnelService] supplies it from the loopback metrics
+ *   listener when one is running.
  */
 internal class TrafficSamplerLoop(
     private val scope: CoroutineScope,
     private val read: () -> TunnelCounters?,
     private val emit: (TrafficSample) -> Unit,
     private val intervalMillis: Long = DEFAULT_INTERVAL_MILLIS,
+    private val readTags: (() -> List<TagTraffic>)? = null,
 ) {
     private var job: Job? = null
 
@@ -67,7 +75,7 @@ internal class TrafficSamplerLoop(
                         // KDoc names: a cancellation landing after accept()
                         // but before this check still slips one stale emit
                         // through. Deliberately not stronger than that.
-                        if (isActive) emit(sample)
+                        if (isActive) emit(sample.copy(perTag = readTags?.invoke() ?: emptyList()))
                     }
                     delay(intervalMillis)
                 }

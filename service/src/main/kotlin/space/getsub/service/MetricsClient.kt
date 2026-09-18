@@ -1,21 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
-@file:Suppress("MatchingDeclarationName")
-
 package space.getsub.service
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import space.getsub.core.model.TagTraffic
 import java.net.HttpURLConnection
 import java.net.URL
-
-/** Bytes moved by one outbound tag this session. */
-internal data class TagTraffic(
-    val tag: String,
-    val uplinkBytes: Long,
-    val downlinkBytes: Long,
-)
 
 /**
  * Parses xray's `/debug/vars` payload.

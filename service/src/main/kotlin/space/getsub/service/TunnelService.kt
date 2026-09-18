@@ -289,6 +289,20 @@ internal fun reservedOutboundTags(breakdownEnabled: Boolean): Set<String> =
         if (breakdownEnabled) add(METRICS_RESERVED_TAG)
     }
 
+/**
+ * The loopback port for xray's metrics listener, or null when the breakdown is
+ * off or no port could be allocated.
+ *
+ * Pure so the decision is testable without a service (M8.5 spec §6 item #9). A
+ * failed allocation yields null rather than failing the start sequence:
+ * ARCHITECTURE.md §10.4's "fail loudly" governs the tunnel, and a missing
+ * diagnostic must never be the reason a tunnel does not come up.
+ */
+internal fun metricsPortFor(
+    breakdownEnabled: Boolean,
+    allocate: () -> Int?,
+): Int? = if (breakdownEnabled) allocate() else null
+
 /** Whether a config's own outbound tags already claim one this app reserves. */
 internal fun collidesWithReservedTag(
     configTags: Set<String>,
@@ -607,6 +621,13 @@ class TunnelService : VpnService() {
             scope = scope,
             read = { Tun2Socks.stats() },
             emit = ::broadcastTrafficSample,
+            // M8.5 spec §2: null while the breakdown is off or no port could be
+            // allocated (metricsPort itself). §5.6 — fetchMetricsPayload/
+            // parseMetricsPayload never throw and this reads only the port
+            // number, never a tag or a payload, so nothing here is loggable.
+            readTags = {
+                metricsPort?.let { port -> fetchMetricsPayload(port)?.let(::parseMetricsPayload) } ?: emptyList()
+            },
         )
 
     /** Guards measurement against another app's VPN holding the route — see [ForeignVpn]. */
@@ -665,6 +686,14 @@ class TunnelService : VpnService() {
      */
     private var tunAdvertisedDns: String? = null
     private var configFile: File? = null
+
+    /**
+     * The loopback port [trafficLoop]'s `readTags` reads from, or null while
+     * the breakdown is off or [metricsPortFor]'s allocation failed (M8.5 spec
+     * §2). Same lifetime as [configFile]: set in [startCore] once a session's
+     * config is generated, cleared everywhere [configFile] is.
+     */
+    private var metricsPort: Int? = null
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
@@ -1385,6 +1414,36 @@ class TunnelService : VpnService() {
             null
         }
 
+    /**
+     * Resolves [metricsPortFor]'s decision for this connect attempt.
+     *
+     * A separate `suspend` function, not inlined into [startCore], for two
+     * reasons: it keeps [startCore] under the LongMethod budget, and it is
+     * where the suspend/non-suspend boundary [metricsPortFor] sits on has to
+     * be crossed. [metricsPortFor]'s own `allocate` parameter is a plain,
+     * synchronous `() -> Int?` on purpose, so its decision is unit-testable on
+     * the JVM with no coroutine (`PerTagWiringTest`) — and a plain lambda
+     * cannot itself call [XrayController.allocatePorts], which suspends.
+     * Gating that call on `breakdownEnabled` here, before [metricsPortFor]
+     * ever sees the result, is what keeps a port from being allocated at all
+     * while the breakdown is off, not merely discarded once allocated.
+     */
+    @Suppress("SwallowedException") // A failed allocation degrades to no breakdown, never a failed connect.
+    private suspend fun resolveMetricsPort(xray: XrayController): Int? {
+        val breakdownEnabled = settingsRepository.perTagBreakdown.first()
+        val allocated =
+            if (!breakdownEnabled) {
+                null
+            } else {
+                try {
+                    xray.allocatePorts(count = 1).firstOrNull()
+                } catch (e: XrayException) {
+                    null
+                }
+            }
+        return metricsPortFor(breakdownEnabled) { allocated }
+    }
+
     // One early return per step is the point, not a smell: §10.4 requires each
     // stage of the start sequence to fail specifically and stop there.
     //
@@ -1418,6 +1477,10 @@ class TunnelService : VpnService() {
         val httpPort = ports[1]
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
+        // M8.5 spec §2: allocated alongside the pair above, not with it — a
+        // failed allocation here must not fail the connect. See
+        // resolveMetricsPort for why it is a separate suspend function.
+        val breakdownPort = resolveMetricsPort(xray)
         val settings =
             TunnelSettings(
                 socksPort = socksPort,
@@ -1426,6 +1489,7 @@ class TunnelService : VpnService() {
                 routing = (routing as? RoutingResolution.Active)?.ruleSet,
                 httpPort = httpPort,
                 dns = dnsPlan,
+                metricsPort = breakdownPort,
             )
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
@@ -1445,6 +1509,7 @@ class TunnelService : VpnService() {
         synchronized(lock) {
             if (gen != generation) return null
             configFile = file
+            metricsPort = breakdownPort
         }
 
         // §6: validate before starting. libXray's testXray takes a path, so the
@@ -1520,8 +1585,13 @@ class TunnelService : VpnService() {
                     FailureReason.ConfigGenerationFailed,
                     IllegalStateException("a runsAsWritten row stored no bytes"),
                 )
-            val breakdownEnabled = settingsRepository.perTagBreakdown.first()
-            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan, breakdownEnabled)) {
+            // The reserved-tag check below cares whether a Metrics block will
+            // actually be emitted, not whether the setting is on — the two
+            // disagree exactly when startCore's own allocation attempt failed,
+            // and settings.metricsPort (already resolved there) is what
+            // composePassthrough goes on to inject regardless.
+            val metricsWillEmit = settings.metricsPort != null
+            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan, metricsWillEmit)) {
                 is ComposeResult.Ok -> ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true)
                 // Distinct from PassthroughRejectedAtConnect, which startCore uses when the
                 // *core* refuses a well-formed config (§10.4): this means composition itself
@@ -2029,6 +2099,7 @@ class TunnelService : VpnService() {
                 ownedIntentToken = sessionIntentToken
                 configFile?.delete()
                 configFile = null
+                metricsPort = null
                 controller = null
                 liveSession = null
                 reconnectAttempts.reset()
@@ -2157,6 +2228,7 @@ class TunnelService : VpnService() {
             lifecycle = {
                 configFile?.delete()
                 configFile = null
+                metricsPort = null
                 controller = null
                 liveSession = null
                 reconnectAttempts.commit(trialAttempt)
@@ -2612,6 +2684,7 @@ class TunnelService : VpnService() {
             tunInterface = null
             tunAdvertisedDns = null
             configFile = null
+            metricsPort = null
             liveSession = null
             // Every stopTunnel caller (explicit disconnect, onRevoke, a
             // deliberate reapplyPerApp/network-change restart) ends whatever
@@ -3193,6 +3266,7 @@ class TunnelService : VpnService() {
                     controller = null
                     configFile?.delete()
                     configFile = null
+                    metricsPort = null
                     // Spec §1.1: [rowId] is the *active* profile, which can differ
                     // from the row this session started on if another server was
                     // picked while connected (ruling R37: by design). [liveSession]

@@ -52,6 +52,10 @@ internal class HomeViewModel @Inject constructor(
             // overload tops out at five, and traffic (§5.5, mirrored verbatim
             // like connection) is the sixth source.
         }.combine(tunnel.traffic) { partial, traffic -> partial.copy(traffic = traffic) }
+            // A seventh source, chained the same way: the per-tag breakdown
+            // setting (M8.5 spec §2), which HomeScreen needs to tell "off"
+            // apart from perTag simply having nothing yet.
+            .combine(tunnel.perTagBreakdown) { partial, enabled -> partial.copy(perTagBreakdownEnabled = enabled) }
             .onEach { _state.value = it }
             .launchIn(viewModelScope)
     }

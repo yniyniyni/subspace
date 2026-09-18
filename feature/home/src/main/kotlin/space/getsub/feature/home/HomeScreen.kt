@@ -199,6 +199,8 @@ internal fun HomeScreenContent(
 
         StatTilesRow(state = state, onTest = actions.onTestLatency)
 
+        BreakdownSection(state = state)
+
         AssistChip(
             onClick = actions.onAddServer,
             label = { Text(stringResource(R.string.home_add_server)) },

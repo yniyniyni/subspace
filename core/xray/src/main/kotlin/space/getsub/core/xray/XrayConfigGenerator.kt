@@ -52,6 +52,15 @@ public data class TunnelSettings(
      * DNS yet keep compiling.
      */
     val dns: DnsPlan? = null,
+    /**
+     * Loopback port for xray's metrics listener, or null when the per-tag
+     * breakdown is off or no port could be allocated (M8.5 spec §2).
+     *
+     * Non-null is the only trigger for [metricsBlocks]: nothing here reads
+     * `SettingsRepository.perTagBreakdown` directly, so a caller that never
+     * allocates a port gets the exact M1 shape it always has, byte for byte.
+     */
+    val metricsPort: Int? = null,
 )
 
 /**
@@ -170,7 +179,8 @@ public object XrayConfigGenerator {
         appendInbounds(sb, settings)
         appendOutbounds(sb, outbound, settings)
 
-        appendRouting(sb, settings.routing, settings.dns)
+        appendRouting(sb, settings.routing, settings.dns, trailingComma = settings.metricsPort != null)
+        appendMetrics(sb, settings.metricsPort)
         sb.append("}")
 
         return sb.toString()
@@ -205,6 +215,7 @@ public object XrayConfigGenerator {
         sb: StringBuilder,
         routing: RoutingRuleSet?,
         dns: DnsPlan?,
+        trailingComma: Boolean,
     ) {
         // The typed path builds the `proxy` outbound itself (appendOutbounds), so
         // it is the one caller that knows its own target by construction. This is
@@ -214,9 +225,34 @@ public object XrayConfigGenerator {
         // `namesFallthrough = false`: `appendOutbounds` writes `proxy` first, so
         // unmatched traffic already reaches it and a rule saying so would change
         // bytes the golden files pin. See `fallthroughRuleLines`.
+        //
+        // `trailingComma`: `routing` is the last field unless a metrics port
+        // follows it (M8.5 spec §2) — see `appendMetrics`.
         sb.appendLine(
-            """  "routing": ${routingObject(routing, dns, TYPED_PATH_TARGET, namesFallthrough = false)}""",
+            """  "routing": ${routingObject(routing, dns, TYPED_PATH_TARGET, namesFallthrough = false)}""" +
+                if (trailingComma) "," else "",
         )
+    }
+
+    /**
+     * Appends `stats`/`policy`/`metrics`, only when [port] is non-null.
+     *
+     * A null port changes nothing: this is the one call site that can make the
+     * typed path's output differ from the M1 shape the golden file pins, and
+     * every other caller of [generate] gets that shape back byte-identical
+     * (spec §2.4 makes the same promise on the passthrough side, in
+     * `RawConfigComposer`).
+     */
+    private fun appendMetrics(
+        sb: StringBuilder,
+        port: Int?,
+    ) {
+        val p = port ?: return
+        val entries = metricsBlocks(p).entries.toList()
+        entries.forEachIndexed { index, (key, value) ->
+            val comma = if (index == entries.size - 1) "" else ","
+            sb.appendLine("""  ${jsonString(key)}: $value$comma""")
+        }
     }
 
     /**

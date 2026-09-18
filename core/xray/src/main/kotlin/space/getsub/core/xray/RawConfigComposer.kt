@@ -146,6 +146,12 @@ public object RawConfigComposer {
             kept["routing"] = withDeclaredBalancers(parsedOverride.routing, root["routing"])
             kept["dns"] = parsedOverride.dns
             kept["outbounds"] = JsonArray(outbounds + parsedOverride.extraOutbounds)
+
+            // spec §2.4: only the override branch may carry these — it already
+            // replaces `routing`/`dns` wholesale, so three more blocks change
+            // nothing about the pure branch's "as written" promise, which this
+            // `if (override != null)` guard is what keeps intact.
+            kept.addMetricsBlocks(settings.metricsPort)
         }
 
         val preservedSniffing = if (override == null) sniffingOf(root) else null
@@ -200,6 +206,23 @@ public object RawConfigComposer {
         } else {
             JsonObject(routing + ("balancers" to balancers))
         }
+    }
+
+    /**
+     * Merges `stats`/`policy`/`metrics` into an already-mutable kept-keys map,
+     * when [port] is non-null.
+     *
+     * Split out of [compose] so its own branching (a null check and a `forEach`)
+     * does not count against that function's cyclomatic complexity — the
+     * decision itself stays exactly where spec §2.4 requires it: only
+     * [compose]'s override branch calls this at all, so a null
+     * [TunnelSettings.metricsPort] (breakdown off, or no port could be
+     * allocated) leaves the map exactly as [STRIPPED] left it, on both
+     * branches.
+     */
+    private fun MutableMap<String, JsonElement>.addMetricsBlocks(port: Int?) {
+        val p = port ?: return
+        metricsBlocks(p).forEach { (key, value) -> this[key] = value }
     }
 
     /** Keys removed outright before anything is added back. */

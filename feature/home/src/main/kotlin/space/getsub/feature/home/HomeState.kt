@@ -55,6 +55,14 @@ internal data class HomeState(
      * than on this being non-null alone.
      */
     val traffic: TrafficSample? = null,
+    /**
+     * Mirrors [TunnelConnection.perTagBreakdown] — the developer setting, not
+     * derived from [traffic] (M8.5 spec §2). [traffic]`.perTag` is empty for
+     * three different reasons ([TrafficSample.perTag]'s own KDoc): this is
+     * what lets [HomeScreen] tell "off" apart from the other two, which look
+     * identical from an empty list alone.
+     */
+    val perTagBreakdownEnabled: Boolean = false,
 ) {
     /**
      * Whether tapping the connect control should attempt a connection.

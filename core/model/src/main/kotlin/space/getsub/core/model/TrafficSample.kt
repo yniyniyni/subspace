@@ -21,8 +21,37 @@ public data class TrafficSample(
     val downlinkBytes: Long,
     val uplinkPackets: Long,
     val downlinkPackets: Long,
+    /**
+     * Per-outbound-tag rows, empty unless the user enabled the breakdown
+     * (M8.5 spec §2) — and empty for a `RAW_JSON` profile running in the pure
+     * passthrough branch, which cannot carry a stats block at all (spec §2.4).
+     *
+     * Empty therefore does not mean "no traffic". The UI must distinguish
+     * "breakdown off", "not available for this profile" and "on, but nothing
+     * has moved yet" — rendering an empty list as zeros would be
+     * `ARCHITECTURE.md` §10.1's signature failure.
+     */
+    val perTag: List<TagTraffic> = emptyList(),
 ) {
     public companion object {
         public val ZERO: TrafficSample = TrafficSample(0, 0, 0, 0)
     }
 }
+
+/**
+ * Bytes moved by one outbound tag this session (M8.5 spec §2).
+ *
+ * Public and in `:core:model` — not `:service`, where it originated — so it
+ * can cross the AIDL boundary and reach `:feature:home`, where the breakdown
+ * renders (§4: `:service` may not depend on `:feature:*`, so the type has to
+ * live upstream of both).
+ *
+ * [tag] is an outbound tag from the user's own config and is config content
+ * (`ARCHITECTURE.md` §5.6) — it must never be logged, only displayed back to
+ * the user who wrote it.
+ */
+public data class TagTraffic(
+    val tag: String,
+    val uplinkBytes: Long,
+    val downlinkBytes: Long,
+)

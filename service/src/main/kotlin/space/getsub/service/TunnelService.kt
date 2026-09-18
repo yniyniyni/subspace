@@ -394,10 +394,13 @@ internal fun testConnectObserverFrom(
  * first enter [commandCoordinator], while [lock] and [generation] handle those
  * platform callbacks racing the asynchronous start sequence. So:
  *
- *  - [lock] guards every field below and every state publication. `RemoteCallbackList`
- *    is not safe for concurrent broadcast — `beginBroadcast()` throws if one is
- *    already in progress, and that throw landing inside teardown would abandon
- *    the TUN fd, which is §5.4's wedged-until-reboot outcome.
+ *  - [lock] guards every field below and every state publication, including
+ *    [broadcastTrafficSample] — [trafficLoop]'s per-second push shares
+ *    [callbacks] with [publishLocked], so it takes the same lock for the same
+ *    reason. `RemoteCallbackList` is not safe for concurrent broadcast —
+ *    `beginBroadcast()` throws if one is already in progress, and that throw
+ *    landing inside teardown would abandon the TUN fd, which is §5.4's
+ *    wedged-until-reboot outcome.
  *  - [generation] supersedes an in-flight start. Coroutine cancellation is
  *    cooperative and the tail of the start sequence has no suspension points, so
  *    `cancel()` alone cannot stop it from publishing `Connected` after a teardown

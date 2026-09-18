@@ -20,6 +20,7 @@ import space.getsub.core.model.LatencyResult
 import space.getsub.core.model.LatencyTarget
 import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
+import space.getsub.core.model.TrafficSample
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -64,6 +65,16 @@ public class TunnelClient private constructor(
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
+    private val _traffic = MutableStateFlow<TrafficSample?>(null)
+
+    /**
+     * Null until the current session reports its first sample, and null again
+     * once that session ends — the same going-stale cache [state] documents
+     * (§5.5): a traffic total outliving its session is that bug with a
+     * different field.
+     */
+    public val traffic: StateFlow<TrafficSample?> = _traffic.asStateFlow()
+
     /**
      * Whether the Binder handshake has completed since the latest [bind].
      *
@@ -92,6 +103,10 @@ public class TunnelClient private constructor(
         object : ITunnelCallback.Stub() {
             override fun onStateChanged(state: ConnectionStateParcel) {
                 _state.value = state.toState()
+            }
+
+            override fun onTrafficSample(sample: TrafficSampleParcel) {
+                _traffic.value = sample.toSample()
             }
         }
 
@@ -125,6 +140,10 @@ public class TunnelClient private constructor(
                 // about whether the tunnel is down. Claiming Disconnected here
                 // would be §5.5's lying UI. Rebinding re-reads the truth.
                 _state.value = ConnectionState.Disconnecting
+                // :bg died — its own session is what [traffic] tracked, and
+                // that session's fate is now unknown. A stale total surviving
+                // this is the same cache-gone-stale bug [state] avoids above.
+                _traffic.value = null
             }
         }
 
@@ -153,6 +172,9 @@ public class TunnelClient private constructor(
         }
         service = null
         runCatching { context.unbindService(connection) }
+        // This client no longer receives samples for whatever session is or
+        // isn't live — the same reasoning as onServiceDisconnected's clear.
+        _traffic.value = null
     }
 
     /**

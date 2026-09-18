@@ -42,6 +42,13 @@ internal enum class TeardownStep {
     ClearNotification,
 
     /**
+     * `trafficLoop.stop()`. Spec §1.5: stopped after the state that ends the
+     * session has published, and before the capture that must outlive it —
+     * immediately ahead of [StopLogCapture], not at any other position.
+     */
+    StopTrafficSampler,
+
+    /**
      * Last, always. Spec §3.3: the capture must outlive every phase that logs,
      * because M8's phase instrumentation (`705f4ab`) is W7's only evidence and a
      * capture that stops first records the teardown right up to the point where
@@ -56,5 +63,6 @@ internal fun teardownOrder(): List<TeardownStep> =
         TeardownStep.CloseTun,
         TeardownStep.StopCore,
         TeardownStep.ClearNotification,
+        TeardownStep.StopTrafficSampler,
         TeardownStep.StopLogCapture,
     )

@@ -54,6 +54,7 @@ import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
 import space.getsub.core.model.Retryability
 import space.getsub.core.model.StartupStage
+import space.getsub.core.model.TrafficSample
 import space.getsub.core.model.failure
 import space.getsub.core.model.retryability
 import space.getsub.core.parser.OverrideTarget
@@ -554,6 +555,23 @@ class TunnelService : VpnService() {
      */
     private val logRing by lazy { LogRing(File(filesDir, LOG_DIR_NAME)) }
     private val logCapture by lazy { LogCapture(logRing) }
+
+    /**
+     * Spec §1.5: samples [Tun2Socks.stats] once a second while a session is up
+     * and pushes each accumulated total through [broadcastTrafficSample]. Tied
+     * to session lifetime like [logCapture] just above: started once the
+     * session reaches [ConnectionState.Connected] (both [attachTun] and
+     * [attachRetainedTun]'s `lifecycle` blocks — [start] is idempotent, so the
+     * retained-TUN restart's re-settle is a no-op), stopped in [stopTunnel] at
+     * [space.getsub.service.log.TeardownStep.StopTrafficSampler]'s position,
+     * immediately before [logCapture] stops.
+     */
+    private val trafficLoop =
+        TrafficSamplerLoop(
+            scope = scope,
+            read = { Tun2Socks.stats() },
+            emit = ::broadcastTrafficSample,
+        )
 
     /** Guards measurement against another app's VPN holding the route — see [ForeignVpn]. */
     private val foreignVpn by lazy { ForeignVpn(applicationContext) }
@@ -1103,6 +1121,32 @@ class TunnelService : VpnService() {
             }
         }
         callbacks.finishBroadcast()
+    }
+
+    /**
+     * Spec §1.5: pushes one accumulated sample to every bound `:main` over the
+     * existing [ITunnelCallback], reusing [callbacks] rather than a second
+     * `RemoteCallbackList`.
+     *
+     * Takes [lock] for the same reason [publishLocked] does: `RemoteCallbackList`
+     * is not safe for concurrent broadcast, and [trafficLoop] calls this from its
+     * own coroutine — a call arriving mid-[publishLocked] would hit
+     * `beginBroadcast()`'s reentrancy throw. [TrafficSampleParcel] carries no free
+     * text, so unlike [publishLocked] there is nothing here for §5.6 to redact.
+     */
+    private fun broadcastTrafficSample(sample: TrafficSample) {
+        synchronized(lock) {
+            val parcel = TrafficSampleParcel.from(sample)
+            val count = callbacks.beginBroadcast()
+            repeat(count) { i ->
+                try {
+                    callbacks.getBroadcastItem(i).onTrafficSample(parcel)
+                } catch (e: android.os.RemoteException) {
+                    Log.w(TAG, "traffic callback dropped: ${e.javaClass.simpleName}")
+                }
+            }
+            callbacks.finishBroadcast()
+        }
     }
 
     /**
@@ -1702,7 +1746,10 @@ class TunnelService : VpnService() {
     // them separately, reusing the pairing [startCore] already established —
     // one fewer place to mismatch which index is which, and it keeps this
     // signature at five rather than six now that [dnsPlan] joined it.
-    @Suppress("ReturnCount")
+    @Suppress(
+        "ReturnCount",
+        "LongMethod", // Spec §1.5's trafficLoop.start() call pushed this one line past the threshold.
+    )
     private suspend fun attachTun(
         gen: Int,
         xray: XrayController,
@@ -1856,6 +1903,9 @@ class TunnelService : VpnService() {
                         // [TerminalOutcome.settle].
                         cancelBackoffRetryLocked()
                         reconnectAttempts.reset()
+                        // Spec §1.5: gated on `established` like the two calls above —
+                        // a rejected foreground never really connected.
+                        trafficLoop.start()
                     },
                 )
             },
@@ -2576,6 +2626,11 @@ class TunnelService : VpnService() {
         removeForegroundSafely()
         publish(finalState)
         Log.i(TAG, "teardown: done +${sinceStart()}ms")
+        // Spec §1.5 / TeardownStep.StopTrafficSampler: stopped after the session
+        // has published its final state and before the capture below stops —
+        // a session that has already ended must not go on accumulating a total
+        // for it, or emit one to a client that just heard it is over.
+        trafficLoop.stop()
         // Spec §3.3: stopped last, after every phase above has logged — a
         // capture that stops first would go quiet before the teardown becomes
         // interesting. Guarded like the native calls above: a diagnostic must
@@ -3269,6 +3324,10 @@ class TunnelService : VpnService() {
                         retireRetry = {
                             cancelBackoffRetryLocked()
                             reconnectAttempts.reset()
+                            // Spec §1.5: [start] is idempotent, so on this retained-TUN
+                            // restart it is a no-op — tun2socks was never stopped, so the
+                            // sampler already running is left exactly as it was.
+                            trafficLoop.start()
                         },
                     )
                 },

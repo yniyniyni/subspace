@@ -299,6 +299,55 @@ Java_space_getsub_service_Tun2Socks_nativeIsRunning (JNIEnv *env,
     return r ? JNI_TRUE : JNI_FALSE;
 }
 
+/*
+ * Adapted from hev-socks5-tunnel's own JNI binding (src/hev-jni.c,
+ * native_get_stats), MIT, (c) hev <r@hev.cc>. See THIRD_PARTY.md.
+ *
+ * Returns {uplink_bytes, downlink_bytes, uplink_packets, downlink_packets},
+ * or NULL when no tunnel is running. Note the ORDER AND NAMING DIFFER from
+ * upstream's: hev's tx is a read from the TUN, which is uplink from the
+ * device's point of view. See ARCHITECTURE.md §6 / the M8.5 spec §1.2.
+ *
+ * The lock mirrors nativeIsRunning: the worker never takes it, and it is what
+ * makes `running` a coherent read against a concurrent start or stop. The hev
+ * counters themselves are plain non-atomic size_t globals written from the lwIP
+ * task; a single-word read cannot tear, so a sample may be stale but never
+ * garbage, and no additional synchronisation is possible without patching
+ * upstream.
+ */
+JNIEXPORT jlongArray JNICALL
+Java_space_getsub_service_Tun2Socks_nativeStats (JNIEnv *env, jclass clazz)
+{
+    (void)clazz;
+
+    size_t tx_packets = 0, tx_bytes = 0, rx_packets = 0, rx_bytes = 0;
+    jlong values[4];
+    jlongArray res;
+
+    pthread_mutex_lock (&lock);
+    int r = running && !atomic_load (&worker_finished);
+    if (r) {
+        hev_socks5_tunnel_stats (&tx_packets, &tx_bytes, &rx_packets, &rx_bytes);
+    }
+    pthread_mutex_unlock (&lock);
+
+    if (!r) {
+        return NULL;
+    }
+
+    values[0] = (jlong)tx_bytes;    /* uplink bytes   */
+    values[1] = (jlong)rx_bytes;    /* downlink bytes */
+    values[2] = (jlong)tx_packets;  /* uplink packets */
+    values[3] = (jlong)rx_packets;  /* downlink packets */
+
+    res = (*env)->NewLongArray (env, 4);
+    if (!res) {
+        return NULL;
+    }
+    (*env)->SetLongArrayRegion (env, res, 0, 4, values);
+    return res;
+}
+
 #ifndef NDEBUG
 JNIEXPORT void JNICALL
 Java_space_getsub_service_Tun2SocksNativeTestHook_nativeArmPause (

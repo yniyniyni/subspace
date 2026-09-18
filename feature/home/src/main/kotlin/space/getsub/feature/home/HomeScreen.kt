@@ -215,8 +215,10 @@ internal fun HomeScreenContent(
         // The LATENCY tile was the first of that row to be fed (M4.5). The
         // DOWN/UP tiles beside it are fed by M8.5, from hev-socks5-tunnel's own
         // TUN-level counters — libXray at this project's pinned version exposes
-        // no stats call at all (ARCHITECTURE.md §14.4, amended separately to
-        // record that).
+        // no stats call at all. ARCHITECTURE.md §14.4 still names Xray's stats
+        // API as of this writing; that is stale, and this milestone's
+        // documentation task — deliberately last, once the rest of M8.5 exists
+        // to describe — corrects it.
     }
 }
 

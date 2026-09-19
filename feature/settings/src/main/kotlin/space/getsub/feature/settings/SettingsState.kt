@@ -78,6 +78,14 @@ internal data class SettingsState(
      * responding, per [shouldPromptForBattery]'s own gate in [SettingsViewModel].
      */
     val showBatteryPrompt: Boolean = false,
+    /**
+     * Whether xray's `stats`/`policy`/`metrics` blocks are emitted so the per-server traffic
+     * breakdown (Task 7's [SettingsDiagnosticsSection]) can be shown on Home. Defaults to off —
+     * matches [space.getsub.core.data.SettingsRepository.perTagBreakdown]'s own default, which
+     * that property's KDoc documents as a security decision, not a taste one: see
+     * [SettingsDiagnosticsSection]'s summary text for what turning it on exposes.
+     */
+    val perTagBreakdown: Boolean = false,
 ) {
     /** One row per install filename. See [geoRowsFor]'s KDoc for exactly how ground truth is chosen. */
     val geoRows: List<GeoRow>

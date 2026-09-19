@@ -130,6 +130,10 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(failClosed = enabled) } }
             .launchIn(viewModelScope)
 
+        settingsSource.perTagBreakdown
+            .onEach { enabled -> _state.update { it.copy(perTagBreakdown = enabled) } }
+            .launchIn(viewModelScope)
+
         viewModelScope.launch {
             val version = xraySource.version()
             _state.update {
@@ -167,6 +171,16 @@ constructor(
             settingsSource.setFailClosed(enabled)
             maybePromptForBattery(justEnabled = enabled)
         }
+    }
+
+    /**
+     * Not a survival setting (§7.2's three triggers are always-on, boot autostart and
+     * fail-closed), so this never routes through [maybePromptForBattery] — the copy in
+     * [SettingsDiagnosticsSection] is this toggle's own warning, about exposure rather than about
+     * Doze killing the tunnel.
+     */
+    fun onPerTagBreakdownChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setPerTagBreakdown(enabled) }
     }
 
     /**

@@ -140,4 +140,6 @@
     <string name="settings_section_diagnostics">Diagnostics</string>
     <string name="settings_logs_title">Session log</string>
     <string name="settings_logs_summary">Read or share what the tunnel recorded</string>
+    <string name="settings_breakdown_title">Per-server traffic breakdown</string>
+    <string name="settings_breakdown_summary">Show how much traffic went through the proxy versus direct. While connected, this opens a diagnostics port that other apps on your device can also read — leave it off unless you need it.</string>
 </resources>

@@ -117,6 +117,7 @@ fun SettingsScreen(
             onFailClosedChanged = viewModel::onFailClosedChanged,
             onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
             onAlwaysOnOpened = viewModel::onAlwaysOnOpened,
+            onPerTagBreakdownChanged = viewModel::onPerTagBreakdownChanged,
         ),
         navigation = navigation,
         modifier = modifier,
@@ -170,6 +171,10 @@ internal data class SettingsActions(
     // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
     // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
     val onAlwaysOnOpened: () -> Unit = {},
+    // Defaulted for the same reason as the four above (Task 15, this section's own newest
+    // field) — neither SettingsHwidLayoutTest nor SettingsDnsSectionTest's full positional
+    // construction bears on the diagnostics toggle.
+    val onPerTagBreakdownChanged: (Boolean) -> Unit = {},
 )
 
 /**
@@ -223,7 +228,11 @@ internal fun SettingsScreenContent(
         SettingsGeoSection(state = state, actions = actions)
 
         SectionHeader(stringResource(R.string.settings_section_diagnostics))
-        SettingsDiagnosticsSection(onNavigateToLogViewer = navigation.onNavigateToLogViewer)
+        SettingsDiagnosticsSection(
+            onNavigateToLogViewer = navigation.onNavigateToLogViewer,
+            perTagBreakdown = state.perTagBreakdown,
+            onPerTagBreakdownChanged = actions.onPerTagBreakdownChanged,
+        )
 
         SectionHeader(stringResource(R.string.settings_section_about))
         SettingRow(

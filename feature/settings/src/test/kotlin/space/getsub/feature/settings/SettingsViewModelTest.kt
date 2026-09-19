@@ -181,6 +181,13 @@ class SettingsViewModelTest {
             _batteryPromptShown.value = shown
         }
 
+        private val _perTagBreakdown = MutableStateFlow(false)
+        override val perTagBreakdown: Flow<Boolean> = _perTagBreakdown.asStateFlow()
+
+        override suspend fun setPerTagBreakdown(enabled: Boolean) {
+            _perTagBreakdown.value = enabled
+        }
+
         var ignoringBatteryOptimizations: Boolean = false
 
         override suspend fun isIgnoringBatteryOptimizations(): Boolean = ignoringBatteryOptimizations
@@ -804,6 +811,31 @@ class SettingsViewModelTest {
                 SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
 
             viewModel.onAlwaysOnOpened()
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe false
+        }
+
+    // ── M8.5: the per-tag breakdown toggle (Task 15) ────────────────────────
+
+    @Test
+    fun `the breakdown setting survives a viewmodel restart`() =
+        runTest {
+            val source = FakeSettingsSource()
+            viewModel(source).onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+
+            viewModel(source).state.value.perTagBreakdown shouldBe true
+        }
+
+    /** Not one of §7.2's three survival settings, so it must never raise the Doze prompt. */
+    @Test
+    fun `turning on the breakdown does not prompt about battery`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onPerTagBreakdownChanged(true)
             advanceUntilIdle()
 
             viewModel.state.value.showBatteryPrompt shouldBe false

@@ -34,7 +34,7 @@ public class LogRepository(
     ) : this(File(context.filesDir, LOG_DIR_NAME))
 
     /**
-     * Oldest first. Reads on IO — a full ring is up to 1 MiB (ARCHITECTURE.md §5.3).
+     * Oldest first. Reads on IO — a full ring is up to 1 MiB (spec §3.3).
      *
      * `log.1` and `log.0` are each read inside their own [runCatching], not one
      * shared around both: a single shared block would let a failure reading

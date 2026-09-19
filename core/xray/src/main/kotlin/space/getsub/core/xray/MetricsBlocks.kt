@@ -17,7 +17,7 @@ import kotlinx.serialization.json.buildJsonObject
  * because `getStatCounter` registers no counter unless
  * `policy.system.statsOutboundUplink` is set
  * (`app/proxyman/outbound/handler.go:34-45`, xray-core v26.7.11). Counters are
- * then named `outbound>>><tag>>>>traffic>>>uplink` and bucketed by outbound
+ * then named `outbound>>><tag>>>traffic>>>uplink` and bucketed by outbound
  * tag, which since M7.5 means they follow the config's own vocabulary.
  *
  * @param port a loopback port from `getFreePorts` — ARCHITECTURE.md §10.6

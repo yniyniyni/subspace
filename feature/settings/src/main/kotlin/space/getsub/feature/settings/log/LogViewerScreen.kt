@@ -113,9 +113,9 @@ internal data class LogViewerActions(
  * exists.
  *
  * A [LazyColumn] over [LogViewerState.lines], not a scrolling `Column`
- * materialising every line: the ring is bounded at ~1 MiB (ARCHITECTURE.md
- * §5.3), which is thousands of lines on a long session, so only the visible
- * rows may ever compose — the same reasoning
+ * materialising every line: the ring is bounded at ~1 MiB (spec §3.3), which is
+ * thousands of lines on a long session, so only the visible rows may ever
+ * compose — the same reasoning
  * [PerAppScreen][space.getsub.feature.routing.PerAppScreen]'s own
  * `AppRowList` documents.
  */

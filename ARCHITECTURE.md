@@ -336,8 +336,17 @@ tunnel is up is worse than one that crashes.
 ### 5.6 Do not log config contents
 
 Server addresses, UUIDs, REALITY keys, and subscription URLs are secrets.
-Redact them in every log path, including crash output. The in-app log viewer
-redacts too.
+Redact them in every log path, including crash output.
+
+The on-disk session log ring (M8.5) is stronger than "the viewer redacts":
+**nothing unredacted ever reaches disk.** `redact()` (`:core:model`) is
+applied to each captured line before it is written to the ring, not at
+display time. The distinction matters because a redact-on-display design
+still leaves the raw line sitting in `filesDir`, where it outlives the
+session and survives into a device backup, readable by anyone with the
+device unlocked; redacting at capture means the secret this section warns
+about was never written there at all. Source:
+`docs/agent/specs/2026-09-17-m8.5-observability-design.md` §3.2.
 
 ---
 
@@ -389,7 +398,17 @@ is taken:
 - `log` forced to `access: "none"`, `loglevel: "warning"` (§5.6 — the device-
   found logcat leak, one line per destination).
 - `stats`/`policy`/`metrics` stripped — a config's own listener is an
-  unaudited open port, not this milestone's concern.
+  unaudited open port. **M8.5 exception, this branch only:** with the per-tag
+  traffic breakdown switched on (off by default, §14.4), the same three
+  blocks are injected right back into a passthrough config — after the strip,
+  not instead of it — but only on this branch's **override** case, where
+  `Metrics` becomes a fourth reserved outbound tag alongside
+  `direct`/`block`/`dns-out` for as long as the switch is on. The **pure**
+  passthrough branch below never injects them, so it keeps stripping
+  unconditionally and stays byte-identical to the config as written — the one
+  promise that branch exists to keep. A **typed** profile never goes through
+  this strip at all — `XrayConfigGenerator` builds its config from scratch and
+  emits the same three blocks directly, on the same switch.
 
 **Two branches, chosen from state the app already has, not a persisted
 setting:**
@@ -603,7 +622,9 @@ routing:   [DNS rules, prepended] then rules referencing geoip.dat /
            geosite.dat, then user rules
 dns:       servers (+ hosts, queryStrategy and tag "dns-module" only when
            a DNS plan exists; the no-plan form is servers alone)
-stats/api: enabled when traffic counters are on
+stats/policy/metrics: emitted when the per-tag breakdown is on (§14.4; off by
+           default) — the session-total counters themselves are unconditional
+           and do not come from this config at all
 ```
 
 The DNS rules, when a plan exists, are prepended in this order — the order
@@ -1234,20 +1255,43 @@ worse failure than tracking a prerelease. Revisit whenever libXray bumps.
 
 Hysteria2 inbound landed in v26.3.27, so v26.7.11 clears the §6 floor.
 
-### 14.4 Traffic stats source — RESOLVED
+### 14.4 Traffic stats source — RESOLVED, reversing the 2026-07-25 decision
 
-**Xray's stats API**, not per-UID `TrafficStats`.
+**`hev-socks5-tunnel`'s own TUN-level counters** (`hev_socks5_tunnel_stats`),
+not Xray's stats API, and not per-UID `TrafficStats`.
 
-Stats are collected per inbound/outbound tag, which means the numbers line up
-with the routing rules the user configured — proxied traffic is
-distinguishable from direct traffic. `TrafficStats` counts bytes per UID at
-the OS level and cannot see through the tunnel, so it can report a total but
-never a breakdown.
+This section originally resolved the opposite way, reasoning that Xray's
+per-tag stats make proxied traffic distinguishable from direct. That reasoning
+checked xray-core's capabilities and never libXray's, the wrapper this project
+actually calls. libXray v26.7.11's entire `invoke` surface is `getFreePorts`,
+`convertShareLinksToXrayJson`, `convertXrayJsonToShareLinks`, `countGeoData`,
+`ping`, `testXray`, `runXray`, `runXrayFromJson`, `stopXray`, `xrayVersion`,
+`getXrayState` (§14.2) — no stats method, and the Go `core.Instance` is never
+handed to Java. The 2026-07-25 decision named a capability with no wrapper
+call behind it. Found 2026-09-17 during M8.5; full derivation in
+`docs/agent/research/2026-09-17-traffic-stats-surface.md`.
 
-Cost of this choice: `stats` and `api` blocks must be present in the generated
-config whenever counters are enabled, which makes the config non-identical
-between counters-on and counters-off. That is fine — §6 requires determinism
-for *the same settings*, and the counter toggle is a setting.
+What ships instead is `hev_socks5_tunnel_stats`, public in the tunnel
+library's own header since v2.6.5 (we pin v2.16.0, §14.5), bound through the
+JNI bridge this project already owns. **State the capability this loses,
+because the code will otherwise drift back toward the paragraph above it
+replaced:** hev counts at the TUN fd, so it counts everything the interface
+carries — a routing rule sending traffic `direct` is still traffic through the
+TUN and is still counted. There is no per-tag breakdown and no
+proxied-vs-direct split from this source, and none by default. Do not "fix"
+session totals toward per-tag numbers by reaching for a wrapper call that does
+not exist.
+
+The per-tag breakdown the original decision wanted does exist, but only as an
+opt-in, and not from libXray: xray's own `stats`/`policy`/`metrics` blocks,
+read over loopback HTTP (§6). It defaults **off** because xray's metrics
+listener serves `/debug/vars` and the full pprof suite off the same
+unauthenticated `http.ServeMux`, with no flag to mount one without the other,
+and Android loopback is not app-isolated — any app on the device that finds
+the port can pull a Go heap profile out of the VPN process or trigger repeated
+30-second CPU captures. §6 already strips a config's own copy of these three
+blocks on exactly that reasoning; making them the default here would mean
+opening, for every user, the port §6 closes.
 
 ### 14.5 tun2socks implementation — RESOLVED for now
 
@@ -1465,17 +1509,23 @@ Mandatory rules:
       and the ViewModel no longer has a `Connected`-only gate — the service
       decides, and it already accepts every `Connecting` stage.
 
-      One pre-existing defect surfaced during verification and is **not** fixed
-      here: `android.util.Log` output from the `:bg` process never reaches
-      logcat, which silently disables every diagnostic in `TunnelService`,
-      including §5.1's protect-failure line. That line is the only signal of the
-      §5.1 failure mode, because libXray discards the protect result. It predates
-      this milestone. Full evidence:
-      `docs/agent/research/2026-08-19-m5.5-device-verification.md`.
-- [ ] Traffic counters, live log viewer — **M8.5.** Split out of M8 because the
-      log viewer reads from `:bg`, whose `android.util.Log` output does not reach
-      logcat (mechanism unexplained; see M5.5's device record). That wants its own
-      investigation before it gets a spec.
+      **Correction, 2026-09-16 (M8.5).** This note previously recorded a
+      pre-existing defect found during M5.5 verification: `android.util.Log`
+      output from the `:bg` process never reaches logcat, silently disabling
+      every diagnostic in `TunnelService`, including §5.1's protect-failure
+      line. **That claim was false.** `:bg` lines reach logcat normally; the
+      scrapes behind the original claim found nothing because nothing was
+      being emitted — the happy paths log on failure, not on success — and
+      because the test device's logcat buffer rolls in minutes under load.
+      §5.1's protect-failure diagnostic was never actually unreachable. Source:
+      the M8.5 spec's §0.1, which rests on M8's teardown instrumentation
+      (`f580d3d`, `705f4ab`) being read back from logcat repeatedly; see also
+      `docs/agent/roadmap.md`'s M8.5 section.
+- [ ] Traffic counters, live log viewer — **M8.5.** Counters read
+      `hev-socks5-tunnel`'s own TUN-level counters (§14.4); the log viewer
+      reads a redacted on-disk ring (§5.6). Implemented on
+      `feat/m8.5-observability` (Parts 1–2); the M8.5 spec's §9 device
+      checklist that would tick this box has not been run.
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization
 

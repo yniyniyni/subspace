@@ -289,19 +289,70 @@ internal fun reservedOutboundTags(breakdownEnabled: Boolean): Set<String> =
         if (breakdownEnabled) add(METRICS_RESERVED_TAG)
     }
 
+/** [allocateSessionPorts]'s result: the two ports every session needs, plus the optional third. */
+internal data class SessionPorts(val socksPort: Int, val httpPort: Int, val metricsPort: Int?)
+
 /**
- * The loopback port for xray's metrics listener, or null when the breakdown is
- * off or no port could be allocated.
+ * Allocates every port this connect attempt needs, in the fewest calls that
+ * keep `allocateDistinctPorts`'s distinctness guarantee meaningful.
  *
- * Pure so the decision is testable without a service (M8.5 spec §6 item #9). A
- * failed allocation yields null rather than failing the start sequence:
- * ARCHITECTURE.md §10.4's "fail loudly" governs the tunnel, and a missing
- * diagnostic must never be the reason a tunnel does not come up.
+ * **One allocation, not two.** `allocateDistinctPorts`
+ * (`core/xray/.../PortAllocation.kt`) only guarantees distinctness *within* a
+ * single call — its own KDoc quotes `docs/agent/research/libxray-api.md` §5:
+ * `getFreePorts` binds `localhost:0`, records the port, and closes the
+ * listener before opening the next one, so nothing holds an earlier port
+ * open across two separate calls. Requesting the metrics port from a second,
+ * independent `allocate(1)` call (an earlier version of this function did
+ * exactly that) could therefore hand back a number that collides with the
+ * socks/http pair from the first call — the core then refuses two inbounds
+ * on the same port, and the user gets `CoreStartFailed` for a session they
+ * only asked to be *counted*. Requesting three together reuses the one
+ * distinctness guarantee that actually exists instead of adding a second,
+ * unguarded one.
+ *
+ * A failed three-port request **degrades to a plain two-port request with no
+ * breakdown**, never to a failed connect — the diagnostic is optional, the
+ * tunnel is not (`ARCHITECTURE.md` §10.4). "Failed" here is any [Exception],
+ * not only [XrayException]: [allocate]'s real implementation
+ * (`XrayController.allocatePorts` → `fetchFreePorts`) also throws
+ * `org.json.JSONException` out of `JSONObject`/`JSONArray` parsing, and a
+ * narrower catch would let that one escape uncaught and fail the connect
+ * anyway — exactly the invariant this function exists to hold.
+ *
+ * The two-port request's own failure is **not** degraded: it propagates to
+ * the caller uncaught, which is [XrayController.allocatePorts]'s documented
+ * contract and [startCore]'s existing `PortAllocationFailed` handling for it.
+ *
+ * A free function taking [allocate] rather than an [XrayController] directly
+ * — the same seam-extraction `allocateDistinctPorts` itself uses — so this is
+ * testable on the JVM with a faked allocator instead of the real one, which
+ * (like `XrayController`) calls native `LibXray.invoke` and cannot run there.
  */
-internal fun metricsPortFor(
+// TooGenericExceptionCaught/SwallowedException: deliberate, and the KDoc above
+// says why Exception rather than XrayException — a narrower catch is the bug
+// this function exists to fix. CancellationException still rethrows first.
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+internal suspend fun allocateSessionPorts(
     breakdownEnabled: Boolean,
-    allocate: () -> Int?,
-): Int? = if (breakdownEnabled) allocate() else null
+    allocate: suspend (count: Int) -> List<Int>,
+): SessionPorts {
+    if (breakdownEnabled) {
+        try {
+            val ports = allocate(SESSION_PORT_COUNT_WITH_BREAKDOWN)
+            return SessionPorts(socksPort = ports[0], httpPort = ports[1], metricsPort = ports[2])
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Degrade: fall through to the required two-port request below,
+            // with no breakdown for this session.
+        }
+    }
+    val ports = allocate(SESSION_PORT_COUNT)
+    return SessionPorts(socksPort = ports[0], httpPort = ports[1], metricsPort = null)
+}
+
+private const val SESSION_PORT_COUNT = 2
+private const val SESSION_PORT_COUNT_WITH_BREAKDOWN = 3
 
 /** Whether a config's own outbound tags already claim one this app reserves. */
 internal fun collidesWithReservedTag(
@@ -689,10 +740,20 @@ class TunnelService : VpnService() {
 
     /**
      * The loopback port [trafficLoop]'s `readTags` reads from, or null while
-     * the breakdown is off or [metricsPortFor]'s allocation failed (M8.5 spec
-     * §2). Same lifetime as [configFile]: set in [startCore] once a session's
-     * config is generated, cleared everywhere [configFile] is.
+     * the breakdown is off or [allocateSessionPorts]'s allocation failed
+     * (M8.5 spec §2). Every *write* is under [lock], same as [configFile] and
+     * the same lifetime — set in [startCore] once a session's config is
+     * generated, cleared everywhere [configFile] is.
+     *
+     * Unlike [configFile], **not** lock-guarded on read: [trafficLoop]'s
+     * `readTags` polls it once a second from its own coroutine, off the
+     * `Dispatchers.IO` scope, and taking [lock] there for one field read on a
+     * hot path is worse than the alternative. `@Volatile` is what makes a
+     * write on one thread visible to that read on another without it — a
+     * stale read here costs one poll of a dead port and yields no rows, never
+     * a crash or a corrupted value.
      */
+    @Volatile
     private var metricsPort: Int? = null
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
@@ -1414,36 +1475,6 @@ class TunnelService : VpnService() {
             null
         }
 
-    /**
-     * Resolves [metricsPortFor]'s decision for this connect attempt.
-     *
-     * A separate `suspend` function, not inlined into [startCore], for two
-     * reasons: it keeps [startCore] under the LongMethod budget, and it is
-     * where the suspend/non-suspend boundary [metricsPortFor] sits on has to
-     * be crossed. [metricsPortFor]'s own `allocate` parameter is a plain,
-     * synchronous `() -> Int?` on purpose, so its decision is unit-testable on
-     * the JVM with no coroutine (`PerTagWiringTest`) — and a plain lambda
-     * cannot itself call [XrayController.allocatePorts], which suspends.
-     * Gating that call on `breakdownEnabled` here, before [metricsPortFor]
-     * ever sees the result, is what keeps a port from being allocated at all
-     * while the breakdown is off, not merely discarded once allocated.
-     */
-    @Suppress("SwallowedException") // A failed allocation degrades to no breakdown, never a failed connect.
-    private suspend fun resolveMetricsPort(xray: XrayController): Int? {
-        val breakdownEnabled = settingsRepository.perTagBreakdown.first()
-        val allocated =
-            if (!breakdownEnabled) {
-                null
-            } else {
-                try {
-                    xray.allocatePorts(count = 1).firstOrNull()
-                } catch (e: XrayException) {
-                    null
-                }
-            }
-        return metricsPortFor(breakdownEnabled) { allocated }
-    }
-
     // One early return per step is the point, not a smell: §10.4 requires each
     // stage of the start sequence to fail specifically and stop there.
     //
@@ -1461,26 +1492,22 @@ class TunnelService : VpnService() {
         routing: RoutingResolution,
         dnsPlan: DnsPlan?,
     ): StartedPorts? {
-        // One call for both ports, not two calls to allocatePort(): §10.6 and
-        // docs/agent/research/libxray-api.md §5 — getFreePorts closes each
-        // listener before opening the next, so nothing stops the kernel handing
-        // back the same number twice even across separate calls. allocatePorts
-        // verifies distinctness and retries; a config with two inbounds on the
-        // same port is rejected by the core outright.
-        val ports =
+        // §10.6 and docs/agent/research/libxray-api.md §5: getFreePorts closes
+        // each listener before opening the next, so allocatePorts's distinctness
+        // guarantee only holds within one call. M8.5 spec §2's port rides along
+        // in the *same* call rather than a second one — see allocateSessionPorts's
+        // own KDoc for why a second call is the bug this replaced.
+        val breakdownEnabled = settingsRepository.perTagBreakdown.first()
+        val allocated =
             try {
-                xray.allocatePorts(count = 2)
+                allocateSessionPorts(breakdownEnabled) { count -> xray.allocatePorts(count) }
             } catch (e: XrayException) {
                 return failStart(gen, FailureReason.PortAllocationFailed, e, rowId)
             }
-        val socksPort = ports[0]
-        val httpPort = ports[1]
+        val socksPort = allocated.socksPort
+        val httpPort = allocated.httpPort
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
-        // M8.5 spec §2: allocated alongside the pair above, not with it — a
-        // failed allocation here must not fail the connect. See
-        // resolveMetricsPort for why it is a separate suspend function.
-        val breakdownPort = resolveMetricsPort(xray)
         val settings =
             TunnelSettings(
                 socksPort = socksPort,
@@ -1489,7 +1516,7 @@ class TunnelService : VpnService() {
                 routing = (routing as? RoutingResolution.Active)?.ruleSet,
                 httpPort = httpPort,
                 dns = dnsPlan,
-                metricsPort = breakdownPort,
+                metricsPort = allocated.metricsPort,
             )
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
@@ -1509,7 +1536,7 @@ class TunnelService : VpnService() {
         synchronized(lock) {
             if (gen != generation) return null
             configFile = file
-            metricsPort = breakdownPort
+            metricsPort = allocated.metricsPort
         }
 
         // §6: validate before starting. libXray's testXray takes a path, so the

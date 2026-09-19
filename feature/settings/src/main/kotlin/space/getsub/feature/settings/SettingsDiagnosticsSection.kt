@@ -5,6 +5,7 @@ package space.getsub.feature.settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -65,9 +66,17 @@ internal fun SettingsDiagnosticsSection(
 
         val breakdownTitle = stringResource(R.string.settings_breakdown_title)
         SettingRow(
-            icon = Icons.Default.Info,
+            // Distinct from the log row's Info above, and shared with SettingsTunnelSection's
+            // failClosed row rather than picked arbitrarily: both are opt-in switches whose own
+            // copy is a risk disclosure the user must read before flipping, not a routine
+            // preference (see this file's own KDoc on the summary string).
+            icon = Icons.Default.Warning,
             label = breakdownTitle,
             supportingText = stringResource(R.string.settings_breakdown_summary),
+            // Not cosmetic — see SettingRow's own KDoc and SettingsTunnelSection.kt:64-68 for why
+            // a trailing Switch with no ancestor semantics lets a "the switch under this label"
+            // assertion pass vacuously, with no real switch to find.
+            labelCarriesSemantics = true,
             trailing = {
                 Switch(
                     checked = perTagBreakdown,

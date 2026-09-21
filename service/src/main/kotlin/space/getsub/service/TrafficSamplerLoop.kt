@@ -53,6 +53,16 @@ import space.getsub.core.model.TrafficSample
  *   attribute either. Absent entirely by default so every existing caller
  *   keeps compiling; [TunnelService] supplies it from the loopback metrics
  *   listener when one is running.
+ *
+ *   The raw reading is handed to [TrafficSampler.accept] alongside [read]'s
+ *   reading, in the same call (review finding I1) — this loop no longer
+ *   `copy()`s a raw tag reading onto the emitted sample after the fact. xray
+ *   is restarted by a retained-TUN restart exactly like tun2socks is, so a raw
+ *   per-tag reading resets to zero on every Wi-Fi<->cellular handoff while the
+ *   session total keeps accumulating; routing both through the sampler's own
+ *   delta logic keeps them on one clock. [TrafficSampler] is the only thing
+ *   that may decide what the emitted `perTag` is — this loop cannot see a raw
+ *   reading the sampler has not folded in.
  */
 internal class TrafficSamplerLoop(
     private val scope: CoroutineScope,
@@ -70,12 +80,12 @@ internal class TrafficSamplerLoop(
             scope.launch {
                 while (isActive) {
                     read()?.let { reading ->
-                        val sample = sampler.accept(reading)
+                        val sample = sampler.accept(reading, readTags?.invoke() ?: emptyList())
                         // Narrows, does not close, the residual this class's
                         // KDoc names: a cancellation landing after accept()
                         // but before this check still slips one stale emit
                         // through. Deliberately not stronger than that.
-                        if (isActive) emit(sample.copy(perTag = readTags?.invoke() ?: emptyList()))
+                        if (isActive) emit(sample)
                     }
                     delay(intervalMillis)
                 }

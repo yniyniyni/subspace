@@ -3,7 +3,9 @@
 package space.getsub.service
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import space.getsub.core.model.TagTraffic
 
 class TrafficSamplerTest {
     private fun reading(up: Long, down: Long) = TunnelCounters(up, down, 0, 0)
@@ -141,5 +143,96 @@ class TrafficSamplerTest {
         assertEquals(1_000L, sample.downlinkBytes)
         assertEquals(true, sample.uplinkBytes >= 0)
         assertEquals(true, sample.downlinkBytes >= 0)
+    }
+
+    // --- Per-tag breakdown (review finding I1) ---
+    //
+    // Before the fix, TrafficSamplerLoop.copy()'d a raw current reading from
+    // xray's /debug/vars onto the sample, bypassing TrafficSampler entirely.
+    // xray is restarted by a retained-TUN restart exactly like tun2socks is,
+    // so its per-tag counters reset to zero on every Wi-Fi<->cellular
+    // handoff, while the session total keeps accumulating -- the rows and the
+    // tile they decompose disagreed permanently from the first handoff
+    // onward. These tests exercise TrafficSampler.accept's own per-tag
+    // accumulation, which is where that decision now has to live.
+
+    @Test
+    fun `per-tag traffic accumulates across a simulated xray restart instead of resetting`() {
+        val sampler = TrafficSampler()
+        val preRestart = 9_000_000L // ~9 MB moved by "proxy" before the handoff
+        val postRestart = 500L // a little more after xray comes back up
+
+        // xray's counter for this tag ramps up pre-handoff...
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 0, 0)))
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", preRestart, preRestart)))
+        // ...then a retained-TUN restart brings xray back with its stats
+        // reset to near zero, the same way the raw hev counters reset.
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", postRestart, postRestart)))
+
+        val row = sample.perTag.single { it.tag == "proxy" }
+        val expected = preRestart + postRestart
+        assertEquals(expected, row.uplinkBytes)
+        assertEquals(expected, row.downlinkBytes)
+        // The device defect this reproduces: without accumulation the reading
+        // simply falls back to postRestart, discarding everything moved
+        // before the restart.
+        assertTrue(row.uplinkBytes > postRestart)
+    }
+
+    @Test
+    fun `a newly seen tag's first reading is counted in full, not baselined`() {
+        val sampler = TrafficSampler()
+        // Unlike the session totals, a tag's first reading is not a baseline:
+        // xray's lifetime is bounded by the session, so the first reading a
+        // tag is ever seen at IS this session's traffic for that tag so far.
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("direct", 4_000L, 6_000L)))
+
+        val row = sample.perTag.single { it.tag == "direct" }
+        assertEquals(4_000L, row.uplinkBytes)
+        assertEquals(6_000L, row.downlinkBytes)
+    }
+
+    @Test
+    fun `a tag that disappears keeps its accumulated total and stops growing`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 1_000L, 2_000L), TagTraffic("direct", 500L, 500L)))
+        // "direct" drops out of this tick's payload -- xray restarted with a
+        // config that no longer names it, say -- while "proxy" keeps moving.
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 1_500L, 2_500L)))
+
+        val direct = sample.perTag.single { it.tag == "direct" }
+        assertEquals(500L, direct.uplinkBytes)
+        assertEquals(500L, direct.downlinkBytes)
+        val proxy = sample.perTag.single { it.tag == "proxy" }
+        assertEquals(1_500L, proxy.uplinkBytes)
+        assertEquals(2_500L, proxy.downlinkBytes)
+        // The disappeared row is retained, not dropped.
+        assertEquals(setOf("proxy", "direct"), sample.perTag.map { it.tag }.toSet())
+    }
+
+    @Test
+    fun `the sum of per-tag downlink tracks the session total's shape across a restart`() {
+        val sampler = TrafficSampler()
+        // TUN-level counters include IP/TCP headers the xray payload counters
+        // do not, so the two are never expected to be equal -- only to move
+        // together. Baseline tick establishes both at zero traffic so far.
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 0, 0)))
+
+        val beforeRestart = sampler.accept(reading(1_000, 9_000_000), listOf(TagTraffic("proxy", 900, 8_800_000)))
+        val beforeSumDown = beforeRestart.perTag.sumOf { it.downlinkBytes }
+        assertTrue(beforeSumDown > 0)
+        assertTrue(beforeSumDown <= beforeRestart.downlinkBytes)
+
+        // A retained-TUN restart: both the hev totals' underlying counter and
+        // xray's per-tag counter fall, in the same tick, because the same
+        // network handoff restarted both processes.
+        val afterRestart = sampler.accept(reading(1_050, 9_012_345), listOf(TagTraffic("proxy", 50, 12_000)))
+        val afterSumDown = afterRestart.perTag.sumOf { it.downlinkBytes }
+
+        // Both figures kept climbing across the restart -- neither collapsed
+        // back toward zero the way the pre-fix per-tag reading did.
+        assertTrue(afterSumDown > beforeSumDown)
+        assertTrue(afterRestart.downlinkBytes > beforeRestart.downlinkBytes)
+        assertTrue(afterSumDown <= afterRestart.downlinkBytes)
     }
 }

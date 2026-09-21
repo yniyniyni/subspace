@@ -12,13 +12,20 @@ import space.getsub.core.model.TrafficSample
  * observation. [TrafficSamplerLoop] supplies the timer.
  *
  * **Why deltas rather than the raw value** (spec §1.3): hev's counters are
- * plain `static size_t`, and we build `armeabi-v7a` and `x86`, where `size_t`
- * is 32 bits. A byte counter therefore wraps at 4 GiB and the display would
- * fall back to near zero mid-session. A falling reading distinguishes a wrap
- * from a genuine reset by examining the previous value: only values above 2³²
- * can reset (the 32-bit counter cannot have held such a value), so a falling
- * reading from there is not a wrap. The alternative to this distinction
- * silently loses 4 GiB of a long session.
+ * plain `static size_t`, and we build `arm64-v8a`, `armeabi-v7a` and
+ * `x86_64` (`service/build.gradle.kts`). On the 32-bit ABI, `size_t` is 32
+ * bits, so a byte counter can wrap at 4 GiB and the raw value would fall back
+ * to near zero mid-session; on the two 64-bit ABIs it cannot wrap at all, but
+ * a retained-TUN restart on a network handoff resets the counter to whatever
+ * it held before, and that reset also makes the reading fall. A falling
+ * reading is therefore ambiguous — a 32-bit wrap and a genuine reset look
+ * identical once the previous value is below 2³² — and there is no way to
+ * tell them apart from the two numbers alone, so [delta] does not try. It
+ * treats every falling reading as the start of a fresh counter epoch and
+ * returns the new value as-is. Getting this wrong the other way was a real
+ * defect: on a 64-bit ABI a retained-TUN restart always produces a falling
+ * reading with the previous value nowhere near 2³², so any inference that
+ * called that a wrap added a spurious 4 GiB per network transition.
  *
  * The first reading is a baseline, not traffic: a sampler attached to a session
  * already in flight must not report the counter's whole history as this
@@ -60,29 +67,30 @@ internal class TrafficSampler {
     }
 
     /**
-     * Computes the difference between consecutive counter readings, handling
-     * both 32-bit wraps and genuine resets on 64-bit ABIs.
+     * Computes the difference between consecutive counter readings.
      *
-     * A falling reading (curr < prev) can mean either:
+     * A rising reading is the ordinary case: the delta is `curr - prev`.
      *
-     * - A 32-bit wrap: prev ≤ 2³², counter rolled over, add the gap to 2³² plus curr
-     * - A genuine reset: prev > 2³², impossible in a 32-bit counter, so it must
-     *   have been a 64-bit cumulative value before the tunnel teardown reset it to 0.
-     *   Return curr as-is.
+     * A falling reading (`curr < prev`) is ambiguous — it is either a 32-bit
+     * wrap (`armeabi-v7a`) or a genuine reset from a retained-TUN restart
+     * (any ABI, most commonly on a network handoff), and the two are
+     * indistinguishable from `prev` and `curr` alone once `prev < 2³²`. This
+     * always treats it as a reset and returns `curr` as-is:
      *
-     * 64-bit ABIs can accumulate counters exceeding 4 GiB in multi-hour sessions,
-     * so this distinction is load-bearing on real devices.
+     * - If it really was a reset, that is exactly right.
+     * - If it really was a wrap, this under-counts by `2³² - prev` — the
+     *   bytes moved in the one sampling interval before the rollover
+     *   ([TrafficSamplerLoop] samples at 1 s), so the loss is bounded by one
+     *   second of traffic per 4 GiB crossed.
+     *
+     * The alternative — guessing wrap whenever `prev < 2³²` — is wrong every
+     * time a retained-TUN restart fires on a 64-bit ABI, where `size_t` is 64
+     * bits and the counter cannot wrap at all: it added a spurious ~4 GiB per
+     * network transition, which is worse than this method's bounded
+     * under-count on the ABI where a wrap can actually happen.
      */
     private fun delta(
         prev: Long,
         curr: Long,
-    ): Long = when {
-        curr >= prev -> curr - prev
-        prev >= UINT32_SPAN -> curr
-        else -> (UINT32_SPAN - prev) + curr
-    }
-
-    private companion object {
-        const val UINT32_SPAN = 1L shl 32
-    }
+    ): Long = if (curr >= prev) curr - prev else curr
 }

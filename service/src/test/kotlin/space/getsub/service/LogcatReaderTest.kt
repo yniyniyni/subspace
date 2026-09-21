@@ -46,7 +46,10 @@ class LogcatReaderTest {
         }
     }
 
-    private class FakeProcess(private val stream: InputStream) : Process() {
+    private class FakeProcess(
+        private val stream: InputStream,
+        private val events: MutableList<String>? = null,
+    ) : Process() {
         var destroyed = false
             private set
 
@@ -62,6 +65,18 @@ class LogcatReaderTest {
 
         override fun destroy() {
             destroyed = true
+            events?.add("process-destroyed")
+        }
+    }
+
+    /** Records when the underlying stream is closed, so [close]'s call order can be pinned. */
+    private class OrderTrackingInputStream(
+        data: ByteArray,
+        private val events: MutableList<String>,
+    ) : ByteArrayInputStream(data) {
+        override fun close() {
+            events.add("reader-closed")
+            super.close()
         }
     }
 
@@ -147,5 +162,37 @@ class LogcatReaderTest {
         // is exactly the shape of the real race's losing branch.
         assertFalse("the closed stream unexpectedly yielded another line", lines.hasNext())
         assertFalse(reader.endedWithError)
+    }
+
+    /**
+     * D3 (this branch, 2026-09-21): pins the *order* [close] performs its two
+     * calls in, which is the actual fix — the subprocess must die before the
+     * reader is closed, not after.
+     *
+     * This does not, and cannot, reproduce the deadlock itself: that requires a
+     * thread genuinely blocked inside a native `readLine()` racing a `close()`
+     * from a second thread, and a previous attempt at exactly that wedged the
+     * test JVM and had to be `kill -9`'d (see the task brief this fix came
+     * from). What this test *can* pin, deterministically and without spawning
+     * a thread, is the one property that actually prevents the wedge: by the
+     * time `reader.close()` runs, `process.destroy()` has already run. Revert
+     * the order in [LogcatReader.close] and this test fails immediately — no
+     * timing, no flakiness, no thread.
+     */
+    @Test
+    fun `close destroys the subprocess before closing the reader`() {
+        val events = mutableListOf<String>()
+        var spawned: FakeProcess? = null
+        val reader =
+            LogcatReader {
+                val stream = OrderTrackingInputStream("x\n".toByteArray(), events)
+                FakeProcess(stream, events).also { spawned = it }
+            }
+        reader.lines().first()
+
+        reader.close()
+
+        assertEquals(true, spawned?.destroyed)
+        assertEquals(listOf("process-destroyed", "reader-closed"), events)
     }
 }

@@ -96,10 +96,47 @@ internal class LogcatReader(
         }
     }
 
+    /**
+     * D3 (this branch, 2026-09-21): destroys the subprocess *before* closing the
+     * reader. That order is load-bearing — swapping it back reintroduces a
+     * teardown deadlock, so read this before "tidying" the two lines below.
+     *
+     * `BufferedReader.readLine()` and `BufferedReader.close()` serialize on the
+     * same monitor (`java.io.Reader`'s own `lock`), and a thread blocked inside
+     * a native read holds that monitor for the whole call. [lines]' capture
+     * thread can be sitting in exactly that blocked read — waiting on the
+     * `logcat` subprocess for its next line — when [close] runs on the teardown
+     * thread. If [close] called `reader.close()` first, it would not be able to
+     * enter that synchronized block until the in-flight read returns; and that
+     * read only returns when logcat emits another matching line, or the
+     * subprocess dies. The call that kills the subprocess would then be the
+     * *next* statement — one this thread can no longer reach, because it is
+     * stuck waiting to acquire a monitor the blocked reader already holds. That
+     * is a real deadlock, not a slow path: on a quiet device, that next
+     * matching line can be arbitrarily far away, and teardown never finishes.
+     * `jstack` confirmed this shape earlier on this branch — the capture thread
+     * `locked` inside `StreamDecoder.readBytes`, another thread `BLOCKED (on
+     * object monitor)` in `BufferedReader.close()`.
+     *
+     * Destroying first avoids the wait entirely: [Process.destroy] signals and
+     * returns without blocking. Killing the subprocess closes the pipe's write
+     * end, so the blocked `readLine()` takes EOF, returns null, and releases the
+     * monitor on its own — at which point `reader.close()` proceeds freely
+     * against a reader nothing is blocked inside any more. [lines]'
+     * `generateSequence` ends cleanly on that null, so this path never reaches
+     * `onFailure`, and [endedWithError] stays false without [closeRequested]
+     * even needing to intervene.
+     *
+     * No data is lost that the old order preserved: closing the reader first
+     * discarded its buffer just the same, so there is nothing this order gives
+     * up. `runCatching` around each call only guards against a throw — it does
+     * not, and cannot, guard against one of these calls blocking, which is why
+     * the order itself is the fix, not the `runCatching`.
+     */
     fun close() {
         closeRequested = true
-        runCatching { reader?.close() }
         runCatching { process?.destroy() }
+        runCatching { reader?.close() }
         reader = null
         process = null
     }

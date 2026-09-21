@@ -31,6 +31,39 @@ internal class LogcatReader(
         private set
 
     /**
+     * Set by [close] before it touches the reader or the process.
+     *
+     * D2 (device verification, 2026-09-20): [close] runs on the teardown
+     * thread while [lines]' `generateSequence` block may have a `readLine()`
+     * in flight on the capture thread. `BufferedReader.readLine()` and
+     * `BufferedReader.close()` serialize on the same monitor, so [close]
+     * either lands in a gap between two reads — and the *next* read then
+     * fails against an already-closed stream — or it waits for whatever read
+     * is currently in flight to finish first. Either way, once [close] has
+     * run, a read failure that follows it is the closed stream behaving
+     * exactly as a closed stream should, not evidence the subprocess or pipe
+     * broke. The device observed this landing both ways across two otherwise
+     * identical clean disconnects — sometimes the trailing read failed,
+     * sometimes it didn't — which is what makes it a race and not a
+     * deterministic ordering to special-case instead.
+     *
+     * Without this flag, [lines] could not tell that failure apart from a
+     * genuine mid-stream break, so a normal disconnect could report itself as
+     * a stream failure that never happened. Set here, before [close] touches
+     * the reader or the process, so the write is visible to the capture
+     * thread by the time it observes any effect of the close.
+     *
+     * This does not guarantee the last line written before [close] is
+     * captured — that still depends on whether the subprocess's pipe had
+     * already delivered it to this reader's buffer before the close tore the
+     * stream down, and nothing here waits to find out (teardown must not
+     * block on this capture; see R18). It only fixes what [endedWithError]
+     * reports about a stop this class itself initiated.
+     */
+    @Volatile
+    private var closeRequested: Boolean = false
+
+    /**
      * Blocking, and consumed on a dedicated thread — this follows the
      * subprocess until [close].
      *
@@ -52,13 +85,19 @@ internal class LogcatReader(
         return generateSequence {
             runCatching { newReader.readLine() }
                 .onFailure {
-                    endedWithError = true
+                    // A read failure that follows a requested close is the
+                    // expected consequence of that close, not a genuine
+                    // mid-stream error — see [closeRequested].
+                    if (!closeRequested) {
+                        endedWithError = true
+                    }
                 }
                 .getOrNull()
         }
     }
 
     fun close() {
+        closeRequested = true
         runCatching { reader?.close() }
         runCatching { process?.destroy() }
         reader = null

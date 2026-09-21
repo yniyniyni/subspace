@@ -115,4 +115,37 @@ class LogcatReaderTest {
         reader.lines().toList()
         assertTrue(reader.endedWithError)
     }
+
+    /**
+     * D2 (device verification, 2026-09-20): on one of two clean disconnects,
+     * `LogCapture.stop` closed the reader while `readLine()` was still
+     * blocked inside it. Both `BufferedReader.readLine()` and
+     * `BufferedReader.close()` synchronize on the same monitor, so in
+     * practice the two only race when the capture thread is between reads —
+     * whichever one gets there first decides whether the *next* read sees a
+     * closed stream (throwing `IOException("Stream closed")`) or a still-live
+     * one. This test drives that outcome directly, without depending on JDK
+     * `Reader` lock timing to land a genuinely concurrent read mid-flight:
+     * [close] runs between two [LogcatReader.lines] reads, so the next read
+     * fails exactly the way the losing side of the real race does, and what's
+     * under test is what [LogcatReader] does with that failure — not the
+     * scheduling that produces it.
+     *
+     * Before this fix, [endedWithError] could not tell that failure apart
+     * from a genuine mid-stream break, so a normal disconnect accused itself
+     * of a stream failure that never happened.
+     */
+    @Test
+    fun `a stop we initiated does not set the error flag even when the next read fails`() {
+        val reader = LogcatReader { FakeProcess(ByteArrayInputStream("line1\n".toByteArray())) }
+        val lines = reader.lines().iterator()
+        assertEquals("line1", lines.next())
+
+        reader.close()
+
+        // The reader is now closed underneath the still-live sequence, which
+        // is exactly the shape of the real race's losing branch.
+        assertFalse("the closed stream unexpectedly yielded another line", lines.hasNext())
+        assertFalse(reader.endedWithError)
+    }
 }

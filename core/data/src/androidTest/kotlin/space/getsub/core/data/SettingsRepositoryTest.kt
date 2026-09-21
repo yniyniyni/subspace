@@ -390,6 +390,24 @@ class SettingsRepositoryTest {
             repository.failClosed.first() shouldBe false
         }
 
+    /**
+     * Review finding I6: the per-tag breakdown is off by default, and that
+     * default is what keeps an unauthenticated `/debug/vars` endpoint (which
+     * also exposes Go heap stats via `/debug/pprof/`, see
+     * [SettingsRepository.perTagBreakdown]'s own KDoc) off every user's
+     * loopback. An invariant, like [failClosedDefaultsToOn] above, not a
+     * preference — this is the one place that default is actually decided.
+     */
+    @Test
+    fun perTagBreakdownDefaultsToOff() =
+        runTest {
+            repository.perTagBreakdown.first() shouldBe false
+
+            repository.setPerTagBreakdown(true)
+
+            repository.perTagBreakdown.first() shouldBe true
+        }
+
     @Test
     fun batteryPromptShownDefaultsToFalse() =
         runTest {

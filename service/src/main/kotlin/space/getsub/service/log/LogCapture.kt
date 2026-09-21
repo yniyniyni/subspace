@@ -90,8 +90,21 @@ private val LOGCAT_PREFIX_PATTERN =
  * **An accepted residual.** A leading `label:` that survives *inside* the
  * message body — `stopTunnel:` in `TunnelService: stopTunnel: phase=...` — is
  * still redacted by [redact]'s own rules once the split hands it the body.
- * That is not chased here: the component name (the tag) and the phase value
- * both survive the split, which is what W7 diagnosis actually needs.
+ * That is not chased here: the component name (the tag) survives the split.
+ *
+ * **The phase value does not survive for free.** A device capture on
+ * 2026-09-16 showed [redact]'s own positional rules eating it: a body of the
+ * shape `tun2socks.stop exit +33ms` is a dotted identifier —
+ * `HOSTNAME_PATTERN` in `Redaction.kt` — and a leading `word:` — like the old
+ * `teardown: tun2socks.stop enter` — is `BARE_HOST_PREFIX_PATTERN`'s bare-host
+ * shape. Both eat cleanly, leaving only durations behind. There is no fix for
+ * this here: [redact] must keep catching those shapes everywhere else they
+ * mean a real host, so the constraint sits on the emission side. `TunnelService`'s
+ * teardown instrumentation follows the convention `"teardown[<phase>] <event>"`
+ * — bracketed, undotted — specifically so its phase names fall outside every
+ * pattern in `Redaction.kt`; see the comment above that block, and
+ * `RedactionTest`'s `teardown phase names survive redaction` test, before
+ * changing that shape or adding a new phase line elsewhere.
  */
 private fun redactLine(line: String): String {
     val match = LOGCAT_PREFIX_PATTERN.matchEntire(line) ?: return redact(line)

@@ -2687,9 +2687,18 @@ class TunnelService : VpnService() {
         // with no matching `exit` instead of being indistinguishable from a fast,
         // silent success — which is what made the first occurrence undiagnosable.
         // §5.6: phase names and durations only, never config contents.
+        //
+        // Every line below is shaped "teardown[<phase>] <event>", deliberately:
+        // no bare `word:` before whitespace (BARE_HOST_PREFIX_PATTERN in
+        // Redaction.kt eats that whole), and no dot inside the phase name
+        // (HOSTNAME_PATTERN eats that). A device capture on 2026-09-16 showed
+        // the old "teardown: tun2socks.stop exit +33ms" shape reduced to
+        // "<redacted>: <redacted> exit +33ms" — durations survived, phases did
+        // not. See LogCapture.kt's note on this convention before changing the
+        // shape of any line here.
         val startedAtMillis = android.os.SystemClock.elapsedRealtime()
         fun sinceStart(): Long = android.os.SystemClock.elapsedRealtime() - startedAtMillis
-        Log.i(TAG, "teardown: enter")
+        Log.i(TAG, "teardown[lifecycle] enter")
 
         val xray: XrayController?
         val fd: ParcelFileDescriptor?
@@ -2699,7 +2708,7 @@ class TunnelService : VpnService() {
 
         synchronized(lock) {
             if (expectedGeneration != null && expectedGeneration != generation) {
-                Log.i(TAG, "teardown: superseded, nothing taken +${sinceStart()}ms")
+                Log.i(TAG, "teardown[lifecycle] superseded, nothing taken +${sinceStart()}ms")
                 return null
             }
             // Supersede any in-flight start before taking ownership of its state.
@@ -2733,10 +2742,10 @@ class TunnelService : VpnService() {
             publishLocked(ConnectionState.Disconnecting)
         }
 
-        Log.i(TAG, "teardown: state taken +${sinceStart()}ms")
+        Log.i(TAG, "teardown[lifecycle] state taken +${sinceStart()}ms")
 
         // Order matters: stop feeding packets in before removing their destination.
-        Log.i(TAG, "teardown: tun2socks.stop enter")
+        Log.i(TAG, "teardown[tun2socks-stop] enter")
         try {
             Tun2Socks.stop()
         } catch (e: Throwable) {
@@ -2744,26 +2753,26 @@ class TunnelService : VpnService() {
             // says teardown must still finish — abandoning here leaks the fd.
             Log.e(TAG, "tun2socks stop failed: ${e.javaClass.simpleName}")
         }
-        Log.i(TAG, "teardown: tun2socks.stop exit +${sinceStart()}ms")
+        Log.i(TAG, "teardown[tun2socks-stop] exit +${sinceStart()}ms")
 
         try {
             fd?.close()
         } catch (e: java.io.IOException) {
             Log.e(TAG, "closing tun fd failed: ${e.javaClass.simpleName}")
         }
-        Log.i(TAG, "teardown: fd.close exit +${sinceStart()}ms")
+        Log.i(TAG, "teardown[fd-close] exit +${sinceStart()}ms")
 
         // stopBlocking(), not stop(): onDestroy has no scope that outlives it and
         // §5.4 requires teardown to finish before the process dies. It also drops
         // the protector so Go stops holding this service.
-        Log.i(TAG, "teardown: xray.stopBlocking enter (present=${xray != null})")
+        Log.i(TAG, "teardown[xray-stopBlocking] enter (present=${xray != null})")
         xray?.stopBlocking()
-        Log.i(TAG, "teardown: xray.stopBlocking exit +${sinceStart()}ms")
+        Log.i(TAG, "teardown[xray-stopBlocking] exit +${sinceStart()}ms")
         cfg?.delete()
 
         removeForegroundSafely()
         publish(finalState)
-        Log.i(TAG, "teardown: done +${sinceStart()}ms")
+        Log.i(TAG, "teardown[lifecycle] done +${sinceStart()}ms")
         // Spec §1.5 / TeardownStep.StopTrafficSampler: stopped after the session
         // has published its final state and before the capture below stops —
         // a session that has already ended must not go on accumulating a total

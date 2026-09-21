@@ -3475,9 +3475,17 @@ class TunnelService : VpnService() {
                         retireRetry = {
                             cancelBackoffRetryLocked()
                             reconnectAttempts.reset()
-                            // Spec §1.5: [start] is idempotent, so on this retained-TUN
-                            // restart it is a no-op — tun2socks was never stopped, so the
-                            // sampler already running is left exactly as it was.
+                            // Spec §1.5: [start] is idempotent — a no-op while its job is
+                            // still active — so this retained-TUN restart does not rebuild
+                            // [trafficLoop]'s [TrafficSampler]. That is what survives the
+                            // restart, not tun2socks: `Tun2Socks.stop()` is called earlier
+                            // in this same restart (see above), and its counters *do* reset
+                            // along with everything else tun2socks owns. What this no-op
+                            // preserves is the accumulator — the same [TrafficSampler]
+                            // instance goes on polling the freshly reset counters, and its
+                            // falling-reading rule (spec §1.3) treats that reset as the
+                            // fresh epoch it is, so the session total keeps climbing instead
+                            // of restarting from zero.
                             trafficLoop.start()
                         },
                     )

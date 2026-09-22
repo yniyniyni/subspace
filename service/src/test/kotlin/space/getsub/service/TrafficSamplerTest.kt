@@ -236,4 +236,121 @@ class TrafficSamplerTest {
         assertTrue(afterRestart.downlinkBytes > beforeRestart.downlinkBytes)
         assertTrue(afterSumDown <= afterRestart.downlinkBytes)
     }
+
+    // --- Explicit epoch signalling (F4 / ruling R38, amending R28) ---
+    //
+    // TrafficSamplerLoop no longer leaves a restart for delta()'s falling-reading rule to infer:
+    // TunnelService.restartCoreRetainingTun now calls TrafficSamplerLoop.notifyCountersRestarted(),
+    // which calls TrafficSampler.beginNewEpoch() before the new epoch's first reading is folded
+    // in. These tests drive beginNewEpoch() directly -- the reviewer's own probe values
+    // ("before=100, new epoch raw=150, observed=150, expected=250") are reproduced as the "above"
+    // case below. Without beginNewEpoch() actually resetting the "previous reading" baseline (i.e.
+    // if it were a no-op, or if it called the deleted whole-session reset() instead), every one of
+    // these would fail: a no-op reproduces the exact review bug (falls through to delta(), which
+    // undercounts or zeroes the below/equal cases and is simply wrong for "above"); a whole-session
+    // reset would zero the accumulated totals these tests assert are preserved.
+
+    @Test
+    fun `an explicit epoch signal counts a lower new-epoch reading in full, not by delta`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0))
+        sampler.accept(reading(100, 100)) // pre-restart: accumulated = 100
+
+        sampler.beginNewEpoch() // TunnelService just restarted hev between polls
+        val sample = sampler.accept(reading(60, 60)) // new epoch's first reading, below the old prev
+
+        // 100 (preserved) + 60 (counted in full) = 160. Falling back to delta() here would treat
+        // 60 < 100 as a fresh epoch too and happen to land on the same number by coincidence --
+        // the "equal"/"above" cases below are what actually discriminate the fix from delta().
+        assertEquals(160L, sample.uplinkBytes)
+        assertEquals(160L, sample.downlinkBytes)
+    }
+
+    @Test
+    fun `an explicit epoch signal counts a new-epoch reading equal to the old prev in full`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0))
+        sampler.accept(reading(100, 100)) // pre-restart: accumulated = 100
+
+        sampler.beginNewEpoch()
+        // The equality case review finding F4 calls out as "worse": delta(100, 100) = 0, silently
+        // discarding the new epoch's traffic entirely.
+        val sample = sampler.accept(reading(100, 100))
+
+        assertEquals(200L, sample.uplinkBytes)
+        assertEquals(200L, sample.downlinkBytes)
+    }
+
+    @Test
+    fun `an explicit epoch signal counts a higher new-epoch reading in full without subtracting the old epoch`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0))
+        sampler.accept(reading(100, 100)) // pre-restart: accumulated = 100, matches the reviewer's probe
+
+        sampler.beginNewEpoch()
+        // The reviewer's own probe: "before=100, new epoch raw=150, observed=150, expected=250".
+        // delta(100, 150) = 50, which is what the old inference-only code returned.
+        val sample = sampler.accept(reading(150, 150))
+
+        assertEquals(250L, sample.uplinkBytes)
+        assertEquals(250L, sample.downlinkBytes)
+    }
+
+    @Test
+    fun `an explicit epoch signal counts a lower new-epoch tag reading in full, not by delta`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 0, 0)))
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 100, 100)))
+
+        sampler.beginNewEpoch()
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 60, 60)))
+
+        val row = sample.perTag.single { it.tag == "proxy" }
+        assertEquals(160L, row.uplinkBytes)
+        assertEquals(160L, row.downlinkBytes)
+    }
+
+    @Test
+    fun `an explicit epoch signal counts a new-epoch tag reading equal to the old prev in full`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 0, 0)))
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 100, 100)))
+
+        sampler.beginNewEpoch()
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 100, 100)))
+
+        val row = sample.perTag.single { it.tag == "proxy" }
+        assertEquals(200L, row.uplinkBytes)
+        assertEquals(200L, row.downlinkBytes)
+    }
+
+    @Test
+    fun `an explicit epoch signal counts a higher new-epoch tag reading in full without subtracting the old epoch`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 0, 0)))
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 100, 100)))
+
+        sampler.beginNewEpoch()
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 150, 150)))
+
+        val row = sample.perTag.single { it.tag == "proxy" }
+        assertEquals(250L, row.uplinkBytes)
+        assertEquals(250L, row.downlinkBytes)
+    }
+
+    @Test
+    fun `an explicit epoch signal leaves an unrelated tag's accumulator untouched`() {
+        val sampler = TrafficSampler()
+        sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 100, 100), TagTraffic("direct", 40, 40)))
+
+        sampler.beginNewEpoch()
+        // Only "proxy" reappears this tick -- "direct" is simply absent, the same as the ordinary
+        // disappearing-tag case, and must not be zeroed or otherwise disturbed by the epoch reset.
+        val sample = sampler.accept(reading(0, 0), listOf(TagTraffic("proxy", 30, 30)))
+
+        val proxy = sample.perTag.single { it.tag == "proxy" }
+        assertEquals(130L, proxy.uplinkBytes)
+        val direct = sample.perTag.single { it.tag == "direct" }
+        assertEquals(40L, direct.uplinkBytes)
+    }
 }

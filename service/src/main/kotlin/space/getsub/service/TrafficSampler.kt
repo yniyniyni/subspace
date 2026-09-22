@@ -60,8 +60,27 @@ import space.getsub.core.model.TrafficSample
  * xray restarting with a different config must not erase traffic already
  * counted for this session under the old one.
  *
+ * **Restart epochs are now signalled explicitly, not inferred (ruling R38,
+ * amending R28).** [delta]'s own KDoc used to be the only place this class
+ * decided a falling reading meant a fresh epoch — correct at the instant a
+ * retained-TUN restart resets the counter, but the sampler does not read at
+ * that instant: it reads up to one interval later ([TrafficSamplerLoop]
+ * samples at 1 s), and by then the new epoch can already have passed the old
+ * reading. `delta(prev=100, curr=150)` after a restart returns `50`, not the
+ * new epoch's true `150`; the equality case is worse, losing the new epoch's
+ * traffic entirely. [beginNewEpoch] is [TrafficSamplerLoop]'s way of telling
+ * this class the counters were just reset by
+ * [space.getsub.service.TunnelService.restartCoreRetainingTun], which removes
+ * the guess for the one case that actually happens on this hardware. [delta]
+ * stays exactly as it was for the case that has no signal — a genuine 32-bit
+ * wrap on `armeabi-v7a` — so R28 is narrowed, not reversed: inference still
+ * beats the old wrap-arithmetic branch, it just is not trusted to cover a
+ * restart anymore.
+ *
  * **Not thread-safe.** Must be driven from a single coroutine or dispatcher;
- * concurrent calls to [accept] are not synchronized.
+ * concurrent calls to [accept] are not synchronized. [beginNewEpoch] carries
+ * the same requirement — see its own KDoc for how [TrafficSamplerLoop] keeps
+ * it off an in-flight [accept].
  */
 internal class TrafficSampler {
     private var previous: TunnelCounters? = null
@@ -106,6 +125,40 @@ internal class TrafficSampler {
     }
 
     /**
+     * Tells this sampler the underlying counters were just reset by an
+     * explicit restart — [space.getsub.service.TunnelService.restartCoreRetainingTun]
+     * stopping and restarting hev and xray between polls — rather than
+     * leaving [delta] to guess it from a falling reading (ruling R38,
+     * amending R28; see this class' own KDoc).
+     *
+     * Resets the "previous reading" baseline to zero for the totals and
+     * every tag [tagAccumulators] already knows about, **without touching
+     * [uplinkBytes]/[downlinkBytes]/[uplinkPackets]/[downlinkPackets] or any
+     * tag's accumulated total** — those are this session's traffic and
+     * survive the restart exactly like they do today. The next reading of
+     * each counter is a delta from zero, i.e. counted in full: the same
+     * treatment [TagAccumulator]'s first-ever sighting already gets, for the
+     * same reason — there is nothing to subtract because nothing before this
+     * point belongs to the new epoch.
+     *
+     * This is deliberately not the whole-session `reset()` — there is no
+     * such function anymore (deleted as dead code in `7b1fd2b`), and if
+     * there were, calling it here would be wrong: it would discard the
+     * accumulated totals this function exists to preserve.
+     *
+     * **Caller's responsibility, not this function's:** [TrafficSamplerLoop]
+     * must not let this land concurrently with, or between the two halves
+     * of, an in-flight [accept] — this class is not thread-safe and an
+     * unsynchronized epoch reset racing a read is exactly the corruption
+     * ruling R38 exists to close. See [TrafficSamplerLoop.notifyCountersRestarted]'s
+     * KDoc for the mechanism.
+     */
+    fun beginNewEpoch() {
+        previous = ZERO_COUNTERS
+        tagAccumulators.values.forEach { it.beginNewEpoch() }
+    }
+
+    /**
      * Computes the difference between consecutive counter readings.
      *
      * A rising reading is the ordinary case: the delta is `curr - prev`.
@@ -132,6 +185,17 @@ internal class TrafficSampler {
         prev: Long,
         curr: Long,
     ): Long = if (curr >= prev) curr - prev else curr
+
+    private companion object {
+        /** [beginNewEpoch]'s baseline: a reading of zero from every counter, not "no reading yet". */
+        val ZERO_COUNTERS =
+            TunnelCounters(
+                uplinkBytes = 0L,
+                downlinkBytes = 0L,
+                uplinkPackets = 0L,
+                downlinkPackets = 0L,
+            )
+    }
 }
 
 /**
@@ -165,6 +229,18 @@ private class TagAccumulator {
         previousUplink = uplink
         downlinkBytes += stepDelta(previousDownlink, downlink, delta)
         previousDownlink = downlink
+    }
+
+    /**
+     * [TrafficSampler.beginNewEpoch]'s per-tag half. Drops the "previous
+     * reading" baseline — [uplinkBytes]/[downlinkBytes] (the accumulated
+     * total) are untouched — so this tag's next reading goes through
+     * [stepDelta]'s null-[prev] branch exactly as it would on this tag's
+     * first-ever sighting: counted in full, nothing subtracted.
+     */
+    fun beginNewEpoch() {
+        previousUplink = null
+        previousDownlink = null
     }
 
     /**

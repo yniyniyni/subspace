@@ -9,6 +9,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import space.getsub.core.model.TagTraffic
 import space.getsub.core.model.TrafficSample
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The timer half of the sampler (spec §1.5).
@@ -77,6 +78,21 @@ internal class TrafficSamplerLoop(
     private val lock = Any()
 
     /**
+     * A monotonic epoch marker, bumped once per [notifyCountersRestarted] call. [start]'s loop
+     * body reads this both immediately before and immediately after [read], so a restart landing
+     * anywhere inside that call — including a genuine data race on the native counters themselves
+     * ([Tun2Socks.stats]'s own KDoc: hev's counters are "plain non-atomic size_t globals") — is
+     * detected and that tick's reading is discarded rather than fed to [TrafficSampler.accept].
+     * [AtomicInteger] rather than a plain `var`: [notifyCountersRestarted] is called from
+     * `TunnelService`'s own coroutine, a different one from [start]'s `scope.launch` body, so this
+     * field is genuinely written and read from two threads with nothing else serializing them.
+     *
+     * Deliberately never reset to 0 on [stop]/[start]: see [start]'s own comment on why a fresh
+     * job seeds its local `appliedRestartEpoch` from this field's *current* value instead.
+     */
+    private val restartSignal = AtomicInteger(0)
+
+    /**
      * **Synchronized with [stop] — do not remove this lock.** [start] is
      * reached from `attachTun`/`attachRetainedTun`; [stop] is reached from
      * `TunnelService.stopTunnel`, which `onRevoke()` and `onDestroy()` call
@@ -98,17 +114,51 @@ internal class TrafficSamplerLoop(
         synchronized(lock) {
             if (job?.isActive == true) return
             val sampler = TrafficSampler()
+            // Seeded from restartSignal's *current* value, not 0: a notifyCountersRestarted()
+            // call that landed after the previous session's stop() (or before this one's first
+            // tick) must not be replayed onto a brand-new TrafficSampler, whose own first-ever
+            // accept() already baselines correctly on its own. Treating a stale signal as "new"
+            // here would call beginNewEpoch() before that first reading, turning a
+            // baseline-and-discard into a count-in-full — exactly the wrong-first-reading bug
+            // TrafficSampler's own "the first reading is the baseline, not a spike" test guards
+            // against.
+            var appliedRestartEpoch = restartSignal.get()
             job =
                 scope.launch {
                     while (isActive) {
-                        read()?.let { reading ->
-                            val sample = sampler.accept(reading, readTags?.invoke() ?: emptyList())
-                            // Narrows, does not close, the residual this class's
-                            // KDoc names: a cancellation landing after accept()
-                            // but before this check still slips one stale emit
-                            // through. Deliberately not stronger than that.
-                            if (isActive) emit(sample)
+                        // Brackets the one call that can race notifyCountersRestarted() on
+                        // another thread. See restartSignal's own KDoc for why this is an
+                        // AtomicInteger rather than a plain var.
+                        val epochBeforeRead = restartSignal.get()
+                        val reading = read()
+                        val epochAfterRead = restartSignal.get()
+
+                        if (epochAfterRead != appliedRestartEpoch) {
+                            // A restart was signalled at some point up to and including this
+                            // read — apply it to the sampler now, from this coroutine, so
+                            // TrafficSampler's own not-thread-safe contract is never crossed.
+                            sampler.beginNewEpoch()
+                            appliedRestartEpoch = epochAfterRead
                         }
+
+                        if (epochBeforeRead == epochAfterRead) {
+                            reading?.let {
+                                val sample = sampler.accept(it, readTags?.invoke() ?: emptyList())
+                                // Narrows, does not close, the residual this class's
+                                // KDoc names: a cancellation landing after accept()
+                                // but before this check still slips one stale emit
+                                // through. Deliberately not stronger than that.
+                                if (isActive) emit(sample)
+                            }
+                        }
+                        // epochBeforeRead != epochAfterRead: the restart landed while read() was
+                        // in flight, so this reading may be a stale tail of the old epoch, a
+                        // partial view of the new one, or a torn read of the native counters
+                        // themselves — any of which would corrupt accept() either way. It is
+                        // discarded outright rather than fed to the sampler; beginNewEpoch() above
+                        // already primed the sampler so the *next* tick's reading — no longer
+                        // racing anything — is counted in full instead.
+
                         delay(intervalMillis)
                     }
                 }
@@ -121,6 +171,32 @@ internal class TrafficSamplerLoop(
             job?.cancel()
             job = null
         }
+    }
+
+    /**
+     * Tells this loop the counters [read] and [readTags] poll were just reset by an explicit
+     * restart — `TunnelService.restartCoreRetainingTun` stopping and restarting hev and xray
+     * between polls — instead of leaving [TrafficSampler] to infer it from a falling reading
+     * (ruling R38, amending R28; [TrafficSampler]'s own KDoc has the full reasoning).
+     *
+     * Safe to call from any thread: this only bumps [restartSignal], an [AtomicInteger]. The
+     * actual [TrafficSampler.beginNewEpoch] call happens later, inside [start]'s own coroutine,
+     * which is what keeps [TrafficSampler] — documented not-thread-safe — touched from exactly
+     * one place. Call this as early as the caller can be sure the *new* epoch's counters are the
+     * ones a subsequent [read] will see: too early (before the old core has actually stopped) can
+     * let a still-climbing old-epoch reading be double-counted as the new epoch's first; too late
+     * re-opens the undercount window this exists to close. `TunnelService.attachRetainedTun`
+     * calls this immediately after `Tun2Socks.start()` confirms the new tunnel — and therefore the
+     * new counters — are live, before any further suspending work (foreground promotion, the
+     * connection record's persistence) that could let [start]'s loop poll a genuine new-epoch
+     * value the sampler has not yet been told to expect.
+     *
+     * A call while [start]'s job is not running (nothing connected) is harmless: [start] seeds its
+     * local epoch tracker from [restartSignal]'s value when it launches, so a signal from a
+     * session that already ended is never replayed onto the next one.
+     */
+    fun notifyCountersRestarted() {
+        restartSignal.incrementAndGet()
     }
 
     internal companion object {

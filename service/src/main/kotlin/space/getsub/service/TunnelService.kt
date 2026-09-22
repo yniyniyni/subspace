@@ -3614,6 +3614,15 @@ class TunnelService : VpnService() {
             return
         }
 
+        // Ruling R38 (amends R28): the counters tun2socks and xray now poll are the *new*
+        // epoch's — `Tun2Socks.start()` just confirmed it — so this is the earliest point
+        // [trafficLoop] can be told the restart happened, and it is told before any further
+        // suspending work below (`goForeground`, `connectionRecorder.record`) that could let
+        // its polling coroutine observe a genuine new-epoch reading before the signal lands.
+        // See [TrafficSamplerLoop.notifyCountersRestarted]'s own KDoc for why the timing here
+        // matters and what closes the race, not just narrows it.
+        trafficLoop.notifyCountersRestarted()
+
         val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
         val settlement =
             terminalOutcome.settleHandlingLifecycleRejection(
@@ -3636,10 +3645,13 @@ class TunnelService : VpnService() {
                             // in this same restart (see above), and its counters *do* reset
                             // along with everything else tun2socks owns. What this no-op
                             // preserves is the accumulator — the same [TrafficSampler]
-                            // instance goes on polling the freshly reset counters, and its
-                            // falling-reading rule (spec §1.3) treats that reset as the
-                            // fresh epoch it is, so the session total keeps climbing instead
-                            // of restarting from zero.
+                            // instance goes on polling the freshly reset counters, now told
+                            // about the reset explicitly by [trafficLoop]'s
+                            // `notifyCountersRestarted()` call above rather than left to infer
+                            // it from a falling reading (ruling R38), so the session total
+                            // keeps climbing instead of restarting from zero **or** silently
+                            // undercounting when the new epoch outruns the old one before the
+                            // next poll.
                             trafficLoop.start()
                         },
                     )

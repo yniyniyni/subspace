@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  M8.5 review finding F1. The app targets SDK 36 (`app/build.gradle.kts`), and
+  Android's default cleartext policy for apps targeting API 28+ refuses
+  cleartext traffic everywhere, including loopback. The platform only grew an
+  implicit localhost exception at API 37 — see "Localhost configuration" at
+  https://developer.android.com/privacy-and-security/security-config, checked
+  2026-09-22 — so on every API level this app actually ships to below that
+  (26 through 36), a plain `HttpURLConnection` GET to `127.0.0.1` is refused
+  by the platform, not by anything in this app's own code.
+
+  MetricsClient.fetchMetricsPayload needs exactly that GET, to read xray's
+  `/debug/vars` for the per-tag traffic breakdown (ARCHITECTURE.md §14.4).
+  Without this file, the feature is silently dead on every shipped OS version
+  except the one the original device verification happened to run on.
+
+  This is deliberately the narrowest exception the platform allows:
+  - Only the literal loopback address `127.0.0.1`, not the `localhost` domain
+    name — `MetricsClient` never resolves a hostname, it dials the literal
+    address directly, so the domain name form would be broader than what is
+    actually used.
+  - `includeSubdomains="false"` — there is nothing under `127.0.0.1` to
+    include, and leaving this explicit rather than omitted (its default is
+    also false) states the intent instead of relying on a default a future
+    reader would have to go look up.
+  - No `<base-config>` override: every other destination keeps the platform
+    default (cleartext refused). Do NOT replace this with
+    `android:usesCleartextTraffic="true"` on the <application> tag — that is a
+    global relaxation, and loopback is not "the internet" this app talks to.
+
+  Applies to ALL build types, not wrapped in <debug-overrides>. The metrics
+  listener this exception exists for is opt-in (ARCHITECTURE.md §14.4) but
+  not debug-only: a user can enable the per-tag breakdown in a release build,
+  and the listener that switch turns on runs in release the same as in debug.
+  Restricting this file to debug would leave the release build exactly as
+  broken as before this fix for the same population that can turn the switch
+  on.
+
+  Before deleting this file because minSdk has risen past 36: re-read
+  "Localhost configuration" in the URL above and confirm the floor is at or
+  above API 37 first. Below that, this exception is still load-bearing.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

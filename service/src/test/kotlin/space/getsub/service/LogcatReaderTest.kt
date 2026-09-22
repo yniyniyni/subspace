@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import space.getsub.service.log.LogcatReader
+import space.getsub.service.log.logcatProcessBuilder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -78,6 +79,21 @@ class LogcatReaderTest {
             events.add("reader-closed")
             super.close()
         }
+    }
+
+    /**
+     * Review finding I2: without `-T`, `logcat` dumps this UID's whole
+     * retained buffer before it starts following, duplicating pre-session
+     * history into a ring the spec calls a record of one session. Asserts
+     * against [logcatProcessBuilder]'s actual argument list — not a
+     * hand-copied literal — so a future edit that drops the flag fails this
+     * test rather than only showing up on a device days later.
+     */
+    @Test
+    fun `the logcat command follows from the moment capture starts, not the buffer head`() {
+        val command = logcatProcessBuilder().command()
+        assertTrue("no -T flag: $command", "-T" in command)
+        assertEquals("-T must be followed by its argument", "1", command[command.indexOf("-T") + 1])
     }
 
     @Test

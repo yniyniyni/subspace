@@ -143,12 +143,40 @@ internal class LogcatReader(
 }
 
 /**
+ * `logcat`'s argument list, exposed separately from [spawnLogcat] so a test
+ * can assert on it — `ProcessBuilder.command()` just returns the list back,
+ * no process spawned — without needing `logcat` to exist in a JVM test
+ * environment.
+ *
  * `-v threadtime` for a stable, parseable prefix; no `-d`, so it follows.
+ *
+ * **`-T 1`, not absent (review finding I2).** Without a `-T`/`-t`, `logcat`
+ * dumps this UID's entire retained buffer before it starts following —
+ * confirmed on device: a ring the spec (§3.5) calls a record of *one
+ * session* began with `--------- beginning of main` and a pre-session
+ * `:main` line. That costs the ring's budget and the capture thread's CPU on
+ * history the session never produced, and a reconnect-reconnect-reconnect
+ * repro duplicates that history into the ring on every attempt, evicting the
+ * session that actually matters. `-T <count>` shows only the most recent
+ * `<count>` lines and then follows, without implying `-d` — unlike `-t`,
+ * which dumps and exits. `1` is the smallest count that is still a count
+ * (there is no `-T 0`), so this replays at most one line of history, never
+ * the whole buffer.
+ *
+ * **Not the filter-narrowing ruling R30 refused.** R30 declined to drop
+ * *diagnostic* lines a live session produces, to fix an unproven CPU cost —
+ * narrowing `logcat`'s own tag filter would mean permanently losing lines
+ * this app's own components emit. `-T 1` loses no line the session
+ * produces: it only declines to re-read history that predates the session
+ * the ring is scoped to, and that history is either already sitting in the
+ * ring from when it was captured the first time, or was evicted by rotation
+ * on purpose. Nothing about *this* session's diagnostic content is affected.
  *
  * Deliberately unfiltered by tag: the whole point is to catch output from
  * libraries whose tags this app does not choose.
  */
-private fun spawnLogcat(): Process =
-    ProcessBuilder("logcat", "-v", "threadtime")
+internal fun logcatProcessBuilder(): ProcessBuilder =
+    ProcessBuilder("logcat", "-v", "threadtime", "-T", "1")
         .redirectErrorStream(true)
-        .start()
+
+private fun spawnLogcat(): Process = logcatProcessBuilder().start()

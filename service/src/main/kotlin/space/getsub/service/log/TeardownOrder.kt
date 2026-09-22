@@ -23,16 +23,29 @@ package space.getsub.service.log
  * item #9 prescribed exactly this move, the same way [BootDecision] and
  * `SessionIntent` extract a decision the caller then actually consumes.
  *
- * **What is actually tested, and what is not.** [teardownOrder]'s ordering
- * test constrains exactly one thing: [TeardownStep.StopLogCapture] is last,
- * after every phase that logs. It does **not** constrain the relative order
- * of [StopTun2Socks], [CloseTun] and [StopCore] against each other — read
+ * **This list is the schedule the service executes, not a description kept
+ * separately.** `TunnelService.stopTunnel` calls [teardownOrder] and runs a
+ * `when` over each [TeardownStep] in the order returned — there is no other
+ * copy of the sequence to drift out of sync with. A step missing from this
+ * `listOf` still compiles cleanly (the `when` in `runTeardownStep` stays
+ * exhaustive over the enum regardless of what this function returns), so the
+ * list's completeness is a runtime property, not a compile-time one.
+ *
+ * **What is actually tested, and what is not.** `LogCaptureLifecycleTest`
+ * asserts: every [TeardownStep] the enum declares appears exactly once (a
+ * dropped step is a silent fd/session leak — §5.4 — and a duplicated step
+ * would run twice, which is unsafe for [CloseTun] even though
+ * `Tun2Socks.stop()` tolerates it); [StopLogCapture] is last, after every
+ * phase that logs; [StopCore], [StopTun2Socks] and [CloseTun] each precede
+ * it; and [StopTrafficSampler] sits immediately before it, per that step's
+ * own KDoc. It does **not** constrain the relative order of [StopTun2Socks],
+ * [CloseTun] and [StopCore] against each other — read
  * `LogCaptureLifecycleTest` before trusting this list for anything beyond
  * that.
  *
- * Exists so the one ordering rule that *is* tested cannot be seen by reading
- * `stopTunnel` top to bottom without adding Robolectric to reach a
- * `VpnService` (ARCHITECTURE.md §10.7).
+ * Exists so the ordering and completeness rules that *are* tested cannot be
+ * seen by reading `stopTunnel` top to bottom without adding Robolectric to
+ * reach a `VpnService` (ARCHITECTURE.md §10.7).
  */
 internal enum class TeardownStep {
     /** `Tun2Socks.stop()`. Stops feeding packets in before removing their destination. */

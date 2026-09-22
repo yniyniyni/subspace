@@ -133,29 +133,60 @@ internal class LogCapture(
     private val readerFactory: () -> LogcatReader = { LogcatReader() },
 ) {
     private var reader: LogcatReader? = null
-
-    @Volatile
     private var running = false
+
+    /**
+     * Guards [running] and [reader]. Both fields are now read and written
+     * exclusively inside a `synchronized(lock)` block — see [start]'s KDoc —
+     * so `@Volatile` is not needed on top of it; the lock already gives every
+     * reader the writer's happens-before guarantee.
+     */
+    private val lock = Any()
 
     /**
      * Spec §3.3: capture is tied to session lifetime — started when the service
      * enters foreground, stopped in teardown, and stopped **last**, after the
      * teardown phases are logged.
+     *
+     * **Synchronized with [stop] — do not remove this lock.** [start] is only
+     * ever called through `TunnelCommandCoordinator` (`TunnelService.kt:1373`),
+     * but [stop] is also reached from `onRevoke()` and `onDestroy()`
+     * (`TunnelService.kt`), both of which call it **directly**, bypassing the
+     * coordinator — the same fact `tun2socks_jni.c`'s own locking-contract
+     * comment cites: "§5.4 says disconnect, onRevoke, and onDestroy are not
+     * serialised with each other". Without a lock here, a `stop()` and a
+     * `start()` can interleave as `running = false` / read `reader` (A) /
+     * `if (running) return` sees false and proceeds (B) / `running = true`,
+     * `reader = <new>` (B) / `reader = null` (A) — leaving `running == true`
+     * with `reader == null`. The reader B just created is then orphaned: no
+     * later `stop()` can reach it through the null field, so its `logcat`
+     * subprocess and capture thread run for the rest of the process's life,
+     * and the *next* `start()` spawns a third reader — from then on two
+     * capture threads append every line to the ring twice, silently, in the
+     * log this milestone exists to make trustworthy. `synchronized` around
+     * these two short, non-blocking bodies closes that window; it is not the
+     * `cancelAndJoin`-style teardown block ruling R18 forbids, and must stay
+     * that way — do not add a wait or a join inside either critical section.
      */
     fun start() {
-        if (running) return
-        running = true
-        val r = readerFactory()
-        reader = r
-        thread(name = "subspace-log-capture", isDaemon = true) {
-            captureOnce(r)
+        synchronized(lock) {
+            if (running) return
+            running = true
+            val r = readerFactory()
+            reader = r
+            thread(name = "subspace-log-capture", isDaemon = true) {
+                captureOnce(r)
+            }
         }
     }
 
+    /** See [start]'s KDoc — synchronized with it for the same reason. */
     fun stop() {
-        running = false
-        reader?.close()
-        reader = null
+        synchronized(lock) {
+            running = false
+            reader?.close()
+            reader = null
+        }
     }
 
     /**

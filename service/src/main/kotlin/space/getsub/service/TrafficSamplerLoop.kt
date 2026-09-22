@@ -73,28 +73,54 @@ internal class TrafficSamplerLoop(
 ) {
     private var job: Job? = null
 
+    /** Guards [job]. See [start]'s KDoc for why this exists. */
+    private val lock = Any()
+
+    /**
+     * **Synchronized with [stop] — do not remove this lock.** [start] is
+     * reached from `attachTun`/`attachRetainedTun`; [stop] is reached from
+     * `TunnelService.stopTunnel`, which `onRevoke()` and `onDestroy()` call
+     * **directly**, bypassing the command coordinator — the same fact
+     * `tun2socks_jni.c`'s locking-contract comment cites: "§5.4 says
+     * disconnect, onRevoke, and onDestroy are not serialised with each
+     * other". Unsynchronized, a `stop()` reading [job] into a local and a
+     * concurrent `start()` racing `job?.isActive`/`job = …` can leave the new
+     * job assigned *after* the old one is cancelled — the same orphaning
+     * shape as [space.getsub.service.log.LogCapture.start]/`stop`, just with
+     * a coroutine instead of a thread and `stopTunnel`'s trailing sampler
+     * left running instead of `logcat`. `synchronized` around these two short
+     * bodies closes that window without blocking: `Job.cancel()` is
+     * fire-and-forget (this class's own KDoc above explains why it is
+     * intentionally not `cancelAndJoin` — ruling R18), so nothing inside
+     * either critical section can wait.
+     */
     fun start() {
-        if (job?.isActive == true) return
-        val sampler = TrafficSampler()
-        job =
-            scope.launch {
-                while (isActive) {
-                    read()?.let { reading ->
-                        val sample = sampler.accept(reading, readTags?.invoke() ?: emptyList())
-                        // Narrows, does not close, the residual this class's
-                        // KDoc names: a cancellation landing after accept()
-                        // but before this check still slips one stale emit
-                        // through. Deliberately not stronger than that.
-                        if (isActive) emit(sample)
+        synchronized(lock) {
+            if (job?.isActive == true) return
+            val sampler = TrafficSampler()
+            job =
+                scope.launch {
+                    while (isActive) {
+                        read()?.let { reading ->
+                            val sample = sampler.accept(reading, readTags?.invoke() ?: emptyList())
+                            // Narrows, does not close, the residual this class's
+                            // KDoc names: a cancellation landing after accept()
+                            // but before this check still slips one stale emit
+                            // through. Deliberately not stronger than that.
+                            if (isActive) emit(sample)
+                        }
+                        delay(intervalMillis)
                     }
-                    delay(intervalMillis)
                 }
-            }
+        }
     }
 
+    /** See [start]'s KDoc — synchronized with it for the same reason. */
     fun stop() {
-        job?.cancel()
-        job = null
+        synchronized(lock) {
+            job?.cancel()
+            job = null
+        }
     }
 
     internal companion object {

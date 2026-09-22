@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -24,6 +25,7 @@ import space.getsub.core.data.GeoInstallRequest
 import space.getsub.core.data.GeoInstallResult
 import space.getsub.core.data.InstalledGeoAsset
 import space.getsub.core.data.ThemePreference
+import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.DnsResolver
 import space.getsub.core.model.DnsTransport
 import space.getsub.core.model.GeoDataKind
@@ -204,6 +206,23 @@ class SettingsViewModelTest {
     }
 
     private class FakeAppVersionSource(override val version: String = "0.1.0-alpha01") : AppVersionSource
+
+    /**
+     * F2 / ruling R39: a controllable stand-in for [TunnelClient.state][space.getsub.service.TunnelClient.state]
+     * — [publish] simulates what the real service would report, the same way
+     * [space.getsub.feature.home.HomeViewModelTest]'s own fake connection controls
+     * `ConnectionState` for [space.getsub.feature.home.HomeViewModel].
+     */
+    private class FakeTunnelSessionSource(
+        initial: ConnectionState = ConnectionState.Disconnected,
+    ) : TunnelSessionSource {
+        private val _state = MutableStateFlow(initial)
+        override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+        fun publish(next: ConnectionState) {
+            _state.value = next
+        }
+    }
 
     /**
      * Records every [install] call and returns a canned [GeoInstallResult] per filename (default
@@ -839,5 +858,130 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.showBatteryPrompt shouldBe false
+        }
+
+    // ── F2 / ruling R39: pending-until-reconnect messaging ──────────────────
+    //
+    // TunnelService.startCore reads perTagBreakdown once, at connect, and is deliberately not
+    // restarted just to apply a change (ARCHITECTURE.md §10.4). These cover the state the
+    // ViewModel produces when the setting is toggled with a session running versus not, and when
+    // that running session ends or is replaced by a fresh one.
+
+    private fun connectedSession() = FakeTunnelSessionSource(initial = ConnectionState.Connected(0L, 1080, 0))
+
+    @Test
+    fun `turning the breakdown off while connected marks it pending, not applied`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    connectedSession(),
+                )
+            advanceUntilIdle()
+
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+
+            // The persisted value changes immediately -- this is not a "should I apply it" gate,
+            // only a "does the running session already reflect it" one (F2's ruling: do not
+            // restart the core to apply a diagnostic setting).
+            viewModel.state.value.perTagBreakdown shouldBe false
+            viewModel.state.value.sessionConnected shouldBe true
+            // The security-relevant assertion: turning it off while connected must not read as
+            // "applied" while the running core's unauthenticated listener is still open.
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+        }
+
+    @Test
+    fun `turning the breakdown off while disconnected is not pending`() =
+        runTest {
+            // Constructor default (DisconnectedTunnelSessionSource): no session to be pending
+            // against, and the very next connect reads the live value directly.
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe false
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe false
+        }
+
+    /** Both directions need handling, not only on→off — the mirror image the finding also names. */
+    @Test
+    fun `turning the breakdown on while connected also marks it pending`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    connectedSession(),
+                )
+            advanceUntilIdle()
+
+            viewModel.onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+
+            viewModel.state.value.perTagBreakdown shouldBe true
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+        }
+
+    @Test
+    fun `disconnecting clears the pending flag -- nothing running left to reconcile against`() =
+        runTest {
+            val sessionSource = connectedSession()
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+
+            sessionSource.publish(ConnectionState.Disconnected)
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe false
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe false
+        }
+
+    /**
+     * A fresh [ConnectionState.Connected] — whether from an ordinary reconnect or a
+     * retained-TUN restart, which also re-reads the setting via `resolveAndStartCore` — is the
+     * moment the pending change actually reaches a running core.
+     */
+    @Test
+    fun `a fresh connect clears the pending flag`() =
+        runTest {
+            val sessionSource = connectedSession()
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+
+            sessionSource.publish(ConnectionState.Disconnected)
+            sessionSource.publish(ConnectionState.Connected(1_000L, 1080, 0))
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe true
+            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe false
         }
 }

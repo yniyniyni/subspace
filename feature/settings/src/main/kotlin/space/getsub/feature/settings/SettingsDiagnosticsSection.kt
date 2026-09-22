@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -46,6 +48,13 @@ import space.getsub.core.ui.component.SettingRow
  * @param perTagBreakdown mirrors [space.getsub.core.data.SettingsRepository.perTagBreakdown]
  *   verbatim through [SettingsState] — never a local default, the same reasoning every other
  *   persisted switch on this screen follows.
+ * @param perTagBreakdownPendingReconnect mirrors [SettingsState.perTagBreakdownPendingReconnect]
+ *   (F2 / ruling R39): true while a running session has not yet picked up the current value of
+ *   [perTagBreakdown]. Shown as a notice beneath the switch rather than folded into
+ *   [R.string.settings_breakdown_summary] — the summary describes the setting itself and does not
+ *   change; this describes a transient fact about *this* session, the same "explains state, does
+ *   not restate the control" shape [R.string.settings_dns_overridden] already uses in
+ *   [SettingsDnsSection].
  * @param onPerTagBreakdownChanged forwarded verbatim to
  *   [SettingsViewModel.onPerTagBreakdownChanged].
  */
@@ -53,6 +62,7 @@ import space.getsub.core.ui.component.SettingRow
 internal fun SettingsDiagnosticsSection(
     onNavigateToLogViewer: () -> Unit,
     perTagBreakdown: Boolean,
+    perTagBreakdownPendingReconnect: Boolean,
     onPerTagBreakdownChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -85,5 +95,21 @@ internal fun SettingsDiagnosticsSection(
                 )
             },
         )
+
+        // F2 / ruling R39: the switch's own position is not the whole truth while a session is
+        // up — TunnelService.startCore reads this setting once, at connect, and is deliberately
+        // not restarted just to apply it (ARCHITECTURE.md §10.4). The on→off direction is the
+        // security-relevant one: the running core's unauthenticated metrics/pprof listener
+        // (ARCHITECTURE.md §14.4) stays reachable by other apps on the device until reconnect,
+        // so this must say so plainly rather than let the switch reading "off" imply that ended.
+        if (perTagBreakdownPendingReconnect) {
+            val pendingRes =
+                if (perTagBreakdown) {
+                    R.string.settings_breakdown_pending_on
+                } else {
+                    R.string.settings_breakdown_pending_off
+                }
+            Text(text = stringResource(pendingRes), style = MaterialTheme.typography.bodySmall)
+        }
     }
 }

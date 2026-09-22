@@ -86,6 +86,32 @@ internal data class SettingsState(
      * [SettingsDiagnosticsSection]'s summary text for what turning it on exposes.
      */
     val perTagBreakdown: Boolean = false,
+    /**
+     * True while a tunnel session is up, mirrored from [TunnelSessionSource] (ARCHITECTURE.md
+     * §5.5: never inferred locally — the same discipline
+     * [space.getsub.feature.home.HomeState.connection] follows for the same underlying state).
+     *
+     * Exists for [perTagBreakdownPendingReconnect]: whether toggling [perTagBreakdown] right now
+     * is a request the running core has not seen yet (F2 / ruling R39), since
+     * [space.getsub.service.TunnelService.startCore] reads this setting once, at connect, and is
+     * deliberately not restarted just to apply a diagnostic.
+     */
+    val sessionConnected: Boolean = false,
+    /**
+     * True from the moment [perTagBreakdown] changes while [sessionConnected] is true, until the
+     * next transition into [space.getsub.core.model.ConnectionState.Connected] — which is when
+     * `TunnelService.startCore` (or `resolveAndStartCore`, on a retained-TUN restart) next reads
+     * the setting fresh.
+     *
+     * F2: turning the switch off while connected used to hide Home's breakdown immediately while
+     * the running core kept its **unauthenticated** metrics/pprof listener open —
+     * `ARCHITECTURE.md` §14.4 names that listener as the whole reason this setting is opt-in, so
+     * the UI implying the exposure had ended was a security-relevant mismatch, not a cosmetic
+     * delay. [SettingsDiagnosticsSection] surfaces this flag instead, so the switch's new
+     * position never implies a change that has not actually reached the running session, in
+     * either direction.
+     */
+    val perTagBreakdownPendingReconnect: Boolean = false,
 ) {
     /** One row per install filename. See [geoRowsFor]'s KDoc for exactly how ground truth is chosen. */
     val geoRows: List<GeoRow>

@@ -13,6 +13,9 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class LogcatReaderTest {
     private class TrackingInputStream(private val data: ByteArray) : ByteArrayInputStream(data) {
@@ -210,5 +213,70 @@ class LogcatReaderTest {
 
         assertEquals(true, spawned?.destroyed)
         assertEquals(listOf("process-destroyed", "reader-closed"), events)
+    }
+
+    /**
+     * F3 (review, 2026-09-22): the actual regression this task fixes.
+     *
+     * Reproduces the reviewer's latch-driven probe through the same [spawn]
+     * seam, deterministically and without any real `logcat` process or thread
+     * sleep: two latches pin the capture thread inside [spawn] until [close]
+     * has fully returned, so `close during spawn` is not a timing hope, it is
+     * the only order this test can produce.
+     *
+     * Before the fix: [close] saw `process == null` and `reader == null`,
+     * destroyed nothing, and returned; [lines] then published the process
+     * [spawn] eventually handed back and started reading it, even though
+     * [LogCapture.stop] had already discarded its own reference — exactly
+     * the `close during spawn: destroyed=false, linesAfterClose=[still
+     * reading after stop]` result the review recorded.
+     */
+    @Test
+    fun `close during spawn destroys the process and yields no lines`() {
+        val spawnEntered = CountDownLatch(1)
+        val releaseSpawn = CountDownLatch(1)
+        var spawned: FakeProcess? = null
+
+        val reader =
+            LogcatReader {
+                spawnEntered.countDown()
+                releaseSpawn.await()
+                FakeProcess(ByteArrayInputStream("line1\n".toByteArray())).also { spawned = it }
+            }
+
+        val captured = mutableListOf<String>()
+        val captureThread =
+            thread(name = "logcat-reader-test-capture") {
+                reader.lines().forEach { captured.add(it) }
+            }
+
+        assertTrue("spawn never started", spawnEntered.await(5, TimeUnit.SECONDS))
+        reader.close()
+        releaseSpawn.countDown()
+        captureThread.join(TimeUnit.SECONDS.toMillis(5))
+
+        assertFalse("capture thread did not finish — lines() did not return", captureThread.isAlive)
+        assertEquals(true, spawned?.destroyed)
+        assertEquals(emptyList<String>(), captured)
+    }
+
+    /**
+     * F3: the other order the fix must cover — [close] with nothing spawned
+     * yet at all, not merely in flight. [lines] must still destroy whatever
+     * [spawn] eventually produces rather than publishing and reading it.
+     */
+    @Test
+    fun `close before lines begins destroys the process spawn later produces`() {
+        var spawned: FakeProcess? = null
+        val reader =
+            LogcatReader {
+                FakeProcess(ByteArrayInputStream("line1\n".toByteArray())).also { spawned = it }
+            }
+
+        reader.close()
+        val lines = reader.lines().toList()
+
+        assertEquals(emptyList<String>(), lines)
+        assertEquals(true, spawned?.destroyed)
     }
 }

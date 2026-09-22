@@ -64,6 +64,30 @@ internal class LogcatReader(
     private var closeRequested: Boolean = false
 
     /**
+     * Guards [process] and [reader] publication against [close] — F3 (review,
+     * 2026-09-22). [spawn] itself runs outside this lock (see [lines]): it can
+     * take arbitrarily long (launching a subprocess), and R18 forbids teardown
+     * ever waiting on log capture, so [close] must never be able to block
+     * behind it.
+     *
+     * What the lock actually closes is the gap *between* spawn returning and
+     * this instance publishing the process/reader it created. Before this
+     * fix, [close] running in that gap saw both fields still null, destroyed
+     * nothing, and returned — then [lines] published the process and reader
+     * anyway and started reading, orphaning a subprocess [close]'s caller
+     * ([LogCapture.stop]) had already discarded its only reference to. See
+     * the F3 finding: reproduced deterministically with a latch-driven probe
+     * through the [spawn] seam, `close during spawn: destroyed=false,
+     * linesAfterClose=[still reading after stop]`.
+     *
+     * Both critical sections below are short and non-blocking (field writes,
+     * plus [Process.destroy] and [BufferedReader.close], which D3's KDoc
+     * already establishes cannot block each other in this order) — holding
+     * this lock across either is not the wait R18 forbids.
+     */
+    private val publishLock = Any()
+
+    /**
      * Blocking, and consumed on a dedicated thread — this follows the
      * subprocess until [close].
      *
@@ -79,20 +103,44 @@ internal class LogcatReader(
             runCatching { spawn() }.getOrElse {
                 return emptySequence()
             }
-        process = proc
-        val newReader = BufferedReader(InputStreamReader(proc.inputStream))
-        reader = newReader
-        return generateSequence {
-            runCatching { newReader.readLine() }
-                .onFailure {
-                    // A read failure that follows a requested close is the
-                    // expected consequence of that close, not a genuine
-                    // mid-stream error — see [closeRequested].
-                    if (!closeRequested) {
-                        endedWithError = true
-                    }
+
+        val newReader =
+            synchronized(publishLock) {
+                // F3: if close() already ran — or runs concurrently and wins
+                // this race — closeRequested is visible here (both this read
+                // and close()'s write happen inside publishLock) before this
+                // process is ever published. Nothing else can reach it once
+                // this instance discards it below, so this branch must be the
+                // one that destroys it; close() cannot, having found no
+                // process to act on.
+                if (closeRequested) {
+                    null
+                } else {
+                    process = proc
+                    BufferedReader(InputStreamReader(proc.inputStream)).also { reader = it }
                 }
-                .getOrNull()
+            }
+
+        return if (newReader == null) {
+            // Same order [close] uses below (D3): destroy before releasing
+            // the stream. Never consumed — no line from this process reaches
+            // the ring.
+            runCatching { proc.destroy() }
+            runCatching { proc.inputStream.close() }
+            emptySequence()
+        } else {
+            generateSequence {
+                runCatching { newReader.readLine() }
+                    .onFailure {
+                        // A read failure that follows a requested close is the
+                        // expected consequence of that close, not a genuine
+                        // mid-stream error — see [closeRequested].
+                        if (!closeRequested) {
+                            endedWithError = true
+                        }
+                    }
+                    .getOrNull()
+            }
         }
     }
 
@@ -132,13 +180,24 @@ internal class LogcatReader(
      * up. `runCatching` around each call only guards against a throw — it does
      * not, and cannot, guard against one of these calls blocking, which is why
      * the order itself is the fix, not the `runCatching`.
+     *
+     * F3: wrapped in [publishLock] so setting [closeRequested] and acting on
+     * [process]/[reader] is atomic with [lines]' own publish step — the two
+     * can no longer interleave as "close sees nothing to destroy" followed by
+     * "lines publishes and reads anyway". This does not reintroduce the D2/D3
+     * deadlock: the lock here is a plain, uncontended `Any()` monitor
+     * different from `BufferedReader`'s own internal lock, and neither
+     * critical section that holds it performs a blocking call — spawning the
+     * subprocess happens in [lines] *before* this lock is ever taken.
      */
     fun close() {
-        closeRequested = true
-        runCatching { process?.destroy() }
-        runCatching { reader?.close() }
-        reader = null
-        process = null
+        synchronized(publishLock) {
+            closeRequested = true
+            runCatching { process?.destroy() }
+            runCatching { reader?.close() }
+            reader = null
+            process = null
+        }
     }
 }
 

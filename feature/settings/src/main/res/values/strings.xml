@@ -142,11 +142,13 @@
     <string name="settings_logs_summary">Read or share what the tunnel recorded</string>
     <string name="settings_breakdown_title">Per-server traffic breakdown</string>
     <string name="settings_breakdown_summary">Show how much traffic went through the proxy versus direct. While connected, this opens a diagnostics port that other apps on your device can also read — leave it off unless you need it.</string>
-    <!-- F2 / ruling R39: TunnelService.startCore reads this setting once, at connect, and is
-         deliberately not restarted just to apply a change (ARCHITECTURE.md §10.4) — a working
-         tunnel is not torn down to close a diagnostics port. These are shown while a session is
-         up and the switch has been changed since. The off case is the security-relevant one: it
-         must not imply the running session's exposure has already ended. -->
-    <string name="settings_breakdown_pending_off">Off for new connections. This session\'s diagnostics port stays open to other apps until you reconnect.</string>
-    <string name="settings_breakdown_pending_on">On for new connections. This session won\'t start collecting until you reconnect.</string>
+    <!-- I-2 / ruling R43 (revises F2 / ruling R39): TunnelService.startCore reads this setting
+         once, at connect, and is deliberately not restarted just to apply a change
+         (ARCHITECTURE.md §10.4) — a working tunnel is not torn down to close a diagnostics port.
+         Shown whenever a session is connected, regardless of the switch's own position or
+         whether it was touched this session: a one-way "pending" flag that only latched on a
+         toggle produced a false statement once the switch was changed back (it kept describing
+         the earlier change, not the running session), and was lost entirely on a screen
+         navigation. This single, direction-independent statement is true in every case. -->
+    <string name="settings_breakdown_session_notice">Applies to your next connection — this session keeps the setting it started with.</string>
 </resources>

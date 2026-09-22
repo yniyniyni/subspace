@@ -48,13 +48,16 @@ import space.getsub.core.ui.component.SettingRow
  * @param perTagBreakdown mirrors [space.getsub.core.data.SettingsRepository.perTagBreakdown]
  *   verbatim through [SettingsState] — never a local default, the same reasoning every other
  *   persisted switch on this screen follows.
- * @param perTagBreakdownPendingReconnect mirrors [SettingsState.perTagBreakdownPendingReconnect]
- *   (F2 / ruling R39): true while a running session has not yet picked up the current value of
- *   [perTagBreakdown]. Shown as a notice beneath the switch rather than folded into
- *   [R.string.settings_breakdown_summary] — the summary describes the setting itself and does not
- *   change; this describes a transient fact about *this* session, the same "explains state, does
- *   not restate the control" shape [R.string.settings_dns_overridden] already uses in
- *   [SettingsDnsSection].
+ * @param sessionNoticeVisible mirrors [SettingsState.perTagBreakdownSessionNoticeVisible] (ruling
+ *   R43, revising F2 / ruling R39): true whenever a session is connected, regardless of
+ *   [perTagBreakdown]'s own value or whether it changed this session. Shown as a notice beneath
+ *   the switch rather than folded into [R.string.settings_breakdown_summary] — the summary
+ *   describes the setting itself and does not change; this describes a transient fact about
+ *   *this* session, the same "explains state, does not restate the control" shape
+ *   [R.string.settings_dns_overridden] already uses in [SettingsDnsSection]. Deliberately a
+ *   single, direction-independent string rather than an on/off pair keyed off [perTagBreakdown]
+ *   — see [SettingsState.perTagBreakdownSessionNoticeVisible]'s own KDoc for why keying off the
+ *   switch position produced a false statement (review finding I-2).
  * @param onPerTagBreakdownChanged forwarded verbatim to
  *   [SettingsViewModel.onPerTagBreakdownChanged].
  */
@@ -62,7 +65,7 @@ import space.getsub.core.ui.component.SettingRow
 internal fun SettingsDiagnosticsSection(
     onNavigateToLogViewer: () -> Unit,
     perTagBreakdown: Boolean,
-    perTagBreakdownPendingReconnect: Boolean,
+    sessionNoticeVisible: Boolean,
     onPerTagBreakdownChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -96,20 +99,21 @@ internal fun SettingsDiagnosticsSection(
             },
         )
 
-        // F2 / ruling R39: the switch's own position is not the whole truth while a session is
-        // up — TunnelService.startCore reads this setting once, at connect, and is deliberately
-        // not restarted just to apply it (ARCHITECTURE.md §10.4). The on→off direction is the
-        // security-relevant one: the running core's unauthenticated metrics/pprof listener
-        // (ARCHITECTURE.md §14.4) stays reachable by other apps on the device until reconnect,
-        // so this must say so plainly rather than let the switch reading "off" imply that ended.
-        if (perTagBreakdownPendingReconnect) {
-            val pendingRes =
-                if (perTagBreakdown) {
-                    R.string.settings_breakdown_pending_on
-                } else {
-                    R.string.settings_breakdown_pending_off
-                }
-            Text(text = stringResource(pendingRes), style = MaterialTheme.typography.bodySmall)
+        // Ruling R43 (revises F2 / ruling R39): the switch's own position is not the whole truth
+        // while a session is up — TunnelService.startCore reads this setting once, at connect,
+        // and is deliberately not restarted just to apply it (ARCHITECTURE.md §10.4). Shown
+        // whenever a session is connected, not keyed off perTagBreakdown or off whether the
+        // switch was touched this session: a two-string on/off pair keyed off the switch stated
+        // the wrong thing once the switch was toggled back to the session's actual value (review
+        // finding I-2) — this single wording is true in either direction, including the
+        // security-relevant on→off case, where the running core's unauthenticated metrics/pprof
+        // listener (ARCHITECTURE.md §14.4) stays reachable by other apps on the device until
+        // reconnect regardless of what the switch reads now.
+        if (sessionNoticeVisible) {
+            Text(
+                text = stringResource(R.string.settings_breakdown_session_notice),
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

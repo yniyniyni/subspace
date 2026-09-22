@@ -136,18 +136,13 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(perTagBreakdown = enabled) } }
             .launchIn(viewModelScope)
 
-        // F2 / ruling R39: mirrors ConnectionState (ARCHITECTURE.md §5.5) purely to decide
-        // whether a diagnostic-setting change just made is live or pending — see
-        // onPerTagBreakdownChanged and perTagBreakdownPendingReconnect's own KDoc.
+        // Ruling R43 (revises F2 / ruling R39): mirrors ConnectionState (ARCHITECTURE.md §5.5)
+        // purely so SettingsState.perTagBreakdownSessionNoticeVisible has something to derive
+        // from — see that property's own KDoc for why this plain mirror, with no latch of what
+        // the user did layered on top, is what closes review finding I-2.
         tunnelSessionSource.state
             .onEach { connectionState ->
-                val connected = connectionState is ConnectionState.Connected
-                _state.update { current ->
-                    current.copy(
-                        sessionConnected = connected,
-                        perTagBreakdownPendingReconnect = stillPendingReconnect(current, connected),
-                    )
-                }
+                _state.update { it.copy(sessionConnected = connectionState is ConnectionState.Connected) }
             }
             .launchIn(viewModelScope)
 
@@ -196,20 +191,18 @@ constructor(
      * [SettingsDiagnosticsSection] is this toggle's own warning, about exposure rather than about
      * Doze killing the tunnel.
      *
-     * F2 / ruling R39: does **not** restart the core to apply the change — `ARCHITECTURE.md`
-     * §10.4's principle is that a diagnostic setting must not tear down a working tunnel to apply
-     * itself, and `allocateSessionPorts`/the `Metrics` tag collision already degrade the same way
-     * rather than disrupt. So the persisted value changes immediately, same as before, but when a
-     * session is up this also marks [SettingsState.perTagBreakdownPendingReconnect] — most
-     * importantly for the **on→off** direction, where the running core's unauthenticated
-     * metrics/pprof listener (`ARCHITECTURE.md` §14.4) stays reachable until reconnect, and the UI
-     * must say so rather than letting the switch's new position imply it has already closed.
+     * Ruling R43 (revises F2 / ruling R39): does **not** restart the core to apply the change —
+     * `ARCHITECTURE.md` §10.4's principle is that a diagnostic setting must not tear down a
+     * working tunnel to apply itself, and `allocateSessionPorts`/the `Metrics` tag collision
+     * already degrade the same way rather than disrupt. So the persisted value changes
+     * immediately, same as before. Unlike the F2 fix this revises, this function no longer marks
+     * anything: [SettingsState.perTagBreakdownSessionNoticeVisible] is derived from
+     * [SettingsState.sessionConnected] alone, not from a flag this call would have to set (and
+     * that a later opposite-direction call would have to reinterpret) — see that property's own
+     * KDoc for why a latch here produced a false statement on a second toggle within one session.
      */
     fun onPerTagBreakdownChanged(enabled: Boolean) {
-        viewModelScope.launch {
-            settingsSource.setPerTagBreakdown(enabled)
-            _state.update { it.copy(perTagBreakdownPendingReconnect = it.sessionConnected) }
-        }
+        viewModelScope.launch { settingsSource.setPerTagBreakdown(enabled) }
     }
 
     /**
@@ -453,31 +446,6 @@ constructor(
         viewModelScope.launch { geoAssetSource.remove(fileName) }
     }
 }
-
-/**
- * F2 / ruling R39: [SettingsState.perTagBreakdownPendingReconnect]'s transition rule, driven by
- * each [TunnelSessionSource.state] emission — see [SettingsViewModel]'s own `init` block for where
- * this is called and [SettingsState.perTagBreakdownPendingReconnect]'s KDoc for the full reasoning.
- *
- * @param current the state before this emission — [SettingsState.sessionConnected] is its *old*
- *   connected-ness, compared against [nowConnected] to detect a fresh transition.
- * @param nowConnected whether this emission's [space.getsub.core.model.ConnectionState] is
- *   [space.getsub.core.model.ConnectionState.Connected].
- */
-private fun stillPendingReconnect(
-    current: SettingsState,
-    nowConnected: Boolean,
-): Boolean =
-    when {
-        // A fresh transition into Connected means TunnelService.startCore (or
-        // resolveAndStartCore, on a retained-TUN restart) just read the setting fresh —
-        // whatever was pending is now what is actually running.
-        nowConnected && !current.sessionConnected -> false
-        // Nothing running to be pending against, and the next connect reads the live setting
-        // directly rather than anything "pending".
-        !nowConnected -> false
-        else -> current.perTagBreakdownPendingReconnect
-    }
 
 /**
  * Spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.

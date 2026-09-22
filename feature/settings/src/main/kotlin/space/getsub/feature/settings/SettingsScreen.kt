@@ -231,7 +231,7 @@ internal fun SettingsScreenContent(
         SettingsDiagnosticsSection(
             onNavigateToLogViewer = navigation.onNavigateToLogViewer,
             perTagBreakdown = state.perTagBreakdown,
-            perTagBreakdownPendingReconnect = state.perTagBreakdownPendingReconnect,
+            sessionNoticeVisible = state.perTagBreakdownSessionNoticeVisible,
             onPerTagBreakdownChanged = actions.onPerTagBreakdownChanged,
         )
 

@@ -91,31 +91,46 @@ internal data class SettingsState(
      * §5.5: never inferred locally — the same discipline
      * [space.getsub.feature.home.HomeState.connection] follows for the same underlying state).
      *
-     * Exists for [perTagBreakdownPendingReconnect]: whether toggling [perTagBreakdown] right now
-     * is a request the running core has not seen yet (F2 / ruling R39), since
-     * [space.getsub.service.TunnelService.startCore] reads this setting once, at connect, and is
-     * deliberately not restarted just to apply a diagnostic.
+     * Drives [perTagBreakdownSessionNoticeVisible] directly: whether toggling [perTagBreakdown]
+     * right now is a request the running core has not seen yet (ruling R43, revising F2 / ruling
+     * R39), since [space.getsub.service.TunnelService.startCore] reads this setting once, at
+     * connect, and is deliberately not restarted just to apply a diagnostic.
      */
     val sessionConnected: Boolean = false,
-    /**
-     * True from the moment [perTagBreakdown] changes while [sessionConnected] is true, until the
-     * next transition into [space.getsub.core.model.ConnectionState.Connected] — which is when
-     * `TunnelService.startCore` (or `resolveAndStartCore`, on a retained-TUN restart) next reads
-     * the setting fresh.
-     *
-     * F2: turning the switch off while connected used to hide Home's breakdown immediately while
-     * the running core kept its **unauthenticated** metrics/pprof listener open —
-     * `ARCHITECTURE.md` §14.4 names that listener as the whole reason this setting is opt-in, so
-     * the UI implying the exposure had ended was a security-relevant mismatch, not a cosmetic
-     * delay. [SettingsDiagnosticsSection] surfaces this flag instead, so the switch's new
-     * position never implies a change that has not actually reached the running session, in
-     * either direction.
-     */
-    val perTagBreakdownPendingReconnect: Boolean = false,
 ) {
     /** One row per install filename. See [geoRowsFor]'s KDoc for exactly how ground truth is chosen. */
     val geoRows: List<GeoRow>
         get() = geoRowsFor(geoSources, selectedGeoSourceIds, geoInstalledAssets)
+
+    /**
+     * Whether [SettingsDiagnosticsSection] shows the "applies to your next connection" notice
+     * beneath the per-server breakdown switch (ruling R43, replacing review finding I-2's one-way
+     * `perTagBreakdownPendingReconnect` latch).
+     *
+     * A `get()` over [sessionConnected], not a stored field the way the removed latch was — so
+     * there is no write path for this to fall out of sync with the session it describes. The
+     * latch had two reachable false-statement cases: re-toggling the switch back to the value the
+     * running session already had (the latch re-armed on every change, in either direction, so it
+     * kept naming the *previous* change rather than the running session — see F2's own on/off
+     * strings, which this removes) and a screen navigation recreating the `ViewModel` (the latch
+     * defaulted to false, silently losing the notice while the running session's exposure had not
+     * changed). Deriving from [sessionConnected] alone closes both: the statement this drives —
+     * "this session keeps the setting it started with; changes apply to your next connection" —
+     * is true in every case and in both toggle directions, and [sessionConnected] itself already
+     * survives a `ViewModel` recreation because [TunnelSessionSource.state] is a
+     * [kotlinx.coroutines.flow.StateFlow] that a fresh subscriber reads at its current value
+     * immediately, rather than starting from an assumed default.
+     *
+     * **Rejected for now, not because it is wrong but because of when this lands:** the more
+     * precise answer is plumbing the real per-session fact —
+     * `TunnelService.metricsPort != null`, i.e. whether *this* session's diagnostics port is
+     * actually open — through `ConnectionStateParcel`, so this notice (and the switch itself)
+     * could describe this session exactly rather than the coarser "a session is running" used
+     * here. That is real Part 3 work: it adds AIDL surface, which this branch does not take on
+     * immediately ahead of a device verification pass.
+     */
+    val perTagBreakdownSessionNoticeVisible: Boolean
+        get() = sessionConnected
 
     /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (§5.6). */
     override fun toString(): String =

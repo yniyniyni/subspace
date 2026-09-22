@@ -860,18 +860,24 @@ class SettingsViewModelTest {
             viewModel.state.value.showBatteryPrompt shouldBe false
         }
 
-    // ── F2 / ruling R39: pending-until-reconnect messaging ──────────────────
+    // ── I-2 / ruling R43 (revises F2 / ruling R39): session-scoped notice ───
     //
     // TunnelService.startCore reads perTagBreakdown once, at connect, and is deliberately not
-    // restarted just to apply a change (ARCHITECTURE.md §10.4). These cover the state the
-    // ViewModel produces when the setting is toggled with a session running versus not, and when
-    // that running session ends or is replaced by a fresh one.
+    // restarted just to apply a change (ARCHITECTURE.md §10.4).
+    // SettingsState.perTagBreakdownSessionNoticeVisible tells Settings whether to say so, and is
+    // now derived purely from sessionConnected -- not from a latch of what the user did -- so
+    // these cover the two cases review finding I-2 showed the old one-way latch got wrong (a
+    // second toggle within one session, and a ViewModel recreated by a screen navigation) plus
+    // the ordinary connect/disconnect transitions the old F2 tests already covered.
 
     private fun connectedSession() = FakeTunnelSessionSource(initial = ConnectionState.Connected(0L, 1080, 0))
 
     @Test
-    fun `turning the breakdown off while connected marks it pending, not applied`() =
+    fun `the session notice is visible while connected, before any toggle`() =
         runTest {
+            // Unlike the removed latch -- which only ever became true from inside
+            // onPerTagBreakdownChanged -- this is a fact about the running session, not a
+            // reaction to an edit: visible even when the switch has never been touched.
             val viewModel =
                 SettingsViewModel(
                     FakeSettingsSource(),
@@ -882,24 +888,15 @@ class SettingsViewModelTest {
                 )
             advanceUntilIdle()
 
-            viewModel.onPerTagBreakdownChanged(false)
-            advanceUntilIdle()
-
-            // The persisted value changes immediately -- this is not a "should I apply it" gate,
-            // only a "does the running session already reflect it" one (F2's ruling: do not
-            // restart the core to apply a diagnostic setting).
-            viewModel.state.value.perTagBreakdown shouldBe false
             viewModel.state.value.sessionConnected shouldBe true
-            // The security-relevant assertion: turning it off while connected must not read as
-            // "applied" while the running core's unauthenticated listener is still open.
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
         }
 
     @Test
-    fun `turning the breakdown off while disconnected is not pending`() =
+    fun `the session notice is not visible while disconnected`() =
         runTest {
-            // Constructor default (DisconnectedTunnelSessionSource): no session to be pending
-            // against, and the very next connect reads the live value directly.
+            // Constructor default (DisconnectedTunnelSessionSource): no session running, and the
+            // very next connect reads the live value directly -- nothing to say the notice about.
             val viewModel =
                 SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
 
@@ -907,12 +904,19 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.sessionConnected shouldBe false
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe false
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe false
         }
 
-    /** Both directions need handling, not only on→off — the mirror image the finding also names. */
+    /**
+     * Review finding I-2, case (a): a session that started with the breakdown **on**, toggled
+     * off and then back on. Under the removed latch this re-armed on the second toggle and the
+     * screen picked the "on" string ("won't start collecting until you reconnect") for a session
+     * that had been collecting the whole time -- wrong-direction on the security-relevant half.
+     * The notice here carries no direction, so there is nothing for a second toggle to get wrong:
+     * it stays visible throughout, and [perTagBreakdown] simply tracks the switch.
+     */
     @Test
-    fun `turning the breakdown on while connected also marks it pending`() =
+    fun `toggling the breakdown off then back on in one connected session never states a false direction`() =
         runTest {
             val viewModel =
                 SettingsViewModel(
@@ -923,16 +927,71 @@ class SettingsViewModelTest {
                     connectedSession(),
                 )
             advanceUntilIdle()
+            viewModel.state.value.perTagBreakdown shouldBe false // FakeSettingsSource's own default
 
             viewModel.onPerTagBreakdownChanged(true)
             advanceUntilIdle()
-
             viewModel.state.value.perTagBreakdown shouldBe true
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+
+            // The toggle back -- the case the old latch got wrong.
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdown shouldBe false
+            // Still visible, still the one direction-independent string -- true whichever way
+            // perTagBreakdown just moved, so this assertion alone rules out a stale "on" reading.
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+            viewModel.state.value.sessionConnected shouldBe true
+        }
+
+    /**
+     * Review finding I-2, case (b): navigating away from Settings and back recreates the
+     * `ViewModel` (`SettingsScreen.kt`'s `hiltViewModel()` is scoped to the nav entry). Under the
+     * removed latch the fresh instance's `perTagBreakdownPendingReconnect` defaulted to `false`,
+     * silently losing the notice while the running session's exposure had not changed --
+     * restoring F2's original finding one navigation later. Modelled here by constructing a
+     * second `SettingsViewModel` against the *same* still-connected [FakeTunnelSessionSource],
+     * the same "shared fake, fresh instance" shape `theme survives a viewmodel restart` uses.
+     */
+    @Test
+    fun `the session notice survives a viewmodel recreation while still connected`() =
+        runTest {
+            val settingsSource = FakeSettingsSource()
+            val sessionSource = connectedSession()
+            val viewModel =
+                SettingsViewModel(
+                    settingsSource,
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+            viewModel.onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+
+            // Simulates SettingsScreen navigating away and back: a brand-new ViewModel instance,
+            // no memory of the toggle above, resubscribing to the same ongoing session.
+            val recreated =
+                SettingsViewModel(
+                    settingsSource,
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+
+            // Correct immediately, with no further action -- StateFlow hands a fresh subscriber
+            // its current value, so this does not depend on any write this ViewModel makes.
+            recreated.state.value.sessionConnected shouldBe true
+            recreated.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+            recreated.state.value.perTagBreakdown shouldBe true
         }
 
     @Test
-    fun `disconnecting clears the pending flag -- nothing running left to reconcile against`() =
+    fun `disconnecting hides the session notice -- nothing running left to describe`() =
         runTest {
             val sessionSource = connectedSession()
             val viewModel =
@@ -944,24 +1003,22 @@ class SettingsViewModelTest {
                     sessionSource,
                 )
             advanceUntilIdle()
-            viewModel.onPerTagBreakdownChanged(false)
-            advanceUntilIdle()
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
 
             sessionSource.publish(ConnectionState.Disconnected)
             advanceUntilIdle()
 
             viewModel.state.value.sessionConnected shouldBe false
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe false
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe false
         }
 
     /**
      * A fresh [ConnectionState.Connected] — whether from an ordinary reconnect or a
-     * retained-TUN restart, which also re-reads the setting via `resolveAndStartCore` — is the
-     * moment the pending change actually reaches a running core.
+     * retained-TUN restart, which also re-reads the setting via `resolveAndStartCore` — is a
+     * session again, so the notice is visible again describing *this* session.
      */
     @Test
-    fun `a fresh connect clears the pending flag`() =
+    fun `a fresh connect shows the session notice again`() =
         runTest {
             val sessionSource = connectedSession()
             val viewModel =
@@ -973,15 +1030,15 @@ class SettingsViewModelTest {
                     sessionSource,
                 )
             advanceUntilIdle()
-            viewModel.onPerTagBreakdownChanged(false)
-            advanceUntilIdle()
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe true
 
             sessionSource.publish(ConnectionState.Disconnected)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe false
+
             sessionSource.publish(ConnectionState.Connected(1_000L, 1080, 0))
             advanceUntilIdle()
 
             viewModel.state.value.sessionConnected shouldBe true
-            viewModel.state.value.perTagBreakdownPendingReconnect shouldBe false
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
         }
 }

@@ -32,11 +32,7 @@ public data class TrafficSample(
      * `ARCHITECTURE.md` §10.1's signature failure.
      */
     val perTag: List<TagTraffic> = emptyList(),
-) {
-    public companion object {
-        public val ZERO: TrafficSample = TrafficSample(0, 0, 0, 0)
-    }
-}
+)
 
 /**
  * Bytes moved by one outbound tag this session (M8.5 spec §2).

@@ -26,6 +26,17 @@ import java.io.File
  * Every operation swallows [java.io.IOException]. Logging is a diagnostic, and
  * a diagnostic that can abort a tunnel teardown is worse than one that silently
  * misses a line — ARCHITECTURE.md §5.4 requires teardown to finish anyway.
+ *
+ * **Write-only from here.** [append] is the only production caller of this
+ * class (`:bg`'s [space.getsub.service.log.LogCapture]); the viewer reads the
+ * same two files back through `:core:data`'s `LogRepository`, a separate
+ * implementation rather than a call into this one — `:core:data` cannot
+ * depend on `:service` (spec §3.4). `LogRepository`'s own KDoc names the
+ * duplication; keep the two in step if [current]/[previous]'s filenames ever
+ * change. A prior revision carried `readAll`/`clear`/`totalBytes` accessors
+ * here for tests to use as a window into that same state — genuinely dead in
+ * production (review finding M2) — which `LogRingTest` now reads back
+ * through the files directly instead.
  */
 internal class LogRing(
     private val dir: File,
@@ -53,34 +64,6 @@ internal class LogRing(
             }
         }
     }
-
-    /** Oldest first, so the caller can render top-to-bottom without reversing. */
-    fun readAll(): List<String> =
-        synchronized(lock) {
-            runCatching {
-                buildList {
-                    if (previous.exists()) addAll(previous.readLines())
-                    if (current.exists()) addAll(current.readLines())
-                }
-            }.getOrDefault(emptyList())
-        }
-
-    fun clear() {
-        synchronized(lock) {
-            runCatching {
-                current.delete()
-                previous.delete()
-            }
-        }
-    }
-
-    fun totalBytes(): Long =
-        synchronized(lock) {
-            runCatching {
-                (if (current.exists()) current.length() else 0L) +
-                    (if (previous.exists()) previous.length() else 0L)
-            }.getOrDefault(0L)
-        }
 
     internal companion object {
         /**

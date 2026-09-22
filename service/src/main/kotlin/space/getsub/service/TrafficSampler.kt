@@ -61,7 +61,7 @@ import space.getsub.core.model.TrafficSample
  * counted for this session under the old one.
  *
  * **Not thread-safe.** Must be driven from a single coroutine or dispatcher;
- * concurrent calls to [accept] or [reset] are not synchronized.
+ * concurrent calls to [accept] are not synchronized.
  */
 internal class TrafficSampler {
     private var previous: TunnelCounters? = null
@@ -103,15 +103,6 @@ internal class TrafficSampler {
             downlinkPackets = downlinkPackets,
             perTag = tagAccumulators.map { (tag, acc) -> TagTraffic(tag, acc.uplinkBytes, acc.downlinkBytes) },
         )
-    }
-
-    fun reset() {
-        previous = null
-        uplinkBytes = 0L
-        downlinkBytes = 0L
-        uplinkPackets = 0L
-        downlinkPackets = 0L
-        tagAccumulators.clear()
     }
 
     /**

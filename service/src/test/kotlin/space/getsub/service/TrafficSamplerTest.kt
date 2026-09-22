@@ -57,7 +57,11 @@ class TrafficSamplerTest {
         val expectedDown = preRestartDown + postRestartDown
         assertEquals(expectedUp, sample.uplinkBytes)
         assertEquals(expectedDown, sample.downlinkBytes)
-        // Nowhere near the observed 8.0 GB defect, let alone 4 GiB.
+        // Documentary, not a guard (M10): subsumed by the exact assertEquals
+        // above — any value this assertion would catch already fails there.
+        // Kept because it states the property in the reader's own terms
+        // ("nowhere near the observed 8.0 GB defect, let alone 4 GiB"), not
+        // because it discriminates anything the line above does not.
         assertEquals(true, sample.downlinkBytes < 100_000_000L)
     }
 
@@ -77,6 +81,10 @@ class TrafficSamplerTest {
 
         val preRolloverRemainder = (1L shl 32) - justBelow
         assertEquals(postWrap, sample.uplinkBytes)
+        // Documentary, not a guard (M10): subsumed by the exact assertEquals
+        // above (uplinkBytes == postWrap makes this bound trivially true).
+        // Kept because it states the under-count bound in the reader's own
+        // terms, not because it discriminates anything the line above does not.
         assertEquals(true, sample.uplinkBytes <= postWrap + preRolloverRemainder)
     }
 
@@ -90,18 +98,6 @@ class TrafficSamplerTest {
         // 294_967_297 here. The fix returns curr as-is.
         assertEquals(1L, sample.uplinkBytes)
         assertEquals(1L, sample.downlinkBytes)
-    }
-
-    @Test
-    fun `reset starts a new session at zero`() {
-        val sampler = TrafficSampler()
-        sampler.accept(reading(0, 0))
-        sampler.accept(reading(500, 500))
-        sampler.reset()
-
-        val sample = sampler.accept(reading(10_000, 10_000))
-        assertEquals(0L, sample.uplinkBytes)
-        assertEquals(0L, sample.downlinkBytes)
     }
 
     @Test
@@ -141,6 +137,11 @@ class TrafficSamplerTest {
 
         assertEquals(1_000L, sample.uplinkBytes)
         assertEquals(1_000L, sample.downlinkBytes)
+        // Documentary, not a guard (M10): subsumed by the two exact
+        // assertEquals calls above (1_000L is already >= 0). Kept because it
+        // states the property this test is named for — the total never goes
+        // negative — not because it discriminates anything the lines above
+        // do not.
         assertEquals(true, sample.uplinkBytes >= 0)
         assertEquals(true, sample.downlinkBytes >= 0)
     }

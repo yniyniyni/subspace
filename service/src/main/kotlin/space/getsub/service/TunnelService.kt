@@ -78,6 +78,8 @@ import space.getsub.core.xray.XrayController
 import space.getsub.core.xray.XrayException
 import space.getsub.service.log.LogCapture
 import space.getsub.service.log.LogRing
+import space.getsub.service.log.TeardownStep
+import space.getsub.service.log.teardownOrder
 import java.io.File
 import javax.inject.Inject
 
@@ -389,6 +391,58 @@ internal fun passthroughOverrideFailure(
             REQUIRED_OVERRIDE_PROTOCOLS[tag]?.let { it != existingProtocol } ?: true
         }
     return ComposeFailure.IncompatibleOverrideOutbound.takeIf { reservedTagIsIncompatible }
+}
+
+/**
+ * [resolveOverrideBreakdown]'s answer for one config: proceed (with or without
+ * the diagnostic), or refuse the connect.
+ */
+internal sealed interface OverrideBreakdownDecision {
+    /** @property useBreakdown Whether the metrics port [composePassthrough] was given should still be emitted. */
+    data class Proceed(val useBreakdown: Boolean) : OverrideBreakdownDecision
+
+    /** A collision [reservedOutboundTags] cannot be talked out of — real, not a breakdown artifact. */
+    data class Refused(val reason: ComposeFailure) : OverrideBreakdownDecision
+}
+
+/**
+ * Whether the override branch should still carry the per-tag breakdown for
+ * [rawJson], review finding I4.
+ *
+ * Before this, a `Metrics` tag collision — [passthroughOverrideFailure] with
+ * the breakdown on — refused the whole connect. Spec §2.3 says outright that
+ * "a passthrough config defining an outbound called `Metrics` is not exotic",
+ * so a user who flipped a setting their own UI describes as a diagnostic lost
+ * the tunnel over it, with an error naming an incompatible override outbound
+ * and nothing pointing at the switch they had just flipped.
+ *
+ * [allocateSessionPorts] already treats the same class of failure as
+ * degradable — "the diagnostic is optional, the tunnel is not"
+ * (`ARCHITECTURE.md` §10.4) — when the *port* allocation for the third port
+ * fails. This is that same rule applied to the other way a breakdown can be
+ * unavailable: the config itself already claims the name the diagnostic
+ * needs.
+ *
+ * **Why this re-runs [passthroughOverrideFailure] rather than inspecting its
+ * result.** That function only reports *whether* a reserved tag collided, not
+ * *which* one — and [reservedOutboundTags] only reserves `Metrics` while
+ * [breakdownEnabled], so asking the same question with the breakdown turned
+ * off isolates the cause: if the collision disappears, it was `Metrics` alone
+ * and degrading clears it; if it survives, the config collides on `direct`,
+ * `block` or `dns-out` with an incompatible protocol, a real refusal this
+ * function must not swallow.
+ */
+@Suppress("ReturnCount") // One early return per distinct outcome, same reasoning as composePassthrough's own.
+internal fun resolveOverrideBreakdown(
+    rawJson: String,
+    breakdownEnabled: Boolean,
+): OverrideBreakdownDecision {
+    val failure = passthroughOverrideFailure(rawJson, breakdownEnabled)
+    if (failure == null) return OverrideBreakdownDecision.Proceed(useBreakdown = breakdownEnabled)
+    if (breakdownEnabled && passthroughOverrideFailure(rawJson, breakdownEnabled = false) == null) {
+        return OverrideBreakdownDecision.Proceed(useBreakdown = false)
+    }
+    return OverrideBreakdownDecision.Refused(failure)
 }
 
 /**
@@ -1522,9 +1576,9 @@ class TunnelService : VpnService() {
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck
         // "Connecting" notification, same as every other branch in this function.
-        val (json, runsAsWritten) =
+        val (json, runsAsWritten, metricsApplied) =
             when (val outcome = resolveConfigJson(profile, settings, routing, dnsPlan, rowId)) {
-                is ConfigJsonOutcome.Ok -> outcome.json to outcome.runsAsWritten
+                is ConfigJsonOutcome.Ok -> Triple(outcome.json, outcome.runsAsWritten, outcome.metricsApplied)
                 is ConfigJsonOutcome.Failed -> return failStart(gen, outcome.reason, outcome.cause, rowId)
             }
         val file =
@@ -1536,7 +1590,15 @@ class TunnelService : VpnService() {
         synchronized(lock) {
             if (gen != generation) return null
             configFile = file
-            metricsPort = allocated.metricsPort
+            // Not unconditionally `allocated.metricsPort` (review finding I4):
+            // the override branch can degrade away the breakdown for a config
+            // that already claims the `Metrics` tag — see
+            // [resolveOverrideBreakdown] — in which case a port was allocated
+            // but the composed config never emits a `metrics` block for it.
+            // [trafficLoop]'s `readTags` polls this field every tick; leaving
+            // it set to a port nothing listens on would poll a dead port
+            // forever instead of correctly reporting no breakdown.
+            metricsPort = allocated.metricsPort.takeIf { metricsApplied }
         }
 
         // §6: validate before starting. libXray's testXray takes a path, so the
@@ -1566,8 +1628,15 @@ class TunnelService : VpnService() {
 
     /** [resolveConfigJson]'s outcome — a JSON string ready for [writeConfig], or a named failure. */
     private sealed interface ConfigJsonOutcome {
-        /** @property runsAsWritten Whether [json] is the row's own composed bytes, not a typed generation. */
-        data class Ok(val json: String, val runsAsWritten: Boolean) : ConfigJsonOutcome
+        /**
+         * @property runsAsWritten Whether [json] is the row's own composed bytes, not a typed generation.
+         * @property metricsApplied Whether [json] actually carries a `metrics` block for the port
+         *   [startCore] allocated — review finding I4. False whenever no port was requested or
+         *   allocated, and also for a `runsAsWritten` row whose own config already claims the
+         *   `Metrics` tag, in which case [composePassthrough] degrades rather than refuses. What
+         *   [startCore] must key the service's own `metricsPort` field on, not `settings.metricsPort`.
+         */
+        data class Ok(val json: String, val runsAsWritten: Boolean, val metricsApplied: Boolean) : ConfigJsonOutcome
 
         data class Failed(val reason: FailureReason, val cause: Exception) : ConfigJsonOutcome
     }
@@ -1618,8 +1687,10 @@ class TunnelService : VpnService() {
             // and settings.metricsPort (already resolved there) is what
             // composePassthrough goes on to inject regardless.
             val metricsWillEmit = settings.metricsPort != null
-            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan, metricsWillEmit)) {
-                is ComposeResult.Ok -> ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true)
+            val outcome = composePassthrough(rawJson, settings, routing, dnsPlan, metricsWillEmit)
+            return when (val composed = outcome.result) {
+                is ComposeResult.Ok ->
+                    ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true, metricsApplied = outcome.metricsApplied)
                 // Distinct from PassthroughRejectedAtConnect, which startCore uses when the
                 // *core* refuses a well-formed config (§10.4): this means composition itself
                 // failed — a condition import already screens for structurally, so reaching
@@ -1638,7 +1709,8 @@ class TunnelService : VpnService() {
                     IllegalArgumentException("${config.protocol} is not supported yet"),
                 )
 
-            is ConfigResult.Ok -> ConfigJsonOutcome.Ok(config.json, runsAsWritten = false)
+            is ConfigResult.Ok ->
+                ConfigJsonOutcome.Ok(config.json, runsAsWritten = false, metricsApplied = settings.metricsPort != null)
         }
     }
 
@@ -1655,6 +1727,16 @@ class TunnelService : VpnService() {
      * config's own tags first: `RawConfigComposer` only ever appends, so an
      * unfiltered duplicate tag (a `direct` freedom outbound is common) would be
      * a config the core is not obliged to accept.
+     *
+     * **A `Metrics` collision degrades, it does not refuse (review finding
+     * I4).** [resolveOverrideBreakdown] answers whether this config's own
+     * `Metrics` tag can be talked around by simply not requesting the
+     * diagnostic for this session — see its own KDoc — and only a collision
+     * that survives with the breakdown off reaches [ComposeResult.Failed]
+     * here. When it degrades, [settings] is composed with `metricsPort` cut
+     * to null so [RawConfigComposer.compose] never emits a `metrics` block
+     * for a port the caller must then also stop treating as live — see
+     * [startCore]'s own use of [PassthroughComposeOutcome.metricsApplied].
      */
     @Suppress("ReturnCount") // One early return per distinct refusal, same reasoning as startCore's own.
     private fun composePassthrough(
@@ -1663,7 +1745,7 @@ class TunnelService : VpnService() {
         routing: RoutingResolution,
         dnsPlan: DnsPlan?,
         breakdownEnabled: Boolean,
-    ): ComposeResult {
+    ): PassthroughComposeOutcome {
         val plan =
             passthroughPlanFor(
                 routingActive = routing is RoutingResolution.Active,
@@ -1671,9 +1753,21 @@ class TunnelService : VpnService() {
                 activeAssetDir = (routing as? RoutingResolution.Active)?.assetDir?.absolutePath,
                 flatRoot = geoAssetRepository.geoDirectory().absolutePath,
             )
+        var effectiveSettings = settings
         val override =
             if (plan.overrideApplies) {
-                passthroughOverrideFailure(rawJson, breakdownEnabled)?.let { return ComposeResult.Failed(it) }
+                val useBreakdown =
+                    when (val decision = resolveOverrideBreakdown(rawJson, breakdownEnabled)) {
+                        is OverrideBreakdownDecision.Refused ->
+                            return PassthroughComposeOutcome(
+                                ComposeResult.Failed(decision.reason),
+                                metricsApplied = false,
+                            )
+                        is OverrideBreakdownDecision.Proceed -> decision.useBreakdown
+                    }
+                if (!useBreakdown && settings.metricsPort != null) {
+                    effectiveSettings = settings.copy(metricsPort = null)
+                }
                 val target =
                     when (val resolved = overrideTargetFor(rawJson, dnsPlanPresent = dnsPlan != null)) {
                         is OverrideTarget.Resolved -> resolved
@@ -1683,7 +1777,10 @@ class TunnelService : VpnService() {
                         // emitter — which `Resolved` makes a type error rather than
                         // a discipline.
                         is OverrideTarget.Unresolvable ->
-                            return ComposeResult.Failed(ComposeFailure.UnresolvableOverrideTarget)
+                            return PassthroughComposeOutcome(
+                                ComposeResult.Failed(ComposeFailure.UnresolvableOverrideTarget),
+                                metricsApplied = false,
+                            )
                     }
                 val existingTags = existingOutboundTags(rawJson)
                 XrayConfigGenerator.overrideBlocks(settings, target)
@@ -1695,8 +1792,24 @@ class TunnelService : VpnService() {
             } else {
                 null
             }
-        return RawConfigComposer.compose(rawJson, settings, plan.assetDir, override)
+        val result = RawConfigComposer.compose(rawJson, effectiveSettings, plan.assetDir, override)
+        // §2.4: only the override branch may carry a metrics block at all
+        // (RawConfigComposer.addMetricsBlocks) — the pure branch strips
+        // `metrics` unconditionally, so it never applies regardless of
+        // effectiveSettings.metricsPort.
+        val metricsApplied = override != null && effectiveSettings.metricsPort != null
+        return PassthroughComposeOutcome(result, metricsApplied)
     }
+
+    /**
+     * [composePassthrough]'s result, plus whether the composed config actually
+     * carries a `metrics` block for the port it was given — review finding I4.
+     * Distinct from `settings.metricsPort != null` in exactly the degraded
+     * case: a port can be allocated and still go unused when the stored
+     * config's own `Metrics` tag forced [composePassthrough] to drop it for
+     * this session.
+     */
+    private data class PassthroughComposeOutcome(val result: ComposeResult, val metricsApplied: Boolean)
 
     /** The per-app gate keeps "off" distinct from "resolution failed" for [attachTun]. */
     private sealed interface PerAppGateResult {
@@ -2671,7 +2784,6 @@ class TunnelService : VpnService() {
      * @return null when `expectedGeneration` no longer owns the tunnel;
      *   otherwise what the stop took from the session it ended.
      */
-    @Suppress("TooGenericExceptionCaught")
     private fun stopTunnel(
         finalState: ConnectionState,
         expectedGeneration: Int? = null,
@@ -2744,49 +2856,91 @@ class TunnelService : VpnService() {
 
         Log.i(TAG, "teardown[lifecycle] state taken +${sinceStart()}ms")
 
-        // Order matters: stop feeding packets in before removing their destination.
-        Log.i(TAG, "teardown[tun2socks-stop] enter")
-        try {
-            Tun2Socks.stop()
-        } catch (e: Throwable) {
-            // Includes NoClassDefFoundError when System.loadLibrary failed. §5.4
-            // says teardown must still finish — abandoning here leaks the fd.
-            Log.e(TAG, "tun2socks stop failed: ${e.javaClass.simpleName}")
-        }
-        Log.i(TAG, "teardown[tun2socks-stop] exit +${sinceStart()}ms")
-
-        try {
-            fd?.close()
-        } catch (e: java.io.IOException) {
-            Log.e(TAG, "closing tun fd failed: ${e.javaClass.simpleName}")
-        }
-        Log.i(TAG, "teardown[fd-close] exit +${sinceStart()}ms")
-
-        // stopBlocking(), not stop(): onDestroy has no scope that outlives it and
-        // §5.4 requires teardown to finish before the process dies. It also drops
-        // the protector so Go stops holding this service.
-        Log.i(TAG, "teardown[xray-stopBlocking] enter (present=${xray != null})")
-        xray?.stopBlocking()
-        Log.i(TAG, "teardown[xray-stopBlocking] exit +${sinceStart()}ms")
-        cfg?.delete()
-
-        removeForegroundSafely()
-        publish(finalState)
-        Log.i(TAG, "teardown[lifecycle] done +${sinceStart()}ms")
-        // Spec §1.5 / TeardownStep.StopTrafficSampler: stopped after the session
-        // has published its final state and before the capture below stops —
-        // a session that has already ended must not go on accumulating a total
-        // for it, or emit one to a client that just heard it is over.
-        trafficLoop.stop()
-        // Spec §3.3: stopped last, after every phase above has logged — a
-        // capture that stops first would go quiet before the teardown becomes
-        // interesting. `runCatching` here only guards against `stop()` throwing;
-        // it cannot and does not guard against `stop()` blocking. What actually
-        // keeps a wedged capture from stalling this teardown is D3:
-        // LogcatReader.close()'s own KDoc on the destroy-before-close order —
-        // that order is what makes this call non-blocking, not this wrapper.
-        runCatching { logCapture.stop() }
+        // The work itself, in exactly the order space.getsub.service.log.teardownOrder()
+        // names. That function is not consulted for documentation only: this loop
+        // is what makes it a real guard rather than a hand-maintained mirror
+        // (spec §6 item #9) — reorder a step's *position* in [runTeardownStep]'s
+        // `when` and LogCaptureLifecycleTest's ordering assertions cover exactly
+        // what they claim to.
+        val taken = TeardownSnapshot(xray, fd, cfg)
+        teardownOrder().forEach { step -> runTeardownStep(step, taken, finalState, ::sinceStart) }
         return StoppedSession(startId = startId, intentToken = intentToken)
+    }
+
+    /** What [stopTunnel] took from the session's fields, bundled for [runTeardownStep]'s sake. */
+    private data class TeardownSnapshot(val xray: XrayController?, val fd: ParcelFileDescriptor?, val cfg: File?)
+
+    /**
+     * One [TeardownStep] of [stopTunnel], extracted so that function stays
+     * under detekt's length threshold — see [stopTunnel]'s own call site for
+     * why this dispatch, not the step bodies, is what actually enforces
+     * `teardownOrder()`'s ordering.
+     */
+    @Suppress("TooGenericExceptionCaught") // Same reasoning as stopTunnel's own suppression.
+    private fun runTeardownStep(
+        step: TeardownStep,
+        taken: TeardownSnapshot,
+        finalState: ConnectionState,
+        sinceStart: () -> Long,
+    ) {
+        val (xray, fd, cfg) = taken
+        when (step) {
+            TeardownStep.StopTun2Socks -> {
+                // Order matters: stop feeding packets in before removing their destination.
+                Log.i(TAG, "teardown[tun2socks-stop] enter")
+                try {
+                    Tun2Socks.stop()
+                } catch (e: Throwable) {
+                    // Includes NoClassDefFoundError when System.loadLibrary failed. §5.4
+                    // says teardown must still finish — abandoning here leaks the fd.
+                    Log.e(TAG, "tun2socks stop failed: ${e.javaClass.simpleName}")
+                }
+                Log.i(TAG, "teardown[tun2socks-stop] exit +${sinceStart()}ms")
+            }
+
+            TeardownStep.CloseTun -> {
+                try {
+                    fd?.close()
+                } catch (e: java.io.IOException) {
+                    Log.e(TAG, "closing tun fd failed: ${e.javaClass.simpleName}")
+                }
+                Log.i(TAG, "teardown[fd-close] exit +${sinceStart()}ms")
+            }
+
+            TeardownStep.StopCore -> {
+                // stopBlocking(), not stop(): onDestroy has no scope that outlives it and
+                // §5.4 requires teardown to finish before the process dies. It also drops
+                // the protector so Go stops holding this service.
+                Log.i(TAG, "teardown[xray-stopBlocking] enter (present=${xray != null})")
+                xray?.stopBlocking()
+                Log.i(TAG, "teardown[xray-stopBlocking] exit +${sinceStart()}ms")
+                cfg?.delete()
+            }
+
+            TeardownStep.ClearNotification -> {
+                removeForegroundSafely()
+                publish(finalState)
+                Log.i(TAG, "teardown[lifecycle] done +${sinceStart()}ms")
+            }
+
+            TeardownStep.StopTrafficSampler ->
+                // Spec §1.5: stopped after the session has published its final
+                // state and before the capture below stops — a session that has
+                // already ended must not go on accumulating a total for it, or
+                // emit one to a client that just heard it is over.
+                trafficLoop.stop()
+
+            TeardownStep.StopLogCapture ->
+                // Spec §3.3: stopped last, after every phase above has logged —
+                // a capture that stops first would go quiet before the teardown
+                // becomes interesting. `runCatching` here only guards against
+                // `stop()` throwing; it cannot and does not guard against
+                // `stop()` blocking. What actually keeps a wedged capture from
+                // stalling this teardown is D3: LogcatReader.close()'s own
+                // KDoc on the destroy-before-close order — that order is what
+                // makes this call non-blocking, not this wrapper.
+                runCatching { logCapture.stop() }
+        }
     }
 
     /** Stops only the started-service generation that owns the completed command. */

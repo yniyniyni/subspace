@@ -17,9 +17,18 @@ import javax.inject.Inject
  * source through a repository. `:main` and `:bg` are one app with one
  * `filesDir`, so this is an ordinary file read and needs no IPC.
  *
- * **The directory name is duplicated**, not shared: `:core:data` cannot depend
- * on `:service`. It must stay in step with `TunnelService.LOG_DIR_NAME`.
- * Spec §3.4.
+ * **Three literals are duplicated here**, not shared: `:core:data` cannot
+ * depend on `:service`, so nothing stops these three from drifting apart from
+ * their originals on its own. Keep them in step by hand:
+ * - the directory name (`"logs"`, [LOG_DIR_NAME] below) with
+ *   `TunnelService.LOG_DIR_NAME`;
+ * - `"log.0"` and `"log.1"` in [lines] and [clear] with `LogRing`'s own
+ *   `current`/`previous` file getters (`space.getsub.service.log.LogRing`) —
+ *   the ring's actual file names, not documented as a public contract
+ *   anywhere else.
+ *
+ * A silent rename on either side, not a compile error, is what this class
+ * going blank in the viewer would actually look like. Spec §3.4.
  *
  * Every line here was redacted at capture (spec §3.2), so nothing this class
  * returns needs redacting again — and nothing it returns may be assumed to

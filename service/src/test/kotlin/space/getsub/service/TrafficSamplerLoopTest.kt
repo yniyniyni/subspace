@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import space.getsub.core.model.TagTraffic
 import space.getsub.core.model.TrafficSample
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -160,5 +161,206 @@ class TrafficSamplerLoopTest {
         // Still baselined, not counted in full -- the stale signal must not have primed this
         // sampler's very first reading as though it were a mid-session restart.
         assertEquals(0L, samples[0].uplinkBytes)
+    }
+
+    // --- I-1 / ruling R42: TunnelService.restartCoreRetainingTun's *other* branch ---
+    //
+    // attachRetainedTun's own call to notifyCountersRestarted() was already covered above.
+    // restartCoreRetainingTun has a second branch -- taken when the retained TUN would stop
+    // advertising the DNS the rebuilt core expects -- that goes through attachTun instead. That
+    // branch also stops and restarts tun2socks and xray, but never calls TrafficSamplerLoop.stop(),
+    // so start() is a no-op there (the job is still active) and the *same* TrafficSampler survives
+    // into the new epoch. The tests below model exactly that shape: the loop is already running
+    // (start() already called once, never stopped) when notifyCountersRestarted() fires, mid-
+    // session, the same way attachTun's rebuild call now does. Without that call, TrafficSampler
+    // would fall back to delta()'s inference on the next reading -- undercounting a rising reading
+    // (below) and losing the interval entirely on an equal one (further below), for totals and for
+    // per-tag rows alike.
+
+    @Test
+    fun `the rebuild path counts a rising new-epoch reading in full, for totals and per-tag`() {
+        val tick = AtomicInteger(0)
+        val gotSecondSample = CountDownLatch(1)
+        val restartSignalled = CountDownLatch(1)
+        val samples = mutableListOf<TrafficSample>()
+        val gotThirdSample = CountDownLatch(1)
+
+        val scope = CoroutineScope(Dispatchers.IO + Job())
+        val loop =
+            TrafficSamplerLoop(
+                scope = scope,
+                read = {
+                    when (tick.incrementAndGet()) {
+                        1 -> reading(0, 0) // baseline: nothing accumulated yet
+                        2 -> reading(100, 100) // ordinary delta: accumulated = 100
+                        else -> {
+                            // Mirrors attachTun's rebuild branch: the signal is fired once, from
+                            // outside this loop's coroutine, strictly before this tick's read --
+                            // not raced mid-read (TrafficSamplerLoopTest's first test already
+                            // covers that harder case).
+                            restartSignalled.await(5, TimeUnit.SECONDS)
+                            reading(150, 150) // new epoch's first reading -- above the old prev
+                        }
+                    }
+                },
+                readTags = {
+                    when (tick.get()) {
+                        1 -> listOf(TagTraffic("proxy", 0, 0))
+                        2 -> listOf(TagTraffic("proxy", 100, 100))
+                        else -> listOf(TagTraffic("proxy", 150, 150))
+                    }
+                },
+                emit = { sample ->
+                    samples.add(sample)
+                    if (samples.size == 2) gotSecondSample.countDown()
+                    if (samples.size == 3) gotThirdSample.countDown()
+                },
+                intervalMillis = 5,
+            )
+
+        try {
+            loop.start()
+            assertTrue("second sample never arrived", gotSecondSample.await(5, TimeUnit.SECONDS))
+            // The rebuild branch's call site: fired here, with the loop still running -- start()
+            // is never called again, exactly like attachTun's rebuild branch never calling it a
+            // second time because trafficLoop.stop() was never reached on that path.
+            loop.notifyCountersRestarted()
+            restartSignalled.countDown()
+
+            assertTrue("third sample never arrived", gotThirdSample.await(5, TimeUnit.SECONDS))
+        } finally {
+            loop.stop()
+            scope.cancel()
+        }
+
+        // 100 (preserved) + 150 (counted in full) = 250, not 150 (delta(100, 150) = 50, landing on
+        // 150 total) -- the exact undercount ruling R38 was filed to remove, reproduced here on the
+        // branch F4's original fix did not reach.
+        assertEquals(250L, samples[2].uplinkBytes)
+        assertEquals(250L, samples[2].downlinkBytes)
+        val proxy = samples[2].perTag.single { it.tag == "proxy" }
+        assertEquals(250L, proxy.uplinkBytes)
+        assertEquals(250L, proxy.downlinkBytes)
+    }
+
+    @Test
+    fun `the rebuild path counts a new-epoch reading equal to the old prev in full, for totals and per-tag`() {
+        val tick = AtomicInteger(0)
+        val gotSecondSample = CountDownLatch(1)
+        val restartSignalled = CountDownLatch(1)
+        val samples = mutableListOf<TrafficSample>()
+        val gotThirdSample = CountDownLatch(1)
+
+        val scope = CoroutineScope(Dispatchers.IO + Job())
+        val loop =
+            TrafficSamplerLoop(
+                scope = scope,
+                read = {
+                    when (tick.incrementAndGet()) {
+                        1 -> reading(0, 0)
+                        2 -> reading(100, 100) // accumulated = 100
+                        else -> {
+                            restartSignalled.await(5, TimeUnit.SECONDS)
+                            // The equality case review finding I-1 calls out as "worse":
+                            // delta(100, 100) = 0 would silently discard this whole interval.
+                            reading(100, 100)
+                        }
+                    }
+                },
+                readTags = {
+                    when (tick.get()) {
+                        1 -> listOf(TagTraffic("proxy", 0, 0))
+                        2 -> listOf(TagTraffic("proxy", 100, 100))
+                        else -> listOf(TagTraffic("proxy", 100, 100))
+                    }
+                },
+                emit = { sample ->
+                    samples.add(sample)
+                    if (samples.size == 2) gotSecondSample.countDown()
+                    if (samples.size == 3) gotThirdSample.countDown()
+                },
+                intervalMillis = 5,
+            )
+
+        try {
+            loop.start()
+            assertTrue("second sample never arrived", gotSecondSample.await(5, TimeUnit.SECONDS))
+            loop.notifyCountersRestarted()
+            restartSignalled.countDown()
+
+            assertTrue("third sample never arrived", gotThirdSample.await(5, TimeUnit.SECONDS))
+        } finally {
+            loop.stop()
+            scope.cancel()
+        }
+
+        // 100 (preserved) + 100 (counted in full) = 200, not 100 (delta(100, 100) = 0 -- the
+        // interval lost entirely).
+        assertEquals(200L, samples[2].uplinkBytes)
+        assertEquals(200L, samples[2].downlinkBytes)
+        val proxy = samples[2].perTag.single { it.tag == "proxy" }
+        assertEquals(200L, proxy.uplinkBytes)
+        assertEquals(200L, proxy.downlinkBytes)
+    }
+
+    @Test
+    fun `the initial-connect call does not spike the first reading, for totals or per-tag`() {
+        // Mirrors attachTun's initial-connect call: notifyCountersRestarted() fires before
+        // start() has ever been called for this session, because the call site does not
+        // distinguish the initial-connect case from the rebuild case -- it relies on start()'s
+        // own seeding (see its KDoc) to make the initial-connect case harmless.
+        val tick = AtomicInteger(0)
+        val samples = mutableListOf<TrafficSample>()
+        val gotSecondSample = CountDownLatch(1)
+        val scope = CoroutineScope(Dispatchers.IO + Job())
+        val loop =
+            TrafficSamplerLoop(
+                scope = scope,
+                read = {
+                    when (tick.incrementAndGet()) {
+                        1 -> reading(50, 50)
+                        else -> reading(80, 80)
+                    }
+                },
+                readTags = {
+                    when (tick.get()) {
+                        1 -> listOf(TagTraffic("proxy", 20, 20))
+                        else -> listOf(TagTraffic("proxy", 35, 35))
+                    }
+                },
+                emit = { sample ->
+                    samples.add(sample)
+                    if (samples.size == 2) gotSecondSample.countDown()
+                },
+                intervalMillis = 5,
+            )
+
+        try {
+            loop.notifyCountersRestarted()
+            loop.start()
+
+            assertTrue("second sample never arrived", gotSecondSample.await(5, TimeUnit.SECONDS))
+        } finally {
+            loop.stop()
+            scope.cancel()
+        }
+
+        // Tick 1: the session totals still baseline (0, not 50) -- a signal fired ahead of this
+        // session's first start() must not be replayed onto that first reading as a restart.
+        assertEquals(0L, samples[0].uplinkBytes)
+        assertEquals(0L, samples[0].downlinkBytes)
+        // Tick 2: an ordinary delta against the baseline, not a second full count --
+        // delta(50, 80) = 30, confirming the epoch tracker settled rather than staying primed.
+        assertEquals(30L, samples[1].uplinkBytes)
+        assertEquals(30L, samples[1].downlinkBytes)
+        // Per-tag: "proxy"'s own first-sighting rule already counts its first reading in full
+        // regardless of any restart signal (TrafficSampler's documented, unrelated behaviour) --
+        // what this proves is tick 2 is an ordinary delta (35 - 20 = 15 more), not a second
+        // full count of 35 stacked on top.
+        val proxyTick1 = samples[0].perTag.single { it.tag == "proxy" }
+        assertEquals(20L, proxyTick1.uplinkBytes)
+        val proxyTick2 = samples[1].perTag.single { it.tag == "proxy" }
+        assertEquals(35L, proxyTick2.uplinkBytes)
+        assertEquals(35L, proxyTick2.downlinkBytes)
     }
 }

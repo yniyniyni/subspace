@@ -2118,6 +2118,29 @@ class TunnelService : VpnService() {
             return TunAttachOutcome.Settled
         }
 
+        // Ruling R42 (extends R38): this is the *other* branch [restartCoreRetainingTun] can
+        // take — when `retainedTunKeepsAdvertisedDns(...)` is false it rebuilds through
+        // [attachTun] instead of [attachRetainedTun], stopping and restarting both tun2socks
+        // and xray exactly as that branch does. Without this call, [trafficLoop] never learns
+        // the counters reset: [trafficLoop.start] below is a no-op on that path (its job is
+        // still active — this call site never went through [stopTunnel]), so the *same*
+        // [TrafficSampler] survives with a stale `previous`, and the next reading falls back to
+        // [delta]'s inference — exactly the undercount (or, on equality, the lost-interval case)
+        // ruling R38 exists to close. See [TrafficSamplerLoop.notifyCountersRestarted]'s KDoc.
+        //
+        // Called here, before [trafficLoop.start] rather than after, for the reason that
+        // function's own seeding comment gives: this call is a no-op safety net on the
+        // *initial*-connect path (the common case reaching this line), where [trafficLoop]'s
+        // job is not yet active and [trafficLoop.start] is about to create a fresh
+        // [TrafficSampler] — that fresh sampler seeds its epoch tracker from this call's bumped
+        // signal, so it is absorbed harmlessly and the first reading still baselines rather than
+        // spikes. Fired *after* [trafficLoop.start] instead, the fresh sampler's first tick would
+        // see a changed epoch, call `beginNewEpoch()` before its first reading, and turn
+        // baseline-and-discard into count-in-full — a spurious traffic spike at the start of
+        // every session. That is the trap [trafficLoop.start]'s own seeding comment describes;
+        // this call site must not reintroduce it from the other side.
+        trafficLoop.notifyCountersRestarted()
+
         val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
         // One generation-checked transition: the connected notification is established and
         // `Connected` published together under the lock, and the spec-D4 success write (see
@@ -3517,6 +3540,12 @@ class TunnelService : VpnService() {
         // adds a branch, not a new fd lifetime. It also re-resolves the per-app
         // gate, which the retained path deliberately does not: a rebuild
         // therefore applies the current selection.
+        //
+        // The sampler is covered too (ruling R42): the `Tun2Socks.stop()`/
+        // `stopBlocking()` calls above reset the counters on this branch exactly
+        // as they do on [attachRetainedTun]'s, so [attachTun] itself calls
+        // `trafficLoop.notifyCountersRestarted()` right after `Tun2Socks.start()`
+        // confirms the rebuilt tunnel is live — see that call site's own comment.
         //
         // **A rebuild must not end a session the retained path would have
         // survived.** §8's gate can produce no plan at all — allow-list mode with

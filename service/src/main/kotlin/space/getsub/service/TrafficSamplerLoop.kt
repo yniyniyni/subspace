@@ -185,15 +185,32 @@ internal class TrafficSamplerLoop(
      * one place. Call this as early as the caller can be sure the *new* epoch's counters are the
      * ones a subsequent [read] will see: too early (before the old core has actually stopped) can
      * let a still-climbing old-epoch reading be double-counted as the new epoch's first; too late
-     * re-opens the undercount window this exists to close. `TunnelService.attachRetainedTun`
-     * calls this immediately after `Tun2Socks.start()` confirms the new tunnel — and therefore the
-     * new counters — are live, before any further suspending work (foreground promotion, the
-     * connection record's persistence) that could let [start]'s loop poll a genuine new-epoch
-     * value the sampler has not yet been told to expect.
+     * re-opens the undercount window this exists to close.
      *
-     * A call while [start]'s job is not running (nothing connected) is harmless: [start] seeds its
-     * local epoch tracker from [restartSignal]'s value when it launches, so a signal from a
-     * session that already ended is never replayed onto the next one.
+     * **Two callers, both in `TunnelService.restartCoreRetainingTun` (ruling R42 extends R38's
+     * original single-caller coverage to the second branch):**
+     * - `attachRetainedTun`, taken when the retained TUN still advertises the DNS the rebuilt
+     *   core was configured with, calls this immediately after `Tun2Socks.start()` confirms the
+     *   new tunnel — and therefore the new counters — are live.
+     * - `attachTun`'s rebuild branch, taken when it does not, calls this at the equivalent point
+     *   in that function — also immediately after `Tun2Socks.start()` succeeds. That branch stops
+     *   and restarts tun2socks and xray exactly like the retained path does, but never calls
+     *   [stop] on this loop, so without this call [start] below is a no-op (its job is still
+     *   active) and the same [TrafficSampler] would carry a stale `previous` into the new epoch,
+     *   falling back to [TrafficSampler]'s delta-based inference — the exact defect this class
+     *   exists to remove.
+     *
+     * Both call sites fire before any further suspending work (foreground promotion, the
+     * connection record's persistence, and — on `attachTun`'s path — before [start] itself) that
+     * could let [start]'s loop poll a genuine new-epoch value the sampler has not yet been told to
+     * expect.
+     *
+     * A call while [start]'s job is not running (nothing connected, or — on `attachTun`'s
+     * *initial*-connect call, not a restart — a session that has not started its first tick yet)
+     * is harmless: [start] seeds its local epoch tracker from [restartSignal]'s value when it
+     * launches, so a signal from a session that already ended, or one fired just ahead of this
+     * session's own first [start] call, is never replayed onto that session's first reading as
+     * though it were a mid-session restart.
      */
     fun notifyCountersRestarted() {
         restartSignal.incrementAndGet()

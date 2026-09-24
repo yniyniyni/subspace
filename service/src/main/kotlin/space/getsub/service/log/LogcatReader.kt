@@ -4,6 +4,14 @@ package space.getsub.service.log
 
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.UUID
+
+/**
+ * The constant half of every capture's end-of-drain sentinel (N1 / R46). The
+ * other half is a per-reader random nonce — see [LogcatReader.sentinel]. The
+ * line carries nothing else: no config, no session detail (§5.6).
+ */
+internal const val SENTINEL_PREFIX = "subspace-log-capture-end"
 
 /**
  * Owns a `logcat` subprocess and emits its lines.
@@ -15,83 +23,127 @@ import java.io.InputStreamReader
  *
  * Knows nothing about redaction or files. [LogCapture] joins the three.
  *
+ * **How a capture ends — drain to a sentinel (N1, ruling R46).** On a Pixel 8
+ * the teardown's final `teardown[lifecycle] done` line reached the ring in 0
+ * of 14 stops, and sessions shorter than ~1.5 s captured nothing, because the
+ * old stop *killed* `logcat` and closed this reader on the teardown thread:
+ * (a) a freshly spawned `logcat` delivers nothing for ~1.9–3.9 s, so a short
+ * session's `logcat` died before delivering anything; (b) `done` is logged
+ * microseconds before the stop, the one window where even a warm `logcat`
+ * (which delivers within ~10 ms) has not written it; (c) lines already in the
+ * pipe were thrown away by the close, because the capture thread is often
+ * behind (redaction costs ~1.3 ms a line). So a stop no longer ends anything
+ * here directly:
+ *
+ * 1. [requestStop] only records that a stop was asked for. [LogCapture.stop]
+ *    then logs [sentinel] through `android.util.Log`, *after* every teardown
+ *    line, and returns immediately (R18).
+ * 2. [lines] — on the capture thread — keeps reading until it sees its own
+ *    [sentinel] on a raw line, then destroys the subprocess and closes its
+ *    own reader.
+ * 3. If the sentinel never arrives, the watchdog calls [forceStop] at
+ *    [LogCapture.DRAIN_DEADLINE_MILLIS], which **only destroys the
+ *    subprocess**. The pipe then hits EOF; the capture thread drains what is
+ *    left, reads null, and closes its own reader.
+ *
+ * **No thread other than the capture thread ever closes the reader.** That is
+ * what keeps D3's deadlock from coming back: `BufferedReader.readLine()` and
+ * `BufferedReader.close()` share a monitor, and a close from any other thread
+ * while a read is in flight blocks until that read returns — which, on a quiet
+ * device, can be never. See [forceStop].
+ *
+ * **Known residual:** if `:bg` is killed before the drain completes, the tail
+ * is lost with it. Nothing in-process can outlive the process.
+ *
  * @param spawn a seam for tests. Production uses [spawnLogcat].
  */
 internal class LogcatReader(
-    private val spawn: () -> Process = ::spawnLogcat,
+    private val spawn: () -> Process,
 ) {
-    @Volatile
-    private var process: Process? = null
+    /**
+     * This capture's end marker: [SENTINEL_PREFIX] plus a random 128-bit
+     * nonce, so a line can only match if *this* capture's stop logged it —
+     * never another capture's sentinel, and never a line some other component
+     * happened to write. Matched on the raw line, before redaction, and never
+     * emitted from [lines].
+     */
+    val sentinel: String = "$SENTINEL_PREFIX ${UUID.randomUUID().toString().replace("-", "")}"
 
     @Volatile
-    private var reader: BufferedReader? = null
+    private var process: Process? = null
 
     @Volatile
     var endedWithError: Boolean = false
         private set
 
     /**
-     * Set by [close] before it touches the reader or the process.
+     * Set by [requestStop] (and by [forceStop]) — D2 (device verification,
+     * 2026-09-20), carried over to R46.
      *
-     * D2 (device verification, 2026-09-20): [close] runs on the teardown
-     * thread while [lines]' `generateSequence` block may have a `readLine()`
-     * in flight on the capture thread. `BufferedReader.readLine()` and
-     * `BufferedReader.close()` serialize on the same monitor, so [close]
-     * either lands in a gap between two reads — and the *next* read then
-     * fails against an already-closed stream — or it waits for whatever read
-     * is currently in flight to finish first. Either way, once [close] has
-     * run, a read failure that follows it is the closed stream behaving
-     * exactly as a closed stream should, not evidence the subprocess or pipe
-     * broke. The device observed this landing both ways across two otherwise
-     * identical clean disconnects — sometimes the trailing read failed,
-     * sometimes it didn't — which is what makes it a race and not a
-     * deterministic ordering to special-case instead.
-     *
-     * Without this flag, [lines] could not tell that failure apart from a
-     * genuine mid-stream break, so a normal disconnect could report itself as
-     * a stream failure that never happened. Set here, before [close] touches
-     * the reader or the process, so the write is visible to the capture
-     * thread by the time it observes any effect of the close.
-     *
-     * This does not guarantee the last line written before [close] is
-     * captured — that still depends on whether the subprocess's pipe had
-     * already delivered it to this reader's buffer before the close tore the
-     * stream down, and nothing here waits to find out (teardown must not
-     * block on this capture; see R18). It only fixes what [endedWithError]
-     * reports about a stop this class itself initiated.
+     * D2's original shape: the teardown thread closed this reader while the
+     * capture thread might have a `readLine()` in flight, and the read failure
+     * that followed was the closed stream behaving as a closed stream should,
+     * not evidence the subprocess or pipe broke. Under R46 nothing but the
+     * capture thread closes the reader, but a stop still *causes* the stream
+     * to end — the watchdog's [Process.destroy] can surface on the reading
+     * side as a read failure rather than a clean EOF. Without this flag,
+     * [lines] could not tell that failure apart from a genuine mid-stream
+     * break, so a normal disconnect could report itself as a stream failure
+     * that never happened. A failure with no stop requested still sets
+     * [endedWithError].
      */
     @Volatile
-    private var closeRequested: Boolean = false
+    private var stopRequested: Boolean = false
 
     /**
-     * Guards [process] and [reader] publication against [close] — F3 (review,
+     * Set by [forceStop]: the drain deadline has passed. From here on a
+     * process [lines] publishes is destroyed at once and never read — F3's
+     * guarantee under R46. See [publishLock].
+     */
+    @Volatile
+    private var deadlinePassed: Boolean = false
+
+    /**
+     * Guards [process] publication against [forceStop] — F3 (review,
      * 2026-09-22). [spawn] itself runs outside this lock (see [lines]): it can
      * take arbitrarily long (launching a subprocess), and R18 forbids teardown
-     * ever waiting on log capture, so [close] must never be able to block
+     * ever waiting on log capture, so the watchdog must never be able to block
      * behind it.
      *
-     * What the lock actually closes is the gap *between* spawn returning and
-     * this instance publishing the process/reader it created. Before this
-     * fix, [close] running in that gap saw both fields still null, destroyed
-     * nothing, and returned — then [lines] published the process and reader
-     * anyway and started reading, orphaning a subprocess [close]'s caller
-     * ([LogCapture.stop]) had already discarded its only reference to. See
-     * the F3 finding: reproduced deterministically with a latch-driven probe
-     * through the [spawn] seam, `close during spawn: destroyed=false,
-     * linesAfterClose=[still reading after stop]`.
+     * What the lock closes is the gap *between* spawn returning and this
+     * instance publishing the process it created. F3's original finding: a
+     * stop running in that gap saw no process, destroyed nothing, and
+     * returned — then [lines] published the process anyway and read it
+     * forever, orphaning a subprocess nothing referenced any more
+     * (`close during spawn: destroyed=false, linesAfterClose=[still reading
+     * after stop]`).
      *
-     * Both critical sections below are short and non-blocking (field writes,
-     * plus [Process.destroy] and [BufferedReader.close], which D3's KDoc
-     * already establishes cannot block each other in this order) — holding
-     * this lock across either is not the wait R18 forbids.
+     * **How F3 changed shape under R46.** A *requested* stop that lands during
+     * spawn no longer means "destroy whatever spawn produces": that was N1
+     * mechanism (a), a short session losing everything. It now means "drain
+     * to the sentinel", which is bounded by the deadline like any other
+     * drain. The leak guard moved to [deadlinePassed]: once [forceStop] has
+     * run, a process spawn publishes afterwards is destroyed at once and
+     * never read, so no stop can orphan a subprocess.
+     *
+     * Every critical section that holds this lock is short and non-blocking —
+     * field writes and [Process.destroy], which signals and returns — so
+     * holding it is not the wait R18 forbids.
      */
     private val publishLock = Any()
 
     /**
      * Blocking, and consumed on a dedicated thread — this follows the
-     * subprocess until [close].
+     * subprocess until it delivers [sentinel], reaches EOF (after [forceStop]
+     * or on its own), or a read fails.
      *
-     * Called at most once per instance — the capture thread is its only caller.
+     * Called at most once per instance — the capture thread is its only
+     * caller, and therefore the only thread that ever closes the reader.
+     *
+     * Any line carrying [SENTINEL_PREFIX] is dropped: it is capture plumbing,
+     * not diagnostic content. Only this reader's own [sentinel] ends the
+     * sequence; another capture's (which a `-T <epoch>` landing on the same
+     * millisecond as the previous session's stop could replay) is skipped.
      *
      * A spawn failure yields an empty sequence rather than throwing: capture is
      * a diagnostic, and ARCHITECTURE.md §10.4's rule about failing loudly is
@@ -99,104 +151,103 @@ internal class LogcatReader(
      * one.
      */
     fun lines(): Sequence<String> {
-        val proc =
-            runCatching { spawn() }.getOrElse {
-                return emptySequence()
-            }
-
-        val newReader =
-            synchronized(publishLock) {
-                // F3: if close() already ran — or runs concurrently and wins
-                // this race — closeRequested is visible here (both this read
-                // and close()'s write happen inside publishLock) before this
-                // process is ever published. Nothing else can reach it once
-                // this instance discards it below, so this branch must be the
-                // one that destroys it; close() cannot, having found no
-                // process to act on.
-                if (closeRequested) {
-                    null
-                } else {
-                    process = proc
-                    BufferedReader(InputStreamReader(proc.inputStream)).also { reader = it }
-                }
-            }
-
-        return if (newReader == null) {
-            // Same order [close] uses below (D3): destroy before releasing
-            // the stream. Never consumed — no line from this process reaches
-            // the ring.
-            runCatching { proc.destroy() }
-            runCatching { proc.inputStream.close() }
-            emptySequence()
-        } else {
-            generateSequence {
-                runCatching { newReader.readLine() }
-                    .onFailure {
-                        // A read failure that follows a requested close is the
-                        // expected consequence of that close, not a genuine
-                        // mid-stream error — see [closeRequested].
-                        if (!closeRequested) {
-                            endedWithError = true
-                        }
-                    }
-                    .getOrNull()
+        val proc = spawnAndPublish() ?: return emptySequence()
+        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+        return sequence {
+            try {
+                yieldAll(
+                    generateSequence { readOrNull(reader) }
+                        .takeWhile { sentinel !in it }
+                        .filterNot { SENTINEL_PREFIX in it },
+                )
+            } finally {
+                finish(reader)
             }
         }
     }
 
     /**
-     * D3 (this branch, 2026-09-21): destroys the subprocess *before* closing the
-     * reader. That order is load-bearing — swapping it back reintroduces a
-     * teardown deadlock, so read this before "tidying" the two lines below.
-     *
-     * `BufferedReader.readLine()` and `BufferedReader.close()` serialize on the
-     * same monitor (`java.io.Reader`'s own `lock`), and a thread blocked inside
-     * a native read holds that monitor for the whole call. [lines]' capture
-     * thread can be sitting in exactly that blocked read — waiting on the
-     * `logcat` subprocess for its next line — when [close] runs on the teardown
-     * thread. If [close] called `reader.close()` first, it would not be able to
-     * enter that synchronized block until the in-flight read returns; and that
-     * read only returns when logcat emits another matching line, or the
-     * subprocess dies. The call that kills the subprocess would then be the
-     * *next* statement — one this thread can no longer reach, because it is
-     * stuck waiting to acquire a monitor the blocked reader already holds. That
-     * is a real deadlock, not a slow path: on a quiet device, that next
-     * matching line can be arbitrarily far away, and teardown never finishes.
-     * `jstack` confirmed this shape earlier on this branch — the capture thread
-     * `locked` inside `StreamDecoder.readBytes`, another thread `BLOCKED (on
-     * object monitor)` in `BufferedReader.close()`.
-     *
-     * Destroying first avoids the wait entirely: [Process.destroy] signals and
-     * returns without blocking. Killing the subprocess closes the pipe's write
-     * end, so the blocked `readLine()` takes EOF, returns null, and releases the
-     * monitor on its own — at which point `reader.close()` proceeds freely
-     * against a reader nothing is blocked inside any more. [lines]'
-     * `generateSequence` ends cleanly on that null, so this path never reaches
-     * `onFailure`, and [endedWithError] stays false without [closeRequested]
-     * even needing to intervene.
-     *
-     * No data is lost that the old order preserved: closing the reader first
-     * discarded its buffer just the same, so there is nothing this order gives
-     * up. `runCatching` around each call only guards against a throw — it does
-     * not, and cannot, guard against one of these calls blocking, which is why
-     * the order itself is the fix, not the `runCatching`.
-     *
-     * F3: wrapped in [publishLock] so setting [closeRequested] and acting on
-     * [process]/[reader] is atomic with [lines]' own publish step — the two
-     * can no longer interleave as "close sees nothing to destroy" followed by
-     * "lines publishes and reads anyway". This does not reintroduce the D2/D3
-     * deadlock: the lock here is a plain, uncontended `Any()` monitor
-     * different from `BufferedReader`'s own internal lock, and neither
-     * critical section that holds it performs a blocking call — spawning the
-     * subprocess happens in [lines] *before* this lock is ever taken.
+     * Spawns `logcat` and publishes it for [forceStop], or — if the deadline
+     * has already passed — destroys it unread and returns null. Also null on
+     * a spawn failure.
      */
-    fun close() {
+    private fun spawnAndPublish(): Process? {
+        val proc = runCatching { spawn() }.getOrNull()
+        val published =
+            proc != null &&
+                synchronized(publishLock) {
+                    // F3: forceStop() either ran before this block (deadlinePassed
+                    // is visible here — both sides hold publishLock) or runs after
+                    // it and finds the process to destroy. There is no third order.
+                    if (!deadlinePassed) process = proc
+                    !deadlinePassed
+                }
+        if (proc != null && !published) {
+            // The deadline has passed: nothing else can reach this process,
+            // so this branch must be the one that destroys it. Never read —
+            // no line from it reaches the ring.
+            runCatching { proc.destroy() }
+            runCatching { proc.inputStream.close() }
+        }
+        return proc.takeIf { published }
+    }
+
+    /** One read; a failure ends the sequence, and is an error only if no stop was requested (D2). */
+    private fun readOrNull(reader: BufferedReader): String? =
+        runCatching { reader.readLine() }
+            .onFailure { if (!stopRequested) endedWithError = true }
+            .getOrNull()
+
+    /**
+     * Runs on the capture thread only, once [lines] is done reading. Destroys
+     * the subprocess, then closes the reader — D3's order. The order no
+     * longer prevents a deadlock (the thread closing the reader is the one
+     * that was reading it, so no read can be in flight), but destroying first
+     * still stops `logcat` writing into a pipe about to lose its reader.
+     */
+    private fun finish(reader: BufferedReader) {
         synchronized(publishLock) {
-            closeRequested = true
             runCatching { process?.destroy() }
-            runCatching { reader?.close() }
-            reader = null
             process = null
+        }
+        runCatching { reader.close() }
+    }
+
+    /**
+     * Records that a stop was requested. Does not destroy, close, or wait on
+     * anything: the capture drains to [sentinel] on its own thread. Returns
+     * immediately (R18).
+     */
+    fun requestStop() {
+        stopRequested = true
+    }
+
+    /**
+     * The watchdog's call, at the drain deadline. **Only destroys the
+     * subprocess — it must never close the reader.**
+     *
+     * D3 (2026-09-21) is why: `BufferedReader.readLine()` and
+     * `BufferedReader.close()` serialize on the same monitor (`java.io.Reader`'s
+     * `lock`), and a thread blocked inside a native read holds it for the
+     * whole call. The capture thread is very likely sitting in exactly that
+     * read when the deadline fires. A `reader.close()` from here would wait
+     * for that read to return — which only happens when `logcat` emits
+     * another line or dies — and teardown once wedged on precisely that shape
+     * (`jstack`: the capture thread `locked` inside `StreamDecoder.readBytes`,
+     * another thread `BLOCKED` in `BufferedReader.close()`).
+     *
+     * [Process.destroy] signals and returns. Killing the subprocess closes the
+     * pipe's write end, the blocked `readLine()` drains what is left and then
+     * takes EOF, and [lines] closes its own reader on the capture thread.
+     *
+     * Also arms the F3 guard: a process [spawn] publishes after this has run
+     * is destroyed at once and never read.
+     */
+    fun forceStop() {
+        synchronized(publishLock) {
+            stopRequested = true
+            deadlinePassed = true
+            runCatching { process?.destroy() }
         }
     }
 }
@@ -209,33 +260,34 @@ internal class LogcatReader(
  *
  * `-v threadtime` for a stable, parseable prefix; no `-d`, so it follows.
  *
- * **`-T 1`, not absent (review finding I2).** Without a `-T`/`-t`, `logcat`
- * dumps this UID's entire retained buffer before it starts following —
- * confirmed on device: a ring the spec (§3.5) calls a record of *one
- * session* began with `--------- beginning of main` and a pre-session
- * `:main` line. That costs the ring's budget and the capture thread's CPU on
- * history the session never produced, and a reconnect-reconnect-reconnect
- * repro duplicates that history into the ring on every attempt, evicting the
- * session that actually matters. `-T <count>` shows only the most recent
- * `<count>` lines and then follows, without implying `-d` — unlike `-t`,
- * which dumps and exits. `1` is the smallest count that is still a count
- * (there is no `-T 0`), so this replays at most one line of history, never
- * the whole buffer.
+ * **`-T <epoch>`, where the epoch is [LogCapture.start]'s wall-clock reading
+ * (N1 / R46; replaces I2's `-T 1`).** Without a `-T`/`-t`, `logcat` dumps this
+ * UID's entire retained buffer before it starts following — review finding
+ * I2, confirmed on device: a ring the spec (§3.5) calls a record of *one
+ * session* began with `--------- beginning of main` and a pre-session `:main`
+ * line. I2's fix, `-T 1`, still replayed one line of history — in practice
+ * always the previous session's last line, which after N1 was the very `done`
+ * line that session had lost. `-T '<seconds>.<millis>'` (accepted by the
+ * Pixel 8's `logcat`, measured 2026-09) replays nothing from before the
+ * session, follows without implying `-d`, and delivered its first line in
+ * ~1.9 s against ~3.9 s for `-T 1`.
  *
  * **Not the filter-narrowing ruling R30 refused.** R30 declined to drop
- * *diagnostic* lines a live session produces, to fix an unproven CPU cost —
- * narrowing `logcat`'s own tag filter would mean permanently losing lines
- * this app's own components emit. `-T 1` loses no line the session
- * produces: it only declines to re-read history that predates the session
- * the ring is scoped to, and that history is either already sitting in the
- * ring from when it was captured the first time, or was evicted by rotation
- * on purpose. Nothing about *this* session's diagnostic content is affected.
+ * *diagnostic* lines a live session produces. The epoch loses no line the
+ * session produces — it only declines to re-read history that predates it.
  *
  * Deliberately unfiltered by tag: the whole point is to catch output from
  * libraries whose tags this app does not choose.
  */
-internal fun logcatProcessBuilder(): ProcessBuilder =
-    ProcessBuilder("logcat", "-v", "threadtime", "-T", "1")
+internal fun logcatProcessBuilder(sinceEpochMillis: Long): ProcessBuilder =
+    ProcessBuilder("logcat", "-v", "threadtime", "-T", logcatEpoch(sinceEpochMillis))
         .redirectErrorStream(true)
 
-private fun spawnLogcat(): Process = logcatProcessBuilder().start()
+private const val MILLIS_PER_SECOND = 1_000L
+private const val MILLIS_DIGITS = 3
+
+/** `logcat -T`'s `<seconds>.<millis>` form of an epoch in milliseconds. */
+private fun logcatEpoch(epochMillis: Long): String =
+    "${epochMillis / MILLIS_PER_SECOND}.${(epochMillis % MILLIS_PER_SECOND).toString().padStart(MILLIS_DIGITS, '0')}"
+
+internal fun spawnLogcat(sinceEpochMillis: Long): Process = logcatProcessBuilder(sinceEpochMillis).start()

@@ -2959,9 +2959,10 @@ class TunnelService : VpnService() {
                 // becomes interesting. `runCatching` here only guards against
                 // `stop()` throwing; it cannot and does not guard against
                 // `stop()` blocking. What actually keeps a wedged capture from
-                // stalling this teardown is D3: LogcatReader.close()'s own
-                // KDoc on the destroy-before-close order — that order is what
-                // makes this call non-blocking, not this wrapper.
+                // stalling this teardown is R46 (N1): stop() only logs a
+                // sentinel and arms a watchdog, and the capture drains to that
+                // sentinel on its own thread — see LogCapture.stop() and
+                // LogcatReader's KDoc. Nothing here closes the reader (D3).
                 runCatching { logCapture.stop() }
         }
     }

@@ -13,21 +13,12 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 class LogcatReaderTest {
-    private class TrackingInputStream(private val data: ByteArray) : ByteArrayInputStream(data) {
-        var isClosed = false
-            private set
-
-        override fun close() {
-            isClosed = true
-            super.close()
-        }
-    }
-
     private class FailingInputStream(private val data: String) : InputStream() {
         private var position = 0
         private val bytes = data.toByteArray()
@@ -85,18 +76,27 @@ class LogcatReaderTest {
     }
 
     /**
-     * Review finding I2: without `-T`, `logcat` dumps this UID's whole
-     * retained buffer before it starts following, duplicating pre-session
-     * history into a ring the spec calls a record of one session. Asserts
-     * against [logcatProcessBuilder]'s actual argument list — not a
-     * hand-copied literal — so a future edit that drops the flag fails this
-     * test rather than only showing up on a device days later.
+     * N1 / R46 (replaces I2's `-T 1`): `-T` takes an epoch — the moment
+     * [space.getsub.service.log.LogCapture.start] ran — in `logcat`'s
+     * `<seconds>.<millis>` form, so the capture replays nothing that predates
+     * the session (I2's residual: `-T 1` always opened with the previous
+     * session's last line) and first delivery is faster (~1.9 s vs ~3.9 s
+     * measured on a Pixel 8). Asserts against [logcatProcessBuilder]'s actual
+     * argument list, not a hand-copied literal.
      */
     @Test
-    fun `the logcat command follows from the moment capture starts, not the buffer head`() {
-        val command = logcatProcessBuilder().command()
+    fun `the logcat command follows from the capture's start epoch, in seconds dot millis`() {
+        val command = logcatProcessBuilder(sinceEpochMillis = 1_726_000_000_123L).command()
         assertTrue("no -T flag: $command", "-T" in command)
-        assertEquals("-T must be followed by its argument", "1", command[command.indexOf("-T") + 1])
+        val since = command[command.indexOf("-T") + 1]
+        assertTrue("not <seconds>.<millis>: $since", Regex("""^\d+\.\d{3}$""").matches(since))
+        assertEquals("1726000000.123", since)
+    }
+
+    @Test
+    fun `the epoch argument zero-pads its milliseconds`() {
+        val command = logcatProcessBuilder(sinceEpochMillis = 1_726_000_000_007L).command()
+        assertEquals("1726000000.007", command[command.indexOf("-T") + 1])
     }
 
     @Test
@@ -105,29 +105,110 @@ class LogcatReaderTest {
         assertEquals(listOf("alpha", "bravo", "charlie"), reader.lines().toList())
     }
 
+    /**
+     * N1 / R46: the capture ends at *its own* sentinel — matched on the raw
+     * line — and neither the sentinel nor anything after it is emitted.
+     */
     @Test
-    fun `close destroys the subprocess`() {
-        var spawned: FakeProcess? = null
-        val reader =
+    fun `lines end at this reader's own sentinel, which is never emitted`() {
+        lateinit var reader: LogcatReader
+        reader =
             LogcatReader {
-                FakeProcess(ByteArrayInputStream("x\n".toByteArray())).also { spawned = it }
+                val text =
+                    listOf(
+                        logcatLine("TunnelService", "teardown[lifecycle] done +12ms"),
+                        logcatLine("LogCapture", reader.sentinel),
+                        logcatLine("TunnelService", "after the sentinel"),
+                    ).joinToString("\n", postfix = "\n")
+                FakeProcess(ByteArrayInputStream(text.toByteArray()))
             }
-        reader.lines().first()
-        reader.close()
-        assertEquals(true, spawned?.destroyed)
+
+        val lines = reader.lines().toList()
+
+        assertEquals(listOf(logcatLine("TunnelService", "teardown[lifecycle] done +12ms")), lines)
+        assertFalse(reader.endedWithError)
+    }
+
+    /**
+     * Two readers' sentinels share a constant prefix. A *different* capture's
+     * sentinel (a `-T <epoch>` landing on the same millisecond as the previous
+     * session's stop can replay it) is dropped — it is capture plumbing, not
+     * diagnostic content — but it must not end *this* capture.
+     */
+    @Test
+    fun `another capture's sentinel is dropped but does not end this one`() {
+        val other = LogcatReader { error("never spawned") }
+        val text =
+            listOf(
+                logcatLine("LogCapture", other.sentinel),
+                "still reading",
+            ).joinToString("\n", postfix = "\n")
+        val reader = LogcatReader { FakeProcess(ByteArrayInputStream(text.toByteArray())) }
+
+        assertEquals(listOf("still reading"), reader.lines().toList())
     }
 
     @Test
-    fun `close closes the reader`() {
-        var trackingStream: TrackingInputStream? = null
-        val reader =
+    fun `sentinels are unique per reader`() {
+        val a = LogcatReader { error("never spawned") }
+        val b = LogcatReader { error("never spawned") }
+        assertTrue(a.sentinel != b.sentinel)
+    }
+
+    /**
+     * On its sentinel the capture thread itself destroys the subprocess and
+     * then closes its own reader — D3's destroy-before-close order kept,
+     * though with only the reading thread ever closing, the deadlock it
+     * guarded against no longer has a second thread to happen between.
+     */
+    @Test
+    fun `at the sentinel the reading thread destroys the subprocess, then closes its own reader`() {
+        val events = mutableListOf<String>()
+        lateinit var reader: LogcatReader
+        reader =
             LogcatReader {
-                TrackingInputStream("x\n".toByteArray()).also { trackingStream = it }
-                FakeProcess(trackingStream!!)
+                val text = listOf("x", logcatLine("LogCapture", reader.sentinel)).joinToString("\n", postfix = "\n")
+                FakeProcess(OrderTrackingInputStream(text.toByteArray(), events), events)
             }
-        reader.lines().first()
-        reader.close()
-        assertEquals(true, trackingStream?.isClosed)
+
+        assertEquals(listOf("x"), reader.lines().toList())
+
+        assertEquals(listOf("process-destroyed", "reader-closed"), events)
+    }
+
+    /**
+     * R46 item 4 — the D3 guard under the new design. The watchdog's
+     * [LogcatReader.forceStop] may only destroy the subprocess; the reader is
+     * closed by the capture thread once the resulting EOF reaches it, never by
+     * the watchdog's thread. A close from any other thread is what deadlocked
+     * teardown in D3.
+     */
+    @Test
+    fun `the deadline destroys the subprocess and never closes the reader from its own thread`() {
+        val pipe = LinePipe()
+        val process = PipeProcess(pipe)
+        val reader = LogcatReader { process }
+        val captured = CopyOnWriteArrayList<String>()
+        val capture =
+            thread(name = "reader-test-capture", isDaemon = true) {
+                reader.lines().forEach { captured.add(it) }
+            }
+        try {
+            pipe.feed("before the deadline")
+            assertTrue("capture thread never blocked in read", awaitParkedAfter(capture) { captured.size == 1 })
+
+            reader.requestStop()
+            reader.forceStop()
+            capture.join(TimeUnit.SECONDS.toMillis(5))
+
+            assertFalse("capture thread did not exit after the deadline", capture.isAlive)
+            assertEquals(Thread.currentThread().name, process.destroyedBy)
+            assertEquals("reader-test-capture", pipe.closedBy)
+            assertEquals(listOf("before the deadline"), captured)
+            assertFalse(reader.endedWithError)
+        } finally {
+            pipe.eof()
+        }
     }
 
     @Test
@@ -151,88 +232,41 @@ class LogcatReaderTest {
     }
 
     /**
-     * D2 (device verification, 2026-09-20): on one of two clean disconnects,
-     * `LogCapture.stop` closed the reader while `readLine()` was still
-     * blocked inside it. Both `BufferedReader.readLine()` and
-     * `BufferedReader.close()` synchronize on the same monitor, so in
-     * practice the two only race when the capture thread is between reads —
-     * whichever one gets there first decides whether the *next* read sees a
-     * closed stream (throwing `IOException("Stream closed")`) or a still-live
-     * one. This test drives that outcome directly, without depending on JDK
-     * `Reader` lock timing to land a genuinely concurrent read mid-flight:
-     * [close] runs between two [LogcatReader.lines] reads, so the next read
-     * fails exactly the way the losing side of the real race does, and what's
-     * under test is what [LogcatReader] does with that failure — not the
-     * scheduling that produces it.
-     *
-     * Before this fix, [endedWithError] could not tell that failure apart
-     * from a genuine mid-stream break, so a normal disconnect accused itself
-     * of a stream failure that never happened.
+     * D2 (device verification, 2026-09-20), adapted to N1 / R46. Originally:
+     * `LogCapture.stop` closed the reader underneath an in-flight read, and
+     * the next read's `IOException("Stream closed")` accused a normal
+     * disconnect of a stream failure. Under R46 nothing but the capture
+     * thread closes the reader, but a stop still *causes* the stream to end —
+     * the watchdog's destroy can surface as a read failure rather than a
+     * clean EOF — so the guarantee is unchanged: a read failure that follows
+     * a requested stop is expected and does not set [LogcatReader.endedWithError].
+     * [FailingInputStream] throws on the read after `line1`, which is exactly
+     * the losing branch of that race, driven deterministically.
      */
     @Test
-    fun `a stop we initiated does not set the error flag even when the next read fails`() {
-        val reader = LogcatReader { FakeProcess(ByteArrayInputStream("line1\n".toByteArray())) }
+    fun `a read failure after a requested stop does not set the error flag`() {
+        val reader = LogcatReader { FakeProcess(FailingInputStream("line1\nabcdefghij")) }
         val lines = reader.lines().iterator()
         assertEquals("line1", lines.next())
 
-        reader.close()
+        reader.requestStop()
 
-        // The reader is now closed underneath the still-live sequence, which
-        // is exactly the shape of the real race's losing branch.
-        assertFalse("the closed stream unexpectedly yielded another line", lines.hasNext())
+        assertFalse("the failed stream unexpectedly yielded another line", lines.hasNext())
         assertFalse(reader.endedWithError)
     }
 
     /**
-     * D3 (this branch, 2026-09-21): pins the *order* [close] performs its two
-     * calls in, which is the actual fix — the subprocess must die before the
-     * reader is closed, not after.
-     *
-     * This does not, and cannot, reproduce the deadlock itself: that requires a
-     * thread genuinely blocked inside a native `readLine()` racing a `close()`
-     * from a second thread, and a previous attempt at exactly that wedged the
-     * test JVM and had to be `kill -9`'d (see the task brief this fix came
-     * from). What this test *can* pin, deterministically and without spawning
-     * a thread, is the one property that actually prevents the wedge: by the
-     * time `reader.close()` runs, `process.destroy()` has already run. Revert
-     * the order in [LogcatReader.close] and this test fails immediately — no
-     * timing, no flakiness, no thread.
+     * F3 (review, 2026-09-22), adapted to N1 / R46. The original guarantee:
+     * a stop landing while `logcat` is still spawning must not leak the
+     * subprocess. Under R46 a *requested* stop no longer kills anything — the
+     * capture drains to its sentinel — so the leak guard moved to the
+     * deadline: once [LogcatReader.forceStop] has run, a process [spawn]
+     * publishes afterwards is destroyed at once and never read. Two latches
+     * pin the capture thread inside spawn until the deadline has fully run,
+     * so the order is the only one this test can produce.
      */
     @Test
-    fun `close destroys the subprocess before closing the reader`() {
-        val events = mutableListOf<String>()
-        var spawned: FakeProcess? = null
-        val reader =
-            LogcatReader {
-                val stream = OrderTrackingInputStream("x\n".toByteArray(), events)
-                FakeProcess(stream, events).also { spawned = it }
-            }
-        reader.lines().first()
-
-        reader.close()
-
-        assertEquals(true, spawned?.destroyed)
-        assertEquals(listOf("process-destroyed", "reader-closed"), events)
-    }
-
-    /**
-     * F3 (review, 2026-09-22): the actual regression this task fixes.
-     *
-     * Reproduces the reviewer's latch-driven probe through the same [spawn]
-     * seam, deterministically and without any real `logcat` process or thread
-     * sleep: two latches pin the capture thread inside [spawn] until [close]
-     * has fully returned, so `close during spawn` is not a timing hope, it is
-     * the only order this test can produce.
-     *
-     * Before the fix: [close] saw `process == null` and `reader == null`,
-     * destroyed nothing, and returned; [lines] then published the process
-     * [spawn] eventually handed back and started reading it, even though
-     * [LogCapture.stop] had already discarded its own reference — exactly
-     * the `close during spawn: destroyed=false, linesAfterClose=[still
-     * reading after stop]` result the review recorded.
-     */
-    @Test
-    fun `close during spawn destroys the process and yields no lines`() {
+    fun `a deadline during spawn destroys the process and yields no lines`() {
         val spawnEntered = CountDownLatch(1)
         val releaseSpawn = CountDownLatch(1)
         var spawned: FakeProcess? = null
@@ -251,7 +285,8 @@ class LogcatReaderTest {
             }
 
         assertTrue("spawn never started", spawnEntered.await(5, TimeUnit.SECONDS))
-        reader.close()
+        reader.requestStop()
+        reader.forceStop()
         releaseSpawn.countDown()
         captureThread.join(TimeUnit.SECONDS.toMillis(5))
 
@@ -260,23 +295,69 @@ class LogcatReaderTest {
         assertEquals(emptyList<String>(), captured)
     }
 
-    /**
-     * F3: the other order the fix must cover — [close] with nothing spawned
-     * yet at all, not merely in flight. [lines] must still destroy whatever
-     * [spawn] eventually produces rather than publishing and reading it.
-     */
+    /** F3: the deadline having passed before [LogcatReader.lines] even begins. */
     @Test
-    fun `close before lines begins destroys the process spawn later produces`() {
+    fun `a deadline before lines begins destroys the process spawn later produces`() {
         var spawned: FakeProcess? = null
         val reader =
             LogcatReader {
                 FakeProcess(ByteArrayInputStream("line1\n".toByteArray())).also { spawned = it }
             }
 
-        reader.close()
+        reader.requestStop()
+        reader.forceStop()
         val lines = reader.lines().toList()
 
         assertEquals(emptyList<String>(), lines)
         assertEquals(true, spawned?.destroyed)
+    }
+
+    /**
+     * N1 mechanism (a) at the reader: a stop that lands during `logcat`'s
+     * startup delay — here, still inside spawn — must still read what the
+     * subprocess delivers once it is up, through to the sentinel. Before
+     * R46 this was F3's "yields no lines", which is precisely how every
+     * session shorter than ~1.5 s captured nothing.
+     */
+    @Test
+    fun `a stop requested during spawn still reads up to the sentinel`() {
+        val spawnEntered = CountDownLatch(1)
+        val releaseSpawn = CountDownLatch(1)
+        lateinit var reader: LogcatReader
+        var spawned: FakeProcess? = null
+        reader =
+            LogcatReader {
+                spawnEntered.countDown()
+                releaseSpawn.await()
+                val text =
+                    listOf("early", logcatLine("LogCapture", reader.sentinel), "late")
+                        .joinToString("\n", postfix = "\n")
+                FakeProcess(ByteArrayInputStream(text.toByteArray())).also { spawned = it }
+            }
+
+        val captured = mutableListOf<String>()
+        val captureThread =
+            thread(name = "logcat-reader-test-capture") {
+                reader.lines().forEach { captured.add(it) }
+            }
+
+        assertTrue("spawn never started", spawnEntered.await(5, TimeUnit.SECONDS))
+        reader.requestStop()
+        releaseSpawn.countDown()
+        captureThread.join(TimeUnit.SECONDS.toMillis(5))
+
+        assertFalse("capture thread did not finish", captureThread.isAlive)
+        assertEquals(listOf("early"), captured)
+        assertEquals(true, spawned?.destroyed)
+    }
+
+    /** Waits until [done] holds and [thread] is parked (blocked in its next read). */
+    private fun awaitParkedAfter(
+        thread: Thread,
+        done: () -> Boolean,
+    ): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!done() && System.nanoTime() < deadline) Thread.onSpinWait()
+        return done() && awaitParked(thread)
     }
 }

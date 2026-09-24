@@ -41,13 +41,13 @@ import java.io.File
 internal class LogRing(
     private val dir: File,
     private val maxBytesPerFile: Long = DEFAULT_MAX_BYTES_PER_FILE,
-) {
+) : LineSink {
     private val current get() = File(dir, "log.0")
     private val previous get() = File(dir, "log.1")
 
     private val lock = Any()
 
-    fun append(line: String) {
+    override fun append(line: String) {
         synchronized(lock) {
             runCatching {
                 if (!dir.exists()) dir.mkdirs()

@@ -84,7 +84,10 @@
          carry a stats block, but an override-branch session whose breakdown was dropped
          by the Metrics tag-collision degrade looks identical from here, and the old
          "config runs unmodified" reason was false for it. The honest specific reason
-         needs a per-session signal from the service, deferred to Part 3 (R43). The
-         resource name reflects when it is shown, not what it claims. -->
-    <string name="home_breakdown_unavailable_passthrough">Per-server traffic isn\'t available for this connection</string>
+         needs a per-session signal from the service, deferred to Part 3 (R43). "right
+         now" (review M-C): a WORKING override-branch session also shows this until its
+         first metrics poll returns rows, so a claim about the whole connection would be
+         briefly false there; "right now" is true in every case. The resource name
+         reflects when it is shown, not what it claims. -->
+    <string name="home_breakdown_unavailable_passthrough">Per-server traffic isn\'t available for this connection right now</string>
 </resources>

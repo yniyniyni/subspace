@@ -63,7 +63,9 @@ private const val METRICS_ROW_TAG = "Metrics"
  * - rows empty, never latched (see below), and the active row is a `RAW_JSON`
  *   profile ([space.getsub.core.data.StoredProfile.runsAsWritten]) → the
  *   header alone, plus [R.string.home_breakdown_unavailable_passthrough]
- *   saying the breakdown isn't available for this connection, rather than a
+ *   saying the breakdown isn't available for this connection *right now*
+ *   (review M-C: a working override-branch session shows it too until its
+ *   first rows arrive, which the latch below cannot prevent), rather than a
  *   blank space where rows would otherwise be. It deliberately names **no
  *   reason** (ruling R51, device finding N4): this screen cannot see which
  *   branch the session ran. The pure passthrough branch cannot carry the

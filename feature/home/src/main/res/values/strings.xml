@@ -77,11 +77,14 @@
     <!-- %1$s and %2$s are already-formatted byte counts (formatByteCount), same as the
          DOWN/UP tiles above — never raw numbers (§10.1). -->
     <string name="home_breakdown_row_traffic">%1$s down · %2$s up</string>
-    <!-- Shown in place of rows when the setting is on but the active server is a
-         pasted config running unmodified (ARCHITECTURE.md §6's pure passthrough
-         branch, spec §2.4) — that branch cannot carry a stats block at all, so this
-         names why rather than leaving a blank space where rows would otherwise be.
-         Not phrased as broken or missing: nothing failed, this profile kind simply
-         runs as written. -->
-    <string name="home_breakdown_unavailable_passthrough">This server\'s config runs unmodified, so per-server traffic isn\'t available</string>
+    <!-- Shown in place of rows when the setting is on, the active server is a
+         pasted (RAW_JSON) config, and no rows have arrived this connection.
+         Deliberately names NO reason (ruling R51, finding N4): Home cannot see which
+         branch the session ran. The pure passthrough branch (ARCHITECTURE.md §6) cannot
+         carry a stats block, but an override-branch session whose breakdown was dropped
+         by the Metrics tag-collision degrade looks identical from here, and the old
+         "config runs unmodified" reason was false for it. The honest specific reason
+         needs a per-session signal from the service, deferred to Part 3 (R43). The
+         resource name reflects when it is shown, not what it claims. -->
+    <string name="home_breakdown_unavailable_passthrough">Per-server traffic isn\'t available for this connection</string>
 </resources>

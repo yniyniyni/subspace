@@ -63,7 +63,14 @@ private const val METRICS_ROW_TAG = "Metrics"
  * - rows empty, never latched (see below), and the active row is a `RAW_JSON`
  *   profile ([space.getsub.core.data.StoredProfile.runsAsWritten]) → the
  *   header alone, plus [R.string.home_breakdown_unavailable_passthrough]
- *   naming why, rather than a blank space where rows would otherwise be.
+ *   saying the breakdown isn't available for this connection, rather than a
+ *   blank space where rows would otherwise be. It deliberately names **no
+ *   reason** (ruling R51, device finding N4): this screen cannot see which
+ *   branch the session ran. The pure passthrough branch cannot carry the
+ *   breakdown, but neither can an override-branch session whose breakdown
+ *   was dropped by the `Metrics` tag-collision degrade — and for that one the
+ *   old "config runs unmodified" reason was false. Naming the real reason
+ *   needs a per-session signal from the service, deferred to Part 3 (R43).
  * - rows empty otherwise (including latched) → the header alone, with neither
  *   rows nor an explanation — "on, but nothing has moved yet" is a real,
  *   different state from the one above, and inventing a zeroed row for it
@@ -111,6 +118,9 @@ internal fun BreakdownSection(
         when {
             rows.isNotEmpty() -> rows.forEach { row -> BreakdownRow(row) }
             everSeenRows -> Unit // known to work; this tick just has nothing.
+            // Reason-free on purpose (R51): runsAsWritten is not "the pure
+            // branch ran" — see the KDoc. The specific reason waits on Part 3's
+            // per-session signal (R43).
             state.activeProfile?.runsAsWritten == true ->
                 Text(
                     text = stringResource(R.string.home_breakdown_unavailable_passthrough),

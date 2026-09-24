@@ -116,6 +116,22 @@ internal class LogcatReader(
     val endedAtDeadline: Boolean get() = deadlinePassed && !reachedSentinel
 
     /**
+     * True when `logcat`'s stream reached a clean EOF while no stop had been
+     * requested — `logcat` exited on its own mid-session (review M-A, ruling
+     * R49), for whatever reason: among the possibilities, logd dropping a
+     * reader that fell too far behind under heavy logging. [LogCapture]
+     * writes a marker for it so the ring is not silently truncated. Like
+     * [endedAtDeadline], not subject to D2's suppression: D2 is about failures
+     * a stop *causes*, and here no stop was requested. An EOF after a
+     * requested stop (SIGTERM at the deadline, or `logcat` exiting before its
+     * sentinel arrived) never sets it, and the sentinel path ends before any
+     * EOF is read.
+     */
+    @Volatile
+    var endedUnexpectedly: Boolean = false
+        private set
+
+    /**
      * Set by [requestStop] (and by [forceStop]) — D2 (device verification,
      * 2026-09-20), carried over to R46.
      *
@@ -257,10 +273,16 @@ internal class LogcatReader(
         return parsed != null
     }
 
-    /** One read; a failure ends the sequence, and is an error only if no stop was requested (D2). */
+    /**
+     * One read; a failure ends the sequence, and is an error only if no stop
+     * was requested (D2). A clean EOF with no stop requested is recorded as
+     * [endedUnexpectedly] (R49) — decided at the moment of EOF, so a stop that
+     * arrives afterwards cannot hide it.
+     */
     private fun readOrNull(reader: BufferedReader): String? =
         runCatching { reader.readLine() }
             .onFailure { if (!stopRequested) endedWithError = true }
+            .onSuccess { if (it == null && !stopRequested) endedUnexpectedly = true }
             .getOrNull()
 
     /**

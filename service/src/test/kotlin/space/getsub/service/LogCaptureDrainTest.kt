@@ -446,6 +446,48 @@ class LogCaptureDrainTest {
         )
     }
 
+    /**
+     * Review M-A / ruling R49: `logcat` exiting on its own mid-session — for
+     * whatever reason, including logd dropping a reader that fell too far
+     * behind — must not leave the ring silently truncated.
+     */
+    @Test
+    fun `logcat exiting with no stop requested writes the unexpected-end marker`() {
+        val logcat = FakeLogcat(FakeLogd())
+        val sink = RecordingSink()
+        val capture = capture(sink, logcat)
+
+        capture.start()
+        logcat.logd.log("teardown[lifecycle] enter")
+        logcat.logd.deliver()
+        logcat.logd.pipe.eof() // logcat exits; nobody asked it to
+        threads.single().join(TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS))
+
+        assertEquals(2, sink.written.size)
+        assertEquals(line("teardown[lifecycle] enter"), sink.written[0])
+        assertTrue("no unexpected-end marker: ${sink.written}", "ended unexpectedly" in sink.written[1])
+        assertFalse(logcat.reader.endedWithError)
+        stopPromptly(capture)
+    }
+
+    /** R49: an EOF that follows a requested stop is the stop working, not news. */
+    @Test
+    fun `logcat exiting after a requested stop writes no unexpected-end marker`() {
+        val logcat = FakeLogcat(FakeLogd())
+        val sink = RecordingSink()
+        val capture = capture(sink, logcat)
+
+        capture.start()
+        logcat.logd.log("teardown[lifecycle] done +4ms")
+        logcat.logd.deliver()
+        assertTrue(sink.awaitSize(1))
+        stopPromptly(capture)
+        logcat.logd.pipe.eof() // exits before its sentinel is delivered
+        joinAll()
+
+        assertEquals(listOf(line("teardown[lifecycle] done +4ms")), sink.written)
+    }
+
     /** N1 / R46 item 5: the `-T` epoch is the wall-clock reading taken inside [LogCapture.start]. */
     @Test
     fun `the reader follows logcat from the epoch taken in start`() {

@@ -32,6 +32,15 @@ private const val ABNORMAL_END_MARKER = "log capture ended abnormally (stream re
  * literal with no detail, routed through [redactLine], for the same reasons
  * as [ABNORMAL_END_MARKER].
  */
+/**
+ * Appended when `logcat`'s stream ended cleanly with no stop requested
+ * ([LogcatReader.endedUnexpectedly], review M-A, ruling R49): `logcat` exited
+ * on its own and nothing after this point in the session was captured.
+ * Informational, not subject to D2's suppression, a literal with no detail,
+ * routed through [redactLine] — same reasons as [ABNORMAL_END_MARKER].
+ */
+private const val UNEXPECTED_END_MARKER = "log capture ended unexpectedly (logcat exited); later lines are missing"
+
 private const val DEADLINE_END_MARKER = "log capture stopped at its drain deadline; closing lines may be missing"
 
 /**
@@ -236,8 +245,12 @@ internal class LogCapture(
      * bounded by [PRIOR_DRAIN_WAIT_MILLIS]. That join runs on the *new capture
      * thread* — never this method, never the teardown thread or the command
      * coordinator. Meanwhile the new `logcat`'s output waits in the kernel
-     * pipe; the bound is far inside the time logd tolerates a reader that is
-     * not draining.
+     * pipe. What is known about that stall: it is bounded, at about 6 s
+     * ([PRIOR_DRAIN_WAIT_MILLIS]). What is not: whether logd tolerates it
+     * under heavy logging — logd may drop a reader that falls far enough
+     * behind, and then `logcat` exits and the rest of the session is not
+     * captured. That case is made visible rather than prevented: an EOF with
+     * no stop requested writes [UNEXPECTED_END_MARKER] (review M-A, R49).
      *
      * The old capture ends at its sentinel, which was logged before this
      * start's `-T` epoch was read, so the ring gets the old session's tail and
@@ -318,8 +331,9 @@ internal class LogCapture(
     }
 
     /**
-     * [captureOnce] over [reader]'s own lines, plus the [ABNORMAL_END_MARKER]
-     * and [DEADLINE_END_MARKER] checks once the sequence ends. Kept separate
+     * [captureOnce] over [reader]'s own lines, plus the [ABNORMAL_END_MARKER],
+     * [DEADLINE_END_MARKER] and [UNEXPECTED_END_MARKER] checks once the
+     * sequence ends. Kept separate
      * from the [Sequence] overload above so that overload stays usable with a
      * plain, reader-free sequence in tests of the redaction pipeline itself.
      *
@@ -336,6 +350,9 @@ internal class LogCapture(
         }
         if (reader.endedAtDeadline) {
             ring.append(redactLine(DEADLINE_END_MARKER))
+        }
+        if (reader.endedUnexpectedly) {
+            ring.append(redactLine(UNEXPECTED_END_MARKER))
         }
     }
 

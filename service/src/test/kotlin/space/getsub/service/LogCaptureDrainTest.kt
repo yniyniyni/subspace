@@ -9,8 +9,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import space.getsub.service.log.LineSink
 import space.getsub.service.log.LogCapture
+import java.time.ZoneOffset
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -92,6 +94,7 @@ class LogCaptureDrainTest {
             emitSentinel = { sentinel -> logcats[nextEmit++].logd.log(sentinel, tag = "LogCapture") },
             armDeadline = { delay, onDeadline -> deadlines += delay to onDeadline },
             clock = { START_EPOCH_MILLIS },
+            zone = { ZoneOffset.UTC },
             startThread = { body ->
                 thread(name = CAPTURE_THREAD, isDaemon = true) { body() }.also { threads += it }
             },
@@ -362,14 +365,17 @@ class LogCaptureDrainTest {
     }
 
     /**
-     * I3's guarantee under R46/R48: a new session can start while the
+     * I3's guarantee under R50 (amends R48): a new session can start while the
      * previous capture is still draining to its sentinel. The new `logcat` is
-     * spawned at once, so its cold start overlaps the old drain (R48); its
-     * first *write* waits for the old capture thread. The ring holds the old
-     * session's tail, then the new session — no interleaving.
+     * spawned only once the old capture thread has finished — serial readers,
+     * because on the Pixel 8 a `-T` reader's cold start grew with the number
+     * starting together (2.3 s for 1, 4.1 s for 2, 6.4–8.6 s for 4). What the
+     * new session logs meanwhile is not lost: `-T <epoch>` replays it. The
+     * ring holds the old session's tail, then the new session — no
+     * interleaving.
      */
     @Test
-    fun `a new capture spawns at once but writes nothing until the old one has finished`() {
+    fun `a new capture spawns its logcat only after the old one has finished`() {
         val secondSpawned = CountDownLatch(1)
         val first = FakeLogcat(FakeLogd())
         val second = FakeLogcat(FakeLogd()) { secondSpawned.countDown() }
@@ -384,14 +390,11 @@ class LogCaptureDrainTest {
         stopPromptly(capture) // the old capture is now draining; its sentinel is not yet delivered
 
         capture.start()
-        assertTrue(
-            "the new logcat must spawn while the old capture drains (R48)",
-            secondSpawned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
-        )
-        second.logd.log("new enter")
-        second.logd.deliver()
         val newThread = threads[1]
         assertTrue("the new capture thread never parked", awaitParked(newThread))
+        assertEquals("the new logcat spawned while the old capture drained (R50)", 1L, secondSpawned.count)
+        second.logd.log("new enter") // logged before the new logcat exists; -T replays it
+        second.logd.deliver()
         assertEquals(
             "the new capture wrote before the old one finished draining",
             listOf(line("old enter")),
@@ -399,6 +402,10 @@ class LogCaptureDrainTest {
         )
 
         first.logd.deliver() // "old done", then the old sentinel
+        assertTrue(
+            "the new logcat never spawned once the old capture finished",
+            secondSpawned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+        )
         assertTrue(sink.awaitSize(3))
         stopPromptly(capture)
         second.logd.deliver()
@@ -408,19 +415,17 @@ class LogCaptureDrainTest {
     }
 
     /**
-     * Review I-2 / R48: a burst of fast-failing connects. Four sessions start
-     * and stop in quick succession while the first `logcat` is still cold.
-     * Time then passes: every `logcat` that has been spawned warms up and
-     * delivers, and every armed deadline fires. The last session — the one
-     * the user is looking at — must still reach the ring. At 6ea559a each
-     * capture spawned only after its predecessor drained, and its deadline
-     * ran from its stop: the later sessions were killed cold, or destroyed
-     * unread, and lost whole.
+     * Review I-2 / R48, kept under R50: a burst of fast-failing connects. Four
+     * sessions start and stop in quick succession. Each capture's deadline
+     * runs from its own spawn — so a capture queued behind its predecessor is
+     * never armed, let alone killed, while it waits — and each spawns only
+     * after its predecessor has finished. At 6ea559a the deadline ran from
+     * the stop, and the queued sessions were killed cold and lost whole.
      */
     @Test
-    fun `rapid start-stop cycles still capture the last session`() {
-        val spawned = CountDownLatch(SESSIONS)
-        val logcats = (1..SESSIONS).map { FakeLogcat(FakeLogd()) { spawned.countDown() } }
+    fun `rapid start-stop cycles arm each deadline at its own spawn and capture every session`() {
+        val spawned = (1..SESSIONS).map { CountDownLatch(1) }
+        val logcats = spawned.map { latch -> FakeLogcat(FakeLogd()) { latch.countDown() } }
         val sink = RecordingSink()
         val capture = capture(sink, logcats)
 
@@ -430,20 +435,93 @@ class LogCaptureDrainTest {
             stopPromptly(capture)
         }
 
-        // ~2 s later, every logcat that exists has warmed up and delivered.
-        spawned.await(2, TimeUnit.SECONDS)
-        logcats.filter { it.process != null }.forEach { it.logd.deliver() }
-        // ~5 s after the stops (or spawns), every armed deadline fires.
-        assertTrue(awaitDeadlines(SESSIONS))
-        deadlines.toList().forEach { (_, onDeadline) -> onDeadline() }
-        // Anything spawned later than that delivers too, for all the good it does.
-        logcats.forEach { it.logd.deliver() }
+        logcats.forEachIndexed { i, logcat ->
+            assertTrue("session $i never spawned", spawned[i].await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            assertTrue(awaitDeadlines(i + 1))
+            assertEquals("a deadline was armed for a capture still queued", i + 1, deadlines.size)
+            logcat.logd.deliver() // warm now: everything through its sentinel
+        }
         joinAll()
 
         assertEquals(
             (0 until SESSIONS).map { line("session$it teardown[lifecycle] done +3ms") },
             sink.written,
         )
+    }
+
+    /**
+     * N1.4 / N3, ruling R50. On the Pixel 8 a burst of 4 fast reconnects
+     * captured 0 of 4 sessions, twice: R48 spawned each new `logcat` at once,
+     * so four readers cold-started together, and a `-T` reader's cold start
+     * grows with the number starting at once (2.3 s / 4.1 s / 6.4–8.6 s for
+     * 1 / 2 / 4) — past the 5 s drain deadline. Here every fake `logcat` has a
+     * cold start far longer than the burst, and at most one may be running at
+     * any moment: each spawn must find every earlier capture's reader already
+     * closed.
+     */
+    @Test
+    fun `a burst of rapid start-stop cycles runs one logcat at a time and captures every session`() {
+        val pump =
+            Executors.newSingleThreadScheduledExecutor { r ->
+                Thread(r, "test-logd-pump").apply { isDaemon = true }
+            }
+        cleanups += { pump.shutdownNow() }
+        val overlapped = CopyOnWriteArrayList<Int>()
+        val logcats = ArrayList<FakeLogcat>()
+        repeat(SESSIONS) { i ->
+            val logd = FakeLogd()
+            logcats +=
+                FakeLogcat(logd) {
+                    if (logcats.take(i).any { it.logd.pipe.closedBy == null }) overlapped += i
+                    // Cold: nothing for COLD_START_MILLIS, then warm and prompt.
+                    pump.scheduleWithFixedDelay({ logd.deliver() }, COLD_START_MILLIS, 1, TimeUnit.MILLISECONDS)
+                }
+        }
+        val sink = RecordingSink()
+        val capture = capture(sink, logcats)
+
+        logcats.forEachIndexed { i, logcat ->
+            capture.start()
+            logcat.logd.log("session$i teardown[lifecycle] done +3ms")
+            stopPromptly(capture)
+        }
+        joinAll()
+
+        assertEquals("these logcats spawned while an earlier capture was still running", emptyList<Int>(), overlapped)
+        assertEquals(
+            (0 until SESSIONS).map { line("session$it teardown[lifecycle] done +3ms") },
+            sink.written,
+        )
+    }
+
+    /**
+     * Ruling R50: `-T <epoch>` is not exact — capture S20 on the Pixel 8
+     * replayed 10 of S19's lines logged up to ~0.4 s before its epoch. A line
+     * stamped before the start epoch is dropped; one in the same millisecond
+     * or later is kept; so is anything without a parseable stamp (fail open).
+     */
+    @Test
+    fun `a replayed line stamped before the capture's start epoch never reaches the ring`() {
+        val logcat = FakeLogcat(FakeLogd())
+        val sink = RecordingSink()
+        val capture = capture(sink, logcat)
+        // START_EPOCH_MILLIS is 2024-09-10T20:26:40.123Z.
+        val stale = "09-10 20:26:39.700  1234  5678 I TunnelService: teardown[lifecycle] done +88ms"
+        val sameMillis = "09-10 20:26:40.123  1234  5678 I TunnelService: teardown[lifecycle] enter"
+
+        capture.start()
+        logcat.logd.pipe.feed("--------- beginning of main")
+        logcat.logd.pipe.feed(stale)
+        logcat.logd.pipe.feed(sameMillis)
+        logcat.logd.log("tunnel started")
+        stopPromptly(capture)
+        logcat.logd.deliver()
+        joinAll()
+
+        assertEquals(3, sink.written.size)
+        assertTrue("banner dropped: ${sink.written}", "beginning of main" in sink.written[0])
+        assertEquals(sameMillis, sink.written[1])
+        assertEquals(line("tunnel started"), sink.written[2])
     }
 
     /**
@@ -508,5 +586,6 @@ class LogCaptureDrainTest {
         const val TIMEOUT_SECONDS = 5L
         const val STOP_BOUND_MILLIS = 1_000L
         const val SESSIONS = 4
+        const val COLD_START_MILLIS = 100L
     }
 }

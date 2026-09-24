@@ -112,9 +112,27 @@ class LogcatReaderTest {
     fun `logcat is spawned through a shell that reports its PID and execs logcat with unparsed args`() {
         val command = logcatProcessBuilder(sinceEpochMillis = 1_726_000_000_123L).command()
         assertEquals(
-            listOf("sh", "-c", "echo \$\$; exec logcat \"\$@\"", "sh", "-v", "threadtime", "-T", "1726000000.123"),
+            listOf(
+                "sh", "-c", "echo \$\$; exec logcat \"\$@\"", "sh",
+                "-b", "main", "-v", "threadtime", "-T", "1726000000.123",
+            ),
             command,
         )
+    }
+
+    /**
+     * Ruling R50: `-b main` only. Measured single-reader cold start on the
+     * Pixel 8: 2.3 s with the default buffers, 1.08 s with `-b main` — and
+     * `-b main,crash` never delivered in 30 s. The app UID reads only its own
+     * lines, and `android.util.Log`, liblog (hev) and GoLog all write to main.
+     */
+    @Test
+    fun `logcat reads the main buffer only, and never crash`() {
+        val command = logcatProcessBuilder(sinceEpochMillis = 1_726_000_000_123L).command()
+        assertTrue("no -b flag: $command", "-b" in command)
+        assertEquals("main", command[command.indexOf("-b") + 1])
+        assertEquals("exactly one -b: $command", 1, command.count { it == "-b" })
+        assertTrue("crash buffer requested: $command", command.none { "crash" in it })
     }
 
     @Test

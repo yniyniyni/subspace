@@ -25,12 +25,14 @@ internal const val SENTINEL_PREFIX = "subspace-log-capture-end"
  *
  * Knows nothing about redaction or files. [LogCapture] joins the three.
  *
- * **How a capture ends — drain to a sentinel (N1, rulings R46–R48).** On a
+ * **How a capture ends — drain to a sentinel (N1, rulings R46–R48, R50).** On a
  * Pixel 8 the teardown's final `teardown[lifecycle] done` line reached the
  * ring in 0 of 14 stops, and sessions shorter than ~1.5 s captured nothing,
  * because the old stop *killed* `logcat` and closed this reader on the
  * teardown thread: (a) a freshly spawned `logcat` delivers nothing for
- * ~1.9–3.9 s, so a short session's `logcat` died before delivering anything;
+ * ~1.9–3.9 s (1.08 s with `-b main`, R50 — and longer when several start
+ * together; see [LogCapture.start]), so a short session's `logcat` died
+ * before delivering anything;
  * (b) `done` is logged microseconds before the stop, the one window where
  * even a warm `logcat` (which delivers within ~10 ms) has not written it;
  * (c) lines already in the pipe were thrown away by the close, because the
@@ -194,30 +196,28 @@ internal class LogcatReader(
      * Called at most once per instance — the capture thread is its only
      * caller, and therefore the only thread that ever closes the reader.
      *
-     * Spawns eagerly, when called. The first line is the shell's PID (R47),
-     * consumed and never emitted; a first line that is not a PID means the
-     * shell never reached `exec logcat`, and takes the spawn-failure path.
-     * [beforeReading] then runs — still on the capture thread — before the
-     * first `logcat` line is read: [LogCapture] holds it until the previous
-     * capture has finished writing (R48), while this `logcat` warms up.
+     * Spawns eagerly, when called — and [LogCapture] calls it only once the
+     * previous capture has finished (R50; see [LogCapture.start]). The first
+     * line is the shell's PID (R47), consumed and never emitted; a first line
+     * that is not a PID means the shell never reached `exec logcat`, and
+     * takes the spawn-failure path.
      *
      * Any line carrying [SENTINEL_PREFIX] is dropped: it is capture plumbing,
      * not diagnostic content. Only this reader's own [sentinel] ends the
-     * sequence; another capture's (which a `-T <epoch>` landing on the same
-     * millisecond as the previous session's stop could replay) is skipped.
+     * sequence; another capture's (which a `-T <epoch>` replay of the previous
+     * session's tail could carry — see [logcatProcessBuilder]) is skipped.
      *
      * A spawn failure yields an empty sequence rather than throwing: capture is
      * a diagnostic, and ARCHITECTURE.md §10.4's rule about failing loudly is
      * about the *start sequence*, not about a logger that could otherwise abort
      * one.
      */
-    fun lines(beforeReading: () -> Unit = {}): Sequence<String> {
+    fun lines(): Sequence<String> {
         val proc = spawnAndPublish() ?: return emptySequence()
         val reader = BufferedReader(InputStreamReader(proc.inputStream))
         return sequence {
             try {
                 if (readPid(reader)) {
-                    beforeReading()
                     yieldAll(
                         generateSequence { readOrNull(reader) }
                             .onEach { if (sentinel in it) reachedSentinel = true }
@@ -399,6 +399,20 @@ private const val LOGCAT_VIA_SHELL = "echo \$\$; exec logcat \"\$@\""
  *
  * `-v threadtime` for a stable, parseable prefix; no `-d`, so it follows.
  *
+ * **`-b main`, and only main (ruling R50).** Measured on the Pixel 8, one
+ * `-T <epoch>` reader's cold start was 2.3 s over the default buffers and
+ * 1.08 s with `-b main`. Nothing is lost by narrowing: the app UID can read
+ * only its own lines, and `android.util.Log`, liblog (hev's
+ * `subspace-tun2socks`) and xray's `GoLog` all write to main.
+ * **Do not add `crash` back** (`-b main,crash`, or a second `-b crash`): on the
+ * same device that combination never delivered a line within 30 s, while the
+ * marker was demonstrably in logd (N3 probe, 2026-09-25,
+ * `docs/agent/research/2026-09-24-m8.5-device-n1-and-ui-checks.md`). Nobody
+ * has explained why. The cost is known and accepted by R50: a Java crash's
+ * `FATAL EXCEPTION` stack goes to the crash buffer, so a `:main` crash during
+ * a session is no longer in the ring. (A `:bg` crash was never recordable —
+ * it kills this capture with it; see [LogcatReader]'s known residual.)
+ *
  * **`-T <epoch>`, where the epoch is [LogCapture.start]'s wall-clock reading
  * (N1 / R46; replaces I2's `-T 1`).** Without a `-T`/`-t`, `logcat` dumps this
  * UID's entire retained buffer before it starts following — review finding
@@ -407,27 +421,35 @@ private const val LOGCAT_VIA_SHELL = "echo \$\$; exec logcat \"\$@\""
  * line. I2's fix, `-T 1`, still replayed one line of history — in practice
  * always the previous session's last line, which after N1 was the very `done`
  * line that session had lost. `-T '<seconds>.<millis>'` (accepted by the
- * Pixel 8's `logcat`, measured 2026-09) replays nothing from before the
- * session's start millisecond, follows without implying `-d`, and delivered
- * its first line in ~1.9 s against ~3.9 s for `-T 1`.
+ * Pixel 8's `logcat`, measured 2026-09) follows without implying `-d`, and
+ * delivered its first line in ~1.9 s against ~3.9 s for `-T 1`.
  *
- * **One accepted duplicate (review M-1).** `-T` has millisecond granularity
- * while logd timestamps are finer, so a line logged in the same millisecond
- * the epoch was read — e.g. the previous session's last lines, if its stop and
- * this start share a millisecond, or after the wall clock steps backwards —
- * can be replayed here and appear twice in the ring. Accepted: rounding the
- * other way would risk losing a real line of this session, which is worse.
+ * **`-T <epoch>` is not exact, so [LogCapture] filters by stamp (R50).** The
+ * earlier claim here — at most one replayed line, in the epoch's own
+ * millisecond (review M-1) — was wrong: on the Pixel 8, capture S20 replayed
+ * 10 of the previous session's lines, logged up to ~0.4 s *before* its epoch
+ * (device record 2026-09-24, N1 item 8; logd's cause unknown). [LogCapture]
+ * therefore drops any line whose `threadtime` stamp is earlier than the epoch
+ * ([stampedBefore]). The true bound on what reaches the ring from before the
+ * session is now: nothing stamped before the epoch; a line stamped in the
+ * epoch's own millisecond is kept, and may be a replay — a duplicate
+ * accepted over the risk of dropping a real line of this session. Lines with
+ * no parseable stamp (logcat's `--------- beginning of main` banner) are kept.
  *
  * **Not the filter-narrowing ruling R30 refused.** R30 declined to drop
  * *diagnostic* lines a live session produces. The epoch loses no line the
  * session produces — it only declines to re-read history that predates it.
+ * `-b main` is a narrowing R30's reasoning would weigh; R50 made that call
+ * on the measured cold-start cost, with the crash-buffer loss above.
  *
  * Deliberately unfiltered by tag: the whole point is to catch output from
  * libraries whose tags this app does not choose.
  */
 internal fun logcatProcessBuilder(sinceEpochMillis: Long): ProcessBuilder =
-    ProcessBuilder("sh", "-c", LOGCAT_VIA_SHELL, "sh", "-v", "threadtime", "-T", logcatEpoch(sinceEpochMillis))
-        .redirectErrorStream(true)
+    ProcessBuilder(
+        "sh", "-c", LOGCAT_VIA_SHELL, "sh",
+        "-b", "main", "-v", "threadtime", "-T", logcatEpoch(sinceEpochMillis),
+    ).redirectErrorStream(true)
 
 private const val MILLIS_PER_SECOND = 1_000L
 private const val MILLIS_DIGITS = 3

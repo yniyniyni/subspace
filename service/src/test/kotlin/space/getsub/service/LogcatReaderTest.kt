@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.SequenceInputStream
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -41,10 +42,18 @@ class LogcatReaderTest {
         }
     }
 
+    /**
+     * A finished-output [Process]. Like the R47 spawn, its stdout starts with
+     * the shell's PID line unless [pidLine] is false.
+     */
     private class FakeProcess(
-        private val stream: InputStream,
+        output: InputStream,
         private val events: MutableList<String>? = null,
+        pidLine: Boolean = true,
     ) : Process() {
+        private val stream: InputStream =
+            if (pidLine) SequenceInputStream(ByteArrayInputStream("4242\n".toByteArray()), output) else output
+
         var destroyed = false
             private set
 
@@ -93,14 +102,30 @@ class LogcatReaderTest {
         assertEquals("1726000000.123", since)
     }
 
+    /**
+     * R47: `logcat` is spawned through a shell that prints its own PID and then
+     * `exec`s `logcat` (same PID), so the watchdog can SIGTERM it without
+     * `Process.destroy()`. `"$@"` keeps the arguments as separate argv
+     * elements the shell never re-parses.
+     */
+    @Test
+    fun `logcat is spawned through a shell that reports its PID and execs logcat with unparsed args`() {
+        val command = logcatProcessBuilder(sinceEpochMillis = 1_726_000_000_123L).command()
+        assertEquals(
+            listOf("sh", "-c", "echo \$\$; exec logcat \"\$@\"", "sh", "-v", "threadtime", "-T", "1726000000.123"),
+            command,
+        )
+    }
+
     @Test
     fun `the epoch argument zero-pads its milliseconds`() {
         val command = logcatProcessBuilder(sinceEpochMillis = 1_726_000_000_007L).command()
         assertEquals("1726000000.007", command[command.indexOf("-T") + 1])
     }
 
+    /** R47: the shell's PID line (prepended by [FakeProcess]) is consumed, never emitted. */
     @Test
-    fun `emits each line of the subprocess output`() {
+    fun `emits each line of the subprocess output, but not the shell's PID line`() {
         val reader = LogcatReader { FakeProcess(ByteArrayInputStream("alpha\nbravo\ncharlie\n".toByteArray())) }
         assertEquals(listOf("alpha", "bravo", "charlie"), reader.lines().toList())
     }
@@ -177,38 +202,135 @@ class LogcatReaderTest {
     }
 
     /**
-     * R46 item 4 — the D3 guard under the new design. The watchdog's
-     * [LogcatReader.forceStop] may only destroy the subprocess; the reader is
-     * closed by the capture thread once the resulting EOF reaches it, never by
-     * the watchdog's thread. A close from any other thread is what deadlocked
-     * teardown in D3.
+     * Review I-1 / ruling R47. Android's `Process.destroy()` closes *our* end
+     * of the pipe (`UNIXProcess.java:221-234`), discarding everything unread —
+     * so the watchdog must never call it. It SIGTERMs `logcat` by PID instead:
+     * `logcat` exits, what it wrote stays in the pipe, and the capture thread
+     * drains to EOF and cleans up itself. The consumer is held inside line
+     * `a` while `b` and `c` sit unread in the pipe, exactly when the deadline
+     * fires. The reader is closed only by the capture thread (D3).
      */
     @Test
-    fun `the deadline destroys the subprocess and never closes the reader from its own thread`() {
+    fun `the deadline SIGTERMs logcat by PID, and what is still in the pipe is drained, not discarded`() {
         val pipe = LinePipe()
         val process = PipeProcess(pipe)
-        val reader = LogcatReader { process }
+        val signalled = CopyOnWriteArrayList<Int>()
+        val reader =
+            LogcatReader(signal = { pid ->
+                signalled += pid
+                process.sigterm()
+            }) { process }
+        val inFirstLine = CountDownLatch(1)
+        val releaseFirstLine = CountDownLatch(1)
+        val captured = CopyOnWriteArrayList<String>()
+        listOf("a", "b", "c").forEach(pipe::feed)
+        val capture =
+            thread(name = "reader-test-capture", isDaemon = true) {
+                reader.lines().forEach {
+                    captured.add(it)
+                    if (captured.size == 1) {
+                        inFirstLine.countDown()
+                        releaseFirstLine.await(5, TimeUnit.SECONDS)
+                    }
+                }
+            }
+        try {
+            assertTrue(inFirstLine.await(5, TimeUnit.SECONDS))
+
+            reader.requestStop()
+            reader.forceStop()
+            releaseFirstLine.countDown()
+            capture.join(TimeUnit.SECONDS.toMillis(5))
+
+            assertFalse("capture thread did not exit after the deadline", capture.isAlive)
+            assertEquals(listOf("a", "b", "c"), captured)
+            assertEquals(listOf(PipeProcess.FAKE_PID), signalled)
+            assertEquals(listOf(Thread.currentThread().name), process.signalledBy)
+            assertTrue(
+                "the watchdog called destroy(), which discards the pipe on Android",
+                process.destroyedBy != Thread.currentThread().name,
+            )
+            assertEquals("reader-test-capture", pipe.closedBy)
+            assertFalse(reader.endedWithError)
+            assertTrue(reader.endedAtDeadline)
+        } finally {
+            releaseFirstLine.countDown()
+            pipe.eof()
+        }
+    }
+
+    /** R47: the same PID-reuse guard the platform's own `destroy()` uses — never signal an exited process. */
+    @Test
+    fun `the deadline neither signals nor destroys a process that has already exited`() {
+        val pipe = LinePipe()
+        val process = PipeProcess(pipe)
+        val reader = LogcatReader(signal = { process.sigterm() }) { process }
+        val lines = reader.lines().iterator()
+        pipe.feed("a")
+        assertEquals("a", lines.next())
+
+        process.sigterm() // logcat exits on its own
+        reader.forceStop()
+
+        assertEquals("only the test's own SIGTERM", 1, process.signalledBy.size)
+        assertFalse("destroy() on the deadline path discards the pipe", process.destroyed)
+        assertFalse(lines.hasNext())
+    }
+
+    /**
+     * A deadline that fires before the shell has even printed its PID: there
+     * is nothing to signal, and nothing past the PID line has been read, so
+     * the watchdog falls back to `destroy()` to bound the leak.
+     */
+    @Test
+    fun `a deadline before the PID is known destroys, so the capture cannot wait forever`() {
+        val pipe = LinePipe(pidLine = null)
+        val process = PipeProcess(pipe)
+        val reader = LogcatReader(signal = { process.sigterm() }) { process }
         val captured = CopyOnWriteArrayList<String>()
         val capture =
             thread(name = "reader-test-capture", isDaemon = true) {
                 reader.lines().forEach { captured.add(it) }
             }
         try {
-            pipe.feed("before the deadline")
-            assertTrue("capture thread never blocked in read", awaitParkedAfter(capture) { captured.size == 1 })
-
+            assertTrue(awaitParked(capture))
             reader.requestStop()
             reader.forceStop()
             capture.join(TimeUnit.SECONDS.toMillis(5))
 
-            assertFalse("capture thread did not exit after the deadline", capture.isAlive)
-            assertEquals(Thread.currentThread().name, process.destroyedBy)
-            assertEquals("reader-test-capture", pipe.closedBy)
-            assertEquals(listOf("before the deadline"), captured)
-            assertFalse(reader.endedWithError)
+            assertFalse(capture.isAlive)
+            assertTrue(process.destroyed)
+            assertEquals(emptyList<String>(), captured)
         } finally {
             pipe.eof()
         }
+    }
+
+    @Test
+    fun `a capture that reaches its sentinel did not end at the deadline`() {
+        lateinit var reader: LogcatReader
+        reader =
+            LogcatReader {
+                FakeProcess(ByteArrayInputStream("x\n${logcatLine("LogCapture", reader.sentinel)}\n".toByteArray()))
+            }
+        assertEquals(listOf("x"), reader.lines().toList())
+        reader.forceStop()
+        assertFalse(reader.endedAtDeadline)
+    }
+
+    /** R47: a first line that is not a PID means the shell did not get as far as `exec logcat`. */
+    @Test
+    fun `a first line that is not a PID is a failed spawn`() {
+        var spawned: FakeProcess? = null
+        val reader =
+            LogcatReader {
+                FakeProcess(ByteArrayInputStream("sh: logcat: not found\nalpha\n".toByteArray()), pidLine = false)
+                    .also { spawned = it }
+            }
+
+        assertEquals(emptyList<String>(), reader.lines().toList())
+        assertEquals(true, spawned?.destroyed)
+        assertFalse(reader.endedWithError)
     }
 
     @Test
@@ -274,13 +396,13 @@ class LogcatReaderTest {
         val reader =
             LogcatReader {
                 spawnEntered.countDown()
-                releaseSpawn.await()
+                releaseSpawn.await(5, TimeUnit.SECONDS)
                 FakeProcess(ByteArrayInputStream("line1\n".toByteArray())).also { spawned = it }
             }
 
         val captured = mutableListOf<String>()
         val captureThread =
-            thread(name = "logcat-reader-test-capture") {
+            thread(name = "logcat-reader-test-capture", isDaemon = true) {
                 reader.lines().forEach { captured.add(it) }
             }
 
@@ -328,7 +450,7 @@ class LogcatReaderTest {
         reader =
             LogcatReader {
                 spawnEntered.countDown()
-                releaseSpawn.await()
+                releaseSpawn.await(5, TimeUnit.SECONDS)
                 val text =
                     listOf("early", logcatLine("LogCapture", reader.sentinel), "late")
                         .joinToString("\n", postfix = "\n")
@@ -337,7 +459,7 @@ class LogcatReaderTest {
 
         val captured = mutableListOf<String>()
         val captureThread =
-            thread(name = "logcat-reader-test-capture") {
+            thread(name = "logcat-reader-test-capture", isDaemon = true) {
                 reader.lines().forEach { captured.add(it) }
             }
 
@@ -349,15 +471,5 @@ class LogcatReaderTest {
         assertFalse("capture thread did not finish", captureThread.isAlive)
         assertEquals(listOf("early"), captured)
         assertEquals(true, spawned?.destroyed)
-    }
-
-    /** Waits until [done] holds and [thread] is parked (blocked in its next read). */
-    private fun awaitParkedAfter(
-        thread: Thread,
-        done: () -> Boolean,
-    ): Boolean {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (!done() && System.nanoTime() < deadline) Thread.onSpinWait()
-        return done() && awaitParked(thread)
     }
 }

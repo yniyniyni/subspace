@@ -24,6 +24,17 @@ import kotlin.concurrent.thread
 private const val ABNORMAL_END_MARKER = "log capture ended abnormally (stream read failed)"
 
 /**
+ * Appended when a capture ended at its drain deadline rather than at its
+ * sentinel ([LogcatReader.endedAtDeadline], review M-2): `logcat` was
+ * signalled before this session's closing lines were seen, so they may be
+ * missing. Informational, and not subject to D2's suppression — a deadline
+ * stop is abnormal by definition, where a stop-caused read failure is not. A
+ * literal with no detail, routed through [redactLine], for the same reasons
+ * as [ABNORMAL_END_MARKER].
+ */
+private const val DEADLINE_END_MARKER = "log capture stopped at its drain deadline; closing lines may be missing"
+
+/**
  * The `-v threadtime` prefix `spawnLogcat` requests:
  * `MM-DD HH:MM:SS.mmm  PID  TID L TAG: `. Anchored to the start of the line —
  * [redactLine] uses [Regex.matchEntire] — so a message body that merely
@@ -213,19 +224,30 @@ internal class LogCapture(
      * `cancelAndJoin`-style teardown block ruling R18 forbids, and must stay
      * that way — do not add a wait or a join inside either critical section.
      *
-     * **A start while the previous capture is still draining (N1 / R46).**
-     * [stop] no longer ends the old capture; it drains to its sentinel for up
-     * to [DRAIN_DEADLINE_MILLIS]. So a reconnect can start a new capture while
-     * the old one is still writing. The *new capture thread* — never this
-     * method, never the teardown thread or the command coordinator — joins the
-     * old one, bounded by [PRIOR_DRAIN_WAIT_MILLIS], before it spawns
-     * `logcat` or writes anything. The old capture ends at its sentinel, which
-     * was logged before this start's `-T` epoch was read, so the ring gets the
-     * old session's tail and then the new session: no duplicates, no
-     * interleaving — I3's guarantee, kept across the drain. If the old thread
-     * outlives even that bound (a `logcat` that survives `destroy()`), the
-     * new capture proceeds rather than never capturing at all; the two could
-     * then interleave, which is the lesser loss.
+     * **A start while the previous capture is still draining (N1 / R46, R48).**
+     * [stop] no longer ends the old capture; it drains to its sentinel,
+     * bounded by its deadline. So a reconnect can start a new capture while
+     * the old one is still writing. The new capture thread spawns its
+     * `logcat` at once — so the ~2–4 s cold start overlaps the old drain
+     * instead of queueing behind it (review I-2: queued spawns in a burst of
+     * fast-failing connects were killed cold by their own deadlines, which is
+     * mechanism (a) again) — and then, before reading its first `logcat` line
+     * and so before its first ring write, joins the old capture thread,
+     * bounded by [PRIOR_DRAIN_WAIT_MILLIS]. That join runs on the *new capture
+     * thread* — never this method, never the teardown thread or the command
+     * coordinator. Meanwhile the new `logcat`'s output waits in the kernel
+     * pipe; the bound is far inside the time logd tolerates a reader that is
+     * not draining.
+     *
+     * The old capture ends at its sentinel, which was logged before this
+     * start's `-T` epoch was read, so the ring gets the old session's tail and
+     * then the new session with no interleaving — I3's guarantee, kept across
+     * the drain. Not strictly "no duplicates": a line logged in the same
+     * millisecond as that epoch can be replayed once (see
+     * [logcatProcessBuilder]); accepted over losing a real line. If the old
+     * thread outlives even the join's bound (its ring writes blocking on
+     * disk), the new capture proceeds rather than never capturing at all; the
+     * two could then interleave, which is the lesser loss.
      */
     fun start() {
         synchronized(lock) {
@@ -235,26 +257,33 @@ internal class LogCapture(
             val r = readerFactory(since)
             reader = r
             val prior = lastCaptureThread
-            lastCaptureThread =
-                startThread {
-                    awaitPriorDrain(prior)
-                    captureOnce(r)
-                }
+            lastCaptureThread = startThread { captureOnce(r) { awaitPriorDrain(prior) } }
         }
     }
 
     /**
-     * Ends the capture by draining it to a sentinel (N1 / R46) — see
+     * Ends the capture by draining it to a sentinel (N1 / R46–R48) — see
      * [LogcatReader]'s KDoc for the three loss mechanisms this closes.
      *
      * **Returns immediately — ruling R18.** Teardown must never wait on log
      * capture: nothing here joins, sleeps, or touches the reader's stream.
      * It records the stop, logs this capture's per-capture sentinel (after
      * every teardown line, since [TeardownStep.StopLogCapture] is last), and
-     * arms a watchdog for [DRAIN_DEADLINE_MILLIS]. The capture thread reads
-     * on until the sentinel, or until the watchdog's [LogcatReader.forceStop]
-     * destroys `logcat` — which only destroys; the capture thread alone
-     * closes its reader (D3).
+     * arms a watchdog for [DRAIN_DEADLINE_MILLIS] — counted from the *later*
+     * of this stop and `logcat`'s spawn completing (R48), so if `logcat` is
+     * still spawning the reader arms it from the capture thread when the spawn
+     * returns. The capture thread reads on until the sentinel, or until the
+     * watchdog's [LogcatReader.forceStop] SIGTERMs `logcat` (R47) and the pipe
+     * drains to EOF; the capture thread alone closes its reader (D3).
+     *
+     * **How long a capture outlives this call (review M-4).** The `logcat`
+     * subprocess: at most [DRAIN_DEADLINE_MILLIS] after the later of this
+     * stop and its spawn, plus however long it takes to exit on SIGTERM. The
+     * capture thread: additionally until it has written out what is left in
+     * the pipe — and a capture started while its predecessor was still
+     * draining may first spend up to [PRIOR_DRAIN_WAIT_MILLIS] (6 s) from its
+     * own start waiting for it. So "up to ~5 s" understates the thread; ~6 s
+     * from start plus the drain is the honest figure.
      *
      * Synchronized with [start] for the reason its KDoc gives (I3).
      */
@@ -263,15 +292,15 @@ internal class LogCapture(
             running = false
             val r = reader ?: return
             reader = null
-            r.requestStop()
+            r.requestStop { runCatching { armDeadline(DRAIN_DEADLINE_MILLIS) { r.forceStop() } } }
             runCatching { emitSentinel(r.sentinel) }
-            runCatching { armDeadline(DRAIN_DEADLINE_MILLIS) { r.forceStop() } }
         }
     }
 
     /**
-     * Runs on the new capture thread only. A bounded join: the prior capture
-     * ends at its sentinel or, at worst, shortly after its deadline.
+     * Runs on the new capture thread only, after its `logcat` has spawned and
+     * before its first line is read. A bounded join: the prior capture ends
+     * at its sentinel or, at worst, shortly after its deadline.
      */
     private fun awaitPriorDrain(prior: Thread?) {
         if (prior == null) return
@@ -290,14 +319,23 @@ internal class LogCapture(
 
     /**
      * [captureOnce] over [reader]'s own lines, plus the [ABNORMAL_END_MARKER]
-     * check once the sequence ends. Kept separate from the [Sequence] overload
-     * above so that overload stays usable with a plain, reader-free sequence in
-     * tests of the redaction pipeline itself.
+     * and [DEADLINE_END_MARKER] checks once the sequence ends. Kept separate
+     * from the [Sequence] overload above so that overload stays usable with a
+     * plain, reader-free sequence in tests of the redaction pipeline itself.
+     *
+     * @param beforeReading runs on this (the capture) thread after `logcat`
+     *   has spawned and before its first line is read — see [start].
      */
-    internal fun captureOnce(reader: LogcatReader) {
-        captureOnce(reader.lines())
+    internal fun captureOnce(
+        reader: LogcatReader,
+        beforeReading: () -> Unit = {},
+    ) {
+        captureOnce(reader.lines(beforeReading))
         if (reader.endedWithError) {
             ring.append(redactLine(ABNORMAL_END_MARKER))
+        }
+        if (reader.endedAtDeadline) {
+            ring.append(redactLine(DEADLINE_END_MARKER))
         }
     }
 
@@ -305,8 +343,9 @@ internal class LogCapture(
         private const val TAG = "LogCapture"
 
         /**
-         * How long a stopped capture may drain before the watchdog destroys
-         * `logcat` (N1 / R46). Measured on a Pixel 8: a freshly spawned
+         * How long a stopped capture may drain before the watchdog SIGTERMs
+         * `logcat` (N1 / R46, R47), counted from the later of the stop and the
+         * spawn completing (R48). Measured on a Pixel 8: a freshly spawned
          * `logcat` delivers nothing for ~3.9 s with `-T 1` and ~1.9 s with
          * `-T <epoch>` — without losing what was logged meanwhile — while a
          * warm one delivers within ~10 ms. 5 s clears the worst measured
@@ -318,7 +357,7 @@ internal class LogCapture(
 
         /**
          * The next capture thread's bound on waiting for the previous one
-         * (see [start]): the drain deadline, plus a margin for the post-destroy
+         * (see [start]): the drain deadline, plus a margin for the post-SIGTERM
          * drain of whatever was still in the pipe.
          */
         const val PRIOR_DRAIN_WAIT_MILLIS = DRAIN_DEADLINE_MILLIS + 1_000L

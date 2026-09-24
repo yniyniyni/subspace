@@ -2,10 +2,13 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.service
 
+import space.getsub.service.log.LogcatReader
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -21,12 +24,23 @@ import java.util.concurrent.TimeUnit
  * throws away.
  *
  * [eof] is sticky — every read after it returns -1 — the way a pipe whose
- * write end has closed behaves.
+ * write end has closed behaves: what was written before it is still read
+ * first. That is what a SIGTERM'd `logcat` leaves behind (R47).
+ *
+ * [closeParentEnd] is the other thing that can happen to a pipe, and the one
+ * Android's `Process.destroy()` does (`UNIXProcess.java:221-234`: kill, then
+ * close stdin/stdout/stderr — *our* end). Everything unread is discarded, and
+ * every read after it — including one already blocked — throws
+ * `IOException("Stream closed")`. The fake at 6ea559a modelled `destroy()` as
+ * [eof] instead, which is why the watchdog's data loss (review I-1) passed.
  */
-internal class LinePipe : InputStream() {
+internal class LinePipe(pidLine: Int? = PipeProcess.FAKE_PID) : InputStream() {
     private val chunks = LinkedBlockingQueue<ByteArray>()
     private var current: ByteArray? = null
     private var position = 0
+
+    @Volatile
+    private var parentEndClosed = false
 
     /** The name of the thread that closed this stream, or null if nothing has. */
     @Volatile
@@ -36,6 +50,13 @@ internal class LinePipe : InputStream() {
     fun feed(line: String) = chunks.put((line + "\n").toByteArray())
 
     fun eof() = chunks.put(EOF)
+
+    /** What Android's `Process.destroy()` does to this stream: discard everything unread. */
+    fun closeParentEnd() {
+        parentEndClosed = true
+        chunks.clear()
+        chunks.put(CLOSED)
+    }
 
     override fun read(): Int {
         val one = ByteArray(1)
@@ -62,9 +83,14 @@ internal class LinePipe : InputStream() {
 
     /** The chunk being read, or the next one (blocking); null once [eof] has been signalled. */
     private fun currentOrNext(): ByteArray? {
+        if (parentEndClosed) throw IOException("Stream closed")
         val chunk = current
         if (chunk != null && position < chunk.size) return chunk
         val next = chunks.take()
+        if (next === CLOSED || parentEndClosed) {
+            chunks.put(CLOSED)
+            throw IOException("Stream closed")
+        }
         if (next === EOF) {
             chunks.put(EOF)
             current = null
@@ -79,28 +105,57 @@ internal class LinePipe : InputStream() {
         closedBy = Thread.currentThread().name
     }
 
+    init {
+        // R47: the shell's `echo $$` is the first thing on the pipe, before
+        // anything logcat writes. null: a shell that never got that far.
+        if (pidLine != null) feed(pidLine.toString())
+    }
+
     private companion object {
         val EOF = ByteArray(0)
+        val CLOSED = ByteArray(0)
         const val BYTE_MASK = 0xff
     }
 }
 
 /**
- * A [Process] over a [LinePipe]. [destroy] closes the pipe's write end —
- * EOF — the way killing the real subprocess does, unless [eofOnDestroy] is
- * false, which models a subprocess that is wedged and never lets go (R18).
+ * A [Process] over a [LinePipe]. The R47 PID line is the pipe's first line
+ * (see [LinePipe]'s constructor).
+ *
+ * [sigterm] is the watchdog's `Os.kill(pid, SIGTERM)`: `logcat` exits cleanly
+ * — [eof] queued *behind* what it already wrote — unless [exitsOnSigterm] is
+ * false, a `logcat` wedged hard enough to ignore it (R18). [destroy] is
+ * Android's: the process is gone and the parent's end of the pipe is closed,
+ * unread data and all ([LinePipe.closeParentEnd]). [exitValue] throws
+ * `IllegalThreadStateException` while the process is running, as the real one
+ * does — the liveness guard R47 relies on.
  */
 internal class PipeProcess(
     val pipe: LinePipe,
-    private val eofOnDestroy: Boolean = true,
+    private val exitsOnSigterm: Boolean = true,
     private val events: MutableList<String>? = null,
 ) : Process() {
+    @Volatile
+    private var exited = false
+
     /** The name of the thread that destroyed this process *first*; a later, redundant destroy does not overwrite it. */
     @Volatile
     var destroyedBy: String? = null
         private set
 
+    /** The names of the threads that SIGTERM'd this process, in order. */
+    val signalledBy = CopyOnWriteArrayList<String>()
+
     val destroyed: Boolean get() = destroyedBy != null
+
+    fun sigterm() {
+        signalledBy += Thread.currentThread().name
+        events?.add("process-signalled")
+        if (exitsOnSigterm && !exited) {
+            exited = true
+            pipe.eof()
+        }
+    }
 
     override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
 
@@ -110,13 +165,44 @@ internal class PipeProcess(
 
     override fun waitFor(): Int = 0
 
-    override fun exitValue(): Int = 0
+    override fun exitValue(): Int = if (exited) 0 else throw IllegalThreadStateException("process hasn't exited")
 
     override fun destroy() {
         synchronized(this) { if (destroyedBy == null) destroyedBy = Thread.currentThread().name }
         events?.add("process-destroyed")
-        if (eofOnDestroy) pipe.eof()
+        exited = true
+        pipe.closeParentEnd()
     }
+
+    companion object {
+        const val FAKE_PID = 4242
+    }
+}
+
+/**
+ * One `logcat` over a [FakeLogd]: a [LogcatReader] whose spawn produces a
+ * [PipeProcess] on [logd]'s pipe (after [beforeSpawn], a hook for holding the
+ * spawn), and whose R47 signal seam SIGTERMs that process.
+ */
+internal class FakeLogcat(
+    val logd: FakeLogd,
+    exitsOnSigterm: Boolean = true,
+    beforeSpawn: () -> Unit = {},
+) {
+    @Volatile
+    var process: PipeProcess? = null
+        private set
+
+    val signalled = CopyOnWriteArrayList<Int>()
+
+    val reader =
+        LogcatReader(signal = { pid ->
+            signalled += pid
+            process?.sigterm()
+        }) {
+            beforeSpawn()
+            PipeProcess(logd.pipe, exitsOnSigterm).also { process = it }
+        }
 }
 
 /**

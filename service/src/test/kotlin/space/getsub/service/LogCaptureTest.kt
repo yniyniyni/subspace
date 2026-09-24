@@ -174,7 +174,7 @@ class LogCaptureTest {
     @Test
     fun `an abnormal end appends the marker`() {
         val dir = tmp.newFolder()
-        val reader = LogcatReader { FakeProcess(FailingInputStream("0123456789abcdefghij")) }
+        val reader = LogcatReader { FakeProcess(FailingInputStream("4242\n0123456789abcdefghij")) }
 
         LogCapture(LogRing(dir)).captureOnce(reader)
 
@@ -185,7 +185,7 @@ class LogCaptureTest {
     @Test
     fun `a clean end does not append the marker`() {
         val dir = tmp.newFolder()
-        val reader = LogcatReader { FakeProcess(ByteArrayInputStream("line1\nline2\n".toByteArray())) }
+        val reader = LogcatReader { FakeProcess(ByteArrayInputStream("4242\nline1\nline2\n".toByteArray())) }
 
         LogCapture(LogRing(dir)).captureOnce(reader)
 

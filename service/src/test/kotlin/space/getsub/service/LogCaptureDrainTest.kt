@@ -9,7 +9,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import space.getsub.service.log.LineSink
 import space.getsub.service.log.LogCapture
-import space.getsub.service.log.LogcatReader
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -72,32 +71,43 @@ class LogCaptureDrainTest {
     }
 
     /**
-     * A [LogCapture] whose readers come from [readers] in order, whose
-     * sentinel is logged into [logds] in the same order — one `logcat`, one
+     * A [LogCapture] whose readers come from [logcats] in order, whose
+     * sentinel is logged into the matching [FakeLogd] — one `logcat`, one
      * daemon view, per capture — and whose deadline and capture threads are
      * recorded for the test to drive and join.
      */
     private fun capture(
         sink: LineSink,
-        readers: List<LogcatReader>,
-        logds: List<FakeLogd>,
+        logcats: List<FakeLogcat>,
     ): LogCapture {
         var nextReader = 0
         var nextEmit = 0
-        logds.forEach { logd -> cleanups += { logd.pipe.eof() } }
+        logcats.forEach { logcat -> cleanups += { logcat.logd.pipe.eof() } }
         return LogCapture(
             ring = sink,
             readerFactory = { since ->
                 sinces += since
-                readers[nextReader++]
+                logcats[nextReader++].reader
             },
-            emitSentinel = { sentinel -> logds[nextEmit++].log(sentinel, tag = "LogCapture") },
+            emitSentinel = { sentinel -> logcats[nextEmit++].logd.log(sentinel, tag = "LogCapture") },
             armDeadline = { delay, onDeadline -> deadlines += delay to onDeadline },
             clock = { START_EPOCH_MILLIS },
             startThread = { body ->
                 thread(name = CAPTURE_THREAD, isDaemon = true) { body() }.also { threads += it }
             },
         )
+    }
+
+    private fun capture(
+        sink: LineSink,
+        logcat: FakeLogcat,
+    ) = capture(sink, listOf(logcat))
+
+    /** Bounded wait for [n] deadlines to have been armed — R48 arms some on a capture thread. */
+    private fun awaitDeadlines(n: Int): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+        while (deadlines.size < n && System.nanoTime() < deadline) Thread.onSpinWait()
+        return deadlines.size >= n
     }
 
     /**
@@ -126,14 +136,13 @@ class LogCaptureDrainTest {
     /** N1 mechanism (c). */
     @Test
     fun `lines already in the pipe at stop are all written, up to the sentinel`() {
-        val logd = FakeLogd()
-        val reader = LogcatReader { PipeProcess(logd.pipe) }
+        val logcat = FakeLogcat(FakeLogd())
         val sink = RecordingSink(holdFirstAppend = true)
-        val capture = capture(sink, listOf(reader), listOf(logd))
+        val capture = capture(sink, logcat)
 
         val bodies = (1..5).map { "teardown[step$it] exit +${it}ms" }
-        bodies.forEach { logd.log(it) }
-        logd.deliver()
+        bodies.forEach { logcat.logd.log(it) }
+        logcat.logd.deliver()
 
         capture.start()
         // The capture thread is inside append(line 1) — redaction is ~1.3 ms a
@@ -141,25 +150,56 @@ class LogCaptureDrainTest {
         assertTrue(sink.firstAppendEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
         stopPromptly(capture)
         sink.releaseFirstAppend.countDown()
-        logd.deliver()
+        logcat.logd.deliver()
         joinAll()
 
         assertEquals(bodies.map(::line), sink.written)
     }
 
+    /**
+     * Review I-1 / R47: mechanism (c) on the *deadline* path. The sentinel
+     * never arrives; lines are still in the pipe behind a capture thread busy
+     * writing line 1 when the deadline fires. The watchdog's SIGTERM lets
+     * `logcat` exit with what it wrote still in the pipe, so every line
+     * reaches the ring — followed by the deadline marker. At 6ea559a the
+     * watchdog called `Process.destroy()`, which on Android closes our end of
+     * the pipe and discards lines 2..5.
+     */
+    @Test
+    fun `data still in the pipe at the deadline reaches the ring`() {
+        val logcat = FakeLogcat(FakeLogd())
+        val sink = RecordingSink(holdFirstAppend = true)
+        val capture = capture(sink, logcat)
+
+        val bodies = (1..5).map { "teardown[step$it] exit +${it}ms" }
+        bodies.forEach { logcat.logd.log(it) }
+        logcat.logd.deliver()
+
+        capture.start()
+        assertTrue(sink.firstAppendEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        stopPromptly(capture) // the sentinel is logged but never delivered
+        assertTrue(awaitDeadlines(1))
+        deadlines.single().second()
+        sink.releaseFirstAppend.countDown()
+        joinAll()
+
+        assertEquals(bodies.map(::line), sink.written.dropLast(1))
+        assertTrue("no deadline marker: ${sink.written}", "drain deadline" in sink.written.last())
+        assertFalse("the watchdog destroyed logcat", logcat.process!!.destroyedBy == Thread.currentThread().name)
+    }
+
     /** N1 mechanism (b): `done` is logged microseconds before stop, and delivered after it. */
     @Test
     fun `a line logged just before stop reaches the ring`() {
-        val logd = FakeLogd()
-        val reader = LogcatReader { PipeProcess(logd.pipe) }
+        val logcat = FakeLogcat(FakeLogd())
         val sink = RecordingSink()
-        val capture = capture(sink, listOf(reader), listOf(logd))
+        val capture = capture(sink, logcat)
 
         capture.start()
         assertTrue("capture never blocked in read", awaitParked(threads.single()))
-        logd.log("teardown[lifecycle] done +113ms")
+        logcat.logd.log("teardown[lifecycle] done +113ms")
         stopPromptly(capture)
-        logd.deliver()
+        logcat.logd.deliver()
         joinAll()
 
         assertEquals(listOf(line("teardown[lifecycle] done +113ms")), sink.written)
@@ -168,26 +208,24 @@ class LogCaptureDrainTest {
     /** N1 mechanism (a): a session shorter than `logcat`'s startup delay. */
     @Test
     fun `a stop during logcat's startup delay still captures the session, up to the sentinel`() {
-        val logd = FakeLogd()
         val spawnEntered = CountDownLatch(1)
         val releaseSpawn = CountDownLatch(1)
         cleanups += { releaseSpawn.countDown() }
-        val reader =
-            LogcatReader {
+        val logcat =
+            FakeLogcat(FakeLogd()) {
                 spawnEntered.countDown()
                 releaseSpawn.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                PipeProcess(logd.pipe)
             }
         val sink = RecordingSink()
-        val capture = capture(sink, listOf(reader), listOf(logd))
+        val capture = capture(sink, logcat)
 
         capture.start()
         assertTrue(spawnEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-        logd.log("teardown[lifecycle] enter")
-        logd.log("teardown[lifecycle] done +40ms")
+        logcat.logd.log("teardown[lifecycle] enter")
+        logcat.logd.log("teardown[lifecycle] done +40ms")
         stopPromptly(capture)
         releaseSpawn.countDown()
-        logd.deliver()
+        logcat.logd.deliver()
         joinAll()
 
         assertEquals(
@@ -196,38 +234,63 @@ class LogCaptureDrainTest {
         )
     }
 
+    /**
+     * R48: a capture's deadline runs from the *later* of its stop and its
+     * spawn completing — a stop that lands while `logcat` is still spawning
+     * must not start the clock on a process that does not exist yet.
+     */
     @Test
-    fun `nothing after the sentinel is written, and the sentinel itself never is`() {
-        val logd = FakeLogd()
-        val process = PipeProcess(logd.pipe)
-        val reader = LogcatReader { process }
-        val sink = RecordingSink()
-        val capture = capture(sink, listOf(reader), listOf(logd))
+    fun `a stop before spawn completes arms the deadline only once spawn completes`() {
+        val spawnEntered = CountDownLatch(1)
+        val releaseSpawn = CountDownLatch(1)
+        cleanups += { releaseSpawn.countDown() }
+        val logcat =
+            FakeLogcat(FakeLogd()) {
+                spawnEntered.countDown()
+                releaseSpawn.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            }
+        val capture = capture(RecordingSink(), logcat)
 
         capture.start()
-        logd.log("teardown[lifecycle] done +9ms")
+        assertTrue(spawnEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
         stopPromptly(capture)
-        logd.log("the next session's first line")
-        logd.deliver()
+        assertEquals("deadline armed before logcat had even spawned", 0, deadlines.size)
+
+        releaseSpawn.countDown()
+        assertTrue("deadline never armed after spawn", awaitDeadlines(1))
+        logcat.logd.deliver()
+        joinAll()
+    }
+
+    @Test
+    fun `nothing after the sentinel is written, and the sentinel itself never is`() {
+        val logcat = FakeLogcat(FakeLogd())
+        val sink = RecordingSink()
+        val capture = capture(sink, logcat)
+
+        capture.start()
+        logcat.logd.log("teardown[lifecycle] done +9ms")
+        stopPromptly(capture)
+        logcat.logd.log("the next session's first line")
+        logcat.logd.deliver()
         joinAll()
 
         assertEquals(listOf(line("teardown[lifecycle] done +9ms")), sink.written)
-        assertTrue("sentinel reached the ring", sink.written.none { reader.sentinel in it })
-        assertEquals("the capture thread must end its own subprocess", CAPTURE_THREAD, process.destroyedBy)
-        assertEquals("the capture thread must close its own reader", CAPTURE_THREAD, logd.pipe.closedBy)
+        assertTrue("sentinel reached the ring", sink.written.none { logcat.reader.sentinel in it })
+        assertEquals("the capture thread must end its own subprocess", CAPTURE_THREAD, logcat.process!!.destroyedBy)
+        assertEquals("the capture thread must close its own reader", CAPTURE_THREAD, logcat.logd.pipe.closedBy)
     }
 
     @Test
     fun `lines drained after stop are still redacted`() {
-        val logd = FakeLogd()
-        val reader = LogcatReader { PipeProcess(logd.pipe) }
+        val logcat = FakeLogcat(FakeLogd())
         val sink = RecordingSink()
-        val capture = capture(sink, listOf(reader), listOf(logd))
+        val capture = capture(sink, logcat)
 
         capture.start()
-        logd.log("dial failed to 203.0.113.44:443")
+        logcat.logd.log("dial failed to 203.0.113.44:443")
         stopPromptly(capture)
-        logd.deliver()
+        logcat.logd.deliver()
         joinAll()
 
         assertEquals(1, sink.written.size)
@@ -237,25 +300,26 @@ class LogCaptureDrainTest {
 
     /**
      * The sentinel never arrives (a `logcat` still inside a startup delay
-     * longer than the deadline, or one that died). The watchdog destroys the
-     * subprocess at the deadline and the capture thread — never the watchdog —
-     * drains, closes its reader, and exits.
+     * longer than the deadline, or one that died). The watchdog SIGTERMs
+     * `logcat` at the deadline (R47) and the capture thread — never the
+     * watchdog — drains, closes its reader, and exits. The ring then says so:
+     * a deadline stop is abnormal by definition, so D2's suppression of a
+     * stop-caused read failure does not hide it (review M-2).
      */
     @Test
-    fun `if the sentinel never arrives the watchdog destroys at the deadline and the capture exits`() {
-        val logd = FakeLogd()
-        val process = PipeProcess(logd.pipe)
-        val reader = LogcatReader { process }
+    fun `without its sentinel the watchdog signals at the deadline, the capture exits, and the ring says so`() {
+        val logcat = FakeLogcat(FakeLogd())
         val sink = RecordingSink()
-        val capture = capture(sink, listOf(reader), listOf(logd))
+        val capture = capture(sink, logcat)
 
         capture.start()
-        logd.log("teardown[lifecycle] enter")
-        logd.deliver()
+        logcat.logd.log("teardown[lifecycle] enter")
+        logcat.logd.deliver()
         assertTrue(sink.awaitSize(1))
         stopPromptly(capture)
         // The sentinel is logged but never delivered.
 
+        assertTrue(awaitDeadlines(1))
         val (delay, onDeadline) = deadlines.single()
         assertEquals(LogCapture.DRAIN_DEADLINE_MILLIS, delay)
         assertTrue(
@@ -265,25 +329,27 @@ class LogCaptureDrainTest {
         onDeadline()
         joinAll()
 
-        assertEquals(listOf(line("teardown[lifecycle] enter")), sink.written)
-        assertEquals("the watchdog destroys", Thread.currentThread().name, process.destroyedBy)
-        assertEquals("…but only the capture thread closes the reader", CAPTURE_THREAD, logd.pipe.closedBy)
-        assertFalse(reader.endedWithError)
+        assertEquals(2, sink.written.size)
+        assertEquals(line("teardown[lifecycle] enter"), sink.written[0])
+        assertTrue("no deadline marker: ${sink.written}", "drain deadline" in sink.written[1])
+        assertEquals("the watchdog signals", listOf(Thread.currentThread().name), logcat.process!!.signalledBy)
+        assertEquals(listOf(PipeProcess.FAKE_PID), logcat.signalled)
+        assertEquals("…but only the capture thread closes the reader", CAPTURE_THREAD, logcat.logd.pipe.closedBy)
+        assertFalse(logcat.reader.endedWithError)
     }
 
-    /** R18: a wedged `logcat` — one that neither delivers nor dies — never holds up teardown. */
+    /** R18: a wedged `logcat` — one that neither delivers nor exits on SIGTERM — never holds up teardown. */
     @Test
     fun `stop returns promptly even when logcat is stuck and never delivers`() {
-        val logd = FakeLogd()
-        val reader = LogcatReader { PipeProcess(logd.pipe, eofOnDestroy = false) }
-        val sink = RecordingSink()
-        val capture = capture(sink, listOf(reader), listOf(logd))
+        val logcat = FakeLogcat(FakeLogd(), exitsOnSigterm = false)
+        val capture = capture(RecordingSink(), logcat)
 
         capture.start()
         assertTrue("capture never blocked in read", awaitParked(threads.single()))
 
         stopPromptly(capture)
 
+        assertTrue(awaitDeadlines(1))
         val deadlineReturned = CountDownLatch(1)
         thread(name = "test-watchdog", isDaemon = true) {
             deadlines.single().second()
@@ -296,33 +362,34 @@ class LogCaptureDrainTest {
     }
 
     /**
-     * I3's guarantee under R46: a new session can start while the previous
-     * capture is still draining to its sentinel. The new capture thread waits
-     * for the old one before writing anything, so the ring holds the old
-     * session's tail, then the new session — no interleaving, no gap.
+     * I3's guarantee under R46/R48: a new session can start while the
+     * previous capture is still draining to its sentinel. The new `logcat` is
+     * spawned at once, so its cold start overlaps the old drain (R48); its
+     * first *write* waits for the old capture thread. The ring holds the old
+     * session's tail, then the new session — no interleaving.
      */
     @Test
-    fun `a new capture started while the old one drains writes nothing until the old one has finished`() {
-        val first = FakeLogd()
-        val second = FakeLogd()
+    fun `a new capture spawns at once but writes nothing until the old one has finished`() {
+        val secondSpawned = CountDownLatch(1)
+        val first = FakeLogcat(FakeLogd())
+        val second = FakeLogcat(FakeLogd()) { secondSpawned.countDown() }
         val sink = RecordingSink()
-        val capture =
-            capture(
-                sink,
-                listOf(LogcatReader { PipeProcess(first.pipe) }, LogcatReader { PipeProcess(second.pipe) }),
-                listOf(first, second),
-            )
+        val capture = capture(sink, listOf(first, second))
 
         capture.start()
-        first.log("old enter")
-        first.deliver()
+        first.logd.log("old enter")
+        first.logd.deliver()
         assertTrue(sink.awaitSize(1))
-        first.log("old done")
+        first.logd.log("old done")
         stopPromptly(capture) // the old capture is now draining; its sentinel is not yet delivered
 
         capture.start()
-        second.log("new enter")
-        second.deliver()
+        assertTrue(
+            "the new logcat must spawn while the old capture drains (R48)",
+            secondSpawned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+        )
+        second.logd.log("new enter")
+        second.logd.deliver()
         val newThread = threads[1]
         assertTrue("the new capture thread never parked", awaitParked(newThread))
         assertEquals(
@@ -331,25 +398,63 @@ class LogCaptureDrainTest {
             sink.written.toList(),
         )
 
-        first.deliver() // "old done", then the old sentinel
+        first.logd.deliver() // "old done", then the old sentinel
         assertTrue(sink.awaitSize(3))
         stopPromptly(capture)
-        second.deliver()
+        second.logd.deliver()
         joinAll()
 
         assertEquals(listOf(line("old enter"), line("old done"), line("new enter")), sink.written)
     }
 
+    /**
+     * Review I-2 / R48: a burst of fast-failing connects. Four sessions start
+     * and stop in quick succession while the first `logcat` is still cold.
+     * Time then passes: every `logcat` that has been spawned warms up and
+     * delivers, and every armed deadline fires. The last session — the one
+     * the user is looking at — must still reach the ring. At 6ea559a each
+     * capture spawned only after its predecessor drained, and its deadline
+     * ran from its stop: the later sessions were killed cold, or destroyed
+     * unread, and lost whole.
+     */
+    @Test
+    fun `rapid start-stop cycles still capture the last session`() {
+        val spawned = CountDownLatch(SESSIONS)
+        val logcats = (1..SESSIONS).map { FakeLogcat(FakeLogd()) { spawned.countDown() } }
+        val sink = RecordingSink()
+        val capture = capture(sink, logcats)
+
+        logcats.forEachIndexed { i, logcat ->
+            capture.start()
+            logcat.logd.log("session$i teardown[lifecycle] done +3ms")
+            stopPromptly(capture)
+        }
+
+        // ~2 s later, every logcat that exists has warmed up and delivered.
+        spawned.await(2, TimeUnit.SECONDS)
+        logcats.filter { it.process != null }.forEach { it.logd.deliver() }
+        // ~5 s after the stops (or spawns), every armed deadline fires.
+        assertTrue(awaitDeadlines(SESSIONS))
+        deadlines.toList().forEach { (_, onDeadline) -> onDeadline() }
+        // Anything spawned later than that delivers too, for all the good it does.
+        logcats.forEach { it.logd.deliver() }
+        joinAll()
+
+        assertEquals(
+            (0 until SESSIONS).map { line("session$it teardown[lifecycle] done +3ms") },
+            sink.written,
+        )
+    }
+
     /** N1 / R46 item 5: the `-T` epoch is the wall-clock reading taken inside [LogCapture.start]. */
     @Test
     fun `the reader follows logcat from the epoch taken in start`() {
-        val logd = FakeLogd()
-        val sink = RecordingSink()
-        val capture = capture(sink, listOf(LogcatReader { PipeProcess(logd.pipe) }), listOf(logd))
+        val logcat = FakeLogcat(FakeLogd())
+        val capture = capture(RecordingSink(), logcat)
 
         capture.start()
         stopPromptly(capture)
-        logd.deliver()
+        logcat.logd.deliver()
         joinAll()
 
         assertEquals(listOf(START_EPOCH_MILLIS), sinces)
@@ -360,5 +465,6 @@ class LogCaptureDrainTest {
         const val START_EPOCH_MILLIS = 1_726_000_000_123L
         const val TIMEOUT_SECONDS = 5L
         const val STOP_BOUND_MILLIS = 1_000L
+        const val SESSIONS = 4
     }
 }

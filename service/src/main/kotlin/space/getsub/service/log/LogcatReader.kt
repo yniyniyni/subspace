@@ -429,12 +429,16 @@ private const val LOGCAT_VIA_SHELL = "echo \$\$; exec logcat \"\$@\""
  * millisecond (review M-1) — was wrong: on the Pixel 8, capture S20 replayed
  * 10 of the previous session's lines, logged up to ~0.4 s *before* its epoch
  * (device record 2026-09-24, N1 item 8; logd's cause unknown). [LogCapture]
- * therefore drops any line whose `threadtime` stamp is earlier than the epoch
- * ([stampedBefore]). The true bound on what reaches the ring from before the
- * session is now: nothing stamped before the epoch; a line stamped in the
- * epoch's own millisecond is kept, and may be a replay — a duplicate
- * accepted over the risk of dropping a real line of this session. Lines with
- * no parseable stamp (logcat's `--------- beginning of main` banner) are kept.
+ * therefore drops, at the head of the stream only, lines stamped within 2 s
+ * before the epoch ([ReplayHeadFilter], R53). The true bound on what reaches the
+ * ring from before the session is now: no head line stamped in the 2 s before
+ * the epoch. A line in the epoch's own millisecond is kept and may be a
+ * replay: a duplicate accepted over the risk of dropping a real line. So is
+ * a head replay older than 2 s (never seen on device), because that stamp is
+ * indistinguishable from a clock step. Lines with no parseable stamp (logcat's
+ * `--------- beginning of main` banner) are kept. After the head, stamps are
+ * never consulted, because a zone change or clock step mid-session must not
+ * drop real lines (review I-A).
  *
  * **Not the filter-narrowing ruling R30 refused.** R30 declined to drop
  * *diagnostic* lines a live session produces. The epoch loses no line the

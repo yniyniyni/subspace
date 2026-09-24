@@ -23,39 +23,95 @@ private val THREADTIME_STAMP: Pattern =
 private const val NANOS_PER_MILLI = 1_000_000
 
 /**
- * True when [line]'s `threadtime` stamp is strictly earlier than
- * [sinceEpochMillis], this capture's own `-T` epoch — a replayed line from
- * before the session, which [LogCapture] drops (ruling R50).
+ * How far before a capture's `-T` epoch a head line may be stamped and still
+ * count as a replay (ruling R53). The device's replay (capture S20) was 10
+ * lines within ~0.4 s before the epoch; 2 s covers that with margin, and a
+ * stamp further back than this is a clock step, not a replay.
+ */
+internal const val REPLAY_WINDOW_MILLIS = 2_000L
+
+/**
+ * Drops `-T <epoch>` replays from the **head** of one capture, and nothing
+ * else (rulings R50, R53). One instance per capture, used on the capture
+ * thread only.
  *
  * **Why this exists.** `-T <epoch>` is not exact. On the Pixel 8, capture S20
  * replayed 10 of the previous session's lines, logged up to ~0.4 s *before*
- * its epoch (device record 2026-09-24, N1 item 8) — so the ring held 10
+ * its epoch (device record 2026-09-24, N1 item 8), so the ring held 10
  * duplicates and a timestamp regression. The cause inside logd is unknown;
- * this filter does not depend on it.
+ * this filter does not depend on it. The replay was entirely at the head of
+ * the stream, before the capture's own first line.
  *
- * **What it keeps.** Anything stamped at or after the epoch, including the
- * same millisecond — `threadtime` truncates to the millisecond, as does the
- * epoch, so a line in the epoch's own millisecond may be a replay or may be
- * this session's; keeping it is the side that never loses a real line.
+ * **The rule.** While the head is open, a line is dropped only if its stamp
+ * is within [REPLAY_WINDOW_MILLIS] *before* the epoch
+ * (`epoch − 2 s ≤ stamp < epoch`). The head closes, permanently, at the first
+ * line with a parseable stamp that is kept: one at or after the epoch, or one
+ * more than 2 s before it. From then on every line is kept whatever its
+ * stamp.
  *
- * **Fails open.** A line with no parseable stamp — logcat's
- * `--------- beginning of main` banner, a continuation line, one of
- * [LogCapture]'s markers, an impossible date — returns false and is kept.
- * Capture completeness matters more than a stray replay. (Redaction fails
- * *closed*; this is not redaction and is not on that path.)
+ * **Why the head, and why bounded (review I-A).** R50's first version
+ * compared every line of the session with the epoch, with no lower bound.
+ * `logcat` prints stamps in its *current* zone and wall clock, while the
+ * epoch is frozen at `start()`. So a westward zone change mid-session
+ * (NITZ on a train) or NTP stepping the clock back soon after connect made
+ * real lines, including teardown and `done`, look "before" the epoch, and
+ * they were dropped silently. A replay can only be at the head, and only
+ * just before the epoch, and the filter now claims nothing more.
+ *
+ * **Why a stamp more than 2 s back also closes the head.** It is kept either
+ * way. If it left the head open, a clock stepped back by, say, 5 s would lose
+ * the lines that climb back through the last 2 s before the epoch. Closing
+ * the head on it means only a replay *older* than 2 s followed by a
+ * recent one could leak through, and that costs a duplicate, never a loss.
+ *
+ * **Unparseable lines leave the head open, and are kept.** This covers
+ * logcat's `--------- beginning of main` banner (which precedes any replay),
+ * continuation lines and [LogCapture]'s markers. Keeping them fails open,
+ * because capture completeness matters more than a stray replay; redaction
+ * fails *closed*, and this is not redaction. They say nothing about the
+ * clock, so they don't end the window.
+ *
+ * **Kept at the epoch's own millisecond.** `threadtime` and the epoch both
+ * truncate to the millisecond, so a line in that millisecond may be a replay
+ * or the session's own. Keeping it never loses a real line.
+ *
+ * **Known residual.** If NTP steps the clock back by less than 2 s at the
+ * very first instant of a capture, before any of its lines is stamped at or
+ * after the epoch, the lines stamped inside that window can be dropped:
+ * a fraction of a second at most.
+ */
+internal class ReplayHeadFilter(
+    sinceEpochMillis: Long,
+    private val zone: ZoneId,
+) {
+    private val start = Instant.ofEpochMilli(sinceEpochMillis)
+    private val windowStart = start.minusMillis(REPLAY_WINDOW_MILLIS)
+    private var headOpen = true
+
+    /** False only for a replay at the head; see the class KDoc. */
+    fun keep(line: String): Boolean {
+        // Unparseable (null stamp): kept, and the head stays open.
+        val stamp = if (headOpen) stampInstant(line, start, zone) else null
+        val replay = stamp != null && !stamp.isBefore(windowStart) && stamp.isBefore(start)
+        if (stamp != null && !replay) headOpen = false
+        return !replay
+    }
+}
+
+/**
+ * True when [line]'s `threadtime` stamp is strictly earlier than
+ * [sinceEpochMillis]. This is the arithmetic only. It is **not** the drop rule:
+ * [ReplayHeadFilter] is, and it bounds the comparison to the head and to a
+ * 2 s window (R53). A line with no parseable stamp returns false.
  *
  * **Local time, no year.** The stamp is in [zone] with no year. It is read
  * in whichever of the start's year, the one before, or the one after lands
- * nearest the start — so a `12-31` stamp against a `01-01` start is last
+ * nearest the start. So a `12-31` stamp against a `01-01` start is last
  * year's (before), and a `01-01` stamp against a `12-31` start is next
  * year's (not before). A date that does not exist in a candidate year
- * (`02-29`) just skips that year. In the autumn DST overlap, where one
- * local time names two instants, the later one is used: a stamp is dropped
- * only if it is before the start under *every* reading.
- *
- * **Known residual.** If the wall clock steps backwards mid-session, lines
- * logged after the step are stamped before the epoch and are dropped. The
- * `-T` epoch itself has the same exposure (see [logcatProcessBuilder]).
+ * (`02-29`) just skips that year. In the autumn DST overlap, where one local
+ * time names two instants, the later one is used, so a stamp counts as
+ * before only if it is before under *every* reading.
  */
 internal fun stampedBefore(
     line: String,
@@ -63,9 +119,16 @@ internal fun stampedBefore(
     zone: ZoneId,
 ): Boolean {
     val start = Instant.ofEpochMilli(sinceEpochMillis)
-    val stamp = leadingStamp(line)?.let { nearestInstant(it, start, zone) }
+    val stamp = stampInstant(line, start, zone)
     return stamp != null && stamp.isBefore(start)
 }
+
+/** [line]'s stamp as an instant, read as [stampedBefore] describes; null if it has none. */
+private fun stampInstant(
+    line: String,
+    start: Instant,
+    zone: ZoneId,
+): Instant? = leadingStamp(line)?.let { nearestInstant(it, start, zone) }
 
 /**
  * The date and time of [line]'s leading stamp, or null if it has none or it

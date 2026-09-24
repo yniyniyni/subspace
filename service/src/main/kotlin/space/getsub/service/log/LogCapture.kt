@@ -165,7 +165,7 @@ internal fun interface LineSink {
  * write path: every line drained after [stop] goes through [redactLine] like
  * every other; only the sentinel itself — matched raw, in [LogcatReader.lines]
  * — is dropped instead of written. So is a line `-T` replayed from before the
- * capture's start ([stampedBefore], R50): a drop, never an unredacted write.
+ * capture's start ([ReplayHeadFilter], R50/R53): a drop, never an unredacted write.
  *
  * @param readerFactory builds one [LogcatReader] per capture, following
  *   `logcat` from the given wall-clock epoch (ms) — see [logcatProcessBuilder].
@@ -177,7 +177,7 @@ internal fun interface LineSink {
  *   not block. A seam so tests can fire the deadline by hand.
  * @param clock wall-clock milliseconds, read inside [start] for `-T`.
  * @param zone the local zone `threadtime` stamps are printed in, read inside
- *   [start] for the replay filter ([stampedBefore], R50). A seam for tests.
+ *   [start] for the replay filter ([ReplayHeadFilter], R50/R53). A seam for tests.
  * @param startThread starts a capture thread running the given body. A seam
  *   so tests can join the threads they drive.
  */
@@ -296,10 +296,10 @@ internal class LogCapture(
      * The old capture ends at its sentinel, which was logged before this
      * start's `-T` epoch was read, so the ring gets the old session's tail and
      * then the new session with no interleaving — I3's guarantee, kept across
-     * the drain. What `-T` replays from before the epoch is dropped by stamp
-     * ([stampedBefore]); a line stamped in the epoch's own millisecond is kept
-     * and may be a duplicate — accepted over losing a real line (see
-     * [logcatProcessBuilder]).
+     * the drain. What `-T` replays at the head of the new capture — stamped
+     * within 2 s before its epoch — is dropped by stamp ([ReplayHeadFilter],
+     * R53); a line stamped in the epoch's own millisecond is kept and may be a
+     * duplicate — accepted over losing a real line (see [logcatProcessBuilder]).
      */
     fun start() {
         synchronized(lock) {
@@ -396,10 +396,11 @@ internal class LogCapture(
      * from the [Sequence] overload above so that overload stays usable with a
      * plain, reader-free sequence in tests of the redaction pipeline itself.
      *
-     * @param sinceEpochMillis this capture's `-T` epoch. Lines stamped before
-     *   it are replays and are dropped ([stampedBefore], R50) — before
-     *   redaction, which every kept line still goes through unchanged. Null:
-     *   no stamp filter. The markers are never filtered.
+     * @param sinceEpochMillis this capture's `-T` epoch. Replays at the head
+     *   of the stream, stamped within 2 s before it, are dropped
+     *   ([ReplayHeadFilter], R50/R53) — before redaction, which every kept
+     *   line still goes through unchanged. Null: no stamp filter. The markers
+     *   are never filtered.
      * @param localZone the zone the `threadtime` stamps are in.
      */
     internal fun captureOnce(
@@ -412,7 +413,7 @@ internal class LogCapture(
             if (sinceEpochMillis == null) {
                 lines
             } else {
-                lines.filterNot { stampedBefore(it, sinceEpochMillis, localZone) }
+                ReplayHeadFilter(sinceEpochMillis, localZone).let { head -> lines.filter(head::keep) }
             },
         )
         if (reader.endedWithError) {

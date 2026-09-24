@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import space.getsub.service.log.LineSink
 import space.getsub.service.log.LogCapture
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -81,6 +82,7 @@ class LogCaptureDrainTest {
     private fun capture(
         sink: LineSink,
         logcats: List<FakeLogcat>,
+        zone: ZoneId = ZoneOffset.UTC,
     ): LogCapture {
         var nextReader = 0
         var nextEmit = 0
@@ -94,7 +96,7 @@ class LogCaptureDrainTest {
             emitSentinel = { sentinel -> logcats[nextEmit++].logd.log(sentinel, tag = "LogCapture") },
             armDeadline = { delay, onDeadline -> deadlines += delay to onDeadline },
             clock = { START_EPOCH_MILLIS },
-            zone = { ZoneOffset.UTC },
+            zone = { zone },
             startThread = { body ->
                 thread(name = CAPTURE_THREAD, isDaemon = true) { body() }.also { threads += it }
             },
@@ -578,6 +580,100 @@ class LogCaptureDrainTest {
         joinAll()
 
         assertEquals(listOf(START_EPOCH_MILLIS), sinces)
+    }
+
+    /** A `threadtime` line with a chosen stamp; START_EPOCH_MILLIS is 2024-09-10T20:26:40.123Z. */
+    private fun stamped(
+        stamp: String,
+        body: String,
+    ) = "09-10 $stamp  1234  5678 I TunnelService: $body"
+
+    /** Feeds [lines] straight into the pipe of a fresh capture, stops it, and returns what reached the ring. */
+    private fun captureRaw(
+        vararg lines: String,
+        zone: ZoneId = ZoneOffset.UTC,
+    ): List<String> {
+        val logcat = FakeLogcat(FakeLogd())
+        val sink = RecordingSink()
+        val capture = capture(sink, listOf(logcat), zone)
+        capture.start()
+        lines.forEach(logcat.logd.pipe::feed)
+        stopPromptly(capture)
+        logcat.logd.deliver()
+        joinAll()
+        return sink.written.toList()
+    }
+
+    /**
+     * Review I-A / ruling R53: a westward zone change mid-session makes
+     * `logcat` print stamps an hour "before" the epoch. Those are real
+     * session lines — the filter is off once the head has passed.
+     */
+    @Test
+    fun `a mid-session line stamped an hour before the epoch is kept`() {
+        val lines =
+            listOf(
+                stamped("20:26:40.500", "tunnel started"),
+                stamped("19:26:41.000", "teardown[lifecycle] done +88ms"),
+            )
+        assertEquals(lines, captureRaw(*lines.toTypedArray()))
+    }
+
+    /** R53: a clock stepped back more than 2 s at the head is a discontinuity, not a replay. */
+    @Test
+    fun `a backwards clock step of more than 2 s at the head is kept`() {
+        val lines =
+            listOf(
+                stamped("20:26:35.000", "tunnel started"),
+                stamped("20:26:39.000", "dial failed"),
+                stamped("20:26:40.200", "teardown[lifecycle] done +3ms"),
+            )
+        assertEquals(lines, captureRaw(*lines.toTypedArray()))
+    }
+
+    /** R53: the head replay the device showed — within 2 s before the epoch — is still dropped. */
+    @Test
+    fun `a head replay within 2 s before the epoch is dropped`() {
+        val fresh = stamped("20:26:40.200", "tunnel started")
+        val written =
+            captureRaw(
+                "--------- beginning of main",
+                stamped("20:26:38.200", "previous session: tunnel started"),
+                stamped("20:26:39.700", "previous session: done"),
+                fresh,
+            )
+        assertEquals(2, written.size)
+        assertTrue("banner dropped: $written", "beginning of main" in written[0])
+        assertEquals(fresh, written[1])
+    }
+
+    /** R53: once one line at or after the epoch has passed, stamps are no longer consulted. */
+    @Test
+    fun `after an at-or-after line, an earlier-stamped line is kept`() {
+        val lines =
+            listOf(
+                stamped("20:26:40.200", "tunnel started"),
+                stamped("20:26:39.900", "after a small NTP step back"),
+            )
+        assertEquals(lines, captureRaw(*lines.toTypedArray()))
+    }
+
+    /**
+     * Review M-B: [LogCapture.start] reads the zone seam and the filter uses
+     * it. The epoch is 22:26:40.123 in Stockholm (CEST); a 22:26:40.000 stamp
+     * is a replay only when read in that zone — read as UTC it is two hours
+     * after, and would be kept.
+     */
+    @Test
+    fun `the replay filter reads stamps in the zone start was given`() {
+        val fresh = stamped("22:26:40.500", "tunnel started")
+        val written =
+            captureRaw(
+                stamped("22:26:40.000", "previous session: done"),
+                fresh,
+                zone = ZoneId.of("Europe/Stockholm"),
+            )
+        assertEquals(listOf(fresh), written)
     }
 
     private companion object {

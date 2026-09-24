@@ -2,9 +2,11 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.service
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import space.getsub.service.log.ReplayHeadFilter
 import space.getsub.service.log.stampedBefore
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -114,5 +116,44 @@ class LogcatStampTest {
         assertFalse(stampedBefore(line("10-25 02:30:00.000"), start, stockholm))
         // Unambiguously before: 01:59 CEST.
         assertTrue(stampedBefore(line("10-25 01:59:00.000"), start, stockholm))
+    }
+
+    /** R53: [ReplayHeadFilter] — what a capture actually keeps, line by line. */
+    private fun kept(vararg stamps: String): List<String> {
+        val filter = ReplayHeadFilter(s20Start, utc)
+        return stamps.map { if (it.startsWith("-")) it else line(it) }.filter(filter::keep)
+    }
+
+    @Test
+    fun `the head filter drops only replays within 2 s before the epoch`() {
+        assertEquals(
+            listOf(line("09-24 10:57:48.911")),
+            kept("09-24 10:57:46.911", "09-24 10:57:48.535", "09-24 10:57:48.911"),
+        )
+    }
+
+    @Test
+    fun `a head stamp more than 2 s before the epoch is kept, and ends the head`() {
+        assertEquals(
+            listOf(line("09-24 10:57:46.910"), line("09-24 10:57:48.535")),
+            kept("09-24 10:57:46.910", "09-24 10:57:48.535"),
+        )
+    }
+
+    @Test
+    fun `an at-or-after line ends the head for good`() {
+        assertEquals(
+            listOf(line("09-24 10:57:49.000"), line("09-24 10:57:48.535"), line("09-24 09:57:49.000")),
+            kept("09-24 10:57:49.000", "09-24 10:57:48.535", "09-24 09:57:49.000"),
+        )
+    }
+
+    @Test
+    fun `unparseable lines are kept and leave the head open`() {
+        val banner = "--------- beginning of main"
+        assertEquals(
+            listOf(banner, line("09-24 10:57:49.000")),
+            kept(banner, "09-24 10:57:48.535", "09-24 10:57:49.000"),
+        )
     }
 }

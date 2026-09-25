@@ -1523,9 +1523,22 @@ Mandatory rules:
       `docs/agent/roadmap.md`'s M8.5 section.
 - [ ] Traffic counters, live log viewer — **M8.5.** Counters read
       `hev-socks5-tunnel`'s own TUN-level counters (§14.4); the log viewer
-      reads a redacted on-disk ring (§5.6). Implemented on
-      `feat/m8.5-observability` (Parts 1–2); the M8.5 spec's §9 device
-      checklist that would tick this box has not been run.
+      reads a redacted on-disk ring (§5.6). Parts 1–2 were implemented on
+      `feat/m8.5-observability` and verified on hardware (Pixel 8, Android
+      17) between 2026-09-21 and 2026-09-25. The checks covered: no secrets
+      in the ring; counter accuracy; totals and per-tag rows surviving both
+      restart branches; nothing extra listening with the breakdown off; ring
+      rotation; and teardown lines, `done` included, captured on normal,
+      short and burst sessions. **The box stays unticked**: the M8.5 spec's
+      §9 ties it to rows 9 and 13 as well, and those test Part 3's health
+      dimension, which is not built. Known limits, recorded in the M8.5
+      research notes:
+      - Lines that logd drops on write under device-wide log pressure
+        cannot be recovered by any logcat-based capture. The ring marks
+        the gap rather than hiding it.
+      - The loopback-cleartext fix for API < 37 is not yet verified on a
+        device below 37.
+      - The viewer does not tail live yet (Part 3).
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization
 

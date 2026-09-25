@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -24,6 +25,7 @@ import space.getsub.core.data.GeoInstallRequest
 import space.getsub.core.data.GeoInstallResult
 import space.getsub.core.data.InstalledGeoAsset
 import space.getsub.core.data.ThemePreference
+import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.DnsResolver
 import space.getsub.core.model.DnsTransport
 import space.getsub.core.model.GeoDataKind
@@ -181,6 +183,13 @@ class SettingsViewModelTest {
             _batteryPromptShown.value = shown
         }
 
+        private val _perTagBreakdown = MutableStateFlow(false)
+        override val perTagBreakdown: Flow<Boolean> = _perTagBreakdown.asStateFlow()
+
+        override suspend fun setPerTagBreakdown(enabled: Boolean) {
+            _perTagBreakdown.value = enabled
+        }
+
         var ignoringBatteryOptimizations: Boolean = false
 
         override suspend fun isIgnoringBatteryOptimizations(): Boolean = ignoringBatteryOptimizations
@@ -197,6 +206,23 @@ class SettingsViewModelTest {
     }
 
     private class FakeAppVersionSource(override val version: String = "0.1.0-alpha01") : AppVersionSource
+
+    /**
+     * F2 / ruling R39: a controllable stand-in for [TunnelClient.state][space.getsub.service.TunnelClient.state]
+     * — [publish] simulates what the real service would report, the same way
+     * [space.getsub.feature.home.HomeViewModelTest]'s own fake connection controls
+     * `ConnectionState` for [space.getsub.feature.home.HomeViewModel].
+     */
+    private class FakeTunnelSessionSource(
+        initial: ConnectionState = ConnectionState.Disconnected,
+    ) : TunnelSessionSource {
+        private val _state = MutableStateFlow(initial)
+        override val state: StateFlow<ConnectionState> = _state.asStateFlow()
+
+        fun publish(next: ConnectionState) {
+            _state.value = next
+        }
+    }
 
     /**
      * Records every [install] call and returns a canned [GeoInstallResult] per filename (default
@@ -807,5 +833,212 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.showBatteryPrompt shouldBe false
+        }
+
+    // ── M8.5: the per-tag breakdown toggle (Task 15) ────────────────────────
+
+    @Test
+    fun `the breakdown setting survives a viewmodel restart`() =
+        runTest {
+            val source = FakeSettingsSource()
+            viewModel(source).onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+
+            viewModel(source).state.value.perTagBreakdown shouldBe true
+        }
+
+    /** Not one of §7.2's three survival settings, so it must never raise the Doze prompt. */
+    @Test
+    fun `turning on the breakdown does not prompt about battery`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe false
+        }
+
+    // ── I-2 / ruling R43 (revises F2 / ruling R39): session-scoped notice ───
+    //
+    // TunnelService.startCore reads perTagBreakdown once, at connect, and is deliberately not
+    // restarted just to apply a change (ARCHITECTURE.md §10.4).
+    // SettingsState.perTagBreakdownSessionNoticeVisible tells Settings whether to say so, and is
+    // now derived purely from sessionConnected -- not from a latch of what the user did -- so
+    // these cover the two cases review finding I-2 showed the old one-way latch got wrong (a
+    // second toggle within one session, and a ViewModel recreated by a screen navigation) plus
+    // the ordinary connect/disconnect transitions the old F2 tests already covered.
+
+    private fun connectedSession() = FakeTunnelSessionSource(initial = ConnectionState.Connected(0L, 1080, 0))
+
+    @Test
+    fun `the session notice is visible while connected, before any toggle`() =
+        runTest {
+            // Unlike the removed latch -- which only ever became true from inside
+            // onPerTagBreakdownChanged -- this is a fact about the running session, not a
+            // reaction to an edit: visible even when the switch has never been touched.
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    connectedSession(),
+                )
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe true
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+        }
+
+    @Test
+    fun `the session notice is not visible while disconnected`() =
+        runTest {
+            // Constructor default (DisconnectedTunnelSessionSource): no session running, and the
+            // very next connect reads the live value directly -- nothing to say the notice about.
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe false
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe false
+        }
+
+    /**
+     * Review finding I-2, case (a): a session that started with the breakdown **on**, toggled
+     * off and then back on. Under the removed latch this re-armed on the second toggle and the
+     * screen picked the "on" string ("won't start collecting until you reconnect") for a session
+     * that had been collecting the whole time -- wrong-direction on the security-relevant half.
+     * The notice here carries no direction, so there is nothing for a second toggle to get wrong:
+     * it stays visible throughout, and [perTagBreakdown] simply tracks the switch.
+     */
+    @Test
+    fun `toggling the breakdown off then back on in one connected session never states a false direction`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    connectedSession(),
+                )
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdown shouldBe false // FakeSettingsSource's own default
+
+            viewModel.onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdown shouldBe true
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+
+            // The toggle back -- the case the old latch got wrong.
+            viewModel.onPerTagBreakdownChanged(false)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdown shouldBe false
+            // Still visible, still the one direction-independent string -- true whichever way
+            // perTagBreakdown just moved, so this assertion alone rules out a stale "on" reading.
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+            viewModel.state.value.sessionConnected shouldBe true
+        }
+
+    /**
+     * Review finding I-2, case (b): navigating away from Settings and back recreates the
+     * `ViewModel` (`SettingsScreen.kt`'s `hiltViewModel()` is scoped to the nav entry). Under the
+     * removed latch the fresh instance's `perTagBreakdownPendingReconnect` defaulted to `false`,
+     * silently losing the notice while the running session's exposure had not changed --
+     * restoring F2's original finding one navigation later. Modelled here by constructing a
+     * second `SettingsViewModel` against the *same* still-connected [FakeTunnelSessionSource],
+     * the same "shared fake, fresh instance" shape `theme survives a viewmodel restart` uses.
+     */
+    @Test
+    fun `the session notice survives a viewmodel recreation while still connected`() =
+        runTest {
+            val settingsSource = FakeSettingsSource()
+            val sessionSource = connectedSession()
+            val viewModel =
+                SettingsViewModel(
+                    settingsSource,
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+            viewModel.onPerTagBreakdownChanged(true)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+
+            // Simulates SettingsScreen navigating away and back: a brand-new ViewModel instance,
+            // no memory of the toggle above, resubscribing to the same ongoing session.
+            val recreated =
+                SettingsViewModel(
+                    settingsSource,
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+
+            // Correct immediately, with no further action -- StateFlow hands a fresh subscriber
+            // its current value, so this does not depend on any write this ViewModel makes.
+            recreated.state.value.sessionConnected shouldBe true
+            recreated.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+            recreated.state.value.perTagBreakdown shouldBe true
+        }
+
+    @Test
+    fun `disconnecting hides the session notice -- nothing running left to describe`() =
+        runTest {
+            val sessionSource = connectedSession()
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
+
+            sessionSource.publish(ConnectionState.Disconnected)
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe false
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe false
+        }
+
+    /**
+     * A fresh [ConnectionState.Connected] — whether from an ordinary reconnect or a
+     * retained-TUN restart, which also re-reads the setting via `resolveAndStartCore` — is a
+     * session again, so the notice is visible again describing *this* session.
+     */
+    @Test
+    fun `a fresh connect shows the session notice again`() =
+        runTest {
+            val sessionSource = connectedSession()
+            val viewModel =
+                SettingsViewModel(
+                    FakeSettingsSource(),
+                    FakeXraySource(),
+                    FakeAppVersionSource(),
+                    FakeGeoAssetSource(),
+                    sessionSource,
+                )
+            advanceUntilIdle()
+
+            sessionSource.publish(ConnectionState.Disconnected)
+            advanceUntilIdle()
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe false
+
+            sessionSource.publish(ConnectionState.Connected(1_000L, 1080, 0))
+            advanceUntilIdle()
+
+            viewModel.state.value.sessionConnected shouldBe true
+            viewModel.state.value.perTagBreakdownSessionNoticeVisible shouldBe true
         }
 }

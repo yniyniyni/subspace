@@ -24,8 +24,14 @@ import space.getsub.core.ui.theme.RobotoMonoFontFamily
  * this component, not a zero, because [value] is formatted by the caller and the
  * caller branches on the measurement's outcome first.
  *
- * The traffic slot is still unfed. M7 owns it, via the Xray stats API (§14.4),
- * and the same rule applies — render it when there is something real to render.
+ * **M8.5 is the milestone that fed the traffic slot**, from `:feature:home`, and
+ * the same rule applies — render it when there is something real to render. The
+ * numbers come from `hev-socks5-tunnel`'s own TUN-level counters, not the Xray
+ * stats API: libXray at this project's pinned version exposes no stats call at
+ * all. `ARCHITECTURE.md` §14.4 still records the superseded decision (Xray's
+ * stats API) as of this writing; this milestone's documentation task corrects
+ * it once the rest of M8.5 lands, deliberately last because that rewrite also
+ * has to record findings from work this task doesn't yet include.
  *
  * @param value the metric, already formatted by the caller (e.g. "42 ms").
  *   This component does not format, round, or unit-suffix its input — that

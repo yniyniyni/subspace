@@ -98,6 +98,15 @@ data object RoutingQrScan
 data object PerApp
 
 /**
+ * The session log viewer (M8.5 spec §3.4), pushed on top of the top-level
+ * destinations — reached from Settings' "Diagnostics" section rather than
+ * the navigation bar, same reasoning as [RoutingList] and [PerApp]. The pill
+ * hides while this is on screen, same reasoning as those two.
+ */
+@Serializable
+data object LogViewer
+
+/**
  * Passed as [RuleSetEditor.ruleSetId] to start the create-new-rule-set flow.
  *
  * [Editor.profileId] uses the identical "an id that does not resolve to an

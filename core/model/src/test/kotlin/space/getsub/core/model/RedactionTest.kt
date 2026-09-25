@@ -345,4 +345,49 @@ class RedactionTest {
 
         redact(once) shouldBe once
     }
+
+    /**
+     * D1 (device verification, 2026-09-16): `TunnelService`'s M8 teardown
+     * instrumentation used to log `"teardown: tun2socks.stop exit +33ms"`.
+     * Two of the rules above ate it down to
+     * `"<redacted>: <redacted> exit +33ms"` — [BARE_HOST_PREFIX_PATTERN]
+     * claimed the bare `teardown:` token, and [HOSTNAME_PATTERN] claimed
+     * `tun2socks.stop` because a dotted identifier parses exactly like a
+     * hostname. Durations survived; the phase that took them did not, which
+     * is the one thing this instrumentation exists to answer during a W7
+     * hang.
+     *
+     * The fix is at the emission site, not here: `Redaction.kt` is correct to
+     * treat both shapes as candidate hosts, since a real hostname is
+     * indistinguishable from `tun2socks.stop` by shape alone. `TunnelService`
+     * now logs `"teardown[<phase>] <event>"` — bracketed, never a bare
+     * `word:` before whitespace, never a dotted phase name — and this test
+     * pins that shape against the real [redact], not a description of it. If
+     * a future edit reformats a teardown line back into a colon-terminated
+     * prefix or reintroduces a dot in the phase name, this fails.
+     */
+    @Test
+    fun `teardown phase names survive redaction`() {
+        val linesToPhases =
+            listOf(
+                "teardown[lifecycle] enter" to "lifecycle",
+                "teardown[lifecycle] superseded, nothing taken +12ms" to "lifecycle",
+                "teardown[lifecycle] state taken +3ms" to "lifecycle",
+                "teardown[tun2socks-stop] enter" to "tun2socks-stop",
+                "teardown[tun2socks-stop] exit +33ms" to "tun2socks-stop",
+                "teardown[fd-close] exit +113ms" to "fd-close",
+                "teardown[xray-stopBlocking] enter (present=true)" to "xray-stopBlocking",
+                "teardown[xray-stopBlocking] exit +148ms" to "xray-stopBlocking",
+                "teardown[lifecycle] done +162ms" to "lifecycle",
+            )
+        linesToPhases.forEach { (line, phase) ->
+            withClue(line) {
+                val out = redact(line)
+                out shouldContain phase
+                // Nothing in these lines is host-, UUID-, IP- or key-shaped, so
+                // nothing should be touched at all — not just the phase name.
+                out shouldBe line
+            }
+        }
+    }
 }

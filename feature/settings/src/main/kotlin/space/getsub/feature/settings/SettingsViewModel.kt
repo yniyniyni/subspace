@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import space.getsub.core.data.GeoInstallRequest
 import space.getsub.core.data.GeoInstallResult
 import space.getsub.core.data.ThemePreference
+import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.DnsResolver
 import space.getsub.core.model.DnsTransport
 import space.getsub.core.model.DnsValidation
@@ -53,6 +54,7 @@ constructor(
     private val xraySource: XraySource,
     appVersionSource: AppVersionSource,
     private val geoAssetSource: GeoAssetSource,
+    private val tunnelSessionSource: TunnelSessionSource = DisconnectedTunnelSessionSource,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsState(appVersion = appVersionSource.version))
     val state: StateFlow<SettingsState> = _state.asStateFlow()
@@ -130,6 +132,20 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(failClosed = enabled) } }
             .launchIn(viewModelScope)
 
+        settingsSource.perTagBreakdown
+            .onEach { enabled -> _state.update { it.copy(perTagBreakdown = enabled) } }
+            .launchIn(viewModelScope)
+
+        // Ruling R43 (revises F2 / ruling R39): mirrors ConnectionState (ARCHITECTURE.md §5.5)
+        // purely so SettingsState.perTagBreakdownSessionNoticeVisible has something to derive
+        // from — see that property's own KDoc for why this plain mirror, with no latch of what
+        // the user did layered on top, is what closes review finding I-2.
+        tunnelSessionSource.state
+            .onEach { connectionState ->
+                _state.update { it.copy(sessionConnected = connectionState is ConnectionState.Connected) }
+            }
+            .launchIn(viewModelScope)
+
         viewModelScope.launch {
             val version = xraySource.version()
             _state.update {
@@ -167,6 +183,26 @@ constructor(
             settingsSource.setFailClosed(enabled)
             maybePromptForBattery(justEnabled = enabled)
         }
+    }
+
+    /**
+     * Not a survival setting (§7.2's three triggers are always-on, boot autostart and
+     * fail-closed), so this never routes through [maybePromptForBattery] — the copy in
+     * [SettingsDiagnosticsSection] is this toggle's own warning, about exposure rather than about
+     * Doze killing the tunnel.
+     *
+     * Ruling R43 (revises F2 / ruling R39): does **not** restart the core to apply the change —
+     * `ARCHITECTURE.md` §10.4's principle is that a diagnostic setting must not tear down a
+     * working tunnel to apply itself, and `allocateSessionPorts`/the `Metrics` tag collision
+     * already degrade the same way rather than disrupt. So the persisted value changes
+     * immediately, same as before. Unlike the F2 fix this revises, this function no longer marks
+     * anything: [SettingsState.perTagBreakdownSessionNoticeVisible] is derived from
+     * [SettingsState.sessionConnected] alone, not from a flag this call would have to set (and
+     * that a later opposite-direction call would have to reinterpret) — see that property's own
+     * KDoc for why a latch here produced a false statement on a second toggle within one session.
+     */
+    fun onPerTagBreakdownChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setPerTagBreakdown(enabled) }
     }
 
     /**

@@ -20,6 +20,7 @@ import space.getsub.core.model.LatencyResult
 import space.getsub.core.model.LatencyTarget
 import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
+import space.getsub.core.model.TrafficSample
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -64,6 +65,16 @@ public class TunnelClient private constructor(
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     public val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
+    private val _traffic = MutableStateFlow<TrafficSample?>(null)
+
+    /**
+     * Null until the current session reports its first sample, and null again
+     * once that session ends — the same going-stale cache [state] documents
+     * (§5.5): a traffic total outliving its session is that bug with a
+     * different field.
+     */
+    public val traffic: StateFlow<TrafficSample?> = _traffic.asStateFlow()
+
     /**
      * Whether the Binder handshake has completed since the latest [bind].
      *
@@ -88,10 +99,26 @@ public class TunnelClient private constructor(
 
     private var service: ITunnelService? = null
 
+    /** D4: see [TrafficSessionTracker]'s own KDoc for why `_traffic` cannot be cleared by state name alone. */
+    private val trafficSessionTracker = TrafficSessionTracker()
+
     private val callback =
         object : ITunnelCallback.Stub() {
             override fun onStateChanged(state: ConnectionStateParcel) {
-                _state.value = state.toState()
+                val newState = state.toState()
+                // D4: a session boundary must not leave the previous
+                // session's traffic sample sitting in the flow for the next
+                // session's first tick to compose against — see
+                // TrafficSessionTracker's KDoc for why this is not simply
+                // "clear whenever the state is not Connected".
+                if (!trafficSessionTracker.observe(newState)) {
+                    _traffic.value = null
+                }
+                _state.value = newState
+            }
+
+            override fun onTrafficSample(sample: TrafficSampleParcel) {
+                _traffic.value = sample.toSample()
             }
         }
 
@@ -105,7 +132,18 @@ public class TunnelClient private constructor(
                 try {
                     svc.registerCallback(callback)
                     // §5.5: re-read the real state on every bind.
-                    _state.value = svc.state.toState()
+                    val refreshed = svc.state.toState()
+                    // Resyncs the D4 tracker to the freshly re-read state —
+                    // this bypasses onStateChanged, so without this the
+                    // tracker's notion of session liveness would still be
+                    // whatever it was before this bind (stale after an
+                    // unbind/rebind, or simply unset on the first ever bind).
+                    // _traffic is already null here (initial value, or unbind's
+                    // own unconditional clear below), so the return value is
+                    // unused — this call exists to set up correctly-judged
+                    // clearing decisions for onStateChanged calls that follow.
+                    trafficSessionTracker.observe(refreshed)
+                    _state.value = refreshed
                     service = svc
                     // Publish this last. A worker that observes true must also
                     // observe the refreshed state above, never the stale cache.
@@ -125,6 +163,11 @@ public class TunnelClient private constructor(
                 // about whether the tunnel is down. Claiming Disconnected here
                 // would be §5.5's lying UI. Rebinding re-reads the truth.
                 _state.value = ConnectionState.Disconnecting
+                // :bg died — its own session is what [traffic] tracked, and
+                // that session's fate is now unknown. A stale total surviving
+                // this is the same cache-gone-stale bug [state] avoids above.
+                _traffic.value = null
+                trafficSessionTracker.reset()
             }
         }
 
@@ -153,6 +196,10 @@ public class TunnelClient private constructor(
         }
         service = null
         runCatching { context.unbindService(connection) }
+        // This client no longer receives samples for whatever session is or
+        // isn't live — the same reasoning as onServiceDisconnected's clear.
+        _traffic.value = null
+        trafficSessionTracker.reset()
     }
 
     /**

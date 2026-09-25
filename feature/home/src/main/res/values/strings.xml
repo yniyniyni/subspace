@@ -62,4 +62,32 @@
     <string name="home_latency_unsupported">Not testable</string>
     <string name="home_latency_foreign_vpn">Another VPN</string>
     <string name="home_latency_test_description">Latency. Tap to test the active server.</string>
+    <!-- Counted at the TUN (hev-socks5-tunnel's own counters), so this is everything
+         the tunnel carries, including traffic routed direct — not a proxied-vs-direct
+         split. Rendered only for a live session (ConnectionState.Connected); "0 B" is
+         a real measurement, never a placeholder, so unlike latency there is no
+         em-dash variant (§10.1). -->
+    <string name="home_traffic_down">Downloaded</string>
+    <string name="home_traffic_up">Uploaded</string>
+
+    <!-- M8.5 spec §2: the opt-in per-tag breakdown, beneath the tiles above. Nothing
+         under this header renders at all while the developer setting is off — see
+         BreakdownSection's own KDoc for the three states an empty row list can mean. -->
+    <string name="home_breakdown_header">By server</string>
+    <!-- %1$s and %2$s are already-formatted byte counts (formatByteCount), same as the
+         DOWN/UP tiles above — never raw numbers (§10.1). -->
+    <string name="home_breakdown_row_traffic">%1$s down · %2$s up</string>
+    <!-- Shown in place of rows when the setting is on, the active server is a
+         pasted (RAW_JSON) config, and no rows have arrived this connection.
+         Deliberately names NO reason (ruling R51, finding N4): Home cannot see which
+         branch the session ran. The pure passthrough branch (ARCHITECTURE.md §6) cannot
+         carry a stats block, but an override-branch session whose breakdown was dropped
+         by the Metrics tag-collision degrade looks identical from here, and the old
+         "config runs unmodified" reason was false for it. The honest specific reason
+         needs a per-session signal from the service, deferred to Part 3 (R43). "right
+         now" (review M-C): a WORKING override-branch session also shows this until its
+         first metrics poll returns rows, so a claim about the whole connection would be
+         briefly false there; "right now" is true in every case. The resource name
+         reflects when it is shown, not what it claims. -->
+    <string name="home_breakdown_unavailable_passthrough">Per-server traffic isn\'t available for this connection right now</string>
 </resources>

@@ -38,6 +38,7 @@ import space.getsub.feature.routing.RoutingListScreen
 import space.getsub.feature.routing.RoutingQrScanRoute
 import space.getsub.feature.routing.RuleSetEditorScreen
 import space.getsub.feature.settings.SettingsScreen
+import space.getsub.feature.settings.log.LogViewerScreen
 import space.getsub.core.ui.R as CoreUiR
 
 private const val HOME_VALUE = "home"
@@ -46,7 +47,8 @@ private const val SETTINGS_VALUE = "settings"
 
 /**
  * Wires [Home], [Servers], [Settings], [Editor], [QrScan], [SubscriptionDetail],
- * [RoutingList], [RuleSetEditor] and [PerApp] into a [NavHost] behind [FloatingNavigationBar].
+ * [RoutingList], [RuleSetEditor], [PerApp] and [LogViewer] into a [NavHost] behind
+ * [FloatingNavigationBar].
  *
  * [Home], [Servers] and [Settings] are top-level: selecting one navigates
  * with `launchSingleTop` plus `popUpTo(startDestination) { saveState = true }`
@@ -74,7 +76,9 @@ private const val SETTINGS_VALUE = "settings"
  * needed somewhere real to push to; this task retires that placeholder) and,
  * as of Task 9 (M5.5), `PerApp` ([PerAppScreen], from `:feature:routing`,
  * reached from Settings' new "Per-app proxy" row the same way `RoutingList`
- * is reached from its "Routing" row). Every
+ * is reached from its "Routing" row) and, as of M8.5 Task 7, `LogViewer`
+ * ([LogViewerScreen], from `:feature:settings`, reached from Settings' new
+ * "Session log" row the same way). Every
  * destination resolves a `ViewModel` through `hiltViewModel()`, which is why
  * [SubspaceNavHostTest] cannot drive the real [SubspaceNavHost] Hilt-free for
  * any of them — see that file's own KDoc for what that means for its
@@ -157,9 +161,12 @@ fun SubspaceNavHost(
                 // RoutingList — see that composable below.
                 // Task 9 (M5.5): SettingsScreen's new "Per-app proxy" row navigates to
                 // PerApp, same pattern — see routingDestinations below.
+                // M8.5 Task 7: SettingsScreen's new "Session log" row (Diagnostics section)
+                // navigates to LogViewer, same pattern — see routingDestinations below.
                 SettingsScreen(
                     onNavigateToRouting = { navController.navigate(RoutingList) },
                     onNavigateToPerApp = { navController.navigate(PerApp) },
+                    onNavigateToLogViewer = { navController.navigate(LogViewer) },
                 )
             }
             editorDestination(navController)
@@ -210,13 +217,14 @@ fun SubspaceNavHost(
 }
 
 /**
- * `null` for [Editor], [QrScan], [SubscriptionDetail], [RoutingList], [RuleSetEditor] and
- * [PerApp] (and for no current destination yet) — the pill's cue to hide. The `else -> null`
- * branch is what covers the last four: only [Home], [Servers] and [Settings] get an explicit
- * branch, since those are the only three destinations this graph ever wants the pill visible for
- * — Task 15 (M5) confirms [RoutingList] and [RuleSetEditor] fall into that same default bucket
- * alongside [Editor] and [QrScan], and Task 9 (M5.5) confirms [PerApp] falls into it too, rather
- * than adding branches for any of them that would need to (incorrectly) return one of
+ * `null` for [Editor], [QrScan], [SubscriptionDetail], [RoutingList], [RuleSetEditor], [PerApp]
+ * and [LogViewer] (and for no current destination yet) — the pill's cue to hide. The
+ * `else -> null` branch is what covers the last five: only [Home], [Servers] and [Settings] get
+ * an explicit branch, since those are the only three destinations this graph ever wants the pill
+ * visible for — Task 15 (M5) confirms [RoutingList] and [RuleSetEditor] fall into that same
+ * default bucket alongside [Editor] and [QrScan], Task 9 (M5.5) confirms [PerApp] falls into it
+ * too, and M8.5 Task 7 confirms [LogViewer] does as well, rather than adding branches for any of
+ * them that would need to (incorrectly) return one of
  * [HOME_VALUE]/[SERVERS_VALUE]/[SETTINGS_VALUE].
  *
  * `internal`, not `private`, since Task 21: [SubspaceNavHostTest] exercises this mapping
@@ -302,7 +310,10 @@ internal fun NavHostController.navigateToTopLevel(value: String) {
  * purely an extraction, not a behaviour change: every line below was originally unmodified from
  * [SubspaceNavHost]'s previous body. [PerApp] joined them in Task 9 (M5.5) — it is reached from
  * Settings the same way [RoutingList] is, so it belongs in this same grouping rather than back in
- * [SubspaceNavHost]'s own body.
+ * [SubspaceNavHost]'s own body. [LogViewer] joined them in M8.5 Task 7 for the identical reason,
+ * even though its screen lives in `:feature:settings` rather than `:feature:routing` like the
+ * other three — this function's grouping is "reached from Settings, not the bottom nav", not
+ * "same source module".
  */
 /**
  * [Home] — extracted for the same reason [routingDestinations] was: adding the
@@ -417,5 +428,16 @@ private fun NavGraphBuilder.routingDestinations(navController: NavHostController
         // Task 9 (M5.5): the per-app proxy picker, reached from Settings' new
         // "Per-app proxy" row.
         PerAppScreen(onBack = { navController.popBackStack() })
+    }
+    composable<LogViewer> {
+        // M8.5 Task 7: the session log viewer, reached from Settings'
+        // Diagnostics section — folded into this grouping rather than given
+        // its own function, the same `TooManyFunctions` budget reason
+        // [PerApp] itself did not get a separate one. Its screen lives in
+        // `:feature:settings`, not `:feature:routing` like the rest of this
+        // function's destinations, but it is reached from Settings exactly
+        // the way [RoutingList] and [PerApp] are, which is the grouping this
+        // function is actually keyed on.
+        LogViewerScreen(onBack = { navController.popBackStack() })
     }
 }

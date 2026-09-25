@@ -6,6 +6,7 @@ import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -42,6 +43,7 @@ import space.getsub.core.ui.component.ConnectControl
 import space.getsub.core.ui.component.ConnectVisualState
 import space.getsub.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING
 import space.getsub.core.ui.component.StatTile
+import space.getsub.core.ui.format.formatByteCount
 
 private const val UPTIME_TICK_MILLIS = 1_000L
 
@@ -195,7 +197,9 @@ internal fun HomeScreenContent(
             onAddServer = actions.onAddServer,
         )
 
-        LatencyStat(state = state, onTest = actions.onTestLatency)
+        StatTilesRow(state = state, onTest = actions.onTestLatency)
+
+        BreakdownSection(state = state)
 
         AssistChip(
             onClick = actions.onAddServer,
@@ -205,15 +209,18 @@ internal fun HomeScreenContent(
             },
         )
 
-        // Still deliberately NOT rendered: the DOWN/UP tiles and the route chip
-        // the design prototype shows. This build measures neither traffic volume
-        // (M7, via the Xray stats API — §14.4) nor per-app routing (M5), and
-        // drawing them with zeros or placeholder text would tell the user this
-        // security tool measured something it did not (§10.1).
+        // Still deliberately NOT rendered: the route chip the design prototype
+        // shows. This build measures no per-app routing yet (M5), and drawing
+        // it with placeholder text would tell the user this security tool
+        // measured something it did not (§10.1).
         //
-        // The LATENCY tile above is the first of that row to be fed, because
-        // M4.5 is the first milestone with a real number for it — and it still
-        // renders an em-dash rather than a zero until someone actually measures.
+        // The LATENCY tile was the first of that row to be fed (M4.5). The
+        // DOWN/UP tiles beside it are fed by M8.5, from hev-socks5-tunnel's own
+        // TUN-level counters — libXray at this project's pinned version exposes
+        // no stats call at all. ARCHITECTURE.md §14.4 still names Xray's stats
+        // API as of this writing; that is stale, and this milestone's
+        // documentation task — deliberately last, once the rest of M8.5 exists
+        // to describe — corrects it.
     }
 }
 
@@ -290,29 +297,41 @@ private const val MILLIS_PER_SECOND = 1_000L
  * genuinely empty, since there is nothing to navigate to and pick from yet.
  */
 /**
- * The LATENCY slot of the design system's [StatTile], finally fed.
+ * The design system's [StatTile] row: LATENCY, and — for a live session —
+ * DOWN/UP beside it.
  *
  * `StatTile`'s own KDoc asked that whichever milestone first has a real value to
- * show be the one to render it. M4.5 is that milestone for latency; the traffic
- * slot stays unfed until M7 has counters.
+ * show be the one to render it. M4.5 is that milestone for latency; M8.5 is the
+ * same for traffic, from `hev-socks5-tunnel`'s own TUN-level counters — not the
+ * Xray stats API, which does not exist at this project's pinned libXray version.
  *
- * Every non-`OK` outcome renders text rather than a number. `delayMillis` is read
- * on the `OK` branch alone: libXray reports a failed ping as a `10000`/`11000`
- * sentinel, and `StatTile` formats nothing itself — it renders exactly what it is
- * handed, which makes formatting the caller's responsibility and this branch the
- * place §10.1 is either honoured or violated.
+ * LATENCY: every non-`OK` outcome renders text rather than a number.
+ * `delayMillis` is read on the `OK` branch alone: libXray reports a failed ping
+ * as a `10000`/`11000` sentinel, and `StatTile` formats nothing itself — it
+ * renders exactly what it is handed, which makes formatting the caller's
+ * responsibility and this branch the place §10.1 is either honoured or
+ * violated. Tapping measures, and so does ping-on-launch once per session.
+ * Nothing else: no measurement on connect, and no timer.
  *
- * Tapping measures, and so does ping-on-launch once per session. Nothing else:
- * no measurement on connect, and no timer.
+ * DOWN/UP: rendered only while [HomeState.connection] is
+ * [ConnectionState.Connected] — never on [HomeState.traffic] alone, because an
+ * ordinary in-session disconnect while the UI stays bound does not clear
+ * `TunnelClient`'s cached sample (see [TunnelConnection.traffic]'s KDoc).
+ * [formatByteCount] does the formatting, same as [HomeState.latency]'s branch
+ * above; `0 B` for no traffic yet is a real measurement, not a placeholder, so
+ * unlike latency there is no em-dash variant here (§10.1). Not tappable: there
+ * is no on-demand action for traffic the way there is for a latency test, only
+ * the passive per-second stream [HomeViewModel] mirrors into
+ * [HomeState.traffic].
  */
 @Composable
-private fun LatencyStat(
+private fun StatTilesRow(
     state: HomeState,
     onTest: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val latency = state.latency
-    val value =
+    val latencyValue =
         when {
             state.isMeasuringLatency -> stringResource(R.string.home_latency_testing)
             latency == null -> stringResource(R.string.home_latency_none)
@@ -321,20 +340,37 @@ private fun LatencyStat(
             latency.outcome == LatencyOutcome.FOREIGN_VPN -> stringResource(R.string.home_latency_foreign_vpn)
             else -> stringResource(R.string.home_latency_failed)
         }
-    val hint = stringResource(R.string.home_latency_test_description)
-    StatTile(
-        value = value,
-        label = stringResource(R.string.home_latency_label),
-        accent = false,
-        modifier =
-        modifier
-            .clickable(
-                enabled = state.activeProfile != null && !state.isMeasuringLatency,
-                role = Role.Button,
-                onClick = onTest,
+    val latencyHint = stringResource(R.string.home_latency_test_description)
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        StatTile(
+            value = latencyValue,
+            label = stringResource(R.string.home_latency_label),
+            accent = false,
+            modifier =
+            Modifier
+                .clickable(
+                    enabled = state.activeProfile != null && !state.isMeasuringLatency,
+                    role = Role.Button,
+                    onClick = onTest,
+                )
+                .semantics { contentDescription = latencyHint },
+        )
+        if (state.connection is ConnectionState.Connected) {
+            StatTile(
+                value = formatByteCount(state.traffic?.downlinkBytes ?: 0),
+                label = stringResource(R.string.home_traffic_down),
+                accent = false,
             )
-            .semantics { contentDescription = hint },
-    )
+            StatTile(
+                value = formatByteCount(state.traffic?.uplinkBytes ?: 0),
+                label = stringResource(R.string.home_traffic_up),
+                accent = false,
+            )
+        }
+    }
 }
 
 /**

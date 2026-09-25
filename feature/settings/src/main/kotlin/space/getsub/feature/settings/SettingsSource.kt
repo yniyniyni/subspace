@@ -118,6 +118,15 @@ internal interface SettingsSource {
     suspend fun setBatteryPromptShown(shown: Boolean)
 
     /**
+     * Whether xray's `stats`/`policy`/`metrics` blocks are emitted for the per-server traffic
+     * breakdown. See [SettingsRepository.perTagBreakdown] — its KDoc is where the security
+     * reasoning behind the default lives.
+     */
+    val perTagBreakdown: Flow<Boolean>
+
+    suspend fun setPerTagBreakdown(enabled: Boolean)
+
+    /**
      * A fresh platform read of whether Android already exempts this app from battery
      * optimization — not a [Flow], since the only caller needs its value at one instant (the
      * moment a survival setting is switched on), the same one-shot shape [hwid] already uses for
@@ -200,6 +209,10 @@ constructor(
     override val batteryPromptShown: Flow<Boolean> = settingsRepository.batteryPromptShown
 
     override suspend fun setBatteryPromptShown(shown: Boolean) = settingsRepository.setBatteryPromptShown(shown)
+
+    override val perTagBreakdown: Flow<Boolean> = settingsRepository.perTagBreakdown
+
+    override suspend fun setPerTagBreakdown(enabled: Boolean) = settingsRepository.setPerTagBreakdown(enabled)
 
     override suspend fun isIgnoringBatteryOptimizations(): Boolean =
         withContext(Dispatchers.IO) {

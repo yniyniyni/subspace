@@ -28,6 +28,9 @@ internal object Tun2Socks {
     @JvmStatic
     private external fun nativeIsRunning(): Boolean
 
+    @JvmStatic
+    private external fun nativeStats(): LongArray?
+
     /**
      * Starts the tunnel on a background thread owned by the native side.
      *
@@ -51,7 +54,36 @@ internal object Tun2Socks {
 
     val isRunning: Boolean
         get() = nativeIsRunning()
+
+    /**
+     * A raw counter reading, or null when no tunnel is running.
+     *
+     * **This is the boundary where hev's `tx`/`rx` become uplink/downlink**
+     * (spec §1.2) — `tx` is a read *from* the TUN and is therefore uplink. No
+     * caller above this line may use `tx`/`rx` again.
+     *
+     * The values are cumulative since tunnel start and wrap at 4 GiB on 32-bit
+     * ABIs, so no caller may render them directly: `TrafficSampler` turns them
+     * into wrap-safe deltas (spec §1.3).
+     */
+    fun stats(): TunnelCounters? =
+        nativeStats()?.let { v ->
+            TunnelCounters(
+                uplinkBytes = v[0],
+                downlinkBytes = v[1],
+                uplinkPackets = v[2],
+                downlinkPackets = v[3],
+            )
+        }
 }
+
+/** One raw reading from hev. Cumulative, and 32-bit-wrappable — see [Tun2Socks.stats]. */
+internal data class TunnelCounters(
+    val uplinkBytes: Long,
+    val downlinkBytes: Long,
+    val uplinkPackets: Long,
+    val downlinkPackets: Long,
+)
 
 /**
  * hev-socks5-tunnel is configured with YAML, not arguments.

@@ -16,6 +16,7 @@ import space.getsub.core.model.LatencyOptions
 import space.getsub.core.model.LatencyResult
 import space.getsub.core.model.LatencyTarget
 import space.getsub.core.model.Profile
+import space.getsub.core.model.TrafficSample
 import space.getsub.service.TunnelClient
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -38,7 +39,11 @@ internal class BoundTunnelConnection @Inject constructor(
 
     override val measuring: StateFlow<Set<Long>> get() = cache.testing
 
+    override val traffic: StateFlow<TrafficSample?> get() = client.traffic
+
     override val pingOnLaunch: Flow<Boolean> get() = settings.pingOnLaunch
+
+    override val perTagBreakdown: Flow<Boolean> get() = settings.perTagBreakdown
 
     override fun connect(
         profile: Profile,

@@ -3,6 +3,7 @@
 package space.getsub.service;
 
 import space.getsub.service.ConnectionStateParcel;
+import space.getsub.service.TrafficSampleParcel;
 
 /**
  * Pushes tunnel state from :bg to :main.
@@ -13,4 +14,6 @@ import space.getsub.service.ConnectionStateParcel;
  */
 oneway interface ITunnelCallback {
     void onStateChanged(in ConnectionStateParcel state);
+
+    void onTrafficSample(in TrafficSampleParcel sample);
 }

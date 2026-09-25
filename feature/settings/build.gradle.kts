@@ -20,6 +20,16 @@ dependencies {
     // xrayCoreVersion() is the one function :core:xray exports across this
     // boundary for exactly this call.
     implementation(project(":core:xray"))
+    // TunnelSessionSource (F2 / ruling R39): Settings needs to know whether a session is
+    // currently up, so a diagnostic-only setting like per-tag breakdown can tell the user when a
+    // change takes effect immediately vs. waits for reconnect, rather than letting the switch's
+    // new position imply the change is already live. Not a :feature:*-to-:feature:* edge
+    // (checkModuleBoundaries only forbids that one, and :feature:home already depends on
+    // :service the same way, via its own HomeModule/BoundTunnelConnection) — this exposes only
+    // TunnelClient.state through a narrow interface, the same shape
+    // :feature:home's own TunnelConnection already uses for the exact same underlying binder
+    // connection.
+    implementation(project(":service"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.hilt.navigation.compose)

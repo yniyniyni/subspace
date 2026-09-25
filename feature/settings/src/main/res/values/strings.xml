@@ -126,4 +126,29 @@
     <string name="settings_geo_add_custom_action">Add</string>
     <string name="settings_geo_metered_title">Update over mobile data</string>
     <string name="settings_geo_metered_summary">Off by default — the largest database is over 70 MB. \"Update now\" always works, on any network.</string>
+
+    <string name="log_viewer_title">Session log</string>
+    <string name="log_viewer_empty">Nothing logged yet. Connect, and the session\'s log appears here.</string>
+    <string name="log_viewer_refresh">Refresh</string>
+    <string name="log_viewer_clear">Clear</string>
+    <string name="log_viewer_share">Share</string>
+    <string name="log_viewer_redaction_notice">Server addresses, IDs, keys and subscription links are removed before anything is written to this log.</string>
+    <string name="log_viewer_back">Back</string>
+    <!-- Prepended to a shared log that was too large to send in full (log_viewer_share
+         truncates to the newest portion — see shareLogText's own KDoc). -->
+    <string name="log_viewer_share_truncated">Only the most recent part of this log is included below — it was too large to share in full.</string>
+    <string name="settings_section_diagnostics">Diagnostics</string>
+    <string name="settings_logs_title">Session log</string>
+    <string name="settings_logs_summary">Read or share what the tunnel recorded</string>
+    <string name="settings_breakdown_title">Per-server traffic breakdown</string>
+    <string name="settings_breakdown_summary">Show how much traffic went through the proxy versus direct. While connected, this opens a diagnostics port that other apps on your device can also read — leave it off unless you need it.</string>
+    <!-- I-2 / ruling R43 (revises F2 / ruling R39): TunnelService.startCore reads this setting
+         once, at connect, and is deliberately not restarted just to apply a change
+         (ARCHITECTURE.md §10.4) — a working tunnel is not torn down to close a diagnostics port.
+         Shown whenever a session is connected, regardless of the switch's own position or
+         whether it was touched this session: a one-way "pending" flag that only latched on a
+         toggle produced a false statement once the switch was changed back (it kept describing
+         the earlier change, not the running session), and was lost entirely on a screen
+         navigation. This single, direction-independent statement is true in every case. -->
+    <string name="settings_breakdown_session_notice">Applies to your next connection — this session keeps the setting it started with.</string>
 </resources>

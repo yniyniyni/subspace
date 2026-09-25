@@ -5,6 +5,7 @@ package space.getsub.feature.home
 import space.getsub.core.data.StoredProfile
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.LatencyResult
+import space.getsub.core.model.TrafficSample
 
 /**
  * What [HomeScreen] renders.
@@ -42,6 +43,26 @@ internal data class HomeState(
     val latency: LatencyResult? = null,
     /** True while the active profile's measurement is in flight. */
     val isMeasuringLatency: Boolean = false,
+    /**
+     * This session's traffic, mirrored from [TunnelConnection.traffic] verbatim
+     * (§5.5) — never derived locally.
+     *
+     * Null whenever [TunnelConnection.traffic] is null, which includes both "no
+     * session" and the known gap [TunnelConnection.traffic]'s own KDoc and
+     * `TunnelClient.traffic`'s document: an ordinary in-session disconnect while
+     * the UI stays bound does not clear the cache. [HomeScreen] therefore gates
+     * the traffic tiles on [connection] being [ConnectionState.Connected] rather
+     * than on this being non-null alone.
+     */
+    val traffic: TrafficSample? = null,
+    /**
+     * Mirrors [TunnelConnection.perTagBreakdown] — the developer setting, not
+     * derived from [traffic] (M8.5 spec §2). [traffic]`.perTag` is empty for
+     * three different reasons ([TrafficSample.perTag]'s own KDoc): this is
+     * what lets [HomeScreen] tell "off" apart from the other two, which look
+     * identical from an empty list alone.
+     */
+    val perTagBreakdownEnabled: Boolean = false,
 ) {
     /**
      * Whether tapping the connect control should attempt a connection.

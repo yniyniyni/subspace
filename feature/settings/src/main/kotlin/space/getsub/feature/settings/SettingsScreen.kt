@@ -14,9 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
@@ -51,18 +49,16 @@ private val HWID_VALUE_START_PADDING = 56.dp
 private val HWID_VALUE_BOTTOM_PADDING = 8.dp
 
 /**
- * The Settings screen: Appearance, Device ID, Latency testing, Routing, Geo databases and About.
+ * The Settings screen: Appearance, Device ID, Latency testing, DNS, Tunnel, Routing, Geo
+ * databases, Diagnostics and About.
  *
- * **Not drawn**, each because a later milestone owns it, not because it was
- * forgotten:
- *  - Always-on VPN and a log viewer — M7.
- *
- * None of these get a stub, a disabled row, or a "coming soon" entry — an
- * empty control that looks like a feature is worse than no control at all.
- * Routing itself is drawn as of Task 15 (M5): a single row that navigates to
+ * Routing is drawn as of Task 15 (M5): a single row that navigates to
  * `RoutingList` (`:feature:routing`) rather than a stub, since that screen is
  * real and reachable now. Per-app proxy is drawn the same way as of Task 9
  * (M5.5): a row beneath it that navigates to `PerApp` (`:feature:routing`).
+ * Diagnostics — the session log viewer, M8.5's own deliverable — is drawn the
+ * same way again, as of this task: a row navigating to `LogViewer`
+ * (`:feature:settings`'s own [space.getsub.feature.settings.log.LogViewerScreen]).
  *
  * Theme selection here does not (yet) repaint [space.getsub.core.ui.theme.SubspaceTheme]
  * itself — `MainActivity` still always renders with the system setting.
@@ -78,13 +74,23 @@ private val HWID_VALUE_BOTTOM_PADDING = 8.dp
  * @param onNavigateToPerApp the "Per-app proxy" row's action, forwarded verbatim to
  *   `SubspaceNavHost`, which navigates to `PerApp` — the same reasoning as
  *   [onNavigateToRouting].
+ * @param onNavigateToLogViewer [SettingsDiagnosticsSection]'s "Session log" row action,
+ *   forwarded verbatim to `SubspaceNavHost`, which navigates to `LogViewer` — the same
+ *   reasoning as [onNavigateToRouting].
  */
 @Composable
 fun SettingsScreen(
     onNavigateToRouting: () -> Unit,
     onNavigateToPerApp: () -> Unit,
+    onNavigateToLogViewer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val navigation =
+        SettingsNavigation(
+            onNavigateToRouting = onNavigateToRouting,
+            onNavigateToPerApp = onNavigateToPerApp,
+            onNavigateToLogViewer = onNavigateToLogViewer,
+        )
     val viewModel: SettingsViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -111,12 +117,25 @@ fun SettingsScreen(
             onFailClosedChanged = viewModel::onFailClosedChanged,
             onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
             onAlwaysOnOpened = viewModel::onAlwaysOnOpened,
+            onPerTagBreakdownChanged = viewModel::onPerTagBreakdownChanged,
         ),
-        onNavigateToRouting = onNavigateToRouting,
-        onNavigateToPerApp = onNavigateToPerApp,
+        navigation = navigation,
         modifier = modifier,
     )
 }
+
+/**
+ * [SettingsScreen]'s three cross-module navigation callbacks, grouped so
+ * [SettingsScreenContent] takes one parameter for them instead of three —
+ * without this, adding [onNavigateToLogViewer] alongside the two that were
+ * already there pushed [SettingsScreenContent] over detekt's
+ * `LongParameterList` threshold.
+ */
+internal data class SettingsNavigation(
+    val onNavigateToRouting: () -> Unit,
+    val onNavigateToPerApp: () -> Unit,
+    val onNavigateToLogViewer: () -> Unit,
+)
 
 /**
  * This screen's callbacks, grouped for the same reason
@@ -152,6 +171,10 @@ internal data class SettingsActions(
     // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
     // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
     val onAlwaysOnOpened: () -> Unit = {},
+    // Defaulted for the same reason as the four above (Task 15, this section's own newest
+    // field) — neither SettingsHwidLayoutTest nor SettingsDnsSectionTest's full positional
+    // construction bears on the diagnostics toggle.
+    val onPerTagBreakdownChanged: (Boolean) -> Unit = {},
 )
 
 /**
@@ -162,8 +185,7 @@ internal data class SettingsActions(
 internal fun SettingsScreenContent(
     state: SettingsState,
     actions: SettingsActions,
-    onNavigateToRouting: () -> Unit,
-    onNavigateToPerApp: () -> Unit,
+    navigation: SettingsNavigation,
     modifier: Modifier = Modifier,
 ) {
     val onThemeChanged = actions.onThemeChanged
@@ -200,21 +222,18 @@ internal fun SettingsScreenContent(
         TunnelSection(state = state, actions = actions, context = context)
 
         SectionHeader(stringResource(R.string.settings_section_routing))
-        SettingRow(
-            icon = Icons.AutoMirrored.Filled.List,
-            label = stringResource(R.string.settings_routing_row_label),
-            supportingText = stringResource(R.string.settings_routing_row_summary),
-            onClick = onNavigateToRouting,
-        )
-        SettingRow(
-            icon = Icons.Filled.CheckCircle,
-            label = stringResource(R.string.settings_per_app_row_label),
-            supportingText = stringResource(R.string.settings_per_app_row_summary),
-            onClick = onNavigateToPerApp,
-        )
+        SettingsRoutingSection(navigation = navigation)
 
         SectionHeader(stringResource(R.string.settings_section_geo))
         SettingsGeoSection(state = state, actions = actions)
+
+        SectionHeader(stringResource(R.string.settings_section_diagnostics))
+        SettingsDiagnosticsSection(
+            onNavigateToLogViewer = navigation.onNavigateToLogViewer,
+            perTagBreakdown = state.perTagBreakdown,
+            sessionNoticeVisible = state.perTagBreakdownSessionNoticeVisible,
+            onPerTagBreakdownChanged = actions.onPerTagBreakdownChanged,
+        )
 
         SectionHeader(stringResource(R.string.settings_section_about))
         SettingRow(

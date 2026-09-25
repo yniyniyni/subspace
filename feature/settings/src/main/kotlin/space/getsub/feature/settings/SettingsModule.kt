@@ -26,4 +26,8 @@ internal object SettingsModule {
     @Provides
     @Singleton
     fun geoAssetSource(impl: BoundGeoAssetSource): GeoAssetSource = impl
+
+    @Provides
+    @Singleton
+    fun tunnelSessionSource(impl: BoundTunnelSessionSource): TunnelSessionSource = impl
 }

@@ -50,8 +50,12 @@ class SettingsHwidLayoutTest {
                         onGeoRefreshOnMeteredChanged = {},
                         onRemoveCustomGeoSource = {},
                     ),
-                    onNavigateToRouting = {},
-                    onNavigateToPerApp = {},
+                    navigation =
+                    SettingsNavigation(
+                        onNavigateToRouting = {},
+                        onNavigateToPerApp = {},
+                        onNavigateToLogViewer = {},
+                    ),
                 )
             }
         }

@@ -54,6 +54,7 @@ import space.getsub.core.model.PingMode
 import space.getsub.core.model.Profile
 import space.getsub.core.model.Retryability
 import space.getsub.core.model.StartupStage
+import space.getsub.core.model.TrafficSample
 import space.getsub.core.model.failure
 import space.getsub.core.model.retryability
 import space.getsub.core.parser.OverrideTarget
@@ -65,6 +66,7 @@ import space.getsub.core.xray.ConfigResult
 import space.getsub.core.xray.DnsPlan
 import space.getsub.core.xray.DnsPlanner
 import space.getsub.core.xray.LibXrayPingApi
+import space.getsub.core.xray.METRICS_RESERVED_TAG
 import space.getsub.core.xray.ProxyHeadProbe
 import space.getsub.core.xray.RawConfigComposer
 import space.getsub.core.xray.SocketProtector
@@ -74,6 +76,10 @@ import space.getsub.core.xray.TunnelSettings
 import space.getsub.core.xray.XrayConfigGenerator
 import space.getsub.core.xray.XrayController
 import space.getsub.core.xray.XrayException
+import space.getsub.service.log.LogCapture
+import space.getsub.service.log.LogRing
+import space.getsub.service.log.TeardownStep
+import space.getsub.service.log.teardownOrder
 import java.io.File
 import javax.inject.Inject
 
@@ -272,6 +278,91 @@ internal fun overrideTargetFor(
 ): OverrideTarget = resolveOverrideTarget(analysePassthrough(rawJson), reservedOverrideTags(dnsPlanPresent))
 
 /**
+ * The outbound tags this app appends and therefore reserves.
+ *
+ * `Metrics` is conditional: a `metrics` block always registers an outbound of
+ * that name (`infra/conf/metrics.go:17-20`), but no `metrics` block is emitted
+ * while the breakdown is off, so reserving it unconditionally would refuse
+ * configs this app can run perfectly well. M8.5 spec §2.3.
+ */
+internal fun reservedOutboundTags(breakdownEnabled: Boolean): Set<String> =
+    buildSet {
+        addAll(setOf("direct", "block", "dns-out"))
+        if (breakdownEnabled) add(METRICS_RESERVED_TAG)
+    }
+
+/** [allocateSessionPorts]'s result: the two ports every session needs, plus the optional third. */
+internal data class SessionPorts(val socksPort: Int, val httpPort: Int, val metricsPort: Int?)
+
+/**
+ * Allocates every port this connect attempt needs, in the fewest calls that
+ * keep `allocateDistinctPorts`'s distinctness guarantee meaningful.
+ *
+ * **One allocation, not two.** `allocateDistinctPorts`
+ * (`core/xray/.../PortAllocation.kt`) only guarantees distinctness *within* a
+ * single call — its own KDoc quotes `docs/agent/research/libxray-api.md` §5:
+ * `getFreePorts` binds `localhost:0`, records the port, and closes the
+ * listener before opening the next one, so nothing holds an earlier port
+ * open across two separate calls. Requesting the metrics port from a second,
+ * independent `allocate(1)` call (an earlier version of this function did
+ * exactly that) could therefore hand back a number that collides with the
+ * socks/http pair from the first call — the core then refuses two inbounds
+ * on the same port, and the user gets `CoreStartFailed` for a session they
+ * only asked to be *counted*. Requesting three together reuses the one
+ * distinctness guarantee that actually exists instead of adding a second,
+ * unguarded one.
+ *
+ * A failed three-port request **degrades to a plain two-port request with no
+ * breakdown**, never to a failed connect — the diagnostic is optional, the
+ * tunnel is not (`ARCHITECTURE.md` §10.4). "Failed" here is any [Exception],
+ * not only [XrayException]: [allocate]'s real implementation
+ * (`XrayController.allocatePorts` → `fetchFreePorts`) also throws
+ * `org.json.JSONException` out of `JSONObject`/`JSONArray` parsing, and a
+ * narrower catch would let that one escape uncaught and fail the connect
+ * anyway — exactly the invariant this function exists to hold.
+ *
+ * The two-port request's own failure is **not** degraded: it propagates to
+ * the caller uncaught, which is [XrayController.allocatePorts]'s documented
+ * contract and [startCore]'s existing `PortAllocationFailed` handling for it.
+ *
+ * A free function taking [allocate] rather than an [XrayController] directly
+ * — the same seam-extraction `allocateDistinctPorts` itself uses — so this is
+ * testable on the JVM with a faked allocator instead of the real one, which
+ * (like `XrayController`) calls native `LibXray.invoke` and cannot run there.
+ */
+// TooGenericExceptionCaught/SwallowedException: deliberate, and the KDoc above
+// says why Exception rather than XrayException — a narrower catch is the bug
+// this function exists to fix. CancellationException still rethrows first.
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+internal suspend fun allocateSessionPorts(
+    breakdownEnabled: Boolean,
+    allocate: suspend (count: Int) -> List<Int>,
+): SessionPorts {
+    if (breakdownEnabled) {
+        try {
+            val ports = allocate(SESSION_PORT_COUNT_WITH_BREAKDOWN)
+            return SessionPorts(socksPort = ports[0], httpPort = ports[1], metricsPort = ports[2])
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Degrade: fall through to the required two-port request below,
+            // with no breakdown for this session.
+        }
+    }
+    val ports = allocate(SESSION_PORT_COUNT)
+    return SessionPorts(socksPort = ports[0], httpPort = ports[1], metricsPort = null)
+}
+
+private const val SESSION_PORT_COUNT = 2
+private const val SESSION_PORT_COUNT_WITH_BREAKDOWN = 3
+
+/** Whether a config's own outbound tags already claim one this app reserves. */
+internal fun collidesWithReservedTag(
+    configTags: Set<String>,
+    breakdownEnabled: Boolean,
+): Boolean = configTags.intersect(reservedOutboundTags(breakdownEnabled)).isNotEmpty()
+
+/**
  * Whether a reserved tag the override appends already exists with a protocol
  * that would give it different semantics.
  *
@@ -280,14 +371,78 @@ internal fun overrideTargetFor(
  * still appends `direct`, `block` and `dns-out`, and a config that already
  * defines one of those names as something else is still a config we must not
  * write rules against.
+ *
+ * `Metrics` (only while [breakdownEnabled]) is checked differently from the
+ * other three: the override never adds a `Metrics` *outbound* to dedupe
+ * against — `metrics.listen` alone makes the core register that handler — so
+ * there is no compatible protocol to reuse and any existing tag of that name
+ * is a collision regardless of its protocol. [REQUIRED_OVERRIDE_PROTOCOLS]
+ * carries no entry for it, and the `?: true` below is what turns bare
+ * existence into a refusal for exactly that tag.
  */
-internal fun passthroughOverrideFailure(rawJson: String): ComposeFailure? {
+internal fun passthroughOverrideFailure(
+    rawJson: String,
+    breakdownEnabled: Boolean = false,
+): ComposeFailure? {
     val protocols = analysePassthrough(rawJson).outboundProtocolsByTag
     val reservedTagIsIncompatible =
-        REQUIRED_OVERRIDE_PROTOCOLS.any { (tag, expectedProtocol) ->
-            protocols[tag]?.let { it != expectedProtocol } == true
+        reservedOutboundTags(breakdownEnabled).any { tag ->
+            val existingProtocol = protocols[tag] ?: return@any false
+            REQUIRED_OVERRIDE_PROTOCOLS[tag]?.let { it != existingProtocol } ?: true
         }
     return ComposeFailure.IncompatibleOverrideOutbound.takeIf { reservedTagIsIncompatible }
+}
+
+/**
+ * [resolveOverrideBreakdown]'s answer for one config: proceed (with or without
+ * the diagnostic), or refuse the connect.
+ */
+internal sealed interface OverrideBreakdownDecision {
+    /** @property useBreakdown Whether the metrics port [composePassthrough] was given should still be emitted. */
+    data class Proceed(val useBreakdown: Boolean) : OverrideBreakdownDecision
+
+    /** A collision [reservedOutboundTags] cannot be talked out of — real, not a breakdown artifact. */
+    data class Refused(val reason: ComposeFailure) : OverrideBreakdownDecision
+}
+
+/**
+ * Whether the override branch should still carry the per-tag breakdown for
+ * [rawJson], review finding I4.
+ *
+ * Before this, a `Metrics` tag collision — [passthroughOverrideFailure] with
+ * the breakdown on — refused the whole connect. Spec §2.3 says outright that
+ * "a passthrough config defining an outbound called `Metrics` is not exotic",
+ * so a user who flipped a setting their own UI describes as a diagnostic lost
+ * the tunnel over it, with an error naming an incompatible override outbound
+ * and nothing pointing at the switch they had just flipped.
+ *
+ * [allocateSessionPorts] already treats the same class of failure as
+ * degradable — "the diagnostic is optional, the tunnel is not"
+ * (`ARCHITECTURE.md` §10.4) — when the *port* allocation for the third port
+ * fails. This is that same rule applied to the other way a breakdown can be
+ * unavailable: the config itself already claims the name the diagnostic
+ * needs.
+ *
+ * **Why this re-runs [passthroughOverrideFailure] rather than inspecting its
+ * result.** That function only reports *whether* a reserved tag collided, not
+ * *which* one — and [reservedOutboundTags] only reserves `Metrics` while
+ * [breakdownEnabled], so asking the same question with the breakdown turned
+ * off isolates the cause: if the collision disappears, it was `Metrics` alone
+ * and degrading clears it; if it survives, the config collides on `direct`,
+ * `block` or `dns-out` with an incompatible protocol, a real refusal this
+ * function must not swallow.
+ */
+@Suppress("ReturnCount") // One early return per distinct outcome, same reasoning as composePassthrough's own.
+internal fun resolveOverrideBreakdown(
+    rawJson: String,
+    breakdownEnabled: Boolean,
+): OverrideBreakdownDecision {
+    val failure = passthroughOverrideFailure(rawJson, breakdownEnabled)
+    if (failure == null) return OverrideBreakdownDecision.Proceed(useBreakdown = breakdownEnabled)
+    if (breakdownEnabled && passthroughOverrideFailure(rawJson, breakdownEnabled = false) == null) {
+        return OverrideBreakdownDecision.Proceed(useBreakdown = false)
+    }
+    return OverrideBreakdownDecision.Refused(failure)
 }
 
 /**
@@ -391,10 +546,13 @@ internal fun testConnectObserverFrom(
  * first enter [commandCoordinator], while [lock] and [generation] handle those
  * platform callbacks racing the asynchronous start sequence. So:
  *
- *  - [lock] guards every field below and every state publication. `RemoteCallbackList`
- *    is not safe for concurrent broadcast — `beginBroadcast()` throws if one is
- *    already in progress, and that throw landing inside teardown would abandon
- *    the TUN fd, which is §5.4's wedged-until-reboot outcome.
+ *  - [lock] guards every field below and every state publication, including
+ *    [broadcastTrafficSample] — [trafficLoop]'s per-second push shares
+ *    [callbacks] with [publishLocked], so it takes the same lock for the same
+ *    reason. `RemoteCallbackList` is not safe for concurrent broadcast —
+ *    `beginBroadcast()` throws if one is already in progress, and that throw
+ *    landing inside teardown would abandon the TUN fd, which is §5.4's
+ *    wedged-until-reboot outcome.
  *  - [generation] supersedes an in-flight start. Coroutine cancellation is
  *    cooperative and the tail of the start sequence has no suspension points, so
  *    `cancel()` alone cannot stop it from publishing `Connected` after a teardown
@@ -539,6 +697,44 @@ class TunnelService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
     private val callbacks = RemoteCallbackList<ITunnelCallback>()
 
+    /**
+     * Spec §3.3: on-disk ring a session's log is captured into, and the
+     * capture that reads logcat, redacts, and appends to it. Tied to session
+     * lifetime — [logCapture] starts when the service enters foreground for a
+     * connect ([startTunnel]) and stops last in [stopTunnel], after every
+     * phase that logs.
+     *
+     * `by lazy`, not an eager initialiser: [filesDir] is a `Context` method,
+     * and a field initialiser runs before `attachBaseContext()` — the same
+     * reason [foreignVpn] just below is `by lazy` rather than built inline.
+     */
+    private val logRing by lazy { LogRing(File(filesDir, LOG_DIR_NAME)) }
+    private val logCapture by lazy { LogCapture(logRing) }
+
+    /**
+     * Spec §1.5: samples [Tun2Socks.stats] once a second while a session is up
+     * and pushes each accumulated total through [broadcastTrafficSample]. Tied
+     * to session lifetime like [logCapture] just above: started once the
+     * session reaches [ConnectionState.Connected] (both [attachTun] and
+     * [attachRetainedTun]'s `lifecycle` blocks — [start] is idempotent, so the
+     * retained-TUN restart's re-settle is a no-op), stopped in [stopTunnel] at
+     * [space.getsub.service.log.TeardownStep.StopTrafficSampler]'s position,
+     * immediately before [logCapture] stops.
+     */
+    private val trafficLoop =
+        TrafficSamplerLoop(
+            scope = scope,
+            read = { Tun2Socks.stats() },
+            emit = ::broadcastTrafficSample,
+            // M8.5 spec §2: null while the breakdown is off or no port could be
+            // allocated (metricsPort itself). §5.6 — fetchMetricsPayload/
+            // parseMetricsPayload never throw and this reads only the port
+            // number, never a tag or a payload, so nothing here is loggable.
+            readTags = {
+                metricsPort?.let { port -> fetchMetricsPayload(port)?.let(::parseMetricsPayload) } ?: emptyList()
+            },
+        )
+
     /** Guards measurement against another app's VPN holding the route — see [ForeignVpn]. */
     private val foreignVpn by lazy { ForeignVpn(applicationContext) }
 
@@ -595,6 +791,24 @@ class TunnelService : VpnService() {
      */
     private var tunAdvertisedDns: String? = null
     private var configFile: File? = null
+
+    /**
+     * The loopback port [trafficLoop]'s `readTags` reads from, or null while
+     * the breakdown is off or [allocateSessionPorts]'s allocation failed
+     * (M8.5 spec §2). Every *write* is under [lock], same as [configFile] and
+     * the same lifetime — set in [startCore] once a session's config is
+     * generated, cleared everywhere [configFile] is.
+     *
+     * Unlike [configFile], **not** lock-guarded on read: [trafficLoop]'s
+     * `readTags` polls it once a second from its own coroutine, off the
+     * `Dispatchers.IO` scope, and taking [lock] there for one field read on a
+     * hot path is worse than the alternative. `@Volatile` is what makes a
+     * write on one thread visible to that read on another without it — a
+     * stale read here costs one poll of a dead port and yields no rows, never
+     * a crash or a corrupted value.
+     */
+    @Volatile
+    private var metricsPort: Int? = null
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
@@ -1090,6 +1304,32 @@ class TunnelService : VpnService() {
     }
 
     /**
+     * Spec §1.5: pushes one accumulated sample to every bound `:main` over the
+     * existing [ITunnelCallback], reusing [callbacks] rather than a second
+     * `RemoteCallbackList`.
+     *
+     * Takes [lock] for the same reason [publishLocked] does: `RemoteCallbackList`
+     * is not safe for concurrent broadcast, and [trafficLoop] calls this from its
+     * own coroutine — a call arriving mid-[publishLocked] would hit
+     * `beginBroadcast()`'s reentrancy throw. [TrafficSampleParcel] carries no free
+     * text, so unlike [publishLocked] there is nothing here for §5.6 to redact.
+     */
+    private fun broadcastTrafficSample(sample: TrafficSample) {
+        synchronized(lock) {
+            val parcel = TrafficSampleParcel.from(sample)
+            val count = callbacks.beginBroadcast()
+            repeat(count) { i ->
+                try {
+                    callbacks.getBroadcastItem(i).onTrafficSample(parcel)
+                } catch (e: android.os.RemoteException) {
+                    Log.w(TAG, "traffic callback dropped: ${e.javaClass.simpleName}")
+                }
+            }
+            callbacks.finishBroadcast()
+        }
+    }
+
+    /**
      * Publishes only if this start is still the current one.
      *
      * @return false when a teardown or a newer start has superseded [gen], in
@@ -1180,6 +1420,11 @@ class TunnelService : VpnService() {
             establishForeground = { goForeground(R.string.notification_connecting) },
             onRejected = { rejectInitialForegroundLifecycle(gen, rowId) },
             launchStartup = {
+                // Spec §3.3: capture starts here, once the service has actually
+                // entered foreground and before the start sequence below runs —
+                // not inside it, so a session that never reaches resolveAndStartCore
+                // is still captured.
+                logCapture.start()
                 scope.launch {
                     val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
                     when (val outcome = attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)) {
@@ -1301,20 +1546,20 @@ class TunnelService : VpnService() {
         routing: RoutingResolution,
         dnsPlan: DnsPlan?,
     ): StartedPorts? {
-        // One call for both ports, not two calls to allocatePort(): §10.6 and
-        // docs/agent/research/libxray-api.md §5 — getFreePorts closes each
-        // listener before opening the next, so nothing stops the kernel handing
-        // back the same number twice even across separate calls. allocatePorts
-        // verifies distinctness and retries; a config with two inbounds on the
-        // same port is rejected by the core outright.
-        val ports =
+        // §10.6 and docs/agent/research/libxray-api.md §5: getFreePorts closes
+        // each listener before opening the next, so allocatePorts's distinctness
+        // guarantee only holds within one call. M8.5 spec §2's port rides along
+        // in the *same* call rather than a second one — see allocateSessionPorts's
+        // own KDoc for why a second call is the bug this replaced.
+        val breakdownEnabled = settingsRepository.perTagBreakdown.first()
+        val allocated =
             try {
-                xray.allocatePorts(count = 2)
+                allocateSessionPorts(breakdownEnabled) { count -> xray.allocatePorts(count) }
             } catch (e: XrayException) {
                 return failStart(gen, FailureReason.PortAllocationFailed, e, rowId)
             }
-        val socksPort = ports[0]
-        val httpPort = ports[1]
+        val socksPort = allocated.socksPort
+        val httpPort = allocated.httpPort
 
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.GeneratingConfig))) return null
         val settings =
@@ -1325,14 +1570,15 @@ class TunnelService : VpnService() {
                 routing = (routing as? RoutingResolution.Active)?.ruleSet,
                 httpPort = httpPort,
                 dns = dnsPlan,
+                metricsPort = allocated.metricsPort,
             )
         // §10.4/failStart's cleanup applies here too, not just to the try/catch
         // below: an early return that only published a state (skipping
         // stopForeground/stopSelf/controller = null) would leave a stuck
         // "Connecting" notification, same as every other branch in this function.
-        val (json, runsAsWritten) =
+        val (json, runsAsWritten, metricsApplied) =
             when (val outcome = resolveConfigJson(profile, settings, routing, dnsPlan, rowId)) {
-                is ConfigJsonOutcome.Ok -> outcome.json to outcome.runsAsWritten
+                is ConfigJsonOutcome.Ok -> Triple(outcome.json, outcome.runsAsWritten, outcome.metricsApplied)
                 is ConfigJsonOutcome.Failed -> return failStart(gen, outcome.reason, outcome.cause, rowId)
             }
         val file =
@@ -1344,6 +1590,15 @@ class TunnelService : VpnService() {
         synchronized(lock) {
             if (gen != generation) return null
             configFile = file
+            // Not unconditionally `allocated.metricsPort` (review finding I4):
+            // the override branch can degrade away the breakdown for a config
+            // that already claims the `Metrics` tag — see
+            // [resolveOverrideBreakdown] — in which case a port was allocated
+            // but the composed config never emits a `metrics` block for it.
+            // [trafficLoop]'s `readTags` polls this field every tick; leaving
+            // it set to a port nothing listens on would poll a dead port
+            // forever instead of correctly reporting no breakdown.
+            metricsPort = allocated.metricsPort.takeIf { metricsApplied }
         }
 
         // §6: validate before starting. libXray's testXray takes a path, so the
@@ -1373,8 +1628,15 @@ class TunnelService : VpnService() {
 
     /** [resolveConfigJson]'s outcome — a JSON string ready for [writeConfig], or a named failure. */
     private sealed interface ConfigJsonOutcome {
-        /** @property runsAsWritten Whether [json] is the row's own composed bytes, not a typed generation. */
-        data class Ok(val json: String, val runsAsWritten: Boolean) : ConfigJsonOutcome
+        /**
+         * @property runsAsWritten Whether [json] is the row's own composed bytes, not a typed generation.
+         * @property metricsApplied Whether [json] actually carries a `metrics` block for the port
+         *   [startCore] allocated — review finding I4. False whenever no port was requested or
+         *   allocated, and also for a `runsAsWritten` row whose own config already claims the
+         *   `Metrics` tag, in which case [composePassthrough] degrades rather than refuses. What
+         *   [startCore] must key the service's own `metricsPort` field on, not `settings.metricsPort`.
+         */
+        data class Ok(val json: String, val runsAsWritten: Boolean, val metricsApplied: Boolean) : ConfigJsonOutcome
 
         data class Failed(val reason: FailureReason, val cause: Exception) : ConfigJsonOutcome
     }
@@ -1419,8 +1681,16 @@ class TunnelService : VpnService() {
                     FailureReason.ConfigGenerationFailed,
                     IllegalStateException("a runsAsWritten row stored no bytes"),
                 )
-            return when (val composed = composePassthrough(rawJson, settings, routing, dnsPlan)) {
-                is ComposeResult.Ok -> ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true)
+            // The reserved-tag check below cares whether a Metrics block will
+            // actually be emitted, not whether the setting is on — the two
+            // disagree exactly when startCore's own allocation attempt failed,
+            // and settings.metricsPort (already resolved there) is what
+            // composePassthrough goes on to inject regardless.
+            val metricsWillEmit = settings.metricsPort != null
+            val outcome = composePassthrough(rawJson, settings, routing, dnsPlan, metricsWillEmit)
+            return when (val composed = outcome.result) {
+                is ComposeResult.Ok ->
+                    ConfigJsonOutcome.Ok(composed.json, runsAsWritten = true, metricsApplied = outcome.metricsApplied)
                 // Distinct from PassthroughRejectedAtConnect, which startCore uses when the
                 // *core* refuses a well-formed config (§10.4): this means composition itself
                 // failed — a condition import already screens for structurally, so reaching
@@ -1439,7 +1709,8 @@ class TunnelService : VpnService() {
                     IllegalArgumentException("${config.protocol} is not supported yet"),
                 )
 
-            is ConfigResult.Ok -> ConfigJsonOutcome.Ok(config.json, runsAsWritten = false)
+            is ConfigResult.Ok ->
+                ConfigJsonOutcome.Ok(config.json, runsAsWritten = false, metricsApplied = settings.metricsPort != null)
         }
     }
 
@@ -1456,6 +1727,16 @@ class TunnelService : VpnService() {
      * config's own tags first: `RawConfigComposer` only ever appends, so an
      * unfiltered duplicate tag (a `direct` freedom outbound is common) would be
      * a config the core is not obliged to accept.
+     *
+     * **A `Metrics` collision degrades, it does not refuse (review finding
+     * I4).** [resolveOverrideBreakdown] answers whether this config's own
+     * `Metrics` tag can be talked around by simply not requesting the
+     * diagnostic for this session — see its own KDoc — and only a collision
+     * that survives with the breakdown off reaches [ComposeResult.Failed]
+     * here. When it degrades, [settings] is composed with `metricsPort` cut
+     * to null so [RawConfigComposer.compose] never emits a `metrics` block
+     * for a port the caller must then also stop treating as live — see
+     * [startCore]'s own use of [PassthroughComposeOutcome.metricsApplied].
      */
     @Suppress("ReturnCount") // One early return per distinct refusal, same reasoning as startCore's own.
     private fun composePassthrough(
@@ -1463,7 +1744,8 @@ class TunnelService : VpnService() {
         settings: TunnelSettings,
         routing: RoutingResolution,
         dnsPlan: DnsPlan?,
-    ): ComposeResult {
+        breakdownEnabled: Boolean,
+    ): PassthroughComposeOutcome {
         val plan =
             passthroughPlanFor(
                 routingActive = routing is RoutingResolution.Active,
@@ -1471,9 +1753,21 @@ class TunnelService : VpnService() {
                 activeAssetDir = (routing as? RoutingResolution.Active)?.assetDir?.absolutePath,
                 flatRoot = geoAssetRepository.geoDirectory().absolutePath,
             )
+        var effectiveSettings = settings
         val override =
             if (plan.overrideApplies) {
-                passthroughOverrideFailure(rawJson)?.let { return ComposeResult.Failed(it) }
+                val useBreakdown =
+                    when (val decision = resolveOverrideBreakdown(rawJson, breakdownEnabled)) {
+                        is OverrideBreakdownDecision.Refused ->
+                            return PassthroughComposeOutcome(
+                                ComposeResult.Failed(decision.reason),
+                                metricsApplied = false,
+                            )
+                        is OverrideBreakdownDecision.Proceed -> decision.useBreakdown
+                    }
+                if (!useBreakdown && settings.metricsPort != null) {
+                    effectiveSettings = settings.copy(metricsPort = null)
+                }
                 val target =
                     when (val resolved = overrideTargetFor(rawJson, dnsPlanPresent = dnsPlan != null)) {
                         is OverrideTarget.Resolved -> resolved
@@ -1483,7 +1777,10 @@ class TunnelService : VpnService() {
                         // emitter — which `Resolved` makes a type error rather than
                         // a discipline.
                         is OverrideTarget.Unresolvable ->
-                            return ComposeResult.Failed(ComposeFailure.UnresolvableOverrideTarget)
+                            return PassthroughComposeOutcome(
+                                ComposeResult.Failed(ComposeFailure.UnresolvableOverrideTarget),
+                                metricsApplied = false,
+                            )
                     }
                 val existingTags = existingOutboundTags(rawJson)
                 XrayConfigGenerator.overrideBlocks(settings, target)
@@ -1495,8 +1792,24 @@ class TunnelService : VpnService() {
             } else {
                 null
             }
-        return RawConfigComposer.compose(rawJson, settings, plan.assetDir, override)
+        val result = RawConfigComposer.compose(rawJson, effectiveSettings, plan.assetDir, override)
+        // §2.4: only the override branch may carry a metrics block at all
+        // (RawConfigComposer.addMetricsBlocks) — the pure branch strips
+        // `metrics` unconditionally, so it never applies regardless of
+        // effectiveSettings.metricsPort.
+        val metricsApplied = override != null && effectiveSettings.metricsPort != null
+        return PassthroughComposeOutcome(result, metricsApplied)
     }
+
+    /**
+     * [composePassthrough]'s result, plus whether the composed config actually
+     * carries a `metrics` block for the port it was given — review finding I4.
+     * Distinct from `settings.metricsPort != null` in exactly the degraded
+     * case: a port can be allocated and still go unused when the stored
+     * config's own `Metrics` tag forced [composePassthrough] to drop it for
+     * this session.
+     */
+    private data class PassthroughComposeOutcome(val result: ComposeResult, val metricsApplied: Boolean)
 
     /** The per-app gate keeps "off" distinct from "resolution failed" for [attachTun]. */
     private sealed interface PerAppGateResult {
@@ -1681,7 +1994,10 @@ class TunnelService : VpnService() {
     // them separately, reusing the pairing [startCore] already established —
     // one fewer place to mismatch which index is which, and it keeps this
     // signature at five rather than six now that [dnsPlan] joined it.
-    @Suppress("ReturnCount")
+    @Suppress(
+        "ReturnCount",
+        "LongMethod", // Spec §1.5's trafficLoop.start() call pushed this one line past the threshold.
+    )
     private suspend fun attachTun(
         gen: Int,
         xray: XrayController,
@@ -1802,6 +2118,29 @@ class TunnelService : VpnService() {
             return TunAttachOutcome.Settled
         }
 
+        // Ruling R42 (extends R38): this is the *other* branch [restartCoreRetainingTun] can
+        // take — when `retainedTunKeepsAdvertisedDns(...)` is false it rebuilds through
+        // [attachTun] instead of [attachRetainedTun], stopping and restarting both tun2socks
+        // and xray exactly as that branch does. Without this call, [trafficLoop] never learns
+        // the counters reset: [trafficLoop.start] below is a no-op on that path (its job is
+        // still active — this call site never went through [stopTunnel]), so the *same*
+        // [TrafficSampler] survives with a stale `previous`, and the next reading falls back to
+        // [delta]'s inference — exactly the undercount (or, on equality, the lost-interval case)
+        // ruling R38 exists to close. See [TrafficSamplerLoop.notifyCountersRestarted]'s KDoc.
+        //
+        // Called here, before [trafficLoop.start] rather than after, for the reason that
+        // function's own seeding comment gives: this call is a no-op safety net on the
+        // *initial*-connect path (the common case reaching this line), where [trafficLoop]'s
+        // job is not yet active and [trafficLoop.start] is about to create a fresh
+        // [TrafficSampler] — that fresh sampler seeds its epoch tracker from this call's bumped
+        // signal, so it is absorbed harmlessly and the first reading still baselines rather than
+        // spikes. Fired *after* [trafficLoop.start] instead, the fresh sampler's first tick would
+        // see a changed epoch, call `beginNewEpoch()` before its first reading, and turn
+        // baseline-and-discard into count-in-full — a spurious traffic spike at the start of
+        // every session. That is the trap [trafficLoop.start]'s own seeding comment describes;
+        // this call site must not reintroduce it from the other side.
+        trafficLoop.notifyCountersRestarted()
+
         val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
         // One generation-checked transition: the connected notification is established and
         // `Connected` published together under the lock, and the spec-D4 success write (see
@@ -1835,6 +2174,9 @@ class TunnelService : VpnService() {
                         // [TerminalOutcome.settle].
                         cancelBackoffRetryLocked()
                         reconnectAttempts.reset()
+                        // Spec §1.5: gated on `established` like the two calls above —
+                        // a rejected foreground never really connected.
+                        trafficLoop.start()
                     },
                 )
             },
@@ -1920,6 +2262,7 @@ class TunnelService : VpnService() {
                 ownedIntentToken = sessionIntentToken
                 configFile?.delete()
                 configFile = null
+                metricsPort = null
                 controller = null
                 liveSession = null
                 reconnectAttempts.reset()
@@ -2048,6 +2391,7 @@ class TunnelService : VpnService() {
             lifecycle = {
                 configFile?.delete()
                 configFile = null
+                metricsPort = null
                 controller = null
                 liveSession = null
                 reconnectAttempts.commit(trialAttempt)
@@ -2463,7 +2807,6 @@ class TunnelService : VpnService() {
      * @return null when `expectedGeneration` no longer owns the tunnel;
      *   otherwise what the stop took from the session it ended.
      */
-    @Suppress("TooGenericExceptionCaught")
     private fun stopTunnel(
         finalState: ConnectionState,
         expectedGeneration: Int? = null,
@@ -2479,9 +2822,18 @@ class TunnelService : VpnService() {
         // with no matching `exit` instead of being indistinguishable from a fast,
         // silent success — which is what made the first occurrence undiagnosable.
         // §5.6: phase names and durations only, never config contents.
+        //
+        // Every line below is shaped "teardown[<phase>] <event>", deliberately:
+        // no bare `word:` before whitespace (BARE_HOST_PREFIX_PATTERN in
+        // Redaction.kt eats that whole), and no dot inside the phase name
+        // (HOSTNAME_PATTERN eats that). A device capture on 2026-09-16 showed
+        // the old "teardown: tun2socks.stop exit +33ms" shape reduced to
+        // "<redacted>: <redacted> exit +33ms" — durations survived, phases did
+        // not. See LogCapture.kt's note on this convention before changing the
+        // shape of any line here.
         val startedAtMillis = android.os.SystemClock.elapsedRealtime()
         fun sinceStart(): Long = android.os.SystemClock.elapsedRealtime() - startedAtMillis
-        Log.i(TAG, "teardown: enter")
+        Log.i(TAG, "teardown[lifecycle] enter")
 
         val xray: XrayController?
         val fd: ParcelFileDescriptor?
@@ -2491,7 +2843,7 @@ class TunnelService : VpnService() {
 
         synchronized(lock) {
             if (expectedGeneration != null && expectedGeneration != generation) {
-                Log.i(TAG, "teardown: superseded, nothing taken +${sinceStart()}ms")
+                Log.i(TAG, "teardown[lifecycle] superseded, nothing taken +${sinceStart()}ms")
                 return null
             }
             // Supersede any in-flight start before taking ownership of its state.
@@ -2503,6 +2855,7 @@ class TunnelService : VpnService() {
             tunInterface = null
             tunAdvertisedDns = null
             configFile = null
+            metricsPort = null
             liveSession = null
             // Every stopTunnel caller (explicit disconnect, onRevoke, a
             // deliberate reapplyPerApp/network-change restart) ends whatever
@@ -2524,38 +2877,94 @@ class TunnelService : VpnService() {
             publishLocked(ConnectionState.Disconnecting)
         }
 
-        Log.i(TAG, "teardown: state taken +${sinceStart()}ms")
+        Log.i(TAG, "teardown[lifecycle] state taken +${sinceStart()}ms")
 
-        // Order matters: stop feeding packets in before removing their destination.
-        Log.i(TAG, "teardown: tun2socks.stop enter")
-        try {
-            Tun2Socks.stop()
-        } catch (e: Throwable) {
-            // Includes NoClassDefFoundError when System.loadLibrary failed. §5.4
-            // says teardown must still finish — abandoning here leaks the fd.
-            Log.e(TAG, "tun2socks stop failed: ${e.javaClass.simpleName}")
-        }
-        Log.i(TAG, "teardown: tun2socks.stop exit +${sinceStart()}ms")
-
-        try {
-            fd?.close()
-        } catch (e: java.io.IOException) {
-            Log.e(TAG, "closing tun fd failed: ${e.javaClass.simpleName}")
-        }
-        Log.i(TAG, "teardown: fd.close exit +${sinceStart()}ms")
-
-        // stopBlocking(), not stop(): onDestroy has no scope that outlives it and
-        // §5.4 requires teardown to finish before the process dies. It also drops
-        // the protector so Go stops holding this service.
-        Log.i(TAG, "teardown: xray.stopBlocking enter (present=${xray != null})")
-        xray?.stopBlocking()
-        Log.i(TAG, "teardown: xray.stopBlocking exit +${sinceStart()}ms")
-        cfg?.delete()
-
-        removeForegroundSafely()
-        publish(finalState)
-        Log.i(TAG, "teardown: done +${sinceStart()}ms")
+        // The work itself, in exactly the order space.getsub.service.log.teardownOrder()
+        // names. That function is not consulted for documentation only: this loop
+        // is what makes it a real guard rather than a hand-maintained mirror
+        // (spec §6 item #9) — reorder a step's *position* in [runTeardownStep]'s
+        // `when` and LogCaptureLifecycleTest's ordering assertions cover exactly
+        // what they claim to.
+        val taken = TeardownSnapshot(xray, fd, cfg)
+        teardownOrder().forEach { step -> runTeardownStep(step, taken, finalState, ::sinceStart) }
         return StoppedSession(startId = startId, intentToken = intentToken)
+    }
+
+    /** What [stopTunnel] took from the session's fields, bundled for [runTeardownStep]'s sake. */
+    private data class TeardownSnapshot(val xray: XrayController?, val fd: ParcelFileDescriptor?, val cfg: File?)
+
+    /**
+     * One [TeardownStep] of [stopTunnel], extracted so that function stays
+     * under detekt's length threshold — see [stopTunnel]'s own call site for
+     * why this dispatch, not the step bodies, is what actually enforces
+     * `teardownOrder()`'s ordering.
+     */
+    @Suppress("TooGenericExceptionCaught") // Same reasoning as stopTunnel's own suppression.
+    private fun runTeardownStep(
+        step: TeardownStep,
+        taken: TeardownSnapshot,
+        finalState: ConnectionState,
+        sinceStart: () -> Long,
+    ) {
+        val (xray, fd, cfg) = taken
+        when (step) {
+            TeardownStep.StopTun2Socks -> {
+                // Order matters: stop feeding packets in before removing their destination.
+                Log.i(TAG, "teardown[tun2socks-stop] enter")
+                try {
+                    Tun2Socks.stop()
+                } catch (e: Throwable) {
+                    // Includes NoClassDefFoundError when System.loadLibrary failed. §5.4
+                    // says teardown must still finish — abandoning here leaks the fd.
+                    Log.e(TAG, "tun2socks stop failed: ${e.javaClass.simpleName}")
+                }
+                Log.i(TAG, "teardown[tun2socks-stop] exit +${sinceStart()}ms")
+            }
+
+            TeardownStep.CloseTun -> {
+                try {
+                    fd?.close()
+                } catch (e: java.io.IOException) {
+                    Log.e(TAG, "closing tun fd failed: ${e.javaClass.simpleName}")
+                }
+                Log.i(TAG, "teardown[fd-close] exit +${sinceStart()}ms")
+            }
+
+            TeardownStep.StopCore -> {
+                // stopBlocking(), not stop(): onDestroy has no scope that outlives it and
+                // §5.4 requires teardown to finish before the process dies. It also drops
+                // the protector so Go stops holding this service.
+                Log.i(TAG, "teardown[xray-stopBlocking] enter (present=${xray != null})")
+                xray?.stopBlocking()
+                Log.i(TAG, "teardown[xray-stopBlocking] exit +${sinceStart()}ms")
+                cfg?.delete()
+            }
+
+            TeardownStep.ClearNotification -> {
+                removeForegroundSafely()
+                publish(finalState)
+                Log.i(TAG, "teardown[lifecycle] done +${sinceStart()}ms")
+            }
+
+            TeardownStep.StopTrafficSampler ->
+                // Spec §1.5: stopped after the session has published its final
+                // state and before the capture below stops — a session that has
+                // already ended must not go on accumulating a total for it, or
+                // emit one to a client that just heard it is over.
+                trafficLoop.stop()
+
+            TeardownStep.StopLogCapture ->
+                // Spec §3.3: stopped last, after every phase above has logged —
+                // a capture that stops first would go quiet before the teardown
+                // becomes interesting. `runCatching` here only guards against
+                // `stop()` throwing; it cannot and does not guard against
+                // `stop()` blocking. What actually keeps a wedged capture from
+                // stalling this teardown is R46 (N1): stop() only logs a
+                // sentinel and arms a watchdog, and the capture drains to that
+                // sentinel on its own thread — see LogCapture.stop() and
+                // LogcatReader's KDoc. Nothing here closes the reader (D3).
+                runCatching { logCapture.stop() }
+        }
     }
 
     /** Stops only the started-service generation that owns the completed command. */
@@ -3074,6 +3483,7 @@ class TunnelService : VpnService() {
                     controller = null
                     configFile?.delete()
                     configFile = null
+                    metricsPort = null
                     // Spec §1.1: [rowId] is the *active* profile, which can differ
                     // from the row this session started on if another server was
                     // picked while connected (ruling R37: by design). [liveSession]
@@ -3131,6 +3541,12 @@ class TunnelService : VpnService() {
         // adds a branch, not a new fd lifetime. It also re-resolves the per-app
         // gate, which the retained path deliberately does not: a rebuild
         // therefore applies the current selection.
+        //
+        // The sampler is covered too (ruling R42): the `Tun2Socks.stop()`/
+        // `stopBlocking()` calls above reset the counters on this branch exactly
+        // as they do on [attachRetainedTun]'s, so [attachTun] itself calls
+        // `trafficLoop.notifyCountersRestarted()` right after `Tun2Socks.start()`
+        // confirms the rebuilt tunnel is live — see that call site's own comment.
         //
         // **A rebuild must not end a session the retained path would have
         // survived.** §8's gate can produce no plan at all — allow-list mode with
@@ -3228,6 +3644,15 @@ class TunnelService : VpnService() {
             return
         }
 
+        // Ruling R38 (amends R28): the counters tun2socks and xray now poll are the *new*
+        // epoch's — `Tun2Socks.start()` just confirmed it — so this is the earliest point
+        // [trafficLoop] can be told the restart happened, and it is told before any further
+        // suspending work below (`goForeground`, `connectionRecorder.record`) that could let
+        // its polling coroutine observe a genuine new-epoch reading before the signal lands.
+        // See [TrafficSamplerLoop.notifyCountersRestarted]'s own KDoc for why the timing here
+        // matters and what closes the race, not just narrows it.
+        trafficLoop.notifyCountersRestarted()
+
         val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
         val settlement =
             terminalOutcome.settleHandlingLifecycleRejection(
@@ -3243,6 +3668,21 @@ class TunnelService : VpnService() {
                         retireRetry = {
                             cancelBackoffRetryLocked()
                             reconnectAttempts.reset()
+                            // Spec §1.5: [start] is idempotent — a no-op while its job is
+                            // still active — so this retained-TUN restart does not rebuild
+                            // [trafficLoop]'s [TrafficSampler]. That is what survives the
+                            // restart, not tun2socks: `Tun2Socks.stop()` is called earlier
+                            // in this same restart (see above), and its counters *do* reset
+                            // along with everything else tun2socks owns. What this no-op
+                            // preserves is the accumulator — the same [TrafficSampler]
+                            // instance goes on polling the freshly reset counters, now told
+                            // about the reset explicitly by [trafficLoop]'s
+                            // `notifyCountersRestarted()` call above rather than left to infer
+                            // it from a falling reading (ruling R38), so the session total
+                            // keeps climbing instead of restarting from zero **or** silently
+                            // undercounting when the new epoch outruns the old one before the
+                            // next poll.
+                            trafficLoop.start()
                         },
                     )
                 },
@@ -3392,6 +3832,7 @@ class TunnelService : VpnService() {
     private companion object {
         const val CONFIG_NAME = "xray-config.json"
         const val FOREGROUND_LIFECYCLE_REJECTED = "ForegroundLifecycleRejected"
+        const val LOG_DIR_NAME = "logs"
     }
 }
 

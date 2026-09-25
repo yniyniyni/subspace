@@ -28,8 +28,15 @@ class LogRingTest {
             .filter { it.exists() }
             .flatMap { it.readLines() }
 
+    /**
+     * Bytes the ring holds in its two files. It counts regular files only. The
+     * rotation-failure test blocks rotation by putting a *directory* at `log.1`, and
+     * a directory's `length()` is filesystem-specific: 96 B on macOS APFS, 4096 B on
+     * Linux ext4. Counting it measured the fixture, not the ring. That passed locally
+     * and failed on CI.
+     */
     private fun totalBytes(dir: File): Long =
-        listOf(File(dir, "log.0"), File(dir, "log.1")).sumOf { if (it.exists()) it.length() else 0L }
+        listOf(File(dir, "log.0"), File(dir, "log.1")).sumOf { if (it.isFile) it.length() else 0L }
 
     @Test
     fun `reads back what it appended, in order`() {

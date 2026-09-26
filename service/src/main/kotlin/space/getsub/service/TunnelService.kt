@@ -689,10 +689,15 @@ class TunnelService : VpnService() {
      */
     private val errorHandler =
         CoroutineExceptionHandler { _, e ->
-            // §5.6: the class name only, never the message — a Room or libXray
-            // error quotes the config straight back.
+            // ARCHITECTURE.md §5.6: the class name only, never the message — a Room or
+            // libXray error quotes the config straight back.
             Log.e(TAG, "coroutine on the service scope crashed: ${e.javaClass.simpleName}")
-            publish(failure(FailureReason.CoreStartFailed, e.javaClass.simpleName))
+            // M8.5 spec §4.4: decided under [lock] against the live state, so the check
+            // and the publish cannot be split by another transition.
+            synchronized(lock) {
+                scopeCrashPublication(currentState, Tun2Socks.isRunning, e.javaClass.simpleName)
+                    ?.let(::publishLocked)
+            }
         }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + errorHandler)
@@ -711,6 +716,8 @@ class TunnelService : VpnService() {
      */
     private val logRing by lazy { LogRing(File(filesDir, LOG_DIR_NAME)) }
     private val logCapture by lazy { LogCapture(logRing) }
+
+    private val lock = Any()
 
     /**
      * Spec §1.5: samples [Tun2Socks.stats] once a second while a session is up
@@ -770,8 +777,6 @@ class TunnelService : VpnService() {
             onMeasurementError = { name -> Log.w(TAG, "measurement failed: $name") },
         )
     }
-
-    private val lock = Any()
 
     // All guarded by `lock`.
     private var controller: XrayController? = null

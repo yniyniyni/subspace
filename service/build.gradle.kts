@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
+import java.time.Duration
+
 plugins {
     id("subspace.android.library")
     id("subspace.android.hilt")
@@ -65,6 +67,11 @@ val testHevSourceIsolation =
         inputs.file(prepareHevLockWrapper)
         inputs.file(testHevSourceIsolationScript)
         outputs.upToDateWhen { false }
+
+        // M8.5 spec §6: a hang that did not reproduce in 50 looped runs. Bounded so
+        // it fails instead of wedging CI, and the script dumps its process tree on
+        // the way out (see test-hev-source-isolation.sh's watchdog).
+        timeout.set(Duration.ofMinutes(10))
 
         commandLine("bash", testHevSourceIsolationScript.absolutePath)
     }

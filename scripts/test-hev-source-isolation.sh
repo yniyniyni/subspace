@@ -4,6 +4,17 @@
 
 set -euo pipefail
 
+# M8.5 spec §6 (Task 15): a hang here did not reproduce in 50 looped runs
+# (docs/agent/research/scripts/flake-loop.sh, 2026-09-26). This watchdog fires
+# before Gradle's own timeout on the testHevSourceIsolation task
+# (service/build.gradle.kts) kills the process, so the next hang leaves a
+# process-tree dump in the task log instead of just wedging silently. Killed
+# from the existing cleanup() trap below, not a separate trap.
+( sleep 540
+  echo "test-hev-source-isolation.sh: still running after 540s; process tree follows" >&2
+  ps -axo pid,ppid,etime,stat,command >&2 ) &
+watchdog_pid=$!
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 live_hev="$repo_root/third_party/hev-socks5-tunnel"
@@ -32,6 +43,16 @@ cleanup() {
     local status=$?
 
     trap - EXIT INT TERM
+    # `kill "$watchdog_pid"` alone only reaches the subshell wrapping `sleep
+    # 540`, not the sleep itself: bash forks sleep as a real child rather than
+    # exec'ing into it (the subshell has two more commands to run after it).
+    # SIGTERM to the subshell orphans that sleep, which then keeps this
+    # script's inherited stdout/stderr open for the rest of its 540s, so
+    # Gradle's Exec task blocks on EOF long after everything else finished.
+    # Kill the child before the parent, as flake-loop.sh's own watchdog does.
+    pkill -P "$watchdog_pid" 2>/dev/null || true
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
     if [[ -n "$runner_holder_pid" ]] && kill -0 "$runner_holder_pid" 2>/dev/null; then
         kill -TERM "$runner_holder_pid" 2>/dev/null || true
         wait "$runner_holder_pid" 2>/dev/null || true

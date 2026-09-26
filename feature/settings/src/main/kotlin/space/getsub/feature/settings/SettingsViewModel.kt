@@ -216,7 +216,7 @@ constructor(
      * was decoration, tested but never exercised. Switching a survival setting *off* now reaches
      * this function and is refused here, in the one place that decides.
      */
-    private suspend fun maybePromptForBattery(justEnabled: Boolean) {
+    private suspend fun maybePromptForBattery(justEnabled: Boolean): Boolean {
         // No early return on [justEnabled], deliberately. One was added here to skip the two
         // reads below when the outcome is already determined, and it reinstated precisely the
         // property `be1ee7f` removed: with it, [shouldPromptForBattery]'s first conjunct could
@@ -237,6 +237,7 @@ constructor(
                 survivalSettingJustEnabled = justEnabled,
             )
         if (show) _state.update { it.copy(showBatteryPrompt = true) }
+        return show
     }
 
     /**
@@ -248,18 +249,43 @@ constructor(
      * Tapping the row is the strongest statement of "I want this tunnel to survive" that is
      * observable here, so that is what the prompt is hung on. The prompt is shown once ever
      * (`batteryPromptShown`), so treating the tap as intent cannot become nagging.
+     *
+     * M8.5 spec §6 #10: the deep link to `ACTION_VPN_SETTINGS` is deferred until the prompt is
+     * answered, rather than launched alongside it, so the prompt can no longer land behind the
+     * system VPN screen. When no prompt is due, [openVpnSettingsRequested][SettingsState] is set
+     * immediately here instead.
      */
-    fun onAlwaysOnOpened() {
-        viewModelScope.launch { maybePromptForBattery(justEnabled = true) }
+    fun onAlwaysOnRequested() {
+        viewModelScope.launch {
+            val prompted = maybePromptForBattery(justEnabled = true)
+            _state.update {
+                if (prompted) it.copy(vpnSettingsAfterPrompt = true) else it.copy(openVpnSettingsRequested = true)
+            }
+        }
+    }
+
+    /** M8.5 spec §6 #10: consumes [SettingsState.openVpnSettingsRequested] once the screen has acted on it. */
+    fun onVpnSettingsOpened() {
+        _state.update { it.copy(openVpnSettingsRequested = false) }
     }
 
     /**
      * Either response to the battery prompt — including a plain dismissal — records
      * [SettingsSource.batteryPromptShown] so the prompt never returns. "Respect refusal" (§9)
      * means this call happens whatever the user chose, not only on acceptance.
+     *
+     * M8.5 spec §6 #10: if this prompt was raised by [onAlwaysOnRequested]
+     * ([SettingsState.vpnSettingsAfterPrompt]), resolving it now requests the deferred VPN
+     * settings deep link.
      */
     fun onBatteryPromptResolved() {
-        _state.update { it.copy(showBatteryPrompt = false) }
+        _state.update {
+            it.copy(
+                showBatteryPrompt = false,
+                openVpnSettingsRequested = it.openVpnSettingsRequested || it.vpnSettingsAfterPrompt,
+                vpnSettingsAfterPrompt = false,
+            )
+        }
         viewModelScope.launch { settingsSource.setBatteryPromptShown(true) }
     }
 

@@ -78,6 +78,10 @@ internal data class SettingsState(
      * responding, per [shouldPromptForBattery]'s own gate in [SettingsViewModel].
      */
     val showBatteryPrompt: Boolean = false,
+    /** M8.5 spec §6 #10: the screen should launch ACTION_VPN_SETTINGS now. Consumed by onVpnSettingsOpened. */
+    val openVpnSettingsRequested: Boolean = false,
+    /** The prompt on screen was raised by the always-on row, so answering it opens VPN settings. */
+    val vpnSettingsAfterPrompt: Boolean = false,
     /**
      * Whether xray's `stats`/`policy`/`metrics` blocks are emitted so the per-server traffic
      * breakdown (Task 7's [SettingsDiagnosticsSection]) can be shown on Home. Defaults to off —

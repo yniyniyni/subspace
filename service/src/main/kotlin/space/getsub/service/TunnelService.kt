@@ -3014,8 +3014,13 @@ class TunnelService : VpnService() {
         // fight this app should lose, loudly and immediately — not retry into.
         val revokedToken = sessionIntent.currentToken()
         scope.launch(NonCancellable) { sessionIntent.clearIfOwned(revokedToken) }
+        // M8.5 spec §6 #11 (the M8 review's M4a): resolve the start lifetime
+        // onStartCommand actually received, not the session's own token, for
+        // stopTunnelAndService's reason. Between a framework start's enqueue and
+        // its dequeue the two diverge, and stopSelfResult(older) returns false,
+        // leaving the service running with nothing that would ever stop it.
         stopTunnel(failure(FailureReason.Revoked, "VPN permission revoked"))
-            ?.let { stopped -> stopStartedService(stopped.startId) }
+            ?.let { stopStartedService(commandIngress.latestStartId()) }
     }
 
     override fun onDestroy() {

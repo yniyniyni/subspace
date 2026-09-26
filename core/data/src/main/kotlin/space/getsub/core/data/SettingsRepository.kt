@@ -291,9 +291,11 @@ internal constructor(
     }
 
     /**
-     * The packages the **user** selected, which is not the same as the packages in
-     * force: `PerAppRepository` unions this with any approved provider layer, and
-     * that union is what reaches the tunnel.
+     * The user's per-app **selection**, retained while `per_app_mode` is `off` so
+     * that re-enabling restores it. This is **not** the effective list: while the
+     * mode is off it has no effect at all. Read [PerAppRepository], which computes
+     * the one effective selection `:service` and the picker both use, rather than
+     * this column (M8.5 spec §6 #13; ARCHITECTURE.md §5.5).
      *
      * Comma-joined for the reason [selectedGeoSourceIds] is: Android package names
      * match `[A-Za-z0-9_.]+`, so they cannot contain the delimiter. The blank

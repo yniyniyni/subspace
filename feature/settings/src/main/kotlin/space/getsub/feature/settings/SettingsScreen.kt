@@ -26,6 +26,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -116,7 +117,8 @@ fun SettingsScreen(
             onBootAutostartChanged = viewModel::onBootAutostartChanged,
             onFailClosedChanged = viewModel::onFailClosedChanged,
             onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
-            onAlwaysOnOpened = viewModel::onAlwaysOnOpened,
+            onAlwaysOnRequested = viewModel::onAlwaysOnRequested,
+            onVpnSettingsOpened = viewModel::onVpnSettingsOpened,
             onPerTagBreakdownChanged = viewModel::onPerTagBreakdownChanged,
         ),
         navigation = navigation,
@@ -170,7 +172,10 @@ internal data class SettingsActions(
     val onBatteryPromptResolved: () -> Unit = {},
     // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
     // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
-    val onAlwaysOnOpened: () -> Unit = {},
+    val onAlwaysOnRequested: () -> Unit = {},
+    // M8.5 spec §6 #10: consumes SettingsState.openVpnSettingsRequested once the screen has
+    // launched the deep link it names.
+    val onVpnSettingsOpened: () -> Unit = {},
     // Defaulted for the same reason as the four above (Task 15, this section's own newest
     // field) — neither SettingsHwidLayoutTest nor SettingsDnsSectionTest's full positional
     // construction bears on the diagnostics toggle.
@@ -356,24 +361,19 @@ private fun TunnelSection(
         state = state,
         onBootAutostartChange = actions.onBootAutostartChanged,
         onFailClosedChange = actions.onFailClosedChanged,
-        onOpenVpnSettings = {
-            // Spec §7.2: the prompt's third trigger. The deep link still opens whether or not a
-            // prompt is due — shouldPromptForBattery decides that, and never twice.
-            //
-            // The order of these two statements is not load-bearing, and an earlier version of
-            // this comment claimed it was. onAlwaysOnOpened() does not raise a flag in state: it
-            // launches a coroutine that performs a PowerManager binder round trip and a Room
-            // read before it may set showBatteryPrompt, so when — and whether — the dialog
-            // appears is governed by that suspension, not by which line ran first.
-            // openVpnSettings starts the system VPN screen synchronously, and in practice covers
-            // this one well before the prompt can resolve, so the user meets the prompt on
-            // return, after doing the thing it is about. That is the experience wanted; it is
-            // what the asynchrony produces rather than something this ordering guarantees.
-            actions.onAlwaysOnOpened()
-            openVpnSettings(context)
-        },
+        // M8.5 spec §6 #10: the ViewModel decides whether a battery prompt comes first;
+        // the deep link is launched from openVpnSettingsRequested below, never directly,
+        // so the prompt can no longer be buried under the system VPN screen.
+        onOpenVpnSettings = actions.onAlwaysOnRequested,
         onOpenBatterySettings = { openBatterySettings(context) },
     )
+
+    LaunchedEffect(state.openVpnSettingsRequested) {
+        if (state.openVpnSettingsRequested) {
+            openVpnSettings(context)
+            actions.onVpnSettingsOpened()
+        }
+    }
 
     if (state.showBatteryPrompt) {
         AlertDialog(

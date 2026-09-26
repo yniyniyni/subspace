@@ -45,6 +45,11 @@ import space.getsub.core.model.PingMode
  * [space.getsub.feature.home.HomeViewModelTest] sets one.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+// Task 16 (M8.5 spec §6 #10) added five cases replacing two, pushing this fixture-per-scenario
+// ViewModel test past the threshold. Same precedent as ClashYamlTest and
+// RoutingProfileImporterTest: one class covering one ViewModel's every branch, not a design flaw
+// to fix inside a residuals task.
+@Suppress("LargeClass")
 class SettingsViewModelTest {
     /**
      * Backed by a [MutableStateFlow], exactly like the real
@@ -805,34 +810,75 @@ class SettingsViewModelTest {
             viewModel.state.value.showBatteryPrompt shouldBe false
         }
 
-    /**
-     * §7.2's third trigger, which raised no prompt at all. Always-on is a deep link and never a
-     * switch (§7.1), so the tap is the strongest statement of intent the app can observe.
-     */
+    /** M8.5 spec §6 #10: the prompt comes first; the deep link waits for its answer. */
     @Test
-    fun `opening always-on prompts about battery`() =
+    fun `always-on with a prompt due shows the prompt and defers the deep link`() =
         runTest {
             val viewModel =
                 SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
 
-            viewModel.onAlwaysOnOpened()
+            viewModel.onAlwaysOnRequested()
             advanceUntilIdle()
 
             viewModel.state.value.showBatteryPrompt shouldBe true
+            viewModel.state.value.openVpnSettingsRequested shouldBe false
         }
 
-    /** An app already exempt from Doze has nothing to ask for. */
     @Test
-    fun `an already exempt app is not prompted`() =
+    fun `answering the prompt then opens vpn settings`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+            viewModel.onAlwaysOnRequested()
+            advanceUntilIdle()
+
+            viewModel.onBatteryPromptResolved()
+            advanceUntilIdle()
+
+            viewModel.state.value.showBatteryPrompt shouldBe false
+            viewModel.state.value.openVpnSettingsRequested shouldBe true
+        }
+
+    @Test
+    fun `an already exempt app goes straight to vpn settings`() =
         runTest {
             val settingsSource = FakeSettingsSource().apply { ignoringBatteryOptimizations = true }
             val viewModel =
                 SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
 
-            viewModel.onAlwaysOnOpened()
+            viewModel.onAlwaysOnRequested()
             advanceUntilIdle()
 
             viewModel.state.value.showBatteryPrompt shouldBe false
+            viewModel.state.value.openVpnSettingsRequested shouldBe true
+        }
+
+    @Test
+    fun `the deep link request is consumed once opened`() =
+        runTest {
+            val settingsSource = FakeSettingsSource().apply { ignoringBatteryOptimizations = true }
+            val viewModel =
+                SettingsViewModel(settingsSource, FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+            viewModel.onAlwaysOnRequested()
+            advanceUntilIdle()
+
+            viewModel.onVpnSettingsOpened()
+
+            viewModel.state.value.openVpnSettingsRequested shouldBe false
+        }
+
+    @Test
+    fun `resolving a prompt raised by another setting does not open vpn settings`() =
+        runTest {
+            val viewModel =
+                SettingsViewModel(FakeSettingsSource(), FakeXraySource(), FakeAppVersionSource(), FakeGeoAssetSource())
+            viewModel.onFailClosedChanged(true)
+            advanceUntilIdle()
+
+            viewModel.onBatteryPromptResolved()
+            advanceUntilIdle()
+
+            viewModel.state.value.openVpnSettingsRequested shouldBe false
         }
 
     // ── M8.5: the per-tag breakdown toggle (Task 15) ────────────────────────

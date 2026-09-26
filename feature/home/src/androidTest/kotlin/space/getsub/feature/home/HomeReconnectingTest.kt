@@ -82,6 +82,36 @@ class HomeReconnectingTest {
         disconnects shouldBe 1
     }
 
+    @Test
+    fun blockedReconnectingSaysTrafficIsBlocked() {
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(
+                    FailureReason.CoreStartFailed,
+                    attempt = 2,
+                    blocked = true,
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("traffic is blocked", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun openReconnectingSaysTrafficIsNotProtected() {
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(
+                    FailureReason.CoreStartFailed,
+                    attempt = 2,
+                    blocked = false,
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("traffic is not protected", substring = true).assertIsDisplayed()
+    }
+
     private fun setContent(state: HomeState) {
         composeRule.setContent {
             SubspaceTheme {

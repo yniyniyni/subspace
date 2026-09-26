@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
+import space.getsub.core.model.Health
 import space.getsub.core.model.LatencyOutcome
 import space.getsub.core.model.StartupStage
 import space.getsub.core.ui.component.ConnectControl
@@ -249,13 +250,10 @@ private fun ConnectionDetail(connection: ConnectionState) {
             )
         }
 
-        // §7.3: whether traffic is currently blocked or flowing in the clear is
-        // deliberately NOT shown here. That distinction is carried by the
-        // ongoing notification (§6.3), which is the surface a user actually
-        // sees while the app is backgrounded mid-reconnect; duplicating it on
-        // Home would mean widening ConnectionState.Reconnecting and its parcel
-        // discriminant to carry a fact the notification already reports.
-        // Deferred to M8.5 — see the roadmap, not a TODO here.
+        // M8.5 spec §4.2 (amended): whether traffic is currently blocked or flowing in the clear
+        // is now shown in the label (labelRes reads Reconnecting.blocked).
+        // The distinction is carried by the ongoing notification (§4.4), which is
+        // the surface a user sees while the app is backgrounded mid-reconnect.
         ConnectionState.Disconnected,
         ConnectionState.Disconnecting,
         is ConnectionState.Connecting,
@@ -472,19 +470,19 @@ private fun ConnectionState.toVisualState(): ConnectVisualState =
         is ConnectionState.Reconnecting -> ConnectVisualState.Reconnecting
     }
 
-private fun ConnectionState.labelRes(): Int =
+internal fun ConnectionState.labelRes(): Int =
     when (this) {
         is ConnectionState.Disconnected -> R.string.state_disconnected
         is ConnectionState.Disconnecting -> R.string.state_disconnecting
-        is ConnectionState.Connected -> R.string.state_connected
+        is ConnectionState.Connected ->
+            if (health == Health.Stalled) R.string.home_state_stalled else R.string.state_connected
         is ConnectionState.Connecting -> stage.labelRes()
         is ConnectionState.Failed -> reason.labelRes()
-        // Generic, not reason.labelRes(): unlike Failed, a Reconnecting attempt
-        // is not something the user needs to act on, so it gets one steady
-        // label rather than cycling through whichever reason triggered each
-        // retry. The blocked/open distinction (§7.3) is the notification's to
-        // report, not this label's — see ConnectionDetail above.
-        is ConnectionState.Reconnecting -> R.string.home_state_reconnecting
+        // M8.5 spec §4.2 (amended): blocked is published state, read here and by the
+        // notification alike. Still one steady label per value rather than cycling
+        // through each retry's reason.
+        is ConnectionState.Reconnecting ->
+            if (blocked) R.string.home_state_reconnecting_blocked else R.string.home_state_reconnecting_open
     }
 
 private fun StartupStage.labelRes(): Int =

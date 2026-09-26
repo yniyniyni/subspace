@@ -4,17 +4,6 @@
 
 set -euo pipefail
 
-# M8.5 spec §6 (Task 15): a hang here did not reproduce in 50 looped runs
-# (docs/agent/research/scripts/flake-loop.sh, 2026-09-26). This watchdog fires
-# before Gradle's own timeout on the testHevSourceIsolation task
-# (service/build.gradle.kts) kills the process, so the next hang leaves a
-# process-tree dump in the task log instead of just wedging silently. Killed
-# from the existing cleanup() trap below, not a separate trap.
-( sleep 540
-  echo "test-hev-source-isolation.sh: still running after 540s; process tree follows" >&2
-  ps -axo pid,ppid,etime,stat,command >&2 ) &
-watchdog_pid=$!
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 live_hev="$repo_root/third_party/hev-socks5-tunnel"
@@ -38,6 +27,7 @@ nested_specs=(
 )
 runner_holder_pid=""
 runner_contender_pid=""
+watchdog_pid=""
 
 cleanup() {
     local status=$?
@@ -65,6 +55,27 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT INT TERM
+
+# M8.5 spec §6 (Task 15): a hang here did not reproduce in 50 looped runs
+# (docs/agent/research/scripts/flake-loop.sh, 2026-09-26). This watchdog fires
+# before Gradle's own timeout on the testHevSourceIsolation task
+# (service/build.gradle.kts) kills the process, so the next hang leaves a
+# process-tree dump in the task log instead of just wedging silently.
+#
+# Spawned here, after the trap above is armed and after watchdog_pid is
+# pre-declared empty above with the other tracked pids: anything that fails
+# before this point exits with no watchdog to reap, and cleanup() can't trip
+# over an unset watchdog_pid under `set -u` if it somehow fires in the
+# instant between arming the trap and this line actually running. Spawning it
+# any earlier — e.g. right after `set -euo pipefail`, before the trap exists —
+# means a failure in the setup below leaves this subshell (and the `sleep`
+# grandchild cleanup() reaps below) as an orphan holding this script's
+# inherited stdout/stderr for the rest of its 540s: a bounded recurrence of
+# the exact pipe-held hang this watchdog exists to close.
+( sleep 540
+  echo "test-hev-source-isolation.sh: still running after 540s; process tree follows" >&2
+  ps -axo pid,ppid,etime,stat,command >&2 ) &
+watchdog_pid=$!
 
 snapshot_live_metadata() {
     local destination="$1"

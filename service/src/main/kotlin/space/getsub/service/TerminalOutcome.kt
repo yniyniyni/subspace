@@ -62,7 +62,8 @@ internal class TerminalOutcome(
         state: ConnectionState,
         lifecycle: () -> Boolean,
         persist: suspend () -> Unit,
-    ): TerminalSettlement = settleComputed(gen, lifecycle, { state }, persist)
+        onCommitted: () -> Unit = {},
+    ): TerminalSettlement = settleComputed(gen, lifecycle, { state }, persist, onCommitted)
 
     /**
      * [settle] for a state that depends on what [lifecycle] did — M8.5 spec
@@ -98,6 +99,10 @@ internal class TerminalOutcome(
      * take the tunnel down (§10.4); [ConnectionRecorder] already owns that, and cancellation
      * propagates rather than being mistaken for a failed write.
      *
+     * @param onCommitted runs under the same [lock], only for a generation that is still
+     *   current and whose lifecycle was accepted — after [publish], before [persist]. Anything
+     *   that must not happen for a superseded generation belongs here, never in [persist], which
+     *   runs after a suspension a newer generation can use (M8.5 spec §4.5, §6 #9).
      * @return [TerminalSettlement.Committed] if the transition committed,
      *   [TerminalSettlement.Superseded] if [gen] no longer owns the tunnel, or
      *   [TerminalSettlement.LifecycleRejected] if foreground lifecycle could not be
@@ -108,6 +113,7 @@ internal class TerminalOutcome(
         lifecycle: () -> Boolean,
         state: () -> ConnectionState,
         persist: suspend () -> Unit,
+        onCommitted: () -> Unit = {},
     ): TerminalSettlement {
         val settlement =
             synchronized(lock) {
@@ -118,6 +124,11 @@ internal class TerminalOutcome(
                         // Lifecycle first, then publication: the state the UI is
                         // told about must already be true when it hears it.
                         publish(state())
+                        // Under the same lock, only for a generation that is still current
+                        // and whose lifecycle was accepted. Anything that must not happen for
+                        // a superseded generation belongs here, never in [persist], which runs
+                        // after a suspension a newer generation can use (M8.5 spec §4.5, §6 #9).
+                        onCommitted()
                         TerminalSettlement.Committed
                     }
                 }
@@ -133,14 +144,18 @@ internal class TerminalOutcome(
 }
 
 /** Runs terminal cleanup exactly when [TerminalOutcome.settle] rejects lifecycle establishment. */
+// LongParameterList: this wraps [TerminalOutcome.settle] one-for-one, plus [onLifecycleRejected]
+// — every parameter is already load-bearing on the function it delegates to.
+@Suppress("LongParameterList")
 internal suspend fun TerminalOutcome.settleHandlingLifecycleRejection(
     gen: Int,
     state: ConnectionState,
     lifecycle: () -> Boolean,
     persist: suspend () -> Unit,
     onLifecycleRejected: suspend () -> Unit,
+    onCommitted: () -> Unit = {},
 ): TerminalSettlement {
-    val settlement = settle(gen, state, lifecycle, persist)
+    val settlement = settle(gen, state, lifecycle, persist, onCommitted)
     if (settlement == TerminalSettlement.LifecycleRejected) {
         onLifecycleRejected()
     }

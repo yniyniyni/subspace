@@ -319,4 +319,48 @@ class TerminalOutcomeTest {
 
             built shouldBe false
         }
+
+    @Test
+    fun `onCommitted runs under the lock, after publish, before persist`() =
+        runTest {
+            val lock = Any()
+            val order = mutableListOf<String>()
+            var underLock = false
+            val outcome = TerminalOutcome(lock, currentGeneration = { 1 }, publish = { order += "publish" })
+
+            outcome.settle(
+                gen = 1,
+                state = ConnectionState.Disconnected,
+                lifecycle = {
+                    order += "lifecycle"
+                    true
+                },
+                persist = { order += "persist" },
+                onCommitted = {
+                    underLock = Thread.holdsLock(lock)
+                    order += "committed"
+                },
+            )
+
+            order shouldBe listOf("lifecycle", "publish", "committed", "persist")
+            underLock shouldBe true
+        }
+
+    @Test
+    fun `onCommitted never runs for a superseded generation`() =
+        runTest {
+            var ran = false
+            TerminalOutcome(Any(), currentGeneration = { 2 }, publish = {})
+                .settle(1, ConnectionState.Disconnected, { true }, {}, onCommitted = { ran = true })
+            ran shouldBe false
+        }
+
+    @Test
+    fun `onCommitted never runs when lifecycle is rejected`() =
+        runTest {
+            var ran = false
+            TerminalOutcome(Any(), currentGeneration = { 1 }, publish = {})
+                .settle(1, ConnectionState.Disconnected, { false }, {}, onCommitted = { ran = true })
+            ran shouldBe false
+        }
 }

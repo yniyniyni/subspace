@@ -486,38 +486,6 @@ private fun String.tagOf(): String? =
         null
     }
 
-/**
- * The decision [TunnelService.attachTun] and [TunnelService.attachRetainedTun] share for a
- * connect that establishes its foreground notification: retire whatever retry sequence
- * preceded it. Pure — no lock, no Android call — so it is checkable outside [TunnelService],
- * which cannot be instantiated in a JVM test (`VpnService`, and this project carries no
- * Robolectric or mocking library per §10.7).
- *
- * What this function cannot pin by itself is *where* it is called from. Both call sites invoke
- * it from inside `lifecycle`, under `TunnelService.lock`, before `persist` ever suspends — that
- * placement, not this gate, is what closes the P1 race (a generation that has *committed* is
- * not necessarily still *current* once a suspension gives a newer generation room to run), and
- * it is a call-site fact this function has no way to verify. This only pins the other half of
- * that fix: cancellation must not run on a rejected transition.
- *
- * @param established the result of establishing foreground state (`goForeground`). `false`
- *   means the transition did not commit, so [retireRetry] must not run — the rejection handoff
- *   to `handleForegroundLifecycleRejection` owns whether the retry dies with the session it is
- *   about to stop, not this call.
- * @param retireRetry cancels the pending backoff job and resets the attempt counter. Run only
- *   when [established] is true.
- * @return [established], unchanged — callers use this directly as `lifecycle`'s own result.
- */
-internal fun retireRetryIfEstablished(
-    established: Boolean,
-    retireRetry: () -> Unit,
-): Boolean {
-    if (established) {
-        retireRetry()
-    }
-    return established
-}
-
 /** Returns the same-UID debug-test callback only; release builds ignore this extra. */
 @Suppress("DEPRECATION")
 internal fun testConnectObserverFrom(
@@ -2190,40 +2158,24 @@ class TunnelService : VpnService() {
         terminalOutcome.settleHandlingLifecycleRejection(
             gen = gen,
             state = connected,
-            lifecycle = {
-                // Spec §2.4: a successful connect means whatever retry was pending for the
-                // failure this replaces no longer applies. [retireRetryIfEstablished] runs
-                // here, inside the generation-checked transition under [lock], and not in
-                // `persist` — `persist` runs after `record()` suspends, and a newer generation
-                // can arm its own retry during that suspension. Committed and still-current
-                // are different properties: cancelling from `persist` cancelled whichever
-                // generation's timer happened to be live when the write finally resumed,
-                // which is not necessarily this one's. From here a superseded generation
-                // cannot reach this line at all.
-                //
-                // Fix round 1, Finding 1: the counter reset (bundled into `retireRetry` below)
-                // means the next outage starts from zero, not from wherever this one left off.
-                // Gated on `established`: a rejected foreground hands off to
-                // [handleForegroundLifecycleRejection], which owns whether the retry dies with
-                // the session it is about to stop — not this call.
-                retireRetryIfEstablished(
-                    established = goForeground(R.string.notification_state_connected),
-                    retireRetry = {
-                        // `Locked`, not the `synchronized` wrapper: [lock] is already held by
-                        // [TerminalOutcome.settle].
-                        cancelBackoffRetryLocked()
-                        reconnectAttempts.reset()
-                        // Spec §1.5: gated on `established` like the two calls above —
-                        // a rejected foreground never really connected.
-                        trafficLoop.start()
-                        // M8.5 spec §4.3: a fresh window for this generation's core.
-                        healthDetector = HealthDetector()
-                        healthGeneration = gen
-                    },
-                )
-            },
+            lifecycle = { goForeground(R.string.notification_state_connected) },
             persist = { connectionRecorder.record(rowId, connected) },
             onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
+            // M8 spec §2.4 / M8.5 spec §6 #9: retiring the pending retry belongs to the
+            // generation-checked transition. TerminalOutcomeTest pins that onCommitted runs
+            // under the lock and before persist, and never for a superseded or rejected
+            // generation, which is what retireRetryIfEstablished used to promise by
+            // placement alone.
+            onCommitted = {
+                // `Locked`, not the `synchronized` wrapper: [lock] is already held by
+                // [TerminalOutcome.settleComputed].
+                cancelBackoffRetryLocked()
+                reconnectAttempts.reset()
+                trafficLoop.start()
+                // M8.5 spec §4.3: a fresh window for this generation's core.
+                healthDetector = HealthDetector()
+                healthGeneration = gen
+            },
         )
         // The settlement's own outcome needs no branch here: all three leave this
         // attempt with nothing further owed. `Committed` published `Connected`;
@@ -2427,6 +2379,10 @@ class TunnelService : VpnService() {
                 intentWanted = settingsRepository.tunnelSessionWantedNow(),
                 retryability = retryability,
             )
+        // Read before the transition: a binder round trip must not run under [lock].
+        // Staleness is harmless for the reason scheduleBackoffRetry's old comment gave:
+        // onAvailable/onLost reach this timer's cancel or re-arm through the ordinary path.
+        val hasNetwork = activeNetwork() != null
         // M8.5 spec §4.2 (amended): decided once, inside the lifecycle after the
         // conditional close, under [lock]; the foreground text and the published
         // state both read this one value, so Home and the notification are told
@@ -2494,7 +2450,8 @@ class TunnelService : VpnService() {
                 true
             },
             state = { ConnectionState.Reconnecting(reason, trialAttempt, blocked) },
-            persist = { scheduleBackoffRetry(trialAttempt) },
+            persist = {},
+            onCommitted = { armBackoffRetryLocked(trialAttempt, hasNetwork) },
         )
     }
 
@@ -3698,45 +3655,39 @@ class TunnelService : VpnService() {
         trafficLoop.notifyCountersRestarted()
 
         val connected = ConnectionState.Connected(System.currentTimeMillis(), ports.socksPort, ports.httpPort)
-        val settlement =
-            terminalOutcome.settleHandlingLifecycleRejection(
-                gen = gen,
-                state = connected,
-                lifecycle = {
-                    // See [attachTun]'s matching site: the cancel and the attempt counter
-                    // reset belong to the generation-checked transition, not to `persist` — a
-                    // superseded generation must not be able to reach either after `persist`
-                    // suspends in `record()`.
-                    retireRetryIfEstablished(
-                        established = goForeground(R.string.notification_state_connected),
-                        retireRetry = {
-                            cancelBackoffRetryLocked()
-                            reconnectAttempts.reset()
-                            // Spec §1.5: [start] is idempotent — a no-op while its job is
-                            // still active — so this retained-TUN restart does not rebuild
-                            // [trafficLoop]'s [TrafficSampler]. That is what survives the
-                            // restart, not tun2socks: `Tun2Socks.stop()` is called earlier
-                            // in this same restart (see above), and its counters *do* reset
-                            // along with everything else tun2socks owns. What this no-op
-                            // preserves is the accumulator — the same [TrafficSampler]
-                            // instance goes on polling the freshly reset counters, now told
-                            // about the reset explicitly by [trafficLoop]'s
-                            // `notifyCountersRestarted()` call above rather than left to infer
-                            // it from a falling reading (ruling R38), so the session total
-                            // keeps climbing instead of restarting from zero **or** silently
-                            // undercounting when the new epoch outruns the old one before the
-                            // next poll.
-                            trafficLoop.start()
-                            // M8.5 spec §4.3: a fresh window for this generation's core.
-                            healthDetector = HealthDetector()
-                            healthGeneration = gen
-                        },
-                    )
-                },
-                persist = { connectionRecorder.record(rowId, connected) },
-                onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
-            )
-        if (settlement != TerminalSettlement.Committed) return
+        terminalOutcome.settleHandlingLifecycleRejection(
+            gen = gen,
+            state = connected,
+            lifecycle = { goForeground(R.string.notification_state_connected) },
+            persist = { connectionRecorder.record(rowId, connected) },
+            onLifecycleRejected = { handleForegroundLifecycleRejection(gen, rowId) },
+            // See [attachTun]'s matching site: the cancel and the attempt counter reset
+            // belong to the generation-checked transition, not to `persist` — a superseded
+            // generation must not be able to reach either after `persist` suspends in
+            // `record()`.
+            onCommitted = {
+                cancelBackoffRetryLocked()
+                reconnectAttempts.reset()
+                // Spec §1.5: [start] is idempotent — a no-op while its job is
+                // still active — so this retained-TUN restart does not rebuild
+                // [trafficLoop]'s [TrafficSampler]. That is what survives the
+                // restart, not tun2socks: `Tun2Socks.stop()` is called earlier
+                // in this same restart (see above), and its counters *do* reset
+                // along with everything else tun2socks owns. What this no-op
+                // preserves is the accumulator — the same [TrafficSampler]
+                // instance goes on polling the freshly reset counters, now told
+                // about the reset explicitly by [trafficLoop]'s
+                // `notifyCountersRestarted()` call above rather than left to infer
+                // it from a falling reading (ruling R38), so the session total
+                // keeps climbing instead of restarting from zero **or** silently
+                // undercounting when the new epoch outruns the old one before the
+                // next poll.
+                trafficLoop.start()
+                // M8.5 spec §4.3: a fresh window for this generation's core.
+                healthDetector = HealthDetector()
+                healthGeneration = gen
+            },
+        )
     }
 
     /**
@@ -3749,62 +3700,46 @@ class TunnelService : VpnService() {
      * six-hour screen-off row fails — which takes enforcement on both edges:
      * `NetworkLost` cancels a job that was already running, and the guard below
      * refuses to arm one when there is no network to retry over in the first
-     * place. Either way the service waits on the `NetworkCallback` instead.
+     * place ([hasNetwork], read by the caller before the transition, since a
+     * binder round trip must not run under [lock]; staleness between that read
+     * and this call is harmless, because onAvailable/onLost reach this timer's
+     * cancel or re-arm through the ordinary path regardless). Either way the
+     * service waits on the `NetworkCallback` instead.
      *
-     * Called from [settleRetryableFailure]'s `persist` — which confirms the generation
-     * *committed*, not that it is still *current* when this runs. `persist` suspends before
-     * this call, the same gap the cancel-side P1 fix closed by moving cancellation into the
-     * generation-checked `lifecycle` instead of `persist` (see [retireRetryIfEstablished]);
-     * this arming call was not moved with it. Neither this function nor its caller re-checks
-     * the generation, so a superseded generation can still arm a timer here — the arming-side
-     * mirror of that race, reaching the same §11 row 7 corruption named on
-     * [cancelBackoffRetry]. Known, pre-existing, and out of scope for that fix.
+     * M8.5 spec §4.5: arms the backoff timer from inside [TerminalOutcome]'s
+     * generation-checked transition (`onCommitted`), so a superseded generation
+     * cannot arm a timer into a session that already published `Failed(Revoked)`.
+     * Must be called with [lock] held. Cancel and arm stay one atomic step: they
+     * used to be two — `cancelBackoffRetry()`, then `launch`, then publish the
+     * job — and `scope.launch` starts the coroutine immediately, so `backoffJob`
+     * was published a line *after* the timer already existed. A cancel landing
+     * in that window cancelled whatever the previous attempt had left, and this
+     * function then installed a live job over the top of it: armed, unreachable
+     * by every cancel site, and guaranteed to fire `BackoffElapsed` into a
+     * session that had just ended. That is exactly the §11 row 7 corruption I1
+     * was raised to close — adding call sites to [cancelBackoffRetry] could not
+     * close it, because the job was not yet visible to any of them. Moving the
+     * call itself inside the generation-checked transition closes the arming-side
+     * mirror of that same corruption: the pre-M8.5 version of this function ran
+     * from `persist`, after a suspension a newer generation could use.
      */
-    private fun scheduleBackoffRetry(attempt: Int) {
-        // Read before taking the lock — a binder round trip — and acted on
-        // inside it. The value can go stale between the two, which is harmless:
-        // a network arriving in that window delivers onAvailable, and one
-        // leaving delivers onLost, both of which reach this timer's cancel or
-        // re-arm through the ordinary path.
-        val hasNetwork = activeNetwork() != null
-        // §2.4's rule, on the edge it was previously not enforced on. Cancelling
-        // on ReconcileTrigger.NetworkLost only covers a timer that was already
-        // running when the network went away; a failure arriving while there is
-        // *already* no network — the whole fail-closed-with-no-connectivity
-        // case — reached here and armed one anyway. That timer is what §11's
-        // six-hour screen-off row fails on. With none armed the service waits on
-        // NetworkMonitor's callback instead: it stays registered for as long as
-        // the session is wanted (see onCreate), and this failure has just
-        // published Reconnecting without clearing intent, so the callback is
-        // live. Its onAvailable enqueues Reconcile(NetworkChanged), which
-        // `reconcile` answers with Start for a Reconnecting state that may
-        // attempt again — the retry resumes from there, not from a clock.
-        // Cancel and arm are one atomic step, under one acquisition of [lock].
-        // They were previously two — `cancelBackoffRetry()`, then `launch`, then
-        // publish the job — and `scope.launch` starts the coroutine immediately,
-        // so `backoffJob` was published a line *after* the timer already
-        // existed. A cancel landing in that window cancelled whatever the
-        // previous attempt had left, and this function then installed a live job
-        // over the top of it: armed, unreachable by every cancel site, and
-        // guaranteed to fire BackoffElapsed into a session that had just ended.
-        // That is exactly the §11 row 7 corruption I1 was raised to close —
-        // adding call sites to `cancelBackoffRetry` could not close it, because
-        // the job was not yet visible to any of them.
-        synchronized(lock) {
-            cancelBackoffRetryLocked()
-            if (!hasNetwork) {
-                Log.i(TAG, "backoff retry not scheduled: no network; waiting on the network callback")
-                return
-            }
-            // `launch` dispatches rather than running inline (the default start
-            // mode, not UNDISPATCHED), so the body does not execute under [lock]
-            // — only the assignment does.
-            backoffJob =
-                scope.launch {
-                    delay(ReconnectBackoff.delayMillisFor(attempt))
-                    commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.BackoffElapsed))
-                }
+    private fun armBackoffRetryLocked(
+        attempt: Int,
+        hasNetwork: Boolean,
+    ) {
+        cancelBackoffRetryLocked()
+        if (!hasNetwork) {
+            Log.i(TAG, "backoff retry not scheduled: no network; waiting on the network callback")
+            return
         }
+        // `launch` dispatches rather than running inline (the default start
+        // mode, not UNDISPATCHED), so the body does not execute under [lock]
+        // — only the assignment does.
+        backoffJob =
+            scope.launch {
+                delay(ReconnectBackoff.delayMillisFor(attempt))
+                commandCoordinator.enqueue(TunnelCommand.Reconcile(ReconcileTrigger.BackoffElapsed))
+            }
     }
 
     /**
@@ -3825,13 +3760,13 @@ class TunnelService : VpnService() {
      *    [ConnectionState.Connected] in both [attachTun] and
      *    [attachRetainedTun] — the failure the pending retry was for is over.
      *    All four already hold [lock] at the point they act — the last two
-     *    inside the generation-checked `lifecycle` lambda [TerminalOutcome]
+     *    inside the generation-checked `onCommitted` lambda [TerminalOutcome]
      *    runs — and so call [cancelBackoffRetryLocked] inline instead.
      *
-     * [scheduleBackoffRetry] also cancels, first thing, before arming its own replacement —
+     * [armBackoffRetryLocked] also cancels, first thing, before arming its own replacement —
      * named here rather than counted above, because that one is cancel-then-replace
-     * bookkeeping for the *arming* side rather than a session-end cancellation, and it is not
-     * generation-checked (see its KDoc).
+     * bookkeeping for the *arming* side rather than a session-end cancellation, run from
+     * inside the generation-checked transition (see its KDoc).
      */
     private fun cancelBackoffRetry() {
         synchronized(lock) { cancelBackoffRetryLocked() }
@@ -3840,10 +3775,9 @@ class TunnelService : VpnService() {
     /**
      * [cancelBackoffRetry]'s body for callers that already hold [lock]. Five in this file:
      * [stopTunnel]'s one-shot state capture, [settleTerminalFailure]'s `lifecycle` lambda,
-     * [scheduleBackoffRetry]'s own cancel-then-arm, and — since the P1 fix — [attachTun] and
-     * [attachRetainedTun]'s committed-`Connected` `lifecycle` lambdas (via
-     * [retireRetryIfEstablished]; see [cancelBackoffRetry]'s call-site list for why those two
-     * moved here).
+     * [armBackoffRetryLocked]'s own cancel-then-arm, and — since the P1 fix — [attachTun] and
+     * [attachRetainedTun]'s committed-`Connected` `onCommitted` lambdas (see
+     * [cancelBackoffRetry]'s call-site list for why those two moved here).
      *
      * Split out rather than letting any of them call [cancelBackoffRetry] and rely on the
      * monitor being reentrant: every one of these is a place where "this runs under the lock"

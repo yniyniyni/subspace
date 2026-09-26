@@ -692,10 +692,14 @@ class TunnelService : VpnService() {
             // ARCHITECTURE.md §5.6: the class name only, never the message — a Room or
             // libXray error quotes the config straight back.
             Log.e(TAG, "coroutine on the service scope crashed: ${e.javaClass.simpleName}")
+            // Read the JNI state outside [lock] — nativeIsRunning may wait on the native
+            // mutex during teardown, and a slightly stale reading is harmless because the
+            // next transition republishes.
+            val tunnelRunning = Tun2Socks.isRunning
             // M8.5 spec §4.4: decided under [lock] against the live state, so the check
             // and the publish cannot be split by another transition.
             synchronized(lock) {
-                scopeCrashPublication(currentState, Tun2Socks.isRunning, e.javaClass.simpleName)
+                scopeCrashPublication(currentState, tunnelRunning, e.javaClass.simpleName)
                     ?.let(::publishLocked)
             }
         }

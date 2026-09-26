@@ -78,4 +78,15 @@ class ConnectionStateTest {
             .toSet()
             .size shouldBe StartupStage.entries.size
     }
+
+    @Test
+    fun `a connected state starts idle, because nothing has been observed yet`() {
+        ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080).health shouldBe Health.Idle
+    }
+
+    @Test
+    fun `reconnecting carries whether the kill switch is blackholing`() {
+        ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = true).blocked shouldBe true
+        ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = false).blocked shouldBe false
+    }
 }

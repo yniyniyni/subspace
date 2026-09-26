@@ -168,7 +168,7 @@ class TrafficSessionTrackerTest {
         traffic =
             apply(
                 tracker,
-                ConnectionState.Reconnecting(reason = FailureReason.TunnelStartFailed, attempt = 1),
+                ConnectionState.Reconnecting(reason = FailureReason.TunnelStartFailed, attempt = 1, blocked = false),
                 traffic,
             )
 

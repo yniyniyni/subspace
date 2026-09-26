@@ -24,14 +24,22 @@ class HomeReconnectingTest {
 
     @Test
     fun reconnectingIsNotRenderedAsConnected() {
-        setContent(homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)))
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
+            ),
+        )
 
         composeRule.onNodeWithText("Reconnecting…", substring = true).assertIsDisplayed()
     }
 
     @Test
     fun reconnectingIsNotRenderedAsFailed() {
-        setContent(homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)))
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
+            ),
+        )
 
         // "Disconnected" alone would not catch this: ConnectionState.Failed never renders that
         // literal string — it renders reason.labelRes(), which for CoreStartFailed is exactly
@@ -55,7 +63,10 @@ class HomeReconnectingTest {
     @Test
     fun reconnectingOffersAWorkingDisconnect() {
         var disconnects = 0
-        val state = homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2))
+        val state =
+            homeState(
+                connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
+            )
         composeRule.setContent {
             SubspaceTheme {
                 HomeScreenContent(state = state, actions = actions.copy(onDisconnect = { disconnects++ }))

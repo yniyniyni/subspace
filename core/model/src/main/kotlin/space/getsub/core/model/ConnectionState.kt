@@ -26,6 +26,13 @@ public sealed interface ConnectionState {
          * through the tunnel (spec §5.4).
          */
         val httpProxyPort: Int = 0,
+        /**
+         * Whether traffic is observably coming back (M8.5 spec §4.2, §4.3).
+         * [Health.Idle] until the service's detector has seen something: a
+         * session nobody is using is indistinguishable from a dead one, and
+         * saying so is the point.
+         */
+        val health: Health = Health.Idle,
     ) : ConnectionState
 
     public data object Disconnecting : ConnectionState
@@ -41,10 +48,21 @@ public sealed interface ConnectionState {
      *   [space.getsub.core.model.retryability].
      * @property attempt 1-based, so the UI can say how long this has been going and
      *   [TUN_ESTABLISH_ATTEMPT_CAP] has something to compare against.
+     * @property blocked true while a TUN fd is held with no core serving it: the
+     *   fail-closed kill switch is blackholing the session's traffic.
      */
     public data class Reconnecting(
         val reason: FailureReason,
         val attempt: Int,
+        /**
+         * True while a TUN fd is held with no core serving it: the fail-closed
+         * kill switch is blackholing the session's traffic (M8.5 spec §4.2, as
+         * amended). This is the **observed** TUN, not the fail-closed setting:
+         * an attempt that failed before adopting an fd holds nothing, however
+         * the setting reads. No default, so every construction site has to
+         * decide.
+         */
+        val blocked: Boolean,
     ) : ConnectionState
 
     /**
@@ -82,6 +100,25 @@ public sealed interface ConnectionState {
             ): Failed = Failed(reason, redact(detail))
         }
     }
+}
+
+/**
+ * What the traffic counters say about a [ConnectionState.Connected] session
+ * (M8.5 spec §4.2, as amended).
+ *
+ * Decided in `:service` from the TUN-level counters alone, so it cannot tell
+ * proxied from direct traffic: a dead proxy reads [Open] while direct-routed
+ * traffic flows (ARCHITECTURE.md §14.4).
+ */
+public enum class Health {
+    /** Downlink carried data recently. */
+    Open,
+
+    /** Nothing observed recently, so nothing can be concluded. Never an alarm. */
+    Idle,
+
+    /** Uplink has carried data for the whole stall window and nothing came back. */
+    Stalled,
 }
 
 /**

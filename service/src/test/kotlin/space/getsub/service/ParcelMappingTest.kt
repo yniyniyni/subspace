@@ -10,6 +10,7 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
+import space.getsub.core.model.Health
 import space.getsub.core.model.Profile
 import space.getsub.core.model.Security
 import space.getsub.core.model.StartupStage
@@ -264,16 +265,34 @@ class ParcelMappingTest {
             reason = 0,
             detail = "",
             attempt = 0,
+            health = 0,
+            blocked = false,
         ).toState() shouldBe ConnectionState.Disconnected
     }
 
     @Test
     fun reconnectingRoundTripsThroughTheMapping() {
-        val state = ConnectionState.Reconnecting(reason = FailureReason.CoreStartFailed, attempt = 2)
+        val state = ConnectionState.Reconnecting(reason = FailureReason.CoreStartFailed, attempt = 2, blocked = false)
 
         val restored = ConnectionStateParcel.from(state).toState()
 
         restored shouldBe state
+    }
+
+    @Test
+    fun `every health value survives the parcel mapping`() {
+        Health.entries.forEach { health ->
+            val state = ConnectionState.Connected(10L, 1080, 8080, health)
+            ConnectionStateParcel.from(state).toState() shouldBe state
+        }
+    }
+
+    @Test
+    fun `blocked survives the parcel mapping in both directions`() {
+        listOf(true, false).forEach { blocked ->
+            val state = ConnectionState.Reconnecting(FailureReason.TunnelStartFailed, attempt = 3, blocked = blocked)
+            ConnectionStateParcel.from(state).toState() shouldBe state
+        }
     }
 
     /**
@@ -289,7 +308,7 @@ class ParcelMappingTest {
                 ConnectionState.Connecting(StartupStage.StartingCore),
                 ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080),
                 ConnectionState.Disconnecting,
-                ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1),
+                ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = false),
                 failure(FailureReason.ConfigRejected, "detail"),
             ).map { state -> ConnectionStateParcel.from(state).kind }
 

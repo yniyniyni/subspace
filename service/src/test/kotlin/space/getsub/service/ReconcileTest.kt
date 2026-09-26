@@ -99,14 +99,14 @@ class ReconcileTest {
 
     @Test
     fun networkReturningStartsAReconnectingSession() {
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = false)
 
         reconcile(wanted, reconnecting, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Start(7L)
     }
 
     @Test
     fun backoffElapsingRetriesAReconnectingSession() {
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 3)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 3, blocked = false)
 
         reconcile(wanted, reconnecting, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Start(7L)
     }
@@ -138,8 +138,8 @@ class ReconcileTest {
      */
     @Test
     fun tunEstablishFailedStopsRetryingAtTheCap() {
-        val underCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 2)
-        val atCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3)
+        val underCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 2, blocked = false)
+        val atCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3, blocked = false)
 
         reconcile(wanted, underCap, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Start(7L)
         reconcile(wanted, atCap, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Nothing

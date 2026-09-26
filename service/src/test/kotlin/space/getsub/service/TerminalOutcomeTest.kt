@@ -271,4 +271,52 @@ class TerminalOutcomeTest {
 
             stateAtWriteTime shouldBe "connected"
         }
+
+    @Test
+    fun `a computed state is built after lifecycle, under the lock`() =
+        runTest {
+            val lock = Any()
+            var lifecycleRan = false
+            var builtUnderLock = false
+            var builtAfterLifecycle = false
+            val published = mutableListOf<ConnectionState>()
+            val outcome = TerminalOutcome(lock, currentGeneration = { 1 }, publish = { published += it })
+
+            outcome.settleComputed(
+                gen = 1,
+                lifecycle = {
+                    lifecycleRan = true
+                    true
+                },
+                state = {
+                    builtUnderLock = Thread.holdsLock(lock)
+                    builtAfterLifecycle = lifecycleRan
+                    ConnectionState.Disconnected
+                },
+                persist = {},
+            ) shouldBe TerminalSettlement.Committed
+
+            builtUnderLock shouldBe true
+            builtAfterLifecycle shouldBe true
+            published shouldBe listOf(ConnectionState.Disconnected)
+        }
+
+    @Test
+    fun `a superseded generation never builds its computed state`() =
+        runTest {
+            var built = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 2 }, publish = {})
+
+            outcome.settleComputed(
+                gen = 1,
+                lifecycle = { true },
+                state = {
+                    built = true
+                    ConnectionState.Disconnected
+                },
+                persist = {},
+            ) shouldBe TerminalSettlement.Superseded
+
+            built shouldBe false
+        }
 }

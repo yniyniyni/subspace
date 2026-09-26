@@ -165,7 +165,7 @@ class HomeStateTest {
 
     @Test
     fun `canDisconnect is true while reconnecting`() {
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false)
         HomeState(connection = reconnecting, activeProfile = profile("tcp")).canDisconnect shouldBe true
     }
 
@@ -173,7 +173,7 @@ class HomeStateTest {
     fun `canDisconnect is true while reconnecting even at the attempt cap`() {
         // The cap governs whether the *service* attempts again, never whether the user may
         // leave. A capped reason still sits in Reconnecting until the service settles it.
-        val capped = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3)
+        val capped = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3, blocked = false)
         HomeState(connection = capped, activeProfile = profile("tcp")).canDisconnect shouldBe true
     }
 
@@ -181,7 +181,7 @@ class HomeStateTest {
     fun `canConnect is false while reconnecting`() {
         // Reconnecting is not a state a fresh connect stacks onto: the service already has
         // an attempt sequence in flight. The exit is disconnect, not a second connect.
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false)
         HomeState(connection = reconnecting, activeProfile = profile("tcp")).canConnect shouldBe false
     }
 }

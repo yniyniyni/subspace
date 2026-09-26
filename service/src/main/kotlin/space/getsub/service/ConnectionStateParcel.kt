@@ -6,6 +6,7 @@ import android.os.Parcel
 import android.os.Parcelable
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
+import space.getsub.core.model.Health
 import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
 
@@ -27,6 +28,8 @@ public data class ConnectionStateParcel(
     val reason: Int,
     val detail: String,
     val attempt: Int,
+    val health: Int,
+    val blocked: Boolean,
 ) : Parcelable {
     constructor(parcel: Parcel) : this(
         kind = parcel.readInt(),
@@ -37,6 +40,8 @@ public data class ConnectionStateParcel(
         reason = parcel.readInt(),
         detail = parcel.readString().orEmpty(),
         attempt = parcel.readInt(),
+        health = parcel.readInt(),
+        blocked = parcel.readInt() != 0,
     )
 
     override fun writeToParcel(
@@ -51,6 +56,8 @@ public data class ConnectionStateParcel(
         dest.writeInt(reason)
         dest.writeString(detail)
         dest.writeInt(attempt)
+        dest.writeInt(health)
+        dest.writeInt(if (blocked) 1 else 0)
     }
 
     override fun describeContents(): Int = 0
@@ -71,10 +78,11 @@ public data class ConnectionStateParcel(
         when (kind) {
             KIND_DISCONNECTED -> ConnectionState.Disconnected
             KIND_CONNECTING -> ConnectionState.Connecting(StartupStage.entries[stage])
-            KIND_CONNECTED -> ConnectionState.Connected(sinceEpochMillis, socksPort, httpProxyPort)
+            KIND_CONNECTED ->
+                ConnectionState.Connected(sinceEpochMillis, socksPort, httpProxyPort, Health.entries[health])
             KIND_DISCONNECTING -> ConnectionState.Disconnecting
             KIND_FAILED -> failure(FailureReason.entries[reason], detail)
-            KIND_RECONNECTING -> ConnectionState.Reconnecting(FailureReason.entries[reason], attempt)
+            KIND_RECONNECTING -> ConnectionState.Reconnecting(FailureReason.entries[reason], attempt, blocked)
             else -> ConnectionState.Disconnected
         }
 
@@ -97,31 +105,34 @@ public data class ConnectionStateParcel(
         fun from(state: ConnectionState): ConnectionStateParcel =
             when (state) {
                 is ConnectionState.Disconnected ->
-                    ConnectionStateParcel(KIND_DISCONNECTED, 0, 0L, 0, 0, 0, "", 0)
+                    ConnectionStateParcel(KIND_DISCONNECTED, 0, 0L, 0, 0, 0, "", 0, health = 0, blocked = false)
 
                 is ConnectionState.Connecting ->
-                    ConnectionStateParcel(KIND_CONNECTING, state.stage.ordinal, 0L, 0, 0, 0, "", 0)
+                    ConnectionStateParcel(
+                        KIND_CONNECTING, state.stage.ordinal, 0L, 0, 0, 0, "", 0,
+                        health = 0, blocked = false,
+                    )
 
                 is ConnectionState.Connected ->
                     ConnectionStateParcel(
-                        KIND_CONNECTED,
-                        0,
-                        state.sinceEpochMillis,
-                        state.socksPort,
-                        state.httpProxyPort,
-                        0,
-                        "",
-                        0,
+                        KIND_CONNECTED, 0, state.sinceEpochMillis, state.socksPort, state.httpProxyPort,
+                        0, "", 0, health = state.health.ordinal, blocked = false,
                     )
 
                 is ConnectionState.Disconnecting ->
-                    ConnectionStateParcel(KIND_DISCONNECTING, 0, 0L, 0, 0, 0, "", 0)
+                    ConnectionStateParcel(KIND_DISCONNECTING, 0, 0L, 0, 0, 0, "", 0, health = 0, blocked = false)
 
                 is ConnectionState.Failed ->
-                    ConnectionStateParcel(KIND_FAILED, 0, 0L, 0, 0, state.reason.ordinal, state.detail, 0)
+                    ConnectionStateParcel(
+                        KIND_FAILED, 0, 0L, 0, 0, state.reason.ordinal, state.detail, 0,
+                        health = 0, blocked = false,
+                    )
 
                 is ConnectionState.Reconnecting ->
-                    ConnectionStateParcel(KIND_RECONNECTING, 0, 0L, 0, 0, state.reason.ordinal, "", state.attempt)
+                    ConnectionStateParcel(
+                        KIND_RECONNECTING, 0, 0L, 0, 0, state.reason.ordinal, "", state.attempt,
+                        health = 0, blocked = state.blocked,
+                    )
             }
     }
 }

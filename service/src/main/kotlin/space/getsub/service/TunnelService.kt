@@ -2385,9 +2385,13 @@ class TunnelService : VpnService() {
                 intentWanted = settingsRepository.tunnelSessionWantedNow(),
                 retryability = retryability,
             )
-        terminalOutcome.settle(
+        // M8.5 spec §4.2 (amended): decided once, inside the lifecycle after the
+        // conditional close, under [lock]; the foreground text and the published
+        // state both read this one value, so Home and the notification are told
+        // one thing.
+        var blocked = false
+        terminalOutcome.settleComputed(
             gen = gen,
-            state = ConnectionState.Reconnecting(reason, trialAttempt),
             lifecycle = {
                 configFile?.delete()
                 configFile = null
@@ -2431,8 +2435,9 @@ class TunnelService : VpnService() {
                 // Its own success/failure does not gate this transition: a
                 // rejected foreground update here must not silently drop the
                 // Reconnecting state the user is waiting on.
+                blocked = retainTun && tunInterface != null
                 goForeground(
-                    if (retainTun && tunInterface != null) {
+                    if (blocked) {
                         R.string.notification_state_reconnecting_blocked
                     } else {
                         R.string.notification_state_reconnecting_open
@@ -2440,6 +2445,7 @@ class TunnelService : VpnService() {
                 )
                 true
             },
+            state = { ConnectionState.Reconnecting(reason, trialAttempt, blocked) },
             persist = { scheduleBackoffRetry(trialAttempt) },
         )
     }

@@ -56,13 +56,27 @@ internal class TerminalOutcome(
     private val currentGeneration: () -> Int,
     private val publish: (ConnectionState) -> Unit,
 ) {
+    /** [settleComputed] for a state known before [lifecycle] runs. */
+    suspend fun settle(
+        gen: Int,
+        state: ConnectionState,
+        lifecycle: () -> Boolean,
+        persist: suspend () -> Unit,
+    ): TerminalSettlement = settleComputed(gen, lifecycle, { state }, persist)
+
     /**
-     * Commits [state] for generation [gen], then records it.
+     * [settle] for a state that depends on what [lifecycle] did — M8.5 spec
+     * §4.2's `Reconnecting.blocked`, which is only known once the conditional
+     * TUN close inside [lifecycle] has run. [state] is evaluated after
+     * [lifecycle] returns true and before publication, still under [lock], so
+     * the published value describes the lifecycle it was built from.
+     *
+     * Commits the computed state for generation [gen], then records it.
      *
      * Ordering, which is the whole point of this function:
      *
-     *  1. Under [lock]: verify [gen] is still current, run [lifecycle], publish [state].
-     *     No suspension point separates the check from the mutation, so nothing can
+     *  1. Under [lock]: verify [gen] is still current, run [lifecycle], build and publish
+     *     [state]. No suspension point separates the check from the mutation, so nothing can
      *     supersede [gen] between them.
      *  2. Outside the lock, and only if step 1 committed: [persist].
      *
@@ -89,10 +103,10 @@ internal class TerminalOutcome(
      *   [TerminalSettlement.LifecycleRejected] if foreground lifecycle could not be
      *   established. Neither non-committed outcome publishes or persists [state].
      */
-    suspend fun settle(
+    suspend fun settleComputed(
         gen: Int,
-        state: ConnectionState,
         lifecycle: () -> Boolean,
+        state: () -> ConnectionState,
         persist: suspend () -> Unit,
     ): TerminalSettlement {
         val settlement =
@@ -103,7 +117,7 @@ internal class TerminalOutcome(
                     else -> {
                         // Lifecycle first, then publication: the state the UI is
                         // told about must already be true when it hears it.
-                        publish(state)
+                        publish(state())
                         TerminalSettlement.Committed
                     }
                 }

@@ -22,6 +22,14 @@ android {
         versionCode = 1
         versionName = "0.1.0-alpha01"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Mirrors :service's abiFilters (service/build.gradle.kts, Application.mk).
+        // Without this, libXray's lib/x86/ still ships, and an x86 device installs
+        // the app and then fails to load libtun2socks.so at connect. Refusing the
+        // install is the honest outcome (M8.5 spec §6).
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {

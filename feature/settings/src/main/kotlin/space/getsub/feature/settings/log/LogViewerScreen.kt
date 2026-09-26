@@ -21,10 +21,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -32,7 +32,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -50,8 +54,11 @@ private val LOADING_INDICATOR_SIZE = 32.dp
 private val LOADING_TOP_PADDING = 48.dp
 
 /**
- * The session log viewer (spec §3.4): the redacted on-disk ring, tailed
- * manually via [LogViewerActions.onRefresh], with a share action.
+ * The session log viewer (M8.5 spec §3.4, as amended): the redacted on-disk
+ * ring, tailed live at 1 Hz via [LogRepository.tail][space.getsub.core.data.LogRepository.tail]
+ * while this screen is visible, with a share action. The list follows new
+ * lines only when the reader was already at the end ([shouldFollow]); a
+ * reader who scrolled up to read older lines is not pulled back down.
  *
  * Reached from Settings' new "Diagnostics" section
  * ([SettingsDiagnosticsSection][space.getsub.feature.settings.SettingsDiagnosticsSection]),
@@ -87,7 +94,6 @@ fun LogViewerScreen(
         state = state,
         actions =
         LogViewerActions(
-            onRefresh = viewModel::refresh,
             onClear = viewModel::clear,
             onShare = { shareLogText(context, state.lines) },
             onBack = onBack,
@@ -101,7 +107,6 @@ fun LogViewerScreen(
  * [PerAppActions][space.getsub.feature.routing.PerAppActions] is.
  */
 internal data class LogViewerActions(
-    val onRefresh: () -> Unit,
     val onClear: () -> Unit,
     val onShare: () -> Unit,
     val onBack: () -> Unit,
@@ -166,12 +171,6 @@ private fun HeaderRow(
             Text(text = stringResource(R.string.log_viewer_title), style = MaterialTheme.typography.headlineMedium)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = actions.onRefresh) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.log_viewer_refresh),
-                )
-            }
             IconButton(onClick = actions.onShare) {
                 Icon(imageVector = Icons.Default.Share, contentDescription = stringResource(R.string.log_viewer_share))
             }
@@ -229,7 +228,16 @@ private fun LogLineList(
     lines: List<String>,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(modifier = modifier.fillMaxWidth()) {
+    val listState = rememberLazyListState()
+    var previousSize by remember { mutableIntStateOf(0) }
+    LaunchedEffect(lines.size) {
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (lines.isNotEmpty() && shouldFollow(lastVisible, previousSize)) {
+            listState.scrollToItem(lines.lastIndex)
+        }
+        previousSize = lines.size
+    }
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
         items(lines) { line ->
             Text(
                 text = line,

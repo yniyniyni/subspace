@@ -4,7 +4,12 @@ package space.getsub.core.data
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
@@ -66,10 +71,32 @@ public class LogRepository(
         }
     }
 
+    /**
+     * The ring, live (M8.5 spec §3.4, as amended): the current snapshot, then a
+     * re-emission whenever the ring changes. A 1 Hz stat of the two files, with
+     * incremental reads ([LogRingTail]); FileObserver was rejected because
+     * inotify fires once per written line and stops delivering if collected.
+     * Cold: nothing polls unless collected, which is how the viewer stops on
+     * pause.
+     */
+    public fun tail(
+        intervalMillis: Long = TAIL_INTERVAL_MILLIS,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ): Flow<List<String>> =
+        flow {
+            val tail = LogRingTail(dir)
+            emit(tail.poll().orEmpty())
+            while (true) {
+                delay(intervalMillis)
+                tail.poll()?.let { emit(it) }
+            }
+        }.flowOn(dispatcher)
+
     private fun readRingFile(file: File): List<String> =
         runCatching { file.takeIf { it.exists() }?.readLines() }.getOrNull().orEmpty()
 
-    private companion object {
-        const val LOG_DIR_NAME = "logs"
+    public companion object {
+        private const val LOG_DIR_NAME = "logs"
+        public const val TAIL_INTERVAL_MILLIS: Long = 1_000L
     }
 }

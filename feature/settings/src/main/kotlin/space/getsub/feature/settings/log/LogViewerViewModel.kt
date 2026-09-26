@@ -5,9 +5,10 @@ package space.getsub.feature.settings.log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import space.getsub.core.data.LogRepository
 import javax.inject.Inject
@@ -18,25 +19,19 @@ internal class LogViewerViewModel
 constructor(
     private val logs: LogRepository,
 ) : ViewModel() {
-    private val _state = MutableStateFlow(LogViewerState())
-    val state: StateFlow<LogViewerState> = _state.asStateFlow()
+    /**
+     * M8.5 spec §3.4 (amended): live while collected. `WhileSubscribed(0)` stops the
+     * 1 Hz poll the moment the screen stops collecting (it collects with
+     * `collectAsStateWithLifecycle`), so nothing reads the ring while the screen is
+     * not visible.
+     */
+    val state: StateFlow<LogViewerState> =
+        logs.tail()
+            .map { LogViewerState(lines = it, loading = false) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), LogViewerState())
 
-    init {
-        refresh()
-    }
-
-    fun refresh() {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true)
-            val lines = logs.lines()
-            _state.value = LogViewerState(lines = lines, loading = false)
-        }
-    }
-
+    /** The next poll (within a second) sees both files gone and empties the view. */
     fun clear() {
-        viewModelScope.launch {
-            logs.clear()
-            _state.value = LogViewerState(lines = emptyList(), loading = false)
-        }
+        viewModelScope.launch { logs.clear() }
     }
 }

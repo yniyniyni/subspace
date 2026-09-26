@@ -19,6 +19,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.ParcelFileDescriptor
 import android.os.RemoteCallbackList
+import android.os.SystemClock
 import android.util.Log
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
@@ -735,6 +736,17 @@ class TunnelService : VpnService() {
             },
         )
 
+    /**
+     * M8.5 spec §4.3: the live session's detector, or null outside a committed
+     * `Connected`. Installed fresh by every committed `Connected` — the initial
+     * connect and each retained-TUN restart alike — so a new core never inherits
+     * the old one's unanswered time. Guarded by [lock].
+     */
+    private var healthDetector: HealthDetector? = null
+
+    /** The generation that installed [healthDetector]. Guarded by [lock]. */
+    private var healthGeneration = 0
+
     /** Guards measurement against another app's VPN holding the route — see [ForeignVpn]. */
     private val foreignVpn by lazy { ForeignVpn(applicationContext) }
 
@@ -1323,6 +1335,8 @@ class TunnelService : VpnService() {
      * own coroutine — a call arriving mid-[publishLocked] would hit
      * `beginBroadcast()`'s reentrancy throw. [TrafficSampleParcel] carries no free
      * text, so unlike [publishLocked] there is nothing here for §5.6 to redact.
+     *
+     * Also this sample's only feed into [healthDetector] (M8.5 spec §4.2/§4.3).
      */
     private fun broadcastTrafficSample(sample: TrafficSample) {
         synchronized(lock) {
@@ -1336,6 +1350,12 @@ class TunnelService : VpnService() {
                 }
             }
             callbacks.finishBroadcast()
+            // M8.5 spec §4.2/§4.3: the sampler is health's only input. Published
+            // through publishLocked, so the notification follows (Task 4).
+            healthDetector?.let { detector ->
+                val detected = detector.accept(sample, SystemClock.elapsedRealtime())
+                nextHealthState(currentState, detected, healthGeneration, generation)?.let(::publishLocked)
+            }
         }
     }
 
@@ -2187,6 +2207,9 @@ class TunnelService : VpnService() {
                         // Spec §1.5: gated on `established` like the two calls above —
                         // a rejected foreground never really connected.
                         trafficLoop.start()
+                        // M8.5 spec §4.3: a fresh window for this generation's core.
+                        healthDetector = HealthDetector()
+                        healthGeneration = gen
                     },
                 )
             },
@@ -2952,12 +2975,18 @@ class TunnelService : VpnService() {
                 Log.i(TAG, "teardown[lifecycle] done +${sinceStart()}ms")
             }
 
-            TeardownStep.StopTrafficSampler ->
+            TeardownStep.StopTrafficSampler -> {
+                // M8.5 spec §4.3: no detector survives its session — a later
+                // stray tick (there should be none once trafficLoop.stop() below
+                // has run, but the field must not sit here claiming otherwise)
+                // has nothing installed to feed.
+                synchronized(lock) { healthDetector = null }
                 // Spec §1.5: stopped after the session has published its final
                 // state and before the capture below stops — a session that has
                 // already ended must not go on accumulating a total for it, or
                 // emit one to a client that just heard it is over.
                 trafficLoop.stop()
+            }
 
             TeardownStep.StopLogCapture ->
                 // Spec §3.3: stopped last, after every phase above has logged —
@@ -3689,6 +3718,9 @@ class TunnelService : VpnService() {
                             // undercounting when the new epoch outruns the old one before the
                             // next poll.
                             trafficLoop.start()
+                            // M8.5 spec §4.3: a fresh window for this generation's core.
+                            healthDetector = HealthDetector()
+                            healthGeneration = gen
                         },
                     )
                 },

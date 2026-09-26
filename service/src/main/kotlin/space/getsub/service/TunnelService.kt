@@ -812,6 +812,12 @@ class TunnelService : VpnService() {
     private var generation = 0
     private var currentState: ConnectionState = ConnectionState.Disconnected
 
+    /** Whether [goForeground] last succeeded and nothing has removed it since. Guarded by [lock]. */
+    private var inForeground = false
+
+    /** The text [goForeground] last posted, so [publishLocked] reposts only on a change. Guarded by [lock]. */
+    private var postedTextRes: Int? = null
+
     /**
      * The [SessionIntentGate] token the live session owns — recorded by
      * [startTunnel] under [lock], ahead of its already-active guard, and read
@@ -1288,6 +1294,10 @@ class TunnelService : VpnService() {
         // anything non-terminal, which is what makes a stale revoke impossible
         // without a timestamp.
         terminalState.record(next)
+        // M8.5 spec §4.4 (amended): the notification is a reader of published
+        // state, never a holder of its own. Reposted on every publish that changes
+        // its text, from the one mapping Home's label mirrors.
+        notificationRepost(inForeground, postedTextRes, next)?.let(::goForeground)
         val parcel = ConnectionStateParcel.from(next)
         val count = callbacks.beginBroadcast()
         repeat(count) { i ->
@@ -2435,6 +2445,12 @@ class TunnelService : VpnService() {
                 // Its own success/failure does not gate this transition: a
                 // rejected foreground update here must not silently drop the
                 // Reconnecting state the user is waiting on.
+                //
+                // This is this path's entry into the foreground, not a repost —
+                // `notificationRepost` (M8.5 spec §4.4, as amended) returns null
+                // outside the foreground, so `publishLocked` cannot be. Its two
+                // texts are exactly `notificationText`'s `Reconnecting` arm, so
+                // the repost that follows sees an unchanged text and is a no-op.
                 blocked = retainTun && tunInterface != null
                 goForeground(
                     if (blocked) {
@@ -2689,6 +2705,10 @@ class TunnelService : VpnService() {
         } catch (e: RuntimeException) {
             Log.e(TAG, "foreground removal failed: ${e.javaClass.simpleName}")
         }
+        synchronized(lock) {
+            inForeground = false
+            postedTextRes = null
+        }
     }
 
     /** @return false when the package is no longer installed. See [applyEach]. */
@@ -2722,44 +2742,20 @@ class TunnelService : VpnService() {
      * [onStartCommand] must answer `startForegroundService`'s contract on a start
      * that carries no connect request, and [TunnelNotification.ID] is a single
      * shared id — so that call *replaces* the live session's text rather than
-     * adding to it. Returning the current state's own text is what stops an
-     * unrelated always-on or boot start falsifying it.
-     *
-     * `Reconnecting` reproduces [settleRetryableFailure]'s rule rather than
-     * restating the setting: it reports the **observed** TUN, because
-     * `shouldRetainTun` returning true and an fd actually being held are not the
-     * same fact — an attempt that failed before adopting one retains nothing
-     * however the setting reads. [tunInterface] is sampled in the same lock region
-     * as [currentState], so the pair cannot disagree.
+     * adding to it. Deferring to [notificationText] (M8.5 spec §4.4, as amended)
+     * is what stops an unrelated always-on or boot start falsifying it: this and
+     * every repost from `publishLocked` now answer from the one mapping.
      *
      * `Failed` gets the connecting text, which is momentarily untrue: it is the
      * one state where the reconcile that follows answers
      * [ReconcileAction.Release] and takes the notification straight back down.
      * Publishing a truthful text for it would mean a "failed" string that exists
-     * only to be removed milliseconds later.
-     *
-     * Exhaustive with no `else`, for spec §2.2's reason: a state added later must
-     * not inherit whichever text happens to catch it.
+     * only to be removed milliseconds later. [notificationText] returns null for
+     * it — "leave the notification alone" — which does not fit this call site,
+     * so the fallback is the connecting text instead.
      */
     private fun entryForegroundText(): Int =
-        synchronized(lock) {
-            when (currentState) {
-                is ConnectionState.Connected -> R.string.notification_state_connected
-
-                is ConnectionState.Reconnecting ->
-                    if (tunInterface != null) {
-                        R.string.notification_state_reconnecting_blocked
-                    } else {
-                        R.string.notification_state_reconnecting_open
-                    }
-
-                is ConnectionState.Connecting,
-                ConnectionState.Disconnecting,
-                ConnectionState.Disconnected,
-                is ConnectionState.Failed,
-                -> R.string.notification_connecting
-            }
-        }
+        synchronized(lock) { notificationText(currentState) ?: R.string.notification_connecting }
 
     @Suppress("TooGenericExceptionCaught") // RuntimeException is the Android framework boundary here.
     private fun goForeground(textRes: Int): Boolean =
@@ -2777,6 +2773,10 @@ class TunnelService : VpnService() {
                 )
             } else {
                 startForeground(TunnelNotification.ID, notification)
+            }
+            synchronized(lock) {
+                inForeground = true
+                postedTextRes = textRes
             }
             true
         } catch (e: CancellationException) {

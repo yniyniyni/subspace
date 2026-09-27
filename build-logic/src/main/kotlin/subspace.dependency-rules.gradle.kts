@@ -83,7 +83,8 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
 
         if (path.startsWith(":feature:")) {
             projectDeps.filter { it.startsWith(":feature:") }.forEach {
-                violations += "$path depends on $it — :feature:* modules must never depend on each other (ARCHITECTURE.md §4)"
+                violations += "$path depends on $it — :feature:* modules must never depend " +
+                    "on each other (ARCHITECTURE.md §4)"
             }
         }
 
@@ -95,7 +96,8 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
 
         if (path.startsWith(":core:")) {
             projectDeps.filter { it.startsWith(":feature:") }.forEach {
-                violations += "$path depends on $it — :core:* must never depend on :feature:* (ARCHITECTURE.md §3/ARCHITECTURE.md §4)"
+                violations += "$path depends on $it — :core:* must never depend on :feature:* " +
+                    "(ARCHITECTURE.md §3/ARCHITECTURE.md §4)"
             }
         }
 

@@ -226,19 +226,64 @@ public fun redact(message: String): String {
     return redactEveryPattern(message)
 }
 
-private fun redactEveryPattern(message: String): String =
-    message
-        .replace(REDACTED, SENTINEL)
-        .replace(URL_PATTERN, SENTINEL)
-        .replace(UUID_PATTERN, SENTINEL)
-        .replace(IPV4_PATTERN, SENTINEL)
-        .replace(IPV6_PATTERN) { match -> if (isIpv6Address(match.value)) SENTINEL else match.value }
-        .replace(HOSTNAME_PATTERN, SENTINEL)
-        .replace(BASE64_BLOB_PATTERN, SENTINEL)
-        .replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
-        .replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
-        .replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
-        .replace(SENTINEL, REDACTED)
+private val KEYED_WORDS = listOf("address", "server", "host", "sni", "domain")
+private val LABEL_WORDS = listOf("dial", "address", "server", "host", "lookup")
+
+/**
+ * The same passes in the same order, each behind a **necessary** condition for
+ * its pattern to match at all (M8.5 spec §3.2, as amended: row 7 measured ten
+ * ungated regex passes at 1.31 ms per line). A gate may only skip a pattern that
+ * cannot match; `RedactionOracleTest` holds this function equal to the ungated
+ * original. Each gate tests the *current* intermediate string, because each
+ * pattern runs on the previous one's output.
+ */
+private fun redactEveryPattern(message: String): String {
+    var s = message.replace(REDACTED, SENTINEL)
+    if (s.contains("://")) s = s.replace(URL_PATTERN, SENTINEL)
+    if (s.contains('-')) s = s.replace(UUID_PATTERN, SENTINEL)
+    if (s.contains('.')) s = s.replace(IPV4_PATTERN, SENTINEL)
+    if (s.count { it == ':' } >= 2) {
+        s = s.replace(IPV6_PATTERN) { match -> if (isIpv6Address(match.value)) SENTINEL else match.value }
+    }
+    if (s.contains('.')) s = s.replace(HOSTNAME_PATTERN, SENTINEL)
+    if (hasBase64Run(s)) s = s.replace(BASE64_BLOB_PATTERN, SENTINEL)
+    if (KEYED_WORDS.any { s.contains(it, ignoreCase = true) }) {
+        s = s.replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
+    }
+    if (hasColonBeforeWhitespace(s)) {
+        s = s.replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
+    }
+    if (LABEL_WORDS.any { s.contains(it, ignoreCase = true) }) {
+        s = s.replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
+    }
+    return s.replace(SENTINEL, REDACTED)
+}
+
+/** [BASE64_BLOB_PATTERN]'s minimum run length, mirrored in [hasBase64Run]'s gate. */
+private const val BASE64_RUN_LENGTH = 24
+
+/** The ASCII boundary: [BASE64_BLOB_PATTERN]'s `[A-Za-z0-9]` class is 7-bit only. */
+private const val ASCII_LIMIT = 128
+
+/** A character [BASE64_BLOB_PATTERN] itself would accept as part of its run. */
+private fun isBase64RunChar(c: Char): Boolean =
+    (c.isLetterOrDigit() && c.code < ASCII_LIMIT) || c == '+' || c == '/' || c == '_' || c == '-'
+
+/** Necessary for [BASE64_BLOB_PATTERN]: a run of [BASE64_RUN_LENGTH]+ characters from its class. */
+private fun hasBase64Run(s: String): Boolean {
+    var run = 0
+    for (c in s) {
+        run = if (isBase64RunChar(c)) run + 1 else 0
+        if (run >= BASE64_RUN_LENGTH) return true
+    }
+    return false
+}
+
+/** Necessary for [BARE_HOST_PREFIX_PATTERN]: a `:` immediately followed by whitespace. */
+private fun hasColonBeforeWhitespace(s: String): Boolean {
+    for (i in 0 until s.length - 1) if (s[i] == ':' && s[i + 1].isWhitespace()) return true
+    return false
+}
 
 /**
  * Whether a positional candidate should be left alone: already a sentinel, or a

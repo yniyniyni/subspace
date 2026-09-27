@@ -35,7 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -229,7 +229,13 @@ private fun LogLineList(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    var previousSize by remember { mutableIntStateOf(0) }
+    // rememberSaveable, not remember: rememberLazyListState() above is itself saveable, so a
+    // configuration change (a rotation) restores the scroll position but would leave this at its
+    // initial 0 if it were plain remember. The first post-rotation effect would then see
+    // previousSize == 0 against the real (larger) lines.size, and shouldFollow's own
+    // shrunk-or-first-emission rule would read that as "first emission" and scroll a
+    // deliberately scrolled-up reader to the bottom.
+    var previousSize by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(lines.size) {
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
         if (lines.isNotEmpty() && shouldFollow(lastVisible, previousSize)) {

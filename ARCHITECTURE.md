@@ -333,6 +333,31 @@ The UI never infers it from a local boolean. After process death the UI must
 rebind and re-read actual state — an app that shows "Disconnected" while the
 tunnel is up is worse than one that crashes.
 
+**Two surfaces, one reader (M8.5).** The ongoing notification and Home both
+render published state; neither derives its own. `TunnelService.publishLocked`
+reposts the notification from `notificationText(state)` on every publish that
+changes its text, so the notification cannot hold a state Home does not — the
+item #4 defect, where Home read `Failed` while the notification said
+"Connected", was two surfaces each inferring an answer.
+
+The published state carries what used to be inferred:
+
+- `Connected.health` — `Open` / `Idle` / `Stalled`, decided by `HealthDetector`
+  from the TUN-level counters. Only "uplink carried data for the whole window
+  and downlink carried none" is `Stalled`; a session sending nothing is `Idle`,
+  because a working and a dead tunnel look identical when nothing is asked of
+  them. Downlink *bytes* are not the signal: hev completes TCP with the app
+  locally, so a dead server still produces SYN-ACK/ACK/RST. A dead proxy reads
+  `Open` while direct-routed traffic flows (§14.4). `Stalled` is a display state:
+  it never tears down, clears intent, or publishes `Failed`.
+- `Reconnecting.blocked` — a TUN fd is held with no core serving it: the kill
+  switch is blackholing. It is the **observed** fd, never the fail-closed setting.
+
+A crash on the service scope publishes nothing while tun2socks is running and
+never overwrites an existing `Failed`. Source:
+`docs/agent/specs/2026-09-17-m8.5-observability-design.md` §4 (as amended
+2026-09-26).
+
 ### 5.6 Do not log config contents
 
 Server addresses, UUIDs, REALITY keys, and subscription URLs are secrets.
@@ -1538,7 +1563,9 @@ Mandatory rules:
         the gap rather than hiding it.
       - The loopback-cleartext fix for API < 37 is not yet verified on a
         device below 37.
-      - The viewer does not tail live yet (Part 3).
+      - Part 3 (2026-09-26 onwards) adds `Connected.health`,
+        `Reconnecting.blocked`, one notification reader, and a live tail. Row
+        results in `docs/agent/research/2026-09-2*-m8.5-*.md`.
 - [ ] Always-on VPN, boot autostart, kill switch
 - [ ] Material 3, light/dark, RU + EN localization
 

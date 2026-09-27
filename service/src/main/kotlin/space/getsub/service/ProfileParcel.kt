@@ -31,7 +31,7 @@ import space.getsub.core.model.VmessOutbound
  * assume it is idle for VMess. [alterId] carries only VMess's legacy AlterID
  * and is `0` — meaningless, not "unset" — for every other protocol.
  *
- * §5.6: this parcel carries the UUID, password, and REALITY key in the clear.
+ * ARCHITECTURE.md §5.6: this parcel carries the UUID, password, and REALITY key in the clear.
  * That is acceptable — it travels only over a same-UID binder to our own `:bg`
  * process, which needs the values to build the config. It must never be
  * logged, which is why this is a plain class with a hand-written [toString]: a
@@ -115,7 +115,7 @@ public class ProfileParcel(
 
     override fun describeContents(): Int = 0
 
-    /** Deliberately prints no field values — see the §5.6 note on the class. */
+    /** Deliberately prints no field values — see the ARCHITECTURE.md §5.6 note on the class. */
     override fun toString(): String = "ProfileParcel(id=$id)"
 
     /**

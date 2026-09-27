@@ -29,7 +29,7 @@ class NextAttemptExceedsCapTest {
         nextAttemptExceedsCap(Retryability.RetryableCapped, nextAttempt = 4) shouldBe true
     }
 
-    /** Spec §2.4: unbounded while a network exists — that is the point, not a gap. */
+    /** M8 spec §2.4: unbounded while a network exists — that is the point, not a gap. */
     @Test
     fun retryableIsNeverCapped() {
         nextAttemptExceedsCap(Retryability.Retryable, nextAttempt = 1000) shouldBe false

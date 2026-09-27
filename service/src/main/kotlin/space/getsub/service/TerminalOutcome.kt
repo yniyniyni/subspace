@@ -16,7 +16,7 @@ import space.getsub.core.model.ConnectionState
  *
  * ## Why this exists
  *
- * §5.4 says teardown is reachable from three places that are not serialised with each other,
+ * ARCHITECTURE.md §5.4 says teardown is reachable from three places that are not serialised with each other,
  * and [TunnelService]'s `generation` counter is what supersedes an in-flight start. Both
  * terminal paths used to check that counter, publish, suspend to persist the outcome, and
  * *then* mutate lifecycle state — leaving a window in which a stale coroutine resumed and
@@ -25,7 +25,7 @@ import space.getsub.core.model.ConnectionState
  *  - The connected path published `Connected`, suspended in the write, and called
  *    `goForeground()` afterwards. A teardown during the write incremented `generation`,
  *    stopped the tunnel, removed the notification and published `Disconnected` — then the
- *    stale coroutine restored the *connected* foreground notification. That is §5.5's lying
+ *    stale coroutine restored the *connected* foreground notification. That is ARCHITECTURE.md §5.5's lying
  *    UI: an app showing a live tunnel over a tunnel that is down.
  *  - The failed path published `Failed`, suspended, then called `stopForeground()` and
  *    `stopSelf()`. A newer connection starting during the write inherited both: its
@@ -49,7 +49,7 @@ import space.getsub.core.model.ConnectionState
  * @property currentGeneration reads `TunnelService.generation`. Called only while [lock] is
  *   held.
  * @property publish `TunnelService.publishLocked` — likewise only under [lock], which is
- *   what `RemoteCallbackList`'s non-reentrant broadcast requires (§5.4).
+ *   what `RemoteCallbackList`'s non-reentrant broadcast requires (ARCHITECTURE.md §5.4).
  */
 internal class TerminalOutcome(
     private val lock: Any,
@@ -67,7 +67,7 @@ internal class TerminalOutcome(
 
     /**
      * [settle] for a state that depends on what [lifecycle] did — M8.5 spec
-     * §4.2's `Reconnecting.blocked`, which is only known once the conditional
+     * M8.5 spec §4.2's `Reconnecting.blocked`, which is only known once the conditional
      * TUN close inside [lifecycle] has run. [state] is evaluated after
      * [lifecycle] returns true and before publication, still under [lock], so
      * the published value describes the lifecycle it was built from.
@@ -85,7 +85,7 @@ internal class TerminalOutcome(
      * connected notification, or clearing a failed attempt's foreground and started state.
      * Anything left for after the call is exactly the bug this class was written to fix.
      *
-     * It runs under [lock], so it must not suspend, and it must not be *slow*: §5.4 keeps the
+     * It runs under [lock], so it must not suspend, and it must not be *slow*: ARCHITECTURE.md §5.4 keeps the
      * native teardown calls (`Tun2Socks.stop`, `XrayController.stopBlocking`) outside the lock
      * precisely so a wedged one cannot block state publication forever. Framework calls
      * belong here and native ones do not — `startForeground`/`stopForeground`/`stopSelf` are
@@ -102,7 +102,7 @@ internal class TerminalOutcome(
      * @param onCommitted runs under the same [lock], only for a generation that is still
      *   current and whose lifecycle was accepted — after [publish], before [persist]. Anything
      *   that must not happen for a superseded generation belongs here, never in [persist], which
-     *   runs after a suspension a newer generation can use (M8.5 spec §4.5, §6 #9).
+     *   runs after a suspension a newer generation can use (M8.5 spec §4.5, ARCHITECTURE.md §6 #9).
      * @return [TerminalSettlement.Committed] if the transition committed,
      *   [TerminalSettlement.Superseded] if [gen] no longer owns the tunnel, or
      *   [TerminalSettlement.LifecycleRejected] if foreground lifecycle could not be

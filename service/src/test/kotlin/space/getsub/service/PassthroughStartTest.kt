@@ -57,7 +57,7 @@ class PassthroughStartTest {
         json shouldContain "1.1.1.1"
     }
 
-    // Spec §4.3, the precise silent bug the brief warns about: routing off
+    // M7 spec §4.3, the precise silent bug the brief warns about: routing off
     // with a non-default DNS plan is an override (our routing/dns replace the
     // config's own) that must still resolve to the curated flat root, not the
     // rule set's own generation directory. A version of passthroughPlanFor

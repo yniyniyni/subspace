@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Status-bar icon for the ongoing tunnel notification (§9).
+<!-- Status-bar icon for the ongoing tunnel notification (ARCHITECTURE.md §9).
      Vector, not a raster set: no binary blobs in an AGPL tree, and the status
      bar tints it to a single colour anyway. Real branding is an M9 concern. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

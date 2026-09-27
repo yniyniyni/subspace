@@ -17,7 +17,7 @@ class TrafficSampleParcelTest {
     @Test
     fun `carries values past the 32-bit boundary intact`() {
         // The whole reason TrafficSampler accumulates into a Long — a parcel
-        // that narrowed this would undo spec §1.3 silently.
+        // that narrowed this would undo M8.5 spec §1.3 silently.
         val sample =
             TrafficSample(
                 uplinkBytes = 8_000_000_000L,

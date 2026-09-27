@@ -23,7 +23,7 @@ internal sealed interface TunnelCommand {
 
     data object ReapplyPerApp : TunnelCommand
 
-    /** Spec §3.1: re-decide what should be running, on the one ordering point. */
+    /** M8 spec §3.1: re-decide what should be running, on the one ordering point. */
     data class Reconcile(val trigger: ReconcileTrigger) : TunnelCommand
 }
 
@@ -31,7 +31,7 @@ internal sealed interface TunnelCommand {
  * The single service-owned ordering point for tunnel session commands.
  *
  * One lambda per [TunnelCommand] variant plus [observeConnect]'s debug-test hook —
- * seven genuinely distinct handlers, not one bundle hiding as several. Spec §3.1
+ * seven genuinely distinct handlers, not one bundle hiding as several. M8 spec §3.1
  * added [reconcile] here rather than a second channel precisely so a reconnect is
  * a session mutation like any other, ordered against the rest by this one class.
  */
@@ -117,7 +117,7 @@ internal class TunnelCommandIngress(
 
     /**
      * A framework start with no connect request in hand: always-on, boot, or the
-     * sticky restart after `:bg` dies (spec §1.3/§4). Records [startId] the same
+     * sticky restart after `:bg` dies (M8 spec §1.3/§4). Records [startId] the same
      * way [started] does, under the same lock, so a later disconnect or a
      * reconcile-decided start resolves against this framework lifetime rather
      * than a stale one.

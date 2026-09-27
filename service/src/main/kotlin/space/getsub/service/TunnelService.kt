@@ -89,9 +89,9 @@ private const val TAG = "TunnelService"
 private const val TUN_ADDRESS = "10.7.0.1"
 private const val TUN_PREFIX = 30
 
-// §5.2: without an IPv6 address and route, every AAAA-answered lookup and every
+// ARCHITECTURE.md §5.2: without an IPv6 address and route, every AAAA-answered lookup and every
 // IPv6-capable socket leaves outside the tunnel on a dual-stack network. That is
-// the same partial-leak shape §5.2 warns about — it passes a leak test on an
+// the same partial-leak shape ARCHITECTURE.md §5.2 warns about — it passes a leak test on an
 // IPv4-only Wi-Fi and fails on carrier IPv6.
 private const val TUN_ADDRESS_V6 = "fd00:1:2:3::1"
 private const val TUN_PREFIX_V6 = 126
@@ -102,7 +102,7 @@ private const val TUN_MTU = 8500
 // actually queries and what it advertises on the TUN (DnsPlan.tunAdvertisedAddress).
 // This is only the fallback for a plan that yields no address literal — a DoH-only
 // setting or profile with no IP the TUN can be handed — and for the null-plan case
-// where nothing asked for DNS at all (spec §7.4's M1-compatible path).
+// where nothing asked for DNS at all (M6.5 spec §7.4's M1-compatible path).
 private const val DNS_SERVER = "1.1.1.1"
 
 // Fix round 1, Finding 4: sniffing is not a user setting in this build, so both
@@ -138,7 +138,7 @@ internal fun connectProfileFrom(intent: Intent?): ProfileParcel? {
  * Which started-service token a live session should answer for, once a framework
  * start has landed on it and been answered with [ReconcileAction.Nothing].
  *
- * Spec §1.3/§4: every start that carries no `ACTION_CONNECT` — always-on, boot,
+ * M8 spec §1.3/§4: every start that carries no `ACTION_CONNECT` — always-on, boot,
  * a sticky restart — records a fresh `latestStartId` in [TunnelCommandIngress]
  * *before* the reconcile it enqueues is decided. Only `Start`, `Stop` and
  * `Release` resolve that token; `Nothing` is the answer when the session is live
@@ -169,14 +169,14 @@ internal fun adoptedStartId(
 
 /** [passthroughPlanFor]'s answer: what a passthrough compose call should do about routing/DNS. */
 internal data class PassthroughPlan(
-    /** Spec §4.3: what `xray.location.asset` must name — see [passthroughPlanFor]. */
+    /** M7 spec §4.3: what `xray.location.asset` must name — see [passthroughPlanFor]. */
     val assetDir: String,
     /** Whether the app's own `routing`/`dns` should replace the stored config's own. */
     val overrideApplies: Boolean,
 )
 
 /**
- * Spec §4.3, and the one override-branch decision this file must not make
+ * M7 spec §4.3, and the one override-branch decision this file must not make
  * twice with two different conditions.
  *
  * The asset directory a passthrough config's `env` block names follows the
@@ -249,7 +249,7 @@ private val REQUIRED_OVERRIDE_PROTOCOLS =
 
 /**
  * The outbound tags the override branch **reserves**, which a config's balancer
- * must not also select (design §3.4).
+ * must not also select (design M7.5 spec §3.4).
  *
  * Deliberately the *unfiltered* set, not the set actually appended.
  * [composePassthrough] drops any stock outbound whose tag the config already
@@ -269,7 +269,7 @@ internal fun reservedOverrideTags(dnsPlanPresent: Boolean): Set<String> =
  * What the app's generated rules should name for this config, decided fresh from
  * the stored bytes.
  *
- * Never stored (design §3.2): M7's one Critical was a stored verdict going stale
+ * Never stored (design M7.5 spec §3.2): M7's one Critical was a stored verdict going stale
  * across a subscription refresh, and a stored target would go stale identically
  * the moment a refresh renames an outbound.
  */
@@ -411,7 +411,7 @@ internal sealed interface OverrideBreakdownDecision {
  * [rawJson], review finding I4.
  *
  * Before this, a `Metrics` tag collision — [passthroughOverrideFailure] with
- * the breakdown on — refused the whole connect. Spec §2.3 says outright that
+ * the breakdown on — refused the whole connect. M8.5 spec §2.3 says outright that
  * "a passthrough config defining an outbound called `Metrics` is not exotic",
  * so a user who flipped a setting their own UI describes as a diagnostic lost
  * the tunnel over it, with an error naming an incompatible override outbound
@@ -503,13 +503,13 @@ internal fun testConnectObserverFrom(
 /**
  * Owns the tunnel.
  *
- * Runs in `:bg` (§3). Nothing here may be reached from `:main` except through
+ * Runs in `:bg` (ARCHITECTURE.md §3). Nothing here may be reached from `:main` except through
  * [ITunnelService] — the processes share no memory, so a Hilt singleton or an
  * `object` is two different instances.
  *
  * ## Concurrency
  *
- * §5.4 teardown still has platform entry points outside the UI-command stream:
+ * ARCHITECTURE.md §5.4 teardown still has platform entry points outside the UI-command stream:
  * `onRevoke()` arrives through `VpnService`, `onDestroy()` on the main thread,
  * and the start sequence runs on IO. Connect, disconnect, and per-app reapply
  * first enter [commandCoordinator], while [lock] and [generation] handle those
@@ -520,12 +520,12 @@ internal fun testConnectObserverFrom(
  *    [callbacks] with [publishLocked], so it takes the same lock for the same
  *    reason. `RemoteCallbackList` is not safe for concurrent broadcast —
  *    `beginBroadcast()` throws if one is already in progress, and that throw
- *    landing inside teardown would abandon the TUN fd, which is §5.4's
+ *    landing inside teardown would abandon the TUN fd, which is ARCHITECTURE.md §5.4's
  *    wedged-until-reboot outcome.
  *  - [generation] supersedes an in-flight start. Coroutine cancellation is
  *    cooperative and the tail of the start sequence has no suspension points, so
  *    `cancel()` alone cannot stop it from publishing `Connected` after a teardown
- *    published `Disconnected` — §5.5's lying UI, reachable by two taps.
+ *    published `Disconnected` — ARCHITECTURE.md §5.5's lying UI, reachable by two taps.
  *  - Slow teardown work runs **outside** [lock], so a wedged `quit()` cannot
  *    block state publication forever.
  */
@@ -561,7 +561,7 @@ class TunnelService : VpnService() {
     private lateinit var connectionRecorder: ConnectionRecorder
 
     /**
-     * Spec §1.2's `wanted` writes that are conditional on still owning the
+     * M8 spec §1.2's `wanted` writes that are conditional on still owning the
      * session — see [SessionIntentGate] for the race it closes.
      *
      * Injected, not built in [onCreate] like [connectionRecorder]: it is a
@@ -576,7 +576,7 @@ class TunnelService : VpnService() {
     internal lateinit var sessionIntent: SessionIntentGate
 
     /**
-     * §11 row 7. One per `:bg` process, so a terminal failure survives *this*
+     * ARCHITECTURE.md §11 row 7. One per `:bg` process, so a terminal failure survives *this*
      * instance — see [TerminalStateMemory], and [ServiceModule] for why the
      * `@Singleton` scope is the whole point of the binding.
      */
@@ -616,23 +616,23 @@ class TunnelService : VpnService() {
 
     /**
      * §10.4: anything escaping a coroutine on [scope] must still produce a
-     * legible state. Without this the failure is invisible — spec §0.3, `:bg`
+     * legible state. Without this the failure is invisible — M8 spec §0.3, `:bg`
      * logging never reaches logcat — and the UI sits on `Connecting` until it
      * notices binder death.
      *
      * **It publishes and does not tear down, and that is deliberate.** An earlier
      * version routed this through [stopTunnel] to make the published `Failed`
      * true. That was worse than the problem it solved:
-     * [FailureReason.CoreStartFailed] is `Retryable` (§2.2), and every other path
+     * [FailureReason.CoreStartFailed] is `Retryable` (M8 spec §2.2), and every other path
      * in this service settles it as `Reconnecting` with the TUN retained under
-     * fail-closed — so tearing down here closed the fd, released §6.1's kill
+     * fail-closed — so tearing down here closed the fd, released M8 spec §6.1's kill
      * switch and armed no retry, for a reason the rest of the service recovers
      * from. [stopTunnel] also defaults `expectedGeneration` to null, so it ended
      * whichever session happened to be current rather than the one that crashed.
      *
      * What that leaves is a real gap, recorded rather than papered over: a crash
      * landing after `Connected` leaves a terminal `Failed` standing over a live
-     * tunnel — §5.5's lying UI. Closing it properly means settling *retryably*
+     * tunnel — ARCHITECTURE.md §5.5's lying UI. Closing it properly means settling *retryably*
      * from a non-suspend handler that does not know the failing generation, which
      * is a design worth making with a device in the loop rather than inferring at
      * a milestone's tail. M8.5 owns it.
@@ -645,7 +645,7 @@ class TunnelService : VpnService() {
      * tunnel). That function refuses while a TUN is attached.
      *
      * Session intent is deliberately **not** cleared: a crash is not the user
-     * asking to disconnect, and spec §1.2 names the three sites that clear it.
+     * asking to disconnect, and M8 spec §1.2 names the three sites that clear it.
      *
      * What can reach here is bounded and every member of it owns the session: the
      * start sequence, the `tunnelSessionWanted` collector's body (see
@@ -676,7 +676,7 @@ class TunnelService : VpnService() {
     private val callbacks = RemoteCallbackList<ITunnelCallback>()
 
     /**
-     * Spec §3.3: on-disk ring a session's log is captured into, and the
+     * M8.5 spec §3.3: on-disk ring a session's log is captured into, and the
      * capture that reads logcat, redacts, and appends to it. Tied to session
      * lifetime — [logCapture] starts when the service enters foreground for a
      * connect ([startTunnel]) and stops last in [stopTunnel], after every
@@ -692,7 +692,7 @@ class TunnelService : VpnService() {
     private val lock = Any()
 
     /**
-     * Spec §1.5: samples [Tun2Socks.stats] once a second while a session is up
+     * M8.5 spec §1.5: samples [Tun2Socks.stats] once a second while a session is up
      * and pushes each accumulated total through [broadcastTrafficSample]. Tied
      * to session lifetime like [logCapture] just above: started once the
      * session reaches [ConnectionState.Connected] (both [attachTun] and
@@ -707,7 +707,7 @@ class TunnelService : VpnService() {
             read = { Tun2Socks.stats() },
             emit = ::broadcastTrafficSample,
             // M8.5 spec §2: null while the breakdown is off or no port could be
-            // allocated (metricsPort itself). §5.6 — fetchMetricsPayload/
+            // allocated (metricsPort itself). ARCHITECTURE.md §5.6 — fetchMetricsPayload/
             // parseMetricsPayload never throw and this reads only the port
             // number, never a tag or a payload, so nothing here is loggable.
             readTags = {
@@ -745,7 +745,7 @@ class TunnelService : VpnService() {
             loadProfile = { id -> profileRepository.profile(id) },
             scope = scope,
             // §10.4: a swallowed failure still gets a line. The class name only —
-            // a Room or libXray message can quote a stored config value (§5.6).
+            // a Room or libXray message can quote a stored config value (ARCHITECTURE.md §5.6).
             onMeasurementError = { name -> Log.w(TAG, "measurement failed: $name") },
         )
     }
@@ -834,7 +834,7 @@ class TunnelService : VpnService() {
     private var sessionIntentToken = 0
 
     /**
-     * Spec §2.4's retry timer — a plain coroutine delay on [scope], never an
+     * M8 spec §2.4's retry timer — a plain coroutine delay on [scope], never an
      * alarm or a `WorkManager` job, so it cannot outlive the session it belongs
      * to. Cancelled on every path where that session ends — see
      * [cancelBackoffRetry] for the enumerated call sites, and for why
@@ -844,7 +844,7 @@ class TunnelService : VpnService() {
     private var backoffJob: Job? = null
 
     /**
-     * Spec §2.3/§2.4. Reset on a committed [ConnectionState.Connected] (see
+     * M8 spec §2.3/M8 spec §2.4. Reset on a committed [ConnectionState.Connected] (see
      * [attachTun]) and on every [stopTunnel] — an explicit disconnect, revoke,
      * or a terminal failure all start the next retry sequence counting from
      * zero. Advanced only by [settleRetryableFailure].
@@ -853,12 +853,12 @@ class TunnelService : VpnService() {
 
     /**
      * The profile the live session is running, so a per-app change can rebuild
-     * the tunnel without :main re-supplying one (§5.5: what is connected is this
+     * the tunnel without :main re-supplying one (ARCHITECTURE.md §5.5: what is connected is this
      * process's fact, not the UI's).
      *
      * Set fresh by [startTunnel], and moved by [restartCoreRetainingTun] when a
      * reconcile restart follows the active profile onto a different row (spec
-     * §1.1) — `startId` kept, the row and profile replaced. It has to name what
+     * M8 spec §1.1) — `startId` kept, the row and profile replaced. It has to name what
      * the core is actually running: before the restart updated it, a restart
      * onto another server left this on the old one, and the next per-app
      * reapply silently reconnected there.
@@ -907,7 +907,7 @@ class TunnelService : VpnService() {
                 rejectConnectFromCommand(startId, rowId, sessionIntent.currentToken())
             },
             disconnect = { startId ->
-                // Spec §1.2: one of the three events that clear session intent.
+                // M8 spec §1.2: one of the three events that clear session intent.
                 // Through the gate like every other intent write in `:bg`. The
                 // token is read on the coordinator, where the only caller of
                 // `want()` also runs, so nothing can move it before the clear:
@@ -925,14 +925,14 @@ class TunnelService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        // §11 row 7. A terminal failure published by the *previous* instance is
+        // ARCHITECTURE.md §11 row 7. A terminal failure published by the *previous* instance is
         // this instance's starting state: on device the service object is replaced
         // while the process survives, and seeding the field's default here is what
         // made a revoke read as `Disconnected` to anyone who opened the app after
         // the fact. Seeding the remembered failure makes this instance answer the
         // binder exactly as the destroyed one would have.
         synchronized(lock) { currentState = terminalState.seedState() }
-        // §5.6: a config left by a start that failed, or by a process the system
+        // ARCHITECTURE.md §5.6: a config left by a start that failed, or by a process the system
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
         File(filesDir, CONFIG_NAME).delete()
@@ -941,7 +941,7 @@ class TunnelService : VpnService() {
                 recordConnected = profileRepository::recordConnected,
                 recordError = profileRepository::recordError,
                 onFailure = { e ->
-                    // §5.6: never the exception message — Room/SQLite errors can
+                    // ARCHITECTURE.md §5.6: never the exception message — Room/SQLite errors can
                     // quote back the value that failed to write.
                     Log.e(TAG, "failed to record connection outcome: ${e.javaClass.simpleName}")
                 },
@@ -964,7 +964,7 @@ class TunnelService : VpnService() {
             NetworkMonitor(
                 context = applicationContext,
                 onChanged = { network ->
-                    // Spec §5.2. Never called before M8. Not cosmetic: this is what makes
+                    // M8 spec §5.2. Never called before M8. Not cosmetic: this is what makes
                     // the VPN report correct metered-ness and transport to apps querying
                     // through it — including this app's own geoRefreshOnMetered and
                     // pingOnLaunchMetered, which until now read whatever the platform
@@ -1004,7 +1004,7 @@ class TunnelService : VpnService() {
      * reported as a start-sequence crash **over a live `Connected` session**, and
      * `reconcile` never restarts anything from `Failed`: the session would sit
      * there with the UI saying failed, the tunnel up, and nothing retrying.
-     * §5.5's lying UI, reached by a route M8 opened when it put this coroutine on
+     * ARCHITECTURE.md §5.5's lying UI, reached by a route M8 opened when it put this coroutine on
      * that scope.
      *
      * Handling it here rather than widening [errorHandler] keeps that handler
@@ -1019,16 +1019,16 @@ class TunnelService : VpnService() {
      * saying it must not be swallowed, because [errorHandler] turning it into a
      * legible failure is the existing behaviour. A `try` wrapping the `collect`
      * caught that too, and what replaced the legible failure was one `Log.e` line
-     * in a process whose logging never reaches logcat (spec §0.3) — invisible by
+     * in a process whose logging never reaches logcat (M8 spec §0.3) — invisible by
      * construction, with the network callback left unregistered for the life of
      * the service. That callback is the only thing that can resume a no-network
-     * `Reconnecting` session, because §2.4 deliberately arms no timer without a
+     * `Reconnecting` session, because M8 spec §2.4 deliberately arms no timer without a
      * network.
      *
      * `CancellationException` is rethrown explicitly rather than relying on the
      * operator's own handling of it: cancellation is how [onDestroy] stops this
      * collector, and swallowing it would leave the collector's caller running.
-     * §5.6: the exception's class name only, never its message, which can quote a
+     * ARCHITECTURE.md §5.6: the exception's class name only, never its message, which can quote a
      * row.
      */
     private suspend fun collectSessionIntentForMonitor() {
@@ -1044,11 +1044,11 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §11 and §5.4.
+     * ARCHITECTURE.md §11 and §5.4.
      *
      * **`START_STICKY`, and a null intent is a legitimate entry point.** This
      * previously returned `START_NOT_STICKY` because a null-intent start had no way
-     * to know what to connect to, so resurrection really was the bug. Spec §1
+     * to know what to connect to, so resurrection really was the bug. M8 spec §1
      * removes that premise: session intent is persisted, so a null intent means
      * *read the intent and reconcile*, and a restart with nothing wanted stops
      * immediately — the same outcome, reached by asking rather than by refusing.
@@ -1063,7 +1063,7 @@ class TunnelService : VpnService() {
         flags: Int,
         startId: Int,
     ): Int {
-        // Spec §6.3: the notification's disconnect action, handled before the
+        // M8 spec §6.3: the notification's disconnect action, handled before the
         // connect decode below — never an `intent == null` check, the same
         // discriminator rule R6 states for `connectProfileFrom`. The disconnect
         // path already clears session intent (Task 7 Step 6), so nothing extra
@@ -1118,11 +1118,11 @@ class TunnelService : VpnService() {
                 // live session is showing. An earlier revision passed
                 // notification_connecting unconditionally and claimed the reconcile
                 // would put it back; that is false on every arm which answers
-                // Nothing, and the worst case is the one §6.4 rests on: a
+                // Nothing, and the worst case is the one M8 spec §6.4 rests on: a
                 // fail-closed Reconnecting session showing "traffic is blocked"
                 // becomes a permanent "Connecting…" over a session that is still
-                // holding traffic. §6.4 defends defaulting fail-closed *on* entirely
-                // on §6.3's notification telling the truth.
+                // holding traffic. M8 spec §6.4 defends defaulting fail-closed *on* entirely
+                // on M8 spec §6.3's notification telling the truth.
                 //
                 // Re-asserting the current state's own text instead is what makes
                 // this call safe on a live session, and answering the contract
@@ -1134,7 +1134,7 @@ class TunnelService : VpnService() {
                 // documented anywhere in docs/agent/research/. §10.5: this does not
                 // guess — it answers the contract either way.
                 //
-                // §14.1/§9: systemExempted is not among the six types Android 15
+                // ARCHITECTURE.md §14.1/ARCHITECTURE.md §9: systemExempted is not among the six types Android 15
                 // forbids a BOOT_COMPLETED receiver to launch (dataSync, camera,
                 // mediaPlayback, phoneCall, mediaProjection, microphone), and the
                 // general BOOT_COMPLETED exemption from the background-start
@@ -1171,14 +1171,14 @@ class TunnelService : VpnService() {
         }
     }
 
-    // §1.2: the three rejection functions below — [rejectConnectFromCommand],
+    // M8 spec §1.2: the three rejection functions below — [rejectConnectFromCommand],
     // [rejectInitialForegroundLifecycle] and [handleForegroundLifecycleRejection]
     // — each publish a terminal `Failed` and stop without going through
     // [settleTerminalFailure], so none of them inherits its `persist` block and
     // each has to clear session intent itself. Left set, the next always-on
     // bind, boot start or sticky restart reads `wanted = true`, reconciles, and
     // silently connects a session the user never got: exactly the resurrection
-    // §1 exists to make impossible.
+    // M8 spec §1 exists to make impossible.
     //
     // Each clears through [SessionIntentGate.clearIfOwned], never the
     // repository: a direct write can land after a newer connect's `want()` and
@@ -1277,7 +1277,7 @@ class TunnelService : VpnService() {
 
     private fun publishLocked(next: ConnectionState) {
         currentState = next
-        // §11 row 7: hand the terminal state to the process-scoped memory so the
+        // ARCHITECTURE.md §11 row 7: hand the terminal state to the process-scoped memory so the
         // *next* instance can seed from it. Recording every state, not only
         // failures, is deliberate — [TerminalStateMemory.record] clears itself on
         // anything non-terminal, which is what makes a stale revoke impossible
@@ -1295,7 +1295,7 @@ class TunnelService : VpnService() {
             } catch (e: android.os.RemoteException) {
                 // The UI process died mid-broadcast. RemoteCallbackList prunes
                 // dead entries itself; nothing here should abort the tunnel, and
-                // §5.6 forbids logging anything that might quote the config.
+                // ARCHITECTURE.md §5.6 forbids logging anything that might quote the config.
                 Log.w(TAG, "callback dropped: ${e.javaClass.simpleName}")
             }
         }
@@ -1303,7 +1303,7 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * Spec §1.5: pushes one accumulated sample to every bound `:main` over the
+     * M8.5 spec §1.5: pushes one accumulated sample to every bound `:main` over the
      * existing [ITunnelCallback], reusing [callbacks] rather than a second
      * `RemoteCallbackList`.
      *
@@ -1311,9 +1311,9 @@ class TunnelService : VpnService() {
      * is not safe for concurrent broadcast, and [trafficLoop] calls this from its
      * own coroutine — a call arriving mid-[publishLocked] would hit
      * `beginBroadcast()`'s reentrancy throw. [TrafficSampleParcel] carries no free
-     * text, so unlike [publishLocked] there is nothing here for §5.6 to redact.
+     * text, so unlike [publishLocked] there is nothing here for ARCHITECTURE.md §5.6 to redact.
      *
-     * Also this sample's only feed into [healthDetector] (M8.5 spec §4.2/§4.3).
+     * Also this sample's only feed into [healthDetector] (M8.5 spec §4.2/M8.5 spec §4.3).
      */
     private fun broadcastTrafficSample(sample: TrafficSample) {
         synchronized(lock) {
@@ -1327,7 +1327,7 @@ class TunnelService : VpnService() {
                 }
             }
             callbacks.finishBroadcast()
-            // M8.5 spec §4.2/§4.3: the sampler is health's only input. Published
+            // M8.5 spec §4.2/M8.5 spec §4.3: the sampler is health's only input. Published
             // through publishLocked, so the notification follows (Task 4).
             healthDetector?.let { detector ->
                 val detected = detector.accept(sample, SystemClock.elapsedRealtime())
@@ -1355,7 +1355,7 @@ class TunnelService : VpnService() {
     // ── Start sequence ──────────────────────────────────────────────────────
 
     /**
-     * §5.3: the whole sequence is on IO, so the connect button stays live.
+     * ARCHITECTURE.md §5.3: the whole sequence is on IO, so the connect button stays live.
      * §10.4: no broad catch — every step publishes its own specific failure and
      * unwinds what it already built.
      */
@@ -1381,11 +1381,11 @@ class TunnelService : VpnService() {
                 // intent — and the settlement of the start already in flight
                 // must be allowed to clear it, because no separate session was
                 // ever created for it to belong to. Leaving the field behind on
-                // that branch would refuse a clear that spec §1.2 requires, and
+                // that branch would refuse a clear that M8 spec §1.2 requires, and
                 // a terminal failure would settle with `wanted = true` still
                 // persisted.
                 sessionIntentToken = intentToken
-                // §5.5 makes this service the source of truth, so it cannot rely
+                // ARCHITECTURE.md §5.5 makes this service the source of truth, so it cannot rely
                 // on the UI to prevent a second connect. Without this guard the
                 // previous TUN fd leaks and the old core runs on unreferenced.
                 //
@@ -1398,7 +1398,7 @@ class TunnelService : VpnService() {
                 //
                 // It does NOT mean no TUN is running. With the kill switch on —
                 // the default — settleRetryableFailure deliberately keeps
-                // tunInterface open as the blackhole (§6.1), so this guard lets
+                // tunInterface open as the blackhole (M8 spec §6.1), so this guard lets
                 // through the one state that can still hold a live fd. That is
                 // safe only because [attachTun] closes the retained fd before
                 // adopting its own; this comment previously claimed "no core or
@@ -1427,7 +1427,7 @@ class TunnelService : VpnService() {
             establishForeground = { goForeground(R.string.notification_connecting) },
             onRejected = { rejectInitialForegroundLifecycle(gen, rowId) },
             launchStartup = {
-                // Spec §3.3: capture starts here, once the service has actually
+                // M8.5 spec §3.3: capture starts here, once the service has actually
                 // entered foreground and before the start sequence below runs —
                 // not inside it, so a session that never reaches resolveAndStartCore
                 // is still captured.
@@ -1543,7 +1543,7 @@ class TunnelService : VpnService() {
     // the three inputs the config generator needs, and dnsPlan is the plan
     // resolveAndStartCore already computed once from routing — recomputing it
     // here to shrink the list would risk the TUN and the config disagreeing
-    // (§7.4). Six genuinely distinct inputs, not one bundle hiding as several.
+    // (M6.5 spec §7.4). Six genuinely distinct inputs, not one bundle hiding as several.
     @Suppress("ReturnCount", "LongParameterList")
     private suspend fun startCore(
         gen: Int,
@@ -1608,7 +1608,7 @@ class TunnelService : VpnService() {
             metricsPort = allocated.metricsPort.takeIf { metricsApplied }
         }
 
-        // §6: validate before starting. libXray's testXray takes a path, so the
+        // ARCHITECTURE.md §6: validate before starting. libXray's testXray takes a path, so the
         // bytes validated are exactly the bytes runXray will read.
         if (!publishIfCurrent(gen, ConnectionState.Connecting(StartupStage.ValidatingConfig))) return null
         try {
@@ -1618,7 +1618,7 @@ class TunnelService : VpnService() {
             // the core, the environment, or the row's own bytes changed since.
             // §10.4: that is a different, user-actionable fact from "our own
             // typed generation produced something the core dislikes"
-            // (ConfigRejected), and §6 forbids silently falling back to the
+            // (ConfigRejected), and ARCHITECTURE.md §6 forbids silently falling back to the
             // typed projection instead of naming it.
             return failStart(gen, validationFailureReason(runsAsWritten), e, rowId)
         }
@@ -1653,7 +1653,7 @@ class TunnelService : VpnService() {
      * own bytes for a `runsAsWritten` profile, or a typed generation otherwise.
      *
      * The raw bytes come from Room, not the Parcel: `ProfileParcel` carries
-     * typed columns only (§5.6 — a Binder transaction is capped near 1MB and a
+     * typed columns only (ARCHITECTURE.md §5.6 — a Binder transaction is capped near 1MB and a
      * pasted config has no bound), so whether this row runs as written is read
      * fresh here, the same way the latency path already reads a row by id
      * (`loadProfile = { id -> profileRepository.profile(id) }`).
@@ -1727,7 +1727,7 @@ class TunnelService : VpnService() {
      *
      * [passthroughPlanFor] decides, from the same two booleans, both whether
      * the app's own `routing`/`dns` replaces the config's own and which geo
-     * asset directory the composed config's `env` block names (spec §4.3) —
+     * asset directory the composed config's `env` block names (M7 spec §4.3) —
      * see its KDoc for why those two answers come from one function rather
      * than two independently-wired conditions. The override's stock
      * `direct`/`block`/`dns-out` outbounds are filtered against the stored
@@ -1800,7 +1800,7 @@ class TunnelService : VpnService() {
                 null
             }
         val result = RawConfigComposer.compose(rawJson, effectiveSettings, plan.assetDir, override)
-        // §2.4: only the override branch may carry a metrics block at all
+        // M8.5 spec §2.4: only the override branch may carry a metrics block at all
         // (RawConfigComposer.addMetricsBlocks) — the pure branch strips
         // `metrics` unconditionally, so it never applies regardless of
         // effectiveSettings.metricsPort.
@@ -1880,7 +1880,7 @@ class TunnelService : VpnService() {
      * [startCore] has left a core running. Unguarded, the failure reaches
      * [errorHandler], which publishes [FailureReason.CoreStartFailed] but skips
      * both `xray.stop()` and failStart's §5.4 cleanup: a live Go runtime, a
-     * non-null `controller`, the config file still on disk (§5.6) and a stuck
+     * non-null `controller`, the config file still on disk (ARCHITECTURE.md §5.6) and a stuck
      * foreground notification, while `Failed` invites a second connect that would
      * overwrite `controller` and orphan the first core.
      */
@@ -1973,12 +1973,12 @@ class TunnelService : VpnService() {
     /**
      * Builds the TUN interface and hands its fd to tun2socks.
      *
-     * Every failure stops the core [startCore] left running — §5.4: a
+     * Every failure stops the core [startCore] left running — ARCHITECTURE.md §5.4: a
      * half-started tunnel must not survive as a live runtime with nothing left
      * to service. The fd is a separate question, and this function does not
      * answer it once the fd has been adopted into [tunInterface]: from that
      * point the failure policy [failStart] reaches owns its lifetime, which is
-     * what lets §6.1's kill switch retain it. See the `Tun2Socks.start` failure
+     * what lets M8 spec §6.1's kill switch retain it. See the `Tun2Socks.start` failure
      * block below for the exactly-once argument.
      *
      * §5.4 across the [TunAttachOutcome.NoPerAppPlan] returns specifically:
@@ -2003,7 +2003,7 @@ class TunnelService : VpnService() {
     // signature at five rather than six now that [dnsPlan] joined it.
     @Suppress(
         "ReturnCount",
-        "LongMethod", // Spec §1.5's trafficLoop.start() call pushed this one line past the threshold.
+        "LongMethod", // M8.5 spec §1.5's trafficLoop.start() call pushed this one line past the threshold.
     )
     private suspend fun attachTun(
         gen: Int,
@@ -2021,7 +2021,7 @@ class TunnelService : VpnService() {
                 PerAppGateResult.Failed -> return TunAttachOutcome.Settled
                 is PerAppGateResult.NoPlan -> return TunAttachOutcome.NoPerAppPlan(gate.detail)
             }
-        // Spec §5.2, read *before* establish(): sampling after it means asking
+        // M8 spec §5.2, read *before* establish(): sampling after it means asking
         // the framework which network is default at the moment we are adding one,
         // and this app's own package is excluded from the TUN on every
         // BuilderPlan (§8) — so the answer is a physical network either way, but
@@ -2048,7 +2048,7 @@ class TunnelService : VpnService() {
                 fd.close()
                 return TunAttachOutcome.Settled
             }
-            // §5.4/§6.1: a fail-closed retry reaches this line with the *previous*
+            // §5.4/M8 spec §6.1: a fail-closed retry reaches this line with the *previous*
             // attempt's fd still in [tunInterface] — [settleRetryableFailure]
             // deliberately left it open as the kill switch, and nothing between
             // there and here closes it. Assigning over it would leak an fd per
@@ -2089,7 +2089,7 @@ class TunnelService : VpnService() {
             // closed here — the same reasoning [attachRetainedTun]'s own
             // `Tun2Socks.start` failure block carries, now that the two agree.
             //
-            // §6.1: `TunnelStartFailed` is `Retryable`, so this reaches
+            // M8 spec §6.1: `TunnelStartFailed` is `Retryable`, so this reaches
             // [settleRetryableFailure], which asks [shouldRetainTun] — true with
             // the kill switch on, which is the default. Closing and nulling here
             // left that decision with nothing to retain: the TUN came down,
@@ -2154,7 +2154,7 @@ class TunnelService : VpnService() {
         // ConnectionRecorder) happens strictly after. Previously this published, suspended in
         // the write, and called goForeground() on the way out — so a teardown during the
         // write left this coroutine to restore the connected notification over a tunnel that
-        // was already down (§5.5). Nothing may be added after the `persist` lambda.
+        // was already down (ARCHITECTURE.md §5.5). Nothing may be added after the `persist` lambda.
         terminalOutcome.settleHandlingLifecycleRejection(
             gen = gen,
             state = connected,
@@ -2193,7 +2193,7 @@ class TunnelService : VpnService() {
      *
      * Fix round 1, Finding 1: a retryable [reason] does not settle as
      * terminal `Failed` — it settles as `Reconnecting` and schedules the
-     * backoff. Spec §6.1 is explicit that reconnection happens regardless of
+     * backoff. M8 spec §6.1 is explicit that reconnection happens regardless of
      * the fail-closed setting ("the setting decides only whether traffic runs
      * in the clear while it does"), so this decision reads only
      * [FailureReason.retryability]; it never reads `SettingsRepository.failClosed`
@@ -2201,7 +2201,7 @@ class TunnelService : VpnService() {
      * TUN retention is a separate decision — [shouldRetainTun] — consulted only
      * inside [settleRetryableFailure].
      *
-     * §5.6: the config file holds the UUID and REALITY key. A failed start used
+     * ARCHITECTURE.md §5.6: the config file holds the UUID and REALITY key. A failed start used
      * to leave it on disk indefinitely, because only teardown deleted it.
      */
     private suspend fun failStart(
@@ -2211,7 +2211,7 @@ class TunnelService : VpnService() {
         rowId: Long,
     ): Nothing? {
         // failure() redacts at construction — libXray's errors quote the config
-        // straight back (§5.6). Built before either branch because that is the
+        // straight back (ARCHITECTURE.md §5.6). Built before either branch because that is the
         // one thing here with no lifecycle effect, and both branches need it:
         // the terminal one to publish, the retryable one only if it turns out
         // to be at the cap after all.
@@ -2225,7 +2225,7 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §1.2/§2.2: publishes `Failed`, clears session intent, and releases the
+     * M8 spec §1.2/M8 spec §2.2: publishes `Failed`, clears session intent, and releases the
      * started-service lifetime — the outcome only the user can act on.
      *
      * `suspend`, not plain: the one write `:bg` performs on failure (spec D4) runs
@@ -2286,7 +2286,7 @@ class TunnelService : VpnService() {
                 // it would.
                 withContext(NonCancellable) {
                     connectionRecorder.record(rowId, failed)
-                    // Spec §1.2/§2.2: one of the intent-clearing sites. Inside
+                    // M8 spec §1.2/M8 spec §2.2: one of the intent-clearing sites. Inside
                     // `persist` rather than beside `settle` so a superseded
                     // generation (this attempt lost the race) never clears intent
                     // for a session that is not this one's to clear.
@@ -2308,7 +2308,7 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §2.2/§2.4: holds session intent, publishes `Reconnecting`, and schedules
+     * M8 spec §2.2/M8 spec §2.4: holds session intent, publishes `Reconnecting`, and schedules
      * the backoff — a retryable failure is not a reason to stop, and this is
      * unconditional: nothing here makes *reconnection* conditional on the
      * fail-closed setting (fix round 1, Finding 1 — reconnection happens
@@ -2334,7 +2334,7 @@ class TunnelService : VpnService() {
      * `currentState`, or the retry this schedules would be silently ignored
      * the moment it fires.
      *
-     * §2.3: a `RetryableCapped` reason whose next attempt would reach
+     * M8 spec §2.3: a `RetryableCapped` reason whose next attempt would reach
      * [space.getsub.core.model.TUN_ESTABLISH_ATTEMPT_CAP] settles as terminal
      * instead (fix round 1, Finding 2) — see [nextAttemptExceedsCap].
      *
@@ -2397,12 +2397,12 @@ class TunnelService : VpnService() {
                 controller = null
                 liveSession = null
                 reconnectAttempts.commit(trialAttempt)
-                // Spec §6.1: the kill switch itself. Skipping the close here —
+                // M8 spec §6.1: the kill switch itself. Skipping the close here —
                 // rather than adding any route or block — is what leaves a TUN
                 // with nothing servicing it as a blackhole for the wanted
                 // session's traffic instead of a torn-down interface.
                 if (!retainTun) closeRetainedTunLocked()
-                // §6.3/§6.4: the notification reports the **observed** TUN, not
+                // M8 spec §6.3/M8 spec §6.4: the notification reports the **observed** TUN, not
                 // the fail-closed setting and not [shouldRetainTun]'s decision
                 // on its own. Those two are not the same fact, and which side a
                 // given [FailureReason] lands on depends on what ran before it,
@@ -2423,8 +2423,8 @@ class TunnelService : VpnService() {
                 // previous retaining settlement held, whatever the reason.
                 //
                 // That is why this reads the field instead of enumerating
-                // reasons. §6.4 defends defaulting fail-closed *on* entirely on
-                // the promise that §6.3's notification tells the truth, so
+                // reasons. M8 spec §6.4 defends defaulting fail-closed *on* entirely on
+                // the promise that M8 spec §6.3's notification tells the truth, so
                 // reading the retention decision alone made that promise false.
                 // Reading `tunInterface` here needs no extra synchronization:
                 // this lambda already runs under `lock`, after the
@@ -2463,7 +2463,7 @@ class TunnelService : VpnService() {
      * on every path where the session ends).
      *
      * Called unconditionally from [settleTerminalFailure] — a terminal outcome
-     * always ends the retained TUN's life, fail-closed or not (spec §6.1: no
+     * always ends the retained TUN's life, fail-closed or not (M8 spec §6.1: no
      * retry means holding it would leave the device with no connectivity and
      * nothing working to restore it). Called *conditionally* from
      * [settleRetryableFailure], guarded by [shouldRetainTun]: when that
@@ -2498,7 +2498,7 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * §5.1. Wired on every start, never cached: libXray's dialer controller is
+     * ARCHITECTURE.md §5.1. Wired on every start, never cached: libXray's dialer controller is
      * process-global Go state, and `XrayController` clears its target on stop so
      * a destroyed service is not reachable from native code.
      */
@@ -2508,7 +2508,7 @@ class TunnelService : VpnService() {
             if (!ok) {
                 // libXray DISCARDS this result (docs/agent/research/libxray-api.md
                 // §2), so nothing upstream reports it. Without this line a failed
-                // protect is invisible and presents only as §5.1's symptom:
+                // protect is invisible and presents only as ARCHITECTURE.md §5.1's symptom:
                 // connected, no traffic, rising CPU.
                 Log.e(TAG, "VpnService.protect() failed — traffic will loop back into the tunnel")
             }
@@ -2535,7 +2535,7 @@ class TunnelService : VpnService() {
         getSystemService(ConnectivityManager::class.java)?.activeNetwork
 
     private fun writeConfig(json: String): File {
-        // Internal storage, not cache: §5.6 — the config holds the UUID and
+        // Internal storage, not cache: ARCHITECTURE.md §5.6 — the config holds the UUID and
         // REALITY key, and cache is more readily harvested.
         val file = File(filesDir, CONFIG_NAME)
         file.writeText(json)
@@ -2599,7 +2599,7 @@ class TunnelService : VpnService() {
         // `false` does not claim the tunnel is unmetered — it declines to force
         // the answer. AOSP's `Vpn.applyUnderlyingCapabilities` ORs this flag
         // with each underlying network's own metered state, so `false` means
-        // "inherit from what I am running over", which is exactly what §5.2
+        // "inherit from what I am running over", which is exactly what M8 spec §5.2
         // asks for: apps querying through the tunnel, including this app's own
         // geoRefreshOnMetered and pingOnLaunchMetered, see the real network's
         // cost. On cellular the tunnel still reports metered, correctly.
@@ -2622,7 +2622,7 @@ class TunnelService : VpnService() {
             }
             // No excludeSelf() here, and that is not an omission. Calling
             // addDisallowedApplication after addAllowedApplication throws
-            // UnsupportedOperationException (spec §2.2). We are excluded by being
+            // UnsupportedOperationException (M5.5 spec §2.2). We are excluded by being
             // absent from the allow list, which PerAppResolver guarantees.
             is BuilderPlan.Allow -> {
                 val applied = applyEach(plan.packages) { builder.allowOrSkip(it) }
@@ -2632,7 +2632,7 @@ class TunnelService : VpnService() {
                 // is the only safe reading of "only these apps" when there are no
                 // longer any. See PackageApplication.nothingApplied.
                 if (applied.nothingApplied) {
-                    // §5.6: no names. "Empty at the builder", not "empty" —
+                    // ARCHITECTURE.md §5.6: no names. "Empty at the builder", not "empty" —
                     // the user selected apps; the system no longer has them.
                     Log.e(TAG, "per-app: allow list empty at the builder; refusing")
                     return TunResult.AllowListEmptied
@@ -2659,12 +2659,12 @@ class TunnelService : VpnService() {
      */
     private fun Builder.addDnsServerOrFallback(dnsPlan: DnsPlan?) {
         if (addDnsServerOrFallback(dnsPlan?.tunAdvertisedAddress(), DNS_SERVER, ::addDnsServer)) {
-            // §5.6: no address in this line — only that one was rejected.
+            // ARCHITECTURE.md §5.6: no address in this line — only that one was rejected.
             Log.w(TAG, "addDnsServer rejected the plan's address; falling back to the app default")
         }
     }
 
-    /** §5.6: the count, never the names. A package name identifies an installed app. */
+    /** ARCHITECTURE.md §5.6: the count, never the names. A package name identifies an installed app. */
     private fun logSkipped(applied: PackageApplication) {
         if (applied.skipped > 0) {
             Log.w(TAG, "per-app: skipped ${applied.skipped} uninstalled package(s)")
@@ -2702,7 +2702,7 @@ class TunnelService : VpnService() {
 
     /** @return false when the package is no longer installed. See [applyEach]. */
     // Swallowed deliberately: the only thing this exception carries is the
-    // package name, and §5.6 forbids logging it. The count is the whole report.
+    // package name, and ARCHITECTURE.md §5.6 forbids logging it. The count is the whole report.
     @Suppress("SwallowedException")
     private fun Builder.disallowOrSkip(name: String): Boolean =
         try {
@@ -2714,7 +2714,7 @@ class TunnelService : VpnService() {
 
     /** @return false when the package is no longer installed. See [applyEach]. */
     // Swallowed deliberately, as in disallowOrSkip: the exception carries only
-    // the package name, which §5.6 forbids logging.
+    // the package name, which ARCHITECTURE.md §5.6 forbids logging.
     @Suppress("SwallowedException")
     private fun Builder.allowOrSkip(name: String): Boolean =
         try {
@@ -2726,7 +2726,7 @@ class TunnelService : VpnService() {
 
     /**
      * The notification text a framework start should assert, given what this
-     * service is currently doing (§6.3).
+     * service is currently doing (M8 spec §6.3).
      *
      * [onStartCommand] must answer `startForegroundService`'s contract on a start
      * that carries no connect request, and [TunnelNotification.ID] is a single
@@ -2752,7 +2752,7 @@ class TunnelService : VpnService() {
             TunnelNotification.ensureChannel(this)
             val notification = TunnelNotification.build(this, getString(textRes))
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                // §14.1. The typed overload is API 29+, and systemExempted only
+                // ARCHITECTURE.md §14.1. The typed overload is API 29+, and systemExempted only
                 // becomes meaningful on API 34, so below Q the untyped call is both
                 // the only option and the correct one.
                 startForeground(
@@ -2793,7 +2793,7 @@ class TunnelService : VpnService() {
     private data class StoppedSession(val startId: Int, val intentToken: Int)
 
     /**
-     * Idempotent, and reachable from three unsynchronised places (§5.4).
+     * Idempotent, and reachable from three unsynchronised places (ARCHITECTURE.md §5.4).
      *
      * State is taken under [lock] in one shot; the slow work then runs outside it
      * so a wedged `quit()` cannot block publication. A second concurrent call
@@ -2806,17 +2806,17 @@ class TunnelService : VpnService() {
         finalState: ConnectionState,
         expectedGeneration: Int? = null,
     ): StoppedSession? {
-        // §11 row W7. A teardown that never returns wedges
+        // ARCHITECTURE.md §11 row W7. A teardown that never returns wedges
         // [TunnelCommandCoordinator]'s single consumer: it processes commands in
         // one sequential loop, so the user's next Connect queues behind this call
         // forever while the session sits in `Disconnecting` with the fd still open
-        // and §6.1's kill switch still blackholing traffic for a session the user
+        // and M8 spec §6.1's kill switch still blackholing traffic for a session the user
         // has already ended. Observed on device 2026-09-16.
         //
         // Each step logs on entry and on return, so a hang reads as an `enter`
         // with no matching `exit` instead of being indistinguishable from a fast,
         // silent success — which is what made the first occurrence undiagnosable.
-        // §5.6: phase names and durations only, never config contents.
+        // ARCHITECTURE.md §5.6: phase names and durations only, never config contents.
         //
         // Every line below is shaped "teardown[<phase>] <event>", deliberately:
         // no bare `word:` before whitespace (BARE_HOST_PREFIX_PATTERN in
@@ -2861,7 +2861,7 @@ class TunnelService : VpnService() {
             // the counter without cancelling the job left a retry armed against
             // a session this call is ending: it would later fire BackoffElapsed
             // into a reconcile that can flatten a published Failed(Revoked)
-            // into Disconnected (§11 row 7). Inline rather than
+            // into Disconnected (ARCHITECTURE.md §11 row 7). Inline rather than
             // cancelBackoffRetry(), which takes [lock] this block already holds.
             cancelBackoffRetryLocked()
             startId = activeStartId
@@ -2909,7 +2909,7 @@ class TunnelService : VpnService() {
                 try {
                     Tun2Socks.stop()
                 } catch (e: Throwable) {
-                    // Includes NoClassDefFoundError when System.loadLibrary failed. §5.4
+                    // Includes NoClassDefFoundError when System.loadLibrary failed. ARCHITECTURE.md §5.4
                     // says teardown must still finish — abandoning here leaks the fd.
                     Log.e(TAG, "tun2socks stop failed: ${e.javaClass.simpleName}")
                 }
@@ -2927,7 +2927,7 @@ class TunnelService : VpnService() {
 
             TeardownStep.StopCore -> {
                 // stopBlocking(), not stop(): onDestroy has no scope that outlives it and
-                // §5.4 requires teardown to finish before the process dies. It also drops
+                // ARCHITECTURE.md §5.4 requires teardown to finish before the process dies. It also drops
                 // the protector so Go stops holding this service.
                 Log.i(TAG, "teardown[xray-stopBlocking] enter (present=${xray != null})")
                 xray?.stopBlocking()
@@ -2947,7 +2947,7 @@ class TunnelService : VpnService() {
                 // has run, but the field must not sit here claiming otherwise)
                 // has nothing installed to feed.
                 synchronized(lock) { healthDetector = null }
-                // Spec §1.5: stopped after the session has published its final
+                // M8.5 spec §1.5: stopped after the session has published its final
                 // state and before the capture below stops — a session that has
                 // already ended must not go on accumulating a total for it, or
                 // emit one to a client that just heard it is over.
@@ -2955,7 +2955,7 @@ class TunnelService : VpnService() {
             }
 
             TeardownStep.StopLogCapture ->
-                // Spec §3.3: stopped last, after every phase above has logged —
+                // M8.5 spec §3.3: stopped last, after every phase above has logged —
                 // a capture that stops first would go quiet before the teardown
                 // becomes interesting. `runCatching` here only guards against
                 // `stop()` throwing; it cannot and does not guard against
@@ -2973,7 +2973,7 @@ class TunnelService : VpnService() {
         startId > 0 && stopSelfResult(startId)
 
     /**
-     * §5.4: called when another VPN app takes over or the user revokes
+     * ARCHITECTURE.md §5.4: called when another VPN app takes over or the user revokes
      * permission.
      *
      * `super.onRevoke()` is deliberately not called: its default implementation
@@ -2988,11 +2988,11 @@ class TunnelService : VpnService() {
      * the write has to be launched rather than awaited. [stopTunnel] below then
      * stops the started service, which destroys it, and [onDestroy] calls
      * `scope.cancel()` — so a write launched as a child of [scope] is racing its
-     * own scope's cancellation. On device (§11 row 7) it won that race
+     * own scope's cancellation. On device (ARCHITECTURE.md §11 row 7) it won that race
      * comfortably: an instrumented run showed `write DONE` before
      * `onDestroy ENTER`. But winning is a property of how fast this particular
      * Room write happens to be, not of the ordering, and losing it leaves
-     * `wanted = true` after a revoke — which is exactly what §1.2 exists to
+     * `wanted = true` after a revoke — which is exactly what M8 spec §1.2 exists to
      * prevent, since the next boot or always-on bind would then reconnect and
      * fight for the route the user just handed to another VPN app.
      *
@@ -3009,7 +3009,7 @@ class TunnelService : VpnService() {
      * the exact shape a per-instance gate missed (see [SessionIntentGate]).
      */
     override fun onRevoke() {
-        // Spec §1.2: the second of three intent-clearing sites. Reconnecting into
+        // M8 spec §1.2: the second of three intent-clearing sites. Reconnecting into
         // a route another VPN app just took, or that the user just revoked, is a
         // fight this app should lose, loudly and immediately — not retry into.
         val revokedToken = sessionIntent.currentToken()
@@ -3055,7 +3055,7 @@ class TunnelService : VpnService() {
     /**
      * Measures one server, in whichever mode the run asked for.
      *
-     * §5.1 is the whole reason this runs in `:bg`: this is the only place a live
+     * ARCHITECTURE.md §5.1 is the whole reason this runs in `:bg`: this is the only place a live
      * `VpnService` exists to protect the socket. While a session is up, an
      * unprotected measurement is routed back into the TUN and times the server
      * *through* the tunnel rather than timing the server. While no session is up
@@ -3194,7 +3194,7 @@ class TunnelService : VpnService() {
     /**
      * A dead `:main` is ordinary here, not an error — the user navigated away or
      * the UI process was reclaimed while a measurement was still running. The
-     * exception is swallowed without its message for §5.6: a `DeadObjectException`
+     * exception is swallowed without its message for ARCHITECTURE.md §5.6: a `DeadObjectException`
      * from this path carries nothing useful, and logging binder failures around
      * latency would produce a line per row on every backgrounded run.
      */
@@ -3211,7 +3211,7 @@ class TunnelService : VpnService() {
         profile: ProfileParcel,
         startId: Int,
     ) {
-        // Spec §1.2: the first of three intent-writing sites. True the moment the
+        // M8 spec §1.2: the first of three intent-writing sites. True the moment the
         // command is *accepted* — not when it succeeds — so a boot-time or
         // always-on connect that dies at StartingCore is still wanted and still
         // retried; that ordering is the whole reason this milestone exists.
@@ -3238,7 +3238,7 @@ class TunnelService : VpnService() {
     // ── Reconciliation ──────────────────────────────────────────────────────
 
     /**
-     * Spec §3.1/§3.3: re-decides what should be running, from the reconcile
+     * M8 spec §3.1/M8 spec §3.3: re-decides what should be running, from the reconcile
      * channel's single ordering point (Task 5's pure [reconcile]).
      *
      * Reads [currentConnectionState] — the same holder [publishIfCurrent]
@@ -3247,7 +3247,7 @@ class TunnelService : VpnService() {
      * bugs those mechanisms already close.
      */
     private suspend fun reconcileNow(trigger: ReconcileTrigger) {
-        // Spec §2.4: no network means no timer, unconditionally. A retry left
+        // M8 spec §2.4: no network means no timer, unconditionally. A retry left
         // over from just before the network dropped must not fire into a
         // decision nobody is making until the network returns.
         if (trigger == ReconcileTrigger.NetworkLost) cancelBackoffRetry()
@@ -3351,7 +3351,7 @@ class TunnelService : VpnService() {
      * close the TUN and cancel the backoff before they publish, so on those arms
      * the check simply passes. [errorHandler] does not: it publishes a terminal
      * `Failed` over a session it deliberately leaves running — see its KDoc,
-     * `CoreStartFailed` is `Retryable` and tearing down there released §6.1's
+     * `CoreStartFailed` is `Retryable` and tearing down there released M8 spec §6.1's
      * kill switch. Without this guard, a framework start arriving after such a
      * crash would take the ongoing notification off a `VpnService` that is still
      * carrying traffic, which §9 requires for the life of the tunnel.
@@ -3386,7 +3386,7 @@ class TunnelService : VpnService() {
     ) {
         val profile = profileRepository.profile(rowId)?.toProfile()
         if (profile == null) {
-            // §5.6: no name, no address. The row is gone or its config will not
+            // ARCHITECTURE.md §5.6: no name, no address. The row is gone or its config will not
             // decode; either way there is nothing to connect to and holding the
             // service open helps nobody.
             Log.w(TAG, "reconcile: active profile row is not connectable")
@@ -3418,7 +3418,7 @@ class TunnelService : VpnService() {
      * The soft alternative is `setUnderlyingNetworks` alone, letting the core
      * notice its connections died and redial — new dials are protected
      * automatically, because libXray's protector is a dial-time callback
-     * (§14.2). There is **no re-protect**: existing sockets cannot be
+     * (ARCHITECTURE.md §14.2). There is **no re-protect**: existing sockets cannot be
      * re-marked, so §9's "at minimum a re-protect" describes an operation that
      * does not exist.
      *
@@ -3427,7 +3427,7 @@ class TunnelService : VpnService() {
      * Task 16 row 1 settles it.
      *
      * It restarts onto the *active* profile ([rowId], from [reconcileNow]'s
-     * read), not necessarily the one the session started on. Spec §1.1 defines
+     * read), not necessarily the one the session started on. M8 spec §1.1 defines
      * session intent as `(activeProfileId, wanted)`, so a server picked while
      * connected is where the next reconcile restart goes — by design (ruling
      * R37), and not to be pinned to the live session's profile. [liveSession]
@@ -3444,7 +3444,7 @@ class TunnelService : VpnService() {
      * through [settleTerminalFailure]/[settleRetryableFailure], the same as
      * any other failed start: a terminal outcome always closes it via
      * [closeRetainedTunLocked]; a retryable one closes it unless
-     * [shouldRetainTun] says to hold it for the kill switch (spec §6.1). Either
+     * [shouldRetainTun] says to hold it for the kill switch (M8 spec §6.1). Either
      * way a `Start` that follows — whether immediately or after the session
      * reconnects from scratch through [ReconcileAction.Start] — establishes
      * its own TUN via [attachTun] rather than reusing this one.
@@ -3461,7 +3461,7 @@ class TunnelService : VpnService() {
     ) {
         val profile = profileRepository.profile(rowId)?.toProfile()
         if (profile == null) {
-            // §5.6: no name, no address — same reasoning as startFromRow's own
+            // ARCHITECTURE.md §5.6: no name, no address — same reasoning as startFromRow's own
             // refusal. Nothing to restart onto, and the retained fd is still
             // live, so route through the ordinary teardown that closes it
             // rather than leaving it dangling. The intent clear goes through
@@ -3490,7 +3490,7 @@ class TunnelService : VpnService() {
                     configFile?.delete()
                     configFile = null
                     metricsPort = null
-                    // Spec §1.1: [rowId] is the *active* profile, which can differ
+                    // M8 spec §1.1: [rowId] is the *active* profile, which can differ
                     // from the row this session started on if another server was
                     // picked while connected (ruling R37: by design). [liveSession]
                     // moves with it, in this same region as the generation bump —
@@ -3529,7 +3529,7 @@ class TunnelService : VpnService() {
 
         val started = resolveAndStartCore(handoff.gen, profile, rowId) ?: return
 
-        // Spec §5.2, lever 1. The core has just been rebuilt from current
+        // ARCHITECTURE.md §5.2, lever 1. The core has just been rebuilt from current
         // settings; the retained interface still advertises what it was built
         // with. Keeping it is only safe while those agree.
         //
@@ -3560,7 +3560,7 @@ class TunnelService : VpnService() {
         // uninstalled — and `PerAppAllowListEmpty` is `Terminal`, so publishing it
         // here would route through [settleTerminalFailure], which closes the
         // retained TUN unconditionally and clears session intent. The user would
-        // lose the tunnel *and* §6.1's blackhole to an ordinary Wi-Fi↔cellular
+        // lose the tunnel *and* M8 spec §6.1's blackhole to an ordinary Wi-Fi↔cellular
         // change, with nothing on screen explaining why. That is strictly worse
         // than the leak this branch exists to close, which needs DNS off *and* a
         // `geoip:<country>` DIRECT rule to bite.
@@ -3576,7 +3576,7 @@ class TunnelService : VpnService() {
             when (attachTun(handoff.gen, started.xray, started.ports, started.dnsPlan, rowId)) {
                 TunAttachOutcome.Settled -> Unit
                 is TunAttachOutcome.NoPerAppPlan -> {
-                    // §5.6: the reason only. No package names, no counts that
+                    // ARCHITECTURE.md §5.6: the reason only. No package names, no counts that
                     // could identify a selection, no addresses.
                     Log.w(TAG, "per-app gate yielded no plan on a rebuild; keeping the existing interface")
                     // [handoff.fd] is still [tunInterface] — [attachTun] returns
@@ -3635,7 +3635,7 @@ class TunnelService : VpnService() {
             // `TunnelStartFailed` is retryable, so [failStart] reaches
             // [settleRetryableFailure], which closes it through
             // [closeRetainedTunLocked] only when [shouldRetainTun] says not to
-            // retain — and with fail-closed on, the default, keeps it as §6.1's
+            // retain — and with fail-closed on, the default, keeps it as M8 spec §6.1's
             // kill switch. [attachTun]'s own `Tun2Socks.start` failure block
             // carries the same reasoning, including who closes a retained fd
             // later. A close here as well would be a second, unsynchronised
@@ -3673,7 +3673,7 @@ class TunnelService : VpnService() {
             onCommitted = {
                 cancelBackoffRetryLocked()
                 reconnectAttempts.reset()
-                // Spec §1.5: [start] is idempotent — a no-op while its job is
+                // M8.5 spec §1.5: [start] is idempotent — a no-op while its job is
                 // still active — so this retained-TUN restart does not rebuild
                 // [trafficLoop]'s [TrafficSampler]. That is what survives the
                 // restart, not tun2socks: `Tun2Socks.stop()` is called earlier
@@ -3696,12 +3696,12 @@ class TunnelService : VpnService() {
     }
 
     /**
-     * Spec §2.4. A plain coroutine delay on the service scope — **not** an alarm and
+     * M8 spec §2.4. A plain coroutine delay on the service scope — **not** an alarm and
      * not a `WorkManager` job.
      *
      * Two reasons. The scope dies with the service, so a retry cannot outlive the
-     * session it belongs to. And §2.4's rule is that a session with no network
-     * schedules nothing at all — a retry timer running in Doze is how §11's
+     * session it belongs to. And M8 spec §2.4's rule is that a session with no network
+     * schedules nothing at all — a retry timer running in Doze is how ARCHITECTURE.md §11's
      * six-hour screen-off row fails — which takes enforcement on both edges:
      * `NetworkLost` cancels a job that was already running, and the guard below
      * refuses to arm one when there is no network to retry over in the first
@@ -3721,7 +3721,7 @@ class TunnelService : VpnService() {
      * in that window cancelled whatever the previous attempt had left, and this
      * function then installed a live job over the top of it: armed, unreachable
      * by every cancel site, and guaranteed to fire `BackoffElapsed` into a
-     * session that had just ended. That is exactly the §11 row 7 corruption I1
+     * session that had just ended. That is exactly the ARCHITECTURE.md §11 row 7 corruption I1
      * was raised to close — adding call sites to [cancelBackoffRetry] could not
      * close it, because the job was not yet visible to any of them. Moving the
      * call itself inside the generation-checked transition closes the arming-side
@@ -3754,11 +3754,11 @@ class TunnelService : VpnService() {
      * this or [cancelBackoffRetryLocked], because a surviving timer later fires
      * [ReconcileTrigger.BackoffElapsed] into a session that is gone — and a
      * reconcile arriving after a published `Failed(Revoked)` flattens it to
-     * `Disconnected`, losing the one fact the user needs (§11 row 7).
+     * `Disconnected`, losing the one fact the user needs (ARCHITECTURE.md §11 row 7).
      *
      * The call sites, in full:
      *
-     *  - [reconcileNow] on [ReconcileTrigger.NetworkLost] — §2.4's no-network,
+     *  - [reconcileNow] on [ReconcileTrigger.NetworkLost] — M8 spec §2.4's no-network,
      *    no-timer rule on the losing edge.
      *  - [onDestroy].
      *  - [stopTunnel], [settleTerminalFailure], and a committed
@@ -3835,10 +3835,10 @@ class TunnelService : VpnService() {
  * justify adding one for two methods). This indirection is what keeps
  * `ConnectionRecordingTest` a plain JVM unit test.
  *
- * §5.3: only ever called from `:bg`'s IO-dispatched start sequence.
+ * ARCHITECTURE.md §5.3: only ever called from `:bg`'s IO-dispatched start sequence.
  * §10.4: a persistence failure must not take the tunnel down, but it must not
  * vanish silently either — [onFailure] receives it, and [TunnelService] logs
- * only the exception's class name (§5.6: a Room/SQLite failure message can
+ * only the exception's class name (ARCHITECTURE.md §5.6: a Room/SQLite failure message can
  * echo back the value that failed to write).
  */
 internal class ConnectionRecorder(

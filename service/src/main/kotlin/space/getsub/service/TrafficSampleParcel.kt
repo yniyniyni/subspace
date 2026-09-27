@@ -12,10 +12,10 @@ import space.getsub.core.model.TrafficSample
  * [ConnectionStateParcel]'s shape.
  *
  * Unlike [ConnectionStateParcel] — which carries a diagnostic [String] and
- * therefore redacts it on the far side (§5.6) — the four traffic totals here
+ * therefore redacts it on the far side (ARCHITECTURE.md §5.6) — the four traffic totals here
  * are not config content, so there is nothing for a `redact()` step to do on
  * them. [TagTraffic.tag] is different: it is an outbound tag from the user's
- * own config (§5.6). It is not redacted either, but for the opposite reason —
+ * own config (ARCHITECTURE.md §5.6). It is not redacted either, but for the opposite reason —
  * it goes straight to the UI that config's own author is looking at, and is
  * never logged (see [TagTraffic]'s own KDoc). `:core:model` cannot implement
  * [Parcelable] itself (ARCHITECTURE.md §4: zero Android imports), so [perTag]

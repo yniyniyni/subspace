@@ -53,7 +53,7 @@ class MetricsReservedTagTest {
 
     // --- resolveOverrideBreakdown (review finding I4) ---
     //
-    // Before this, a Metrics collision refused the whole connect. Spec §2.3:
+    // Before this, a Metrics collision refused the whole connect. M8.5 spec §2.3:
     // "a passthrough config defining an outbound called Metrics is not
     // exotic", so a switch this app's own UI describes as a diagnostic must
     // not be able to take the tunnel down with it.

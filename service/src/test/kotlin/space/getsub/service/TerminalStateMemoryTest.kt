@@ -10,7 +10,7 @@ import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
 
 /**
- * §11 row 7 / W2. A terminal failure must outlive the `TunnelService` instance that
+ * ARCHITECTURE.md §11 row 7 / W2. A terminal failure must outlive the `TunnelService` instance that
  * published it, because the instance dies while its process lives on: after another
  * VPN app takes the route, `onRevoke` publishes `Failed(Revoked)` correctly and
  * `onDestroy` preserves it correctly — and the next instance starts with

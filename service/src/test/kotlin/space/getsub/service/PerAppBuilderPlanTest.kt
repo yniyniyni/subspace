@@ -11,7 +11,7 @@ import space.getsub.core.model.PerAppMode
  * Covers the one decision that cannot be made wrong twice: a `VpnService.Builder`
  * holds allowed applications or disallowed ones, never both, and mixing them
  * throws `UnsupportedOperationException` at connect time on a device rather than
- * at build time in CI (spec §2.2).
+ * at build time in CI (M5.5 spec §2.2).
  */
 class PerAppBuilderPlanTest {
     @Test

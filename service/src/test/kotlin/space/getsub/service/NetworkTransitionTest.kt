@@ -170,7 +170,7 @@ class NetworkTransitionTest {
 
     // ── Losing the network clears the suppression state ─────────────────────
     //
-    // These pin an invariant that only became load-bearing once spec §2.4's
+    // These pin an invariant that only became load-bearing once M8 spec §2.4's
     // no-network-no-timer rule was enforced on both edges. `scheduleBackoffRetry`
     // now refuses to arm a timer while `activeNetwork` is null, so for a
     // `Reconnecting` session with no network the `onAvailable` callback is the
@@ -347,7 +347,7 @@ class NetworkTransitionTest {
      * two fires. Nothing else in this module could see that the override was absent;
      * the device row that "passed" was measuring the core redialling on its own.
      *
-     * Whether the switch is then handled correctly is a device question (§11), not
+     * Whether the switch is then handled correctly is a device question (ARCHITECTURE.md §11), not
      * one this test claims to answer.
      */
     @Test

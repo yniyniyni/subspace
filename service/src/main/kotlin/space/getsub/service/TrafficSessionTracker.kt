@@ -20,7 +20,7 @@ import space.getsub.core.model.ConnectionState
  * and also whenever a `Connected` arrives with a different
  * `sinceEpochMillis`."** That reads naturally from the state *names*, and it
  * is wrong for a retained-TUN restart (a Wi-Fi<->cellular handoff, spec
- * §1.4/§1.5) — verified by reading `TunnelService`, not assumed:
+ * M8.5 spec §1.4/M8.5 spec §1.5) — verified by reading `TunnelService`, not assumed:
  *
  * - `TunnelService.restartCoreRetainingTun` / `attachRetainedTun` /
  *   `attachTun` publish `Connecting(AllocatingPort)` and
@@ -40,7 +40,7 @@ import space.getsub.core.model.ConnectionState
  * final `Connected` (rule 2, since its `sinceEpochMillis` always differs from
  * the one before it) — exactly the tiles-blank-on-a-network-handoff regression
  * a fix here must not introduce, even though `TrafficSampler`'s own running
- * total is never reset or recreated across that same restart (spec §1.4: "the
+ * total is never reset or recreated across that same restart (M8.5 spec §1.4: "the
  * session total continues rather than resetting").
  *
  * **What actually identifies a session boundary.** `TunnelService.reconcile`
@@ -90,7 +90,7 @@ internal class TrafficSessionTracker {
      * [ConnectionState] to route through [observe] itself.
      *
      * [TunnelClient.unbind] and its `onServiceDisconnected` clear `_traffic`
-     * unconditionally (§5.5: this client's idea of the session is worthless
+     * unconditionally (ARCHITECTURE.md §5.5: this client's idea of the session is worthless
      * once it can no longer hear from it) without necessarily having a fresh
      * [ConnectionState] on hand to `observe` — `unbind()` does not touch
      * [TunnelClient.state] at all. Calling this keeps the tracker's notion of

@@ -15,7 +15,7 @@ import java.io.File
  * files and swallows a config-quoting exception, and an inline lambda inside an `internal
  * object`'s `@Provides` function cannot be called from a test at all.
  *
- * Cache, not internal storage, unlike [TunnelService]'s own `writeConfig` (§5.6's reasoning
+ * Cache, not internal storage, unlike [TunnelService]'s own `writeConfig` (ARCHITECTURE.md §5.6's reasoning
  * there: a *running* tunnel's config sits on disk for the whole session). This file is deleted
  * in the `finally` block below before this function returns on every path — success, refusal, or
  * any other throwable — so the exposure window is one native call, not a session.
@@ -42,7 +42,7 @@ internal suspend fun validateOnCore(
         true
     } catch (e: XrayException) {
         // Deliberately swallowed, not logged: this is the real core refusal, whose message can
-        // quote the config back (§5.6, XrayException's own KDoc).
+        // quote the config back (ARCHITECTURE.md §5.6, XrayException's own KDoc).
         false
     } finally {
         file.delete()

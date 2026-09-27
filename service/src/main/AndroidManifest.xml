@@ -16,19 +16,19 @@
     -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- §14.1: VPN apps are an enumerated criterion for systemExempted. A
+    <!-- ARCHITECTURE.md §14.1: VPN apps are an enumerated criterion for systemExempted. A
          non-qualifying type throws ForegroundServiceTypeNotAllowedException at
          runtime, not at build time. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Spec §4.2: boot autostart, gated behind a user setting that defaults off.
+    <!-- M8 spec §4.2: boot autostart, gated behind a user setting that defaults off.
          Redundant when always-on VPN is enabled, since the platform starts the
          service itself there; this serves the user who wants boot start without
          granting always-on. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application>
-        <!-- §3: :bg isolates the Go runtime's heap and keeps a native crash in
+        <!-- ARCHITECTURE.md §3: :bg isolates the Go runtime's heap and keeps a native crash in
              tun2socks from taking the UI with it.
 
              tools:ignore="ForegroundServicePermission" — lint asserts that

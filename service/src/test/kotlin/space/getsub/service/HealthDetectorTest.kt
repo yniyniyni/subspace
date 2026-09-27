@@ -40,7 +40,7 @@ class HealthDetectorTest {
     }
 
     // A TCP flow to a dead server: the app sends a ClientHello (~600 B) plus ACKs;
-    // lwIP answers with SYN-ACK/ACK/RST, all 40–60 B (spec §4.3's source reading).
+    // lwIP answers with SYN-ACK/ACK/RST, all 40–60 B (M8.5 spec §4.3's source reading).
     private val deadTcpUp = 700L to 3L
     private val deadTcpDown = 150L to 3L
 

@@ -16,7 +16,7 @@ package space.getsub.service;
  *
  * `outcome` is a LatencyOutcome ordinal, never a message string: libXray's ping
  * errors quote the config that produced them, which carries the address, UUID
- * and REALITY key (§5.6). An ordinal is safe here for the reason
+ * and REALITY key (ARCHITECTURE.md §5.6). An ordinal is safe here for the reason
  * ConnectionStateParcel's already are — this never outlives a single bind, so
  * reordering the enum cannot corrupt anything persisted.
  */

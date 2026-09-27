@@ -11,7 +11,7 @@ package space.getsub.service
 internal enum class BootAction { Connect, DoNothing }
 
 /**
- * Spec §4.2.
+ * M8 spec §4.2.
  *
  * Note what is **not** a parameter: whether the session was wanted before the
  * device went down. Boot autostart connects on every boot when enabled — the

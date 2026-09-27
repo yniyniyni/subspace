@@ -19,7 +19,7 @@ import space.getsub.core.model.failure
  * outcome, suspended to persist it, and *then* mutated service lifecycle state — so a
  * teardown or a newer start that ran during the suspension left a stale coroutine to resume
  * and reassert lifecycle it no longer owned. The connected path could restore the connected
- * foreground notification after teardown had removed it (§5.5's lying UI). The failed path
+ * foreground notification after teardown had removed it (ARCHITECTURE.md §5.5's lying UI). The failed path
  * could remove a *newer* connection's foreground state, or `stopSelf()` its service.
  *
  * That is not reachable through `TunnelService` in a JVM test — it is a `VpnService`, and

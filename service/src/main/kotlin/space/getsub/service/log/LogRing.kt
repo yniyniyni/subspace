@@ -7,7 +7,7 @@ import java.io.File
 /**
  * A bounded, rotating on-disk line ring.
  *
- * Spec §3.3: the ring is on disk rather than in memory because W7's entire
+ * M8.5 spec §3.3: the ring is on disk rather than in memory because W7's entire
  * diagnostic plan depends on reading the log *after* an `am force-stop`, which
  * takes any in-memory buffer with it.
  *
@@ -31,7 +31,7 @@ import java.io.File
  * class (`:bg`'s [space.getsub.service.log.LogCapture]); the viewer reads the
  * same two files back through `:core:data`'s `LogRepository`, a separate
  * implementation rather than a call into this one — `:core:data` cannot
- * depend on `:service` (spec §3.4). `LogRepository`'s own KDoc names the
+ * depend on `:service` (M8.5 spec §3.4). `LogRepository`'s own KDoc names the
  * duplication; keep the two in step if [current]/[previous]'s filenames ever
  * change. A prior revision carried `readAll`/`clear`/`totalBytes` accessors
  * here for tests to use as a window into that same state — genuinely dead in
@@ -67,7 +67,7 @@ internal class LogRing(
 
     internal companion object {
         /**
-         * Spec §3.3. About an hour of a talkative session, and small enough that
+         * M8.5 spec §3.3. About an hour of a talkative session, and small enough that
          * a share is sendable over a chat app. A guess in the same sense
          * [space.getsub.service.TrafficSamplerLoop]'s interval is — spec §9 row 8
          * is what settles it.

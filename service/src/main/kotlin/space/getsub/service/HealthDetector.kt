@@ -110,10 +110,10 @@ internal class HealthDetector(
     ): Boolean = packets > 0 && bytes > packets * controlPacketCeilingBytes
 
     internal companion object {
-        /** M8.5 spec §4.3's guess, tuned only by §9 row 6. */
+        /** M8.5 spec §4.3's guess, tuned only by M8.5 spec §9 row 6 row 6. */
         const val STALL_WINDOW_MILLIS: Long = 20_000L
 
-        /** An IPv6 TCP control packet (60 B) plus options. Tuned only by §9 row 6. */
+        /** An IPv6 TCP control packet (60 B) plus options. Tuned only by M8.5 spec §9 row 6 row 6. */
         const val CONTROL_PACKET_CEILING_BYTES: Long = 80L
     }
 }

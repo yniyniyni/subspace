@@ -33,7 +33,7 @@ package space.getsub.service.log
  *
  * **What is actually tested, and what is not.** `LogCaptureLifecycleTest`
  * asserts: every [TeardownStep] the enum declares appears exactly once (a
- * dropped step is a silent fd/session leak — §5.4 — and a duplicated step
+ * dropped step is a silent fd/session leak — ARCHITECTURE.md §5.4 — and a duplicated step
  * would run twice, which is unsafe for [CloseTun] even though
  * `Tun2Socks.stop()` tolerates it); [StopLogCapture] is last, after every
  * phase that logs; [StopCore], [StopTun2Socks] and [CloseTun] each precede
@@ -61,14 +61,14 @@ internal enum class TeardownStep {
     ClearNotification,
 
     /**
-     * `trafficLoop.stop()`. Spec §1.5: stopped after the state that ends the
+     * `trafficLoop.stop()`. M8.5 spec §1.5: stopped after the state that ends the
      * session has published, and before the capture that must outlive it —
      * immediately ahead of [StopLogCapture], not at any other position.
      */
     StopTrafficSampler,
 
     /**
-     * Last, always. Spec §3.3: the capture must outlive every phase that logs,
+     * Last, always. M8.5 spec §3.3: the capture must outlive every phase that logs,
      * because M8's phase instrumentation (`705f4ab`) is W7's only evidence and a
      * capture that stops first records the teardown right up to the point where
      * it becomes interesting.

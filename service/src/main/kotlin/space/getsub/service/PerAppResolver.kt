@@ -78,7 +78,7 @@ internal class PerAppResolver(
  *
  * The variants are exhaustive and non-overlapping **by construction**, which is
  * the point: a builder holds allowed applications or disallowed ones, never both
- * (spec §2.2). Making that a type rather than a discipline means the mistake
+ * (M5.5 spec §2.2). Making that a type rather than a discipline means the mistake
  * cannot be made in `establishTun()`, where it would surface only as an
  * `UnsupportedOperationException` on a device.
  */
@@ -132,7 +132,7 @@ internal data class PackageApplication(
      * (`android/net/VpnService.java`, ~806-817), so a run in which every add
      * threw leaves that list null — and a null list means no per-app filtering
      * at all, i.e. every installed app tunnelled. The allow-list arm
-     * deliberately calls no `addDisallowedApplication` (spec §2.2), so nothing
+     * deliberately calls no `addDisallowedApplication` (M5.5 spec §2.2), so nothing
      * else would exclude us either: the user's "only these apps" would silently
      * invert into "everything, including ourselves" — §8's rule broken and
      * §5.1's loop built, reported as one `Log.w` with a count.
@@ -149,7 +149,7 @@ internal data class PackageApplication(
  *
  * @param add false when the package is no longer installed. Never throws — the
  *   caller swallows `NameNotFoundException`, because the only thing it carries
- *   is the package name and §5.6 forbids logging that.
+ *   is the package name and ARCHITECTURE.md §5.6 forbids logging that.
  */
 internal fun applyEach(
     packages: Set<String>,

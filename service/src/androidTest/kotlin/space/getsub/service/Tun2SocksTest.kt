@@ -42,7 +42,7 @@ class Tun2SocksTest {
 
     @Test
     fun stopBindsAndIsSafeWhenNothingIsRunning() {
-        // Proves nativeStop resolves, and covers §5.4's easy half: teardown can
+        // Proves nativeStop resolves, and covers ARCHITECTURE.md §5.4's easy half: teardown can
         // fire when the tunnel is already down and must not crash :bg.
         Tun2Socks.stop()
         assertFalse(Tun2Socks.isRunning)
@@ -63,14 +63,14 @@ class Tun2SocksTest {
 
     @Test
     fun concurrentStopsDoNotHangOrDoubleJoin() {
-        // Regression test for a Critical found in review. §5.4's three teardown
+        // Regression test for a Critical found in review. ARCHITECTURE.md §5.4's three teardown
         // paths — disconnect, onRevoke, onDestroy — are not serialised. An
         // earlier revision dropped the mutex around quit()+join, so two stops
         // could both call hev_socks5_tunnel_quit(); the second busy-waits forever
         // on an event fd the first already closed, and both join the same tid.
         //
         // If that regresses, this test hangs rather than failing — which is
-        // itself the signal, since a wedged teardown is the §5.4 failure mode.
+        // itself the signal, since a wedged teardown is the ARCHITECTURE.md §5.4 failure mode.
         val threads =
             (1..4).map {
                 Thread {

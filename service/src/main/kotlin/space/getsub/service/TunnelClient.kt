@@ -40,7 +40,7 @@ internal const val TEST_CONNECT_RECEIVED = 1
  * process death this side's idea of the world is worthless — and an app showing
  * "Disconnected" while the tunnel is up is worse than one that crashes.
  *
- * A `@Singleton` here is safe precisely because it lives in `:main` only. §3's
+ * A `@Singleton` here is safe precisely because it lives in `:main` only. ARCHITECTURE.md §3's
  * warning is about expecting `:bg` to see it — it will not; that is what the
  * binder is for.
  */
@@ -70,7 +70,7 @@ public class TunnelClient private constructor(
     /**
      * Null until the current session reports its first sample, and null again
      * once that session ends — the same going-stale cache [state] documents
-     * (§5.5): a traffic total outliving its session is that bug with a
+     * (ARCHITECTURE.md §5.5): a traffic total outliving its session is that bug with a
      * different field.
      */
     public val traffic: StateFlow<TrafficSample?> = _traffic.asStateFlow()
@@ -80,14 +80,14 @@ public class TunnelClient private constructor(
      *
      * [state] is a **cache**: it is a plain field, so once nothing calls [unbind]'s
      * `_state.value = ...` again, it holds whatever it last held forever — including across
-     * an app backgrounding that outlives the tunnel itself (§9's `onRevoke()`, `:bg` killed).
+     * an app backgrounding that outlives the tunnel itself (ARCHITECTURE.md §9's `onRevoke()`, `:bg` killed).
      * Neither of those can notify a client that has unregistered its callback, so [state] alone
      * cannot answer "is this still true"; only [isBound] can, and only by admitting when it
      * cannot answer at all. It stays false while [Context.bindService] has merely accepted a
      * pending request and becomes true only after [ServiceConnection.onServiceConnected]
      * registers [callback] and re-reads the real service state. Otherwise the foreground refresh
      * that starts alongside an activity bind could consume the previous session's stale proxy
-     * port before the asynchronous handshake replaces it. This is §5.5's "declining to guess"
+     * port before the asynchronous handshake replaces it. This is ARCHITECTURE.md §5.5's "declining to guess"
      * applied to a cache that has gone stale rather than one that was never populated.
      *
      * `@Volatile` because [bind]/[unbind] run on the main thread (Activity lifecycle callbacks)
@@ -131,7 +131,7 @@ public class TunnelClient private constructor(
                 val svc = ITunnelService.Stub.asInterface(binder)
                 try {
                     svc.registerCallback(callback)
-                    // §5.5: re-read the real state on every bind.
+                    // ARCHITECTURE.md §5.5: re-read the real state on every bind.
                     val refreshed = svc.state.toState()
                     // Resyncs the D4 tracker to the freshly re-read state —
                     // this bypasses onStateChanged, so without this the
@@ -161,7 +161,7 @@ public class TunnelClient private constructor(
                 service = null
                 // Deliberately NOT Disconnected: :bg died, which says nothing
                 // about whether the tunnel is down. Claiming Disconnected here
-                // would be §5.5's lying UI. Rebinding re-reads the truth.
+                // would be ARCHITECTURE.md §5.5's lying UI. Rebinding re-reads the truth.
                 _state.value = ConnectionState.Disconnecting
                 // :bg died — its own session is what [traffic] tracked, and
                 // that session's fate is now unknown. A stale total surviving
@@ -203,7 +203,7 @@ public class TunnelClient private constructor(
     }
 
     /**
-     * §9: started, not just bound. A bound-only service dies with the last
+     * ARCHITECTURE.md §9: started, not just bound. A bound-only service dies with the last
      * unbind — which is the UI going to background — taking the tunnel with
      * it. `TunnelService` calls `startForeground` immediately on connect so
      * the start window the platform allows is never missed.

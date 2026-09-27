@@ -150,7 +150,7 @@ internal fun interface LineSink {
 /**
  * Joins [LogcatReader] → [redactLine] → [LogRing].
  *
- * **Spec §3.2: redaction happens here, at capture, not at display.** The reason
+ * **M8.5 spec §3.2: redaction happens here, at capture, not at display.** The reason
  * is at-rest exposure rather than display. A log file in `filesDir` carrying
  * server addresses, UUIDs and REALITY keys is a secret on disk that outlives
  * the session, survives into a device backup, and is readable by anyone with
@@ -224,7 +224,7 @@ internal class LogCapture(
     private val lock = Any()
 
     /**
-     * Spec §3.3: capture is tied to session lifetime — started when the service
+     * M8.5 spec §3.3: capture is tied to session lifetime — started when the service
      * enters foreground, stopped in teardown, and stopped **last**, after the
      * teardown phases are logged.
      *
@@ -233,7 +233,7 @@ internal class LogCapture(
      * but [stop] is also reached from `onRevoke()` and `onDestroy()`
      * (`TunnelService.kt`), both of which call it **directly**, bypassing the
      * coordinator — the same fact `tun2socks_jni.c`'s own locking-contract
-     * comment cites: "§5.4 says disconnect, onRevoke, and onDestroy are not
+     * comment cites: "ARCHITECTURE.md §5.4 says disconnect, onRevoke, and onDestroy are not
      * serialised with each other". Without a lock here, a `stop()` and a
      * `start()` can interleave as `running = false` / read `reader` (A) /
      * `if (running) return` sees false and proceeds (B) / `running = true`,
@@ -381,7 +381,7 @@ internal class LogCapture(
 
     /**
      * The pipeline itself, synchronous and without a thread, so a unit test can
-     * assert the §5.6 guarantee without spawning anything.
+     * assert the ARCHITECTURE.md §5.6 guarantee without spawning anything.
      */
     internal fun captureOnce(lines: Sequence<String>) {
         for (line in lines) {

@@ -3,11 +3,11 @@
 package space.getsub.service
 
 /**
- * The retry loop's attempt counter (spec §2.3/§2.4).
+ * The retry loop's attempt counter (M8 spec §2.3/M8 spec §2.4).
  *
  * Extracted into its own small type rather than a raw field on
  * [TunnelService], for the same reason [ReconnectBackoff] and `reconcile`
- * are: `TunnelService` is a `VpnService` and cannot run on the JVM (§11), so
+ * are: `TunnelService` is a `VpnService` and cannot run on the JVM (ARCHITECTURE.md §11), so
  * anything that stays a private field there is untestable. Whether a
  * successful connect resets this count is exactly the kind of thing a
  * reviewer catches by reading and a device run never exercises twice in one
@@ -53,7 +53,7 @@ internal class ReconnectAttemptCounter {
     }
 
     /**
-     * Spec §2.3/§2.4: a successful connect, an explicit disconnect or revoke,
+     * M8 spec §2.3/M8 spec §2.4: a successful connect, an explicit disconnect or revoke,
      * or a terminal failure all start the *next* retry sequence counting from
      * zero. A counter that never resets turns the second outage of a
      * long-lived session into an immediate give-up, since it would inherit

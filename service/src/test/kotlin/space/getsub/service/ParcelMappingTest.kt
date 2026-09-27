@@ -158,7 +158,7 @@ class ParcelMappingTest {
     /**
      * The more dangerous sibling. Reading an unknown security kind as
      * [Security.None] strips REALITY and produces a connection in the clear
-     * that looks to the user exactly like a dead server — §5.1's symptom
+     * that looks to the user exactly like a dead server — ARCHITECTURE.md §5.1's symptom
      * shape, with the user's traffic actually exposed.
      */
     @Test
@@ -202,7 +202,7 @@ class ParcelMappingTest {
 
     @Test
     fun `profile toString does not leak secrets`() {
-        // §5.6. A data class would have printed the uuid and REALITY key, and
+        // ARCHITECTURE.md §5.6. A data class would have printed the uuid and REALITY key, and
         // toString lands in crash output without anyone choosing to log it.
         val rendered = ProfileParcel.from(profile).toString()
         rendered shouldNotContain "70cc48c5"
@@ -236,7 +236,7 @@ class ParcelMappingTest {
     fun `failure detail is redacted crossing the boundary`() {
         // Redaction happens on both sides. It is idempotent, so the second pass
         // is free — and it means a receiver cannot be handed a raw address even
-        // if the sender is ever changed (§5.6).
+        // if the sender is ever changed (ARCHITECTURE.md §5.6).
         val state = failure(FailureReason.CoreStartFailed, "dial tcp 203.0.113.44:443 refused")
         ConnectionStateParcel.from(state).toState().let { it as ConnectionState.Failed }
             .detail shouldNotContain "203.0.113.44"
@@ -297,7 +297,7 @@ class ParcelMappingTest {
 
     /**
      * The discriminant is what tells the two sides apart. A collision silently turns
-     * one state into another across the binder — §5.5's "an app showing Disconnected
+     * one state into another across the binder — ARCHITECTURE.md §5.5's "an app showing Disconnected
      * while the tunnel is up is worse than one that crashes", by mis-numbering.
      */
     @Test

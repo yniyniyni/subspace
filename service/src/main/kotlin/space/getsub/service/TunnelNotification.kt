@@ -11,7 +11,7 @@ import android.content.Intent
 
 /**
  * The ongoing notification a foreground service must show for the whole life of
- * the tunnel (§9).
+ * the tunnel (ARCHITECTURE.md §9).
  */
 internal object TunnelNotification {
     const val CHANNEL_ID = "tunnel"
@@ -30,7 +30,7 @@ internal object TunnelNotification {
     }
 
     /**
-     * §5.6: [contentText] comes from `strings.xml` only. Never the profile name,
+     * ARCHITECTURE.md §5.6: [contentText] comes from `strings.xml` only. Never the profile name,
      * which is user-supplied and often the server's hostname, and never the
      * address.
      */
@@ -52,7 +52,7 @@ internal object TunnelNotification {
     }
 
     /**
-     * Spec §6.3: the way out of a wedged fail-closed session.
+     * M8 spec §6.3: the way out of a wedged fail-closed session.
      *
      * An explicit intent to this service rather than the binder, because a
      * notification tap has no bound client — `:main` may not even be running.

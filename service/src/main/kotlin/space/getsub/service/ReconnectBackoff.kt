@@ -12,11 +12,11 @@ internal const val BACKOFF_CAP_MILLIS: Long = 60_000L
 private const val MAX_DOUBLINGS: Int = 6
 
 /**
- * How long to wait before the next reconnect attempt (spec §2.4).
+ * How long to wait before the next reconnect attempt (M8 spec §2.4).
  *
  * **This says nothing about whether to schedule at all.** When no network is
  * available the service schedules nothing and waits on the `NetworkCallback`
- * instead — a retry timer running in Doze is how §11's six-hour screen-off row
+ * instead — a retry timer running in Doze is how ARCHITECTURE.md §11's six-hour screen-off row
  * fails. `reconcile` enforces that; this only answers "how long".
  */
 internal object ReconnectBackoff {

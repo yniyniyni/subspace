@@ -12,10 +12,10 @@ import space.getsub.core.model.TrafficSample
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * The timer half of the sampler (spec §1.5).
+ * The timer half of the sampler (M8.5 spec §1.5).
  *
  * The sampler lives in `:bg` and runs whether or not a UI is bound, because
- * liveness (spec §4.3, Part 3) must detect an unreachable server with the app
+ * liveness (M8.5 spec §4.3, Part 3) must detect an unreachable server with the app
  * backgrounded — `ConnectionState` is the service's property under
  * ARCHITECTURE.md §5.5. The UI is a second consumer of samples that already
  * exist, not the reason they are taken.
@@ -97,7 +97,7 @@ internal class TrafficSamplerLoop(
      * reached from `attachTun`/`attachRetainedTun`; [stop] is reached from
      * `TunnelService.stopTunnel`, which `onRevoke()` and `onDestroy()` call
      * **directly**, bypassing the command coordinator — the same fact
-     * `tun2socks_jni.c`'s locking-contract comment cites: "§5.4 says
+     * `tun2socks_jni.c`'s locking-contract comment cites: "ARCHITECTURE.md §5.4 says
      * disconnect, onRevoke, and onDestroy are not serialised with each
      * other". Unsynchronized, a `stop()` reading [job] into a local and a
      * concurrent `start()` racing `job?.isActive`/`job = …` can leave the new
@@ -218,7 +218,7 @@ internal class TrafficSamplerLoop(
 
     internal companion object {
         /**
-         * Spec §1.5: a guess at where display smoothness and wakeup cost
+         * M8.5 spec §1.5: a guess at where display smoothness and wakeup cost
          * balance, named rather than inlined so spec §9 row 5 has one place to
          * change. Do not tune it by reasoning.
          */

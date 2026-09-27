@@ -68,7 +68,7 @@ public data class ConnectionStateParcel(
      * Failures route through [failure], so [detail] is redacted on this side of
      * the boundary too. Redaction is idempotent, so the second pass costs
      * nothing — and it means a caller cannot receive an unredacted string even
-     * if the sending process is ever compromised or changed (§5.6).
+     * if the sending process is ever compromised or changed (ARCHITECTURE.md §5.6).
      *
      * An unknown [kind] degrades to [ConnectionState.Disconnected] rather than
      * throwing: a state the UI cannot name must not take down the process that

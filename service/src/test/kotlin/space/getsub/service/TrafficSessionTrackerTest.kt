@@ -16,7 +16,7 @@ import space.getsub.core.model.failure
  * `onServiceDisconnected` — never in `onStateChanged` — so an ordinary
  * disconnect while the UI stayed bound left the previous session's sample
  * sitting in the flow for the next session's first tick to compose against
- * (spec §9 row 12: an empty breakdown section under a dangling header,
+ * (ARCHITECTURE.md §9 row 12: an empty breakdown section under a dangling header,
  * because `BreakdownSection`'s `everSeenRows` latch saw non-empty `perTag`
  * rows that belonged to the session before).
  *

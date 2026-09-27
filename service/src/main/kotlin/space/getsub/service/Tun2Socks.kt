@@ -44,10 +44,10 @@ internal object Tun2Socks {
     ): Boolean = nativeStart(config, tunFd)
 
     /**
-     * Idempotent, and safe under the concurrent teardown §5.4 describes.
+     * Idempotent, and safe under the concurrent teardown ARCHITECTURE.md §5.4 describes.
      *
      * If `System.loadLibrary` failed, touching this object throws
-     *    `NoClassDefFoundError`, including from `onDestroy`. §5.4 requires
+     *    `NoClassDefFoundError`, including from `onDestroy`. ARCHITECTURE.md §5.4 requires
      *    teardown to finish anyway, so guard the call there.
      */
     fun stop(): Unit = nativeStop()
@@ -59,12 +59,12 @@ internal object Tun2Socks {
      * A raw counter reading, or null when no tunnel is running.
      *
      * **This is the boundary where hev's `tx`/`rx` become uplink/downlink**
-     * (spec §1.2) — `tx` is a read *from* the TUN and is therefore uplink. No
+     * (M8.5 spec §1.2) — `tx` is a read *from* the TUN and is therefore uplink. No
      * caller above this line may use `tx`/`rx` again.
      *
      * The values are cumulative since tunnel start and wrap at 4 GiB on 32-bit
      * ABIs, so no caller may render them directly: `TrafficSampler` turns them
-     * into wrap-safe deltas (spec §1.3).
+     * into wrap-safe deltas (M8.5 spec §1.3).
      */
     fun stats(): TunnelCounters? =
         nativeStats()?.let { v ->
@@ -99,7 +99,7 @@ internal data class TunnelCounters(
  * `tunnel.name`, `ipv4`, and `ipv6` are deliberately absent: the interface
  * already exists — we hand the tunnel an fd that `VpnService.Builder` created and
  * configured — so letting this file restate the addressing would be a second
- * source of truth for something §5.2 depends on.
+ * source of truth for something ARCHITECTURE.md §5.2 depends on.
  */
 internal fun tun2socksConfig(
     socksPort: Int,

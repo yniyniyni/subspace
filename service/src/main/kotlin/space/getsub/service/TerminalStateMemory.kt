@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicReference
  * Remembers the last terminal [ConnectionState.Failed] for as long as the `:bg`
  * process lives, so it outlives the `TunnelService` instance that published it.
  *
- * ## The bug this exists to close (§11 row 7 / device check W2)
+ * ## The bug this exists to close (ARCHITECTURE.md §11 row 7 / device check W2)
  *
  * `TunnelService.currentState` is a plain field seeded with
  * [ConnectionState.Disconnected]. When another VPN app takes the route,

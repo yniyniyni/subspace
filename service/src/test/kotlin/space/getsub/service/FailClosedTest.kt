@@ -7,7 +7,7 @@ import org.junit.Test
 import space.getsub.core.model.Retryability
 
 /**
- * Spec §6. Retaining the TUN with nothing servicing it blackholes traffic by
+ * M8 spec §6. Retaining the TUN with nothing servicing it blackholes traffic by
  * construction — no blocking routes, no null-route trickery.
  */
 class FailClosedTest {
@@ -38,7 +38,7 @@ class FailClosedTest {
         shouldRetainTun(failClosed = true, intentWanted = true, retryability = Retryability.Terminal) shouldBe false
     }
 
-    /** No intent, no hold: an explicit disconnect must leave no TUN behind (§11). */
+    /** No intent, no hold: an explicit disconnect must leave no TUN behind (ARCHITECTURE.md §11). */
     @Test
     fun anUnwantedSessionNeverHoldsTheTun() {
         shouldRetainTun(failClosed = true, intentWanted = false, retryability = Retryability.Retryable) shouldBe false

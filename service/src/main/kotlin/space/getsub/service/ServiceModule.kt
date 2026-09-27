@@ -41,7 +41,7 @@ internal object ServiceModule {
     /**
      * `@Singleton` for the same reason as the gate above, and it is equally load-bearing:
      * the terminal state has to survive the `TunnelService` instance that published it,
-     * because on device (§11 row 7) the instance is replaced while the process lives on.
+     * because on device (ARCHITECTURE.md §11 row 7) the instance is replaced while the process lives on.
      * One per instance would reproduce exactly the bug [TerminalStateMemory] closes.
      */
     @Provides

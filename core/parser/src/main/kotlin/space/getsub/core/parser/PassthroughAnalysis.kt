@@ -15,7 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 /**
  * Why a stored config cannot run as written.
  *
- * A closed vocabulary rather than a message: §5.6 forbids storing anything
+ * A closed vocabulary rather than a message: ARCHITECTURE.md §5.6 forbids storing anything
  * derived from config contents, and §10.4 wants the reason to be actionable
  * rather than descriptive. The UI maps each member to a string resource.
  *
@@ -165,7 +165,7 @@ public enum class PassthroughAdvisory {
 /**
  * What a stored raw config is, structurally.
  *
- * §5.6: [outboundTags] are routing identifiers, not credentials, and are what
+ * ARCHITECTURE.md §5.6: [outboundTags] are routing identifiers, not credentials, and are what
  * makes an override blocker explicable — but the generated `toString()` would
  * otherwise be the one place a config's shape reaches a log line, so it is
  * narrowed by hand.
@@ -200,7 +200,7 @@ public data class PassthroughAnalysis(
  * exemption, which is a statement about the document's shape rather than about
  * whether this app can address the balancer.
  *
- * §5.6: [selector] entries are outbound tag prefixes, which are routing
+ * ARCHITECTURE.md §5.6: [selector] entries are outbound tag prefixes, which are routing
  * identifiers rather than credentials — but see [PassthroughAnalysis.toString].
  */
 public data class BalancerSpec(
@@ -227,7 +227,7 @@ public data class BalancerSpec(
 /**
  * The keys a rule may carry and still match everything.
  *
- * An **allow-list**, and the direction matters (design §3.3). A deny-list would
+ * An **allow-list**, and the direction matters (design M7.5 spec §3.3). A deny-list would
  * treat an unrecognised selective key as non-narrowing, so a future or
  * vendor-specific matcher would silently make a narrow rule look like a
  * catch-all and resolve the wrong balancer. This way an unknown key stops the
@@ -239,7 +239,7 @@ public data class BalancerSpec(
  * the most common catch-all shape there is.
  *
  * It is the **only** key on the list whose *value* is also checked, by
- * [coversEveryNetwork]: design §3.3 admits `network` on the strength of
+ * [coversEveryNetwork]: design M7.5 spec §3.3 admits `network` on the strength of
  * `"tcp,udp"` specifically, and `network: "tcp"` says nothing at all about where
  * UDP should go.
  */
@@ -252,7 +252,7 @@ private val TUN_NETWORKS = setOf("tcp", "udp")
  * Whether this rule's `network` value, if it has one, still leaves the rule
  * matching everything a TUN carries.
  *
- * Design §3.3 puts `network` on [UNCONDITIONED_RULE_KEYS] because `"tcp,udp"` is
+ * Design M7.5 spec §3.3 puts `network` on [UNCONDITIONED_RULE_KEYS] because `"tcp,udp"` is
  * the complete set — the justification is about that value, not about the key.
  * A lone `network: "tcp"` is a genuine condition: it expresses no default for
  * UDP, so reading it as the config naming its catch-all balancer would resolve

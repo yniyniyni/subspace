@@ -25,8 +25,8 @@ public sealed interface SyncResult {
      *   reconciliation; the flag clears the moment the user switches to a different active
      *   profile and the row is naturally deleted or re-matched on the next sync.
      * @property rejectedDirectives how many directives failed validation. The
-     *   keys are logged; the values never are (§5.6).
-     * @property duplicatesDropped spec §4.3's documented, bounded limitation: how many parsed
+     *   keys are logged; the values never are (ARCHITECTURE.md §5.6).
+     * @property duplicatesDropped M4 spec §4.3's documented, bounded limitation: how many parsed
      *   servers were not written because their outbound was byte-identical to another server's
      *   (under a different name) already claiming the same identity slot this sync. Zero in the
      *   overwhelming majority of syncs — a provider serving a genuine duplicate is rare, but
@@ -78,7 +78,7 @@ public sealed interface SyncResult {
      * rather than the process crashing on an uncaught `SQLiteConstraintException`.
      *
      * @property detail a closed, redacted description — never the exception message, which can
-     *   quote this table's column values (§5.6, `ProfileRepository.move`'s KDoc explains the
+     *   quote this table's column values (ARCHITECTURE.md §5.6, `ProfileRepository.move`'s KDoc explains the
      *   same hazard for the same exception type).
      */
     public data class ReconciliationConflict(val detail: String) : SyncResult

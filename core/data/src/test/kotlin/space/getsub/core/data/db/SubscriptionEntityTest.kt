@@ -7,7 +7,7 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
 /**
- * Pins §5.6: [SubscriptionEntity.url], [SubscriptionDirectiveEntity.value] and
+ * Pins ARCHITECTURE.md §5.6: [SubscriptionEntity.url], [SubscriptionDirectiveEntity.value] and
  * [SubscriptionOverrideEntity.value] are all potential secrets — the plan's own
  * words are "must not reach a log, an exception message, or a generated
  * `toString()`" — and must not reach a generated `toString()`.

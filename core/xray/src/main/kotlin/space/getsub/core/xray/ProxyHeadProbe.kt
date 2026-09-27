@@ -34,14 +34,14 @@ private const val PING_DNS = "1.1.1.1"
  * with a sentinel delay in `data`, and [LibXrayInvoke] discards `data` on
  * failure precisely so `10000` can never be rendered as a measurement (§10.1).
  * Recovering the distinction would mean parsing an error string that quotes the
- * config (§5.6), which is a worse trade than losing it.
+ * config (ARCHITECTURE.md §5.6), which is a worse trade than losing it.
  */
 public class ProxyHeadProbe(
     private val api: XrayPingApi,
     private val cacheDir: File,
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
-    // The catches below are deliberate swallows, for §5.6: an XrayException's
+    // The catches below are deliberate swallows, for ARCHITECTURE.md §5.6: an XrayException's
     // message quotes the config that produced it, which carries the address,
     // UUID and REALITY key. The failure becomes a typed outcome instead.
     @Suppress("SwallowedException")
@@ -73,7 +73,7 @@ public class ProxyHeadProbe(
                 // full, quota, I/O error) throws with the file already created, and
                 // assigning afterwards left `file` null so the `finally` deleted
                 // nothing — stranding a partially written config carrying the
-                // address, UUID and REALITY key (§5.6).
+                // address, UUID and REALITY key (ARCHITECTURE.md §5.6).
                 file = target
                 target.writeText(json)
                 LatencyResult.ok(
@@ -89,7 +89,7 @@ public class ProxyHeadProbe(
             } catch (e: IOException) {
                 LatencyResult.failed(LatencyOutcome.UNREACHABLE)
             } finally {
-                // §5.6: this file holds the address, UUID and REALITY key. It goes
+                // ARCHITECTURE.md §5.6: this file holds the address, UUID and REALITY key. It goes
                 // away on every path, including cancellation unwinding through here.
                 file?.delete()
             }

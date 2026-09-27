@@ -6,7 +6,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.Test
 
 /**
- * Spec §2.2. These are invariants, not samples: each grouping is a decision
+ * M8 spec §2.2. These are invariants, not samples: each grouping is a decision
  * about whether the app retries forever, and getting one wrong produces either
  * a spinner over a config the core has already refused, or a tunnel that gives
  * up on a transient failure it would have recovered from.
@@ -56,7 +56,7 @@ class RetryabilityTest {
     }
 
     /**
-     * Spec §2.3: `establish()` returns the same null for resource pressure
+     * M8 spec §2.3: `establish()` returns the same null for resource pressure
      * (retryable) and for vanished VPN consent (terminal), and nothing at that
      * call site distinguishes them. Capped rather than unbounded so a revoked
      * consent cannot spin forever.

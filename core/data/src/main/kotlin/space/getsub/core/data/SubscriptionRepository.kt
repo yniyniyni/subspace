@@ -26,7 +26,7 @@ private const val GROUP_SOURCE_SUBSCRIPTION = "SUBSCRIPTION"
 /**
  * One stored subscription, mapped out for consumers outside `:core:data`.
  *
- * [url] is a secret (§5.6): never log it, and redact it for display.
+ * [url] is a secret (ARCHITECTURE.md §5.6): never log it, and redact it for display.
  */
 public data class StoredSubscription(
     val id: Long,
@@ -46,7 +46,7 @@ public data class StoredSubscription(
      */
     val createdAt: Long = 0L,
 ) {
-    // §5.6: url is a secret, same treatment as SubscriptionEntity.toString() —
+    // ARCHITECTURE.md §5.6: url is a secret, same treatment as SubscriptionEntity.toString() —
     // this type is what crosses out of :core:data, so the redaction has to
     // hold here too, not just on the row it was mapped from.
     override fun toString(): String =
@@ -85,7 +85,7 @@ public data class EffectiveValue(
     val providerValue: String?,
     val isPinned: Boolean,
 ) {
-    // §5.6: value/providerValue carry the same DirectiveRegistry vocabulary
+    // ARCHITECTURE.md §5.6: value/providerValue carry the same DirectiveRegistry vocabulary
     // SubscriptionDirectiveEntity.toString() redacts — DirectiveKind.Url and
     // the socks/http auth password keys mean a validated, in-vocabulary value
     // can still be a URL or a plaintext credential. key stays visible, same

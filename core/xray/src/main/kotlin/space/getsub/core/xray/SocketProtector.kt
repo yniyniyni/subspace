@@ -15,8 +15,8 @@ package space.getsub.core.xray
  *
  * **Returning false does not stop anything.** libXray's Go wrapper discards this
  * value (see `docs/agent/research/libxray-api.md` §2), so a failed protect is
- * invisible to the core and surfaces only as §5.1's symptom. The implementation
- * must log the failure itself — redacted, §5.6 — or nothing will.
+ * invisible to the core and surfaces only as ARCHITECTURE.md §5.1's symptom. The implementation
+ * must log the failure itself — redacted, ARCHITECTURE.md §5.6 — or nothing will.
  *
  * §10.2: this looks like boilerplate and is load-bearing. Do not simplify it.
  */

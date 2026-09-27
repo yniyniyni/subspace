@@ -84,7 +84,7 @@ private val fileChannelForcer =
  * Files for a new generation are complete and validated before Task 8 publishes
  * its number with [RoutingRepository.commitGeneration]. The old generation then
  * remains readable until [sweepExcept] runs, so a failed or interrupted update
- * cannot leave routing rules pointing at partial files (spec §7.4).
+ * cannot leave routing rules pointing at partial files (M6 spec §7.4).
  */
 @Singleton
 @Suppress("TooManyFunctions") // Symlink-safe deletion helpers stay at this filesystem boundary.

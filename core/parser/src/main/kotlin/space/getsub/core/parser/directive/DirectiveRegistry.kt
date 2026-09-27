@@ -73,7 +73,7 @@ public object DirectiveRegistry {
             // downloads 25-74 MB of geo data from. What makes a consumer
             // permissible is not that the key became safe — it did not — but that
             // §A.1's required explicit confirmation now exists: nothing reaches
-            // storage before the user approves it in M6's review sheet (spec §6).
+            // storage before the user approves it in M6's review sheet (M6 spec §6).
             // DirectiveRegistryTest pins that reasoning as a named set rather than
             // leaving this comment to carry it.
             //

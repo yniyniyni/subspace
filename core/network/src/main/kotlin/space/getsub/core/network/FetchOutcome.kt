@@ -5,7 +5,7 @@ package space.getsub.core.network
 /**
  * Why a fetch did not produce a body.
  *
- * A closed vocabulary with **no payload**, deliberately (§5.6): the M2 residuals
+ * A closed vocabulary with **no payload**, deliberately (ARCHITECTURE.md §5.6): the M2 residuals
  * record argues at length that free-text-plus-regex-redaction eventually loses,
  * and this is a new surface, so it starts closed rather than being retrofitted.
  * No member can carry a URL, a body, or a server address.
@@ -47,7 +47,7 @@ public enum class FetchFailure {
 public sealed interface FetchOutcome {
     /** @property headers every response header, lower-cased. The allow-list is the registry's job. */
     public data class Success(val body: String, val headers: Map<String, String>) : FetchOutcome {
-        // §5.6: body is the raw subscription content — server addresses,
+        // ARCHITECTURE.md §5.6: body is the raw subscription content — server addresses,
         // credentials, everything. The generated data-class toString() would
         // print it verbatim; this is a structural guard, not a fix for an
         // active leak (see SubscriptionRequest's identical override).
@@ -72,12 +72,12 @@ public sealed interface FetchOutcome {
      *   its own; answering "is this a reset in the path, an expired certificate, or a protocol
      *   mismatch?" took four probes from outside the app, because every one of those collapses
      *   to the same taxonomy member and the exception was discarded at the catch. The category
-     *   is what the *user* is told (§7 is deliberately closed); this is what a log or a bug
+     *   is what the *user* is told (M4 spec §7 is deliberately closed); this is what a log or a bug
      *   report needs.
      *
      *   The message is excluded on purpose, not overlooked: TLS and DNS exception messages
      *   routinely embed the hostname (`Hostname x.example not verified`, `Unable to resolve
-     *   host "x.example"`), and a subscription URL's host is a secret under §5.6. A JDK/OkHttp
+     *   host "x.example"`), and a subscription URL's host is a secret under ARCHITECTURE.md §5.6. A JDK/OkHttp
      *   class name is shape, not content — the same line [FetchOutcome.Success.toString] draws
      *   between header keys and header values.
      */

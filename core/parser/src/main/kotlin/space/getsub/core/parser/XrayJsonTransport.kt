@@ -19,7 +19,7 @@ import space.getsub.core.model.TransportOptions
  * xhttp server lost its path and Host on import, then started presenting as "not supported
  * by this build yet" once `StoredProfile.connectable` began checking the network.
  *
- * §6 is why this is a projection rather than a full reading: the stored bytes are kept
+ * ARCHITECTURE.md §6 is why this is a projection rather than a full reading: the stored bytes are kept
  * verbatim for a `RAW_JSON` profile, and this typed view exists so
  * [space.getsub.core.xray.XrayConfigGenerator] can emit the fields it knows.
  * Everything else in the block — padding placement, session-id tables, `tcpSettings`

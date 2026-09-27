@@ -375,7 +375,7 @@ class SettingsRepositoryTest {
         }
 
     /**
-     * Spec §6.4: a leak is the worse failure for this app's audience, and §6.3's
+     * M8 spec §6.4: a leak is the worse failure for this app's audience, and M8 spec §6.3's
      * notification action is what makes defaulting on safe. This is an invariant,
      * not a preference — flipping it changes what happens to every existing user
      * on upgrade, silently.

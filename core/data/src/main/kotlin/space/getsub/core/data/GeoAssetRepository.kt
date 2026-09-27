@@ -31,7 +31,7 @@ import javax.inject.Qualifier
  *
  * [GeoAssetRepository] needs the concrete path, but this module must not compute
  * it itself: `space.getsub.geoAssetDirectory` lives in `:app`,
- * downstream of `:core:data` (§4), and is also the exact directory
+ * downstream of `:core:data` (M5 spec §4), and is also the exact directory
  * `:service`'s `TunnelService` reads via `geoDirectory()` to build the invoke
  * `env` object `XrayController` sends xray-core (research §2b) — the two must
  * never disagree, so `:app`'s `GeoModule` is the only place allowed to supply
@@ -57,7 +57,7 @@ public annotation class GeoAssetRoot
  * `() -> Long` rather than a `System.currentTimeMillis()` call. [GeoDownloader]
  * names that shape as a SAM Hilt can bind. Its production implementation lives
  * in `DataModule.geoDownloader`, inside this module rather than `:app`:
- * `:core:network` is `:core:data`'s own I/O boundary (§4,
+ * `:core:network` is `:core:data`'s own I/O boundary (M5 spec §4,
  * `checkModuleBoundaries`), and translating `GeoDownloadOutcome`/
  * `GeoFetchFailure` into this narrower contract here is the same seam
  * `SubscriptionSyncFailure` already uses for the subscription pipeline, not a
@@ -194,7 +194,7 @@ internal constructor(
     /** Where the live `.dat` files sit. `XRAY_LOCATION_ASSET` points here (Part 2). */
     public fun geoDirectory(): File = root
 
-    /** The files currently on disk. The activation gate's other input (spec §4.3). */
+    /** The files currently on disk. The activation gate's other input (M5 spec §4.3). */
     public suspend fun installedFileNames(): Set<String> =
         withContext(Dispatchers.IO) {
             dao
@@ -680,7 +680,7 @@ internal constructor(
          * The grammar `ext:` routing entries accept, from `:core:model`.
          *
          * Deliberately not a second copy of the expression: `Redaction` relies on
-         * the same grammar for its §5.6 exemption, so a local edit here that did
+         * the same grammar for its ARCHITECTURE.md §5.6 exemption, so a local edit here that did
          * not reach there would fail unsafe.
          */
         private fun isSafeFileName(fileName: String): Boolean = isGeoFileName(fileName)

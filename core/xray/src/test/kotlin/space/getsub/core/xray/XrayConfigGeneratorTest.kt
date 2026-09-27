@@ -56,7 +56,7 @@ class XrayConfigGeneratorTest {
 
     @Test
     fun `is byte-identical across invocations`() {
-        // §6: same profile + same settings => byte-identical JSON. This is what
+        // ARCHITECTURE.md §6: same profile + same settings => byte-identical JSON. This is what
         // makes the golden file below meaningful and config diffs reviewable.
         val first = generateJson(outbound, settings)
         val second = generateJson(outbound, settings)
@@ -65,7 +65,7 @@ class XrayConfigGeneratorTest {
 
     @Test
     fun `binds the socks inbound to loopback only`() {
-        // §6: never 0.0.0.0 — that turns the phone into an open proxy on the LAN.
+        // ARCHITECTURE.md §6: never 0.0.0.0 — that turns the phone into an open proxy on the LAN.
         val json = generateJson(outbound, settings)
         json shouldContain "\"listen\": \"127.0.0.1\""
         json shouldNotContain "0.0.0.0"
@@ -73,7 +73,7 @@ class XrayConfigGeneratorTest {
 
     @Test
     fun `includes a dns block`() {
-        // §5.2, half one. The other half is VpnService.Builder.addDnsServer().
+        // ARCHITECTURE.md §5.2, half one. The other half is VpnService.Builder.addDnsServer().
         // libXray v26.7.11 has no setDNS, so these two are the only levers.
         val json = generateJson(outbound, settings)
         json shouldContain "\"dns\""
@@ -118,7 +118,7 @@ class XrayConfigGeneratorTest {
 
     @Test
     fun `has no stats or api block in M1`() {
-        // Traffic counters are M7 (§14.4). Their presence would change the config
+        // Traffic counters are M7 (ARCHITECTURE.md §14.4). Their presence would change the config
         // for the same profile, which is fine — but not yet.
         val json = generateJson(outbound, settings)
         json shouldNotContain "\"stats\""
@@ -348,14 +348,14 @@ class XrayConfigGeneratorTest {
      *
      * `ConfigResult.Unsupported.protocol` is rendered straight to the user by
      * `HomeScreen`. The guarantee that it is a fixed literal rather than, say,
-     * `outbound.address` — which would be a §5.6 leak into the UI — rested on
+     * `outbound.address` — which would be a ARCHITECTURE.md §5.6 leak into the UI — rested on
      * source inspection alone while this asserted only the type. It is also the
      * one place a copy-paste between the four branches would go unnoticed:
      * every wrong answer is still an `Unsupported`.
      */
     // ── Transport emission ──────────────────────────────────────────────────
     //
-    // Every key below is verified against Xray-core v26.7.11 — the version §14.3
+    // Every key below is verified against Xray-core v26.7.11 — the version ARCHITECTURE.md §14.3
     // pins — in `infra/conf/transport_method.go`: `WebSocketConfig` (`path`,
     // `host`, `headers`), `GRPCConfig` (`serviceName`), `SplitHTTPConfig`
     // (`path`, `host`, `mode`). §10.5: an invented key here is either silently
@@ -524,7 +524,7 @@ class XrayConfigGeneratorTest {
      * `trailingComma = false` would pass that test, the golden file test, and
      * every case above it while emitting invalid JSON. That fails at connect
      * as `ConfigRejected` with nothing in the message to explain why (the core
-     * quotes the config back, and §5.6 forbids logging it). This asserts the
+     * quotes the config back, and ARCHITECTURE.md §5.6 forbids logging it). This asserts the
      * actual separator between the two inbound objects rather than relying on
      * a check that cannot see it.
      */
@@ -579,7 +579,7 @@ class XrayConfigGeneratorTest {
 
                 result.shouldBeInstanceOf<ConfigResult.Unsupported>()
                 result.protocol shouldBe expected
-                // §5.6: this string reaches the UI. It must be a fixed literal.
+                // ARCHITECTURE.md §5.6: this string reaches the UI. It must be a fixed literal.
                 result.protocol shouldNotContain secretAddress
             }
         }

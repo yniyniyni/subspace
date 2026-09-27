@@ -14,7 +14,7 @@ private const val MATRIX_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
  *
  * ARCHITECTURE.md §7 lists five link protocols and four container shapes, which
  * reads as twenty working combinations. It is sixteen. The remaining gaps are
- * not bugs — nobody has written those branches — but §7 stated the capability
+ * not bugs — nobody has written those branches — but ARCHITECTURE.md §7 stated the capability
  * unqualified, so the table there and this test exist to keep the real shape
  * visible and to fail if a cell silently changes.
  *
@@ -22,10 +22,10 @@ private const val MATRIX_UUID = "70cc48c5-b2f4-4a1e-9f3d-0123456789ab"
  * protocol `:core:xray` can actually emit a config for, and it was the one
  * cell Clash lacked, so a Clash import produced profiles that all failed at
  * connect. M3 fills that cell, and fills Clash/`socks5` alongside it, closing
- * out the Clash column entirely — see the matrix in §7.
+ * out the Clash column entirely — see the matrix in ARCHITECTURE.md §7.
  *
  * Each cell asserts only whether a profile comes out, because that is exactly
- * what the §7 table claims. Field-level correctness for the cells that do work
+ * what the ARCHITECTURE.md §7 table claims. Field-level correctness for the cells that do work
  * is the job of the per-format tests.
  */
 class CapabilityMatrixTest {

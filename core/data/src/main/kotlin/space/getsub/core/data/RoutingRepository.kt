@@ -80,7 +80,7 @@ public data class StoredRuleSet(
         get() = assetGeneration > 0 && ruleSet.requiredGeoFiles().isNotEmpty()
 
     /**
-     * §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs.
+     * ARCHITECTURE.md §5.6: entries, geo URLs, DNS data, and their fingerprint never reach logs.
      *
      * [dns] relies on [ProfileDns]'s own [ProfileDns.toString] redaction rather
      * than repeating it here — one redaction to keep in sync, not two.
@@ -202,7 +202,7 @@ internal constructor(
      * 1. **Fingerprint first.** Identical content is [UpdateDecision.Unchanged]
      *    regardless of timestamp. A subscription re-delivers the same profile
      *    hourly; prompting or writing each time would destroy the review sheet's
-     *    security value (spec §7.3).
+     *    security value (M6 spec §7.3).
      * 2. **`LastUpdated` second.** Different content is accepted only when its
      *    timestamp is strictly newer. If either side has no timestamp, there is
      *    no comparable stale gate and the update is [UpdateDecision.Changed].
@@ -212,7 +212,7 @@ internal constructor(
         val existing = dao.byName(profile.name) ?: return UpdateDecision.New
         // A row that never published successfully is always retryable.
         //
-        // §7.3's silent no-op is about a subscription re-delivering content that
+        // M6 spec §7.3's silent no-op is about a subscription re-delivering content that
         // already landed — its stated purpose is to stop the review sheet
         // becoming an hourly interruption. It was never meant to cover an
         // attempt that failed, and applying it there made a transient download
@@ -220,7 +220,7 @@ internal constructor(
         // re-importing the byte-identical link answered Unchanged and did no
         // I/O. The only escape was deleting the row.
         //
-        // §7.5 is explicit that Failed "clears on a successful retry", and that
+        // M6 spec §7.5 is explicit that Failed "clears on a successful retry", and that
         // the refresh cap "exists to stop a chatty profile hammering a CDN, not
         // to tell the device's owner no". This gate is what makes that true.
         if (existing.assetState != RuleSetAssetState.Ready.name) return UpdateDecision.Changed
@@ -232,7 +232,7 @@ internal constructor(
         // digest of every stored profile — a DNS-less one included, since
         // `feed(null)` still writes a field separator. Comparing against the column
         // would answer `Changed` for every row on the first sync after an upgrade,
-        // which is spec §4.3's "one unexplained review sheet per user", or `Stale`
+        // which is M6.5 spec §4.3's "one unexplained review sheet per user", or `Stale`
         // for a row carrying a timestamp, silently refusing a real update.
         //
         // Recomputing both sides with the same algorithm makes the comparison
@@ -299,7 +299,7 @@ internal constructor(
      *
      * The DAO performs the complete swap in one SQL statement, including
      * `Ready` and clearing the prior failure; splitting it would permit observers
-     * to see rule columns and the live generation disagree (spec §7.4).
+     * to see rule columns and the live generation disagree (M6 spec §7.4).
      */
     public suspend fun commitGeneration(
         id: Long,
@@ -490,7 +490,7 @@ private fun RoutingProfile.toEntity(
         subscriptionId = subscriptionId,
         lastUpdated = lastUpdated,
         fingerprint = fingerprint(),
-        // Spec §7.4 step 1: "Approved import writes the row with assetState =
+        // M6 spec §7.4 step 1: "Approved import writes the row with assetState =
         // Pending." What makes the row retryable is this state, not the absence
         // of a fingerprint — see decideFor.
         assetState = RuleSetAssetState.Pending.name,

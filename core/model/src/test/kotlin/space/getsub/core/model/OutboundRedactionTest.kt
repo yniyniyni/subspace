@@ -7,7 +7,7 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 
 /**
- * §5.6 as a structural guard on the classes that hold the actual credentials.
+ * ARCHITECTURE.md §5.6 as a structural guard on the classes that hold the actual credentials.
  *
  * These five carry the server address, the UUID, the password and the REALITY key material.
  * Kotlin's generated `toString()` prints all of it, so one `Log.d("$outbound")`, or any exception

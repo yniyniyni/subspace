@@ -446,7 +446,7 @@ class ClashYamlTest {
     }
 
     /**
-     * §5.6: a ParseFailure is a diagnostic and diagnostics reach logs. Nothing
+     * ARCHITECTURE.md §5.6: a ParseFailure is a diagnostic and diagnostics reach logs. Nothing
      * from the config may appear in one, and the Clash branch never quotes the
      * document.
      */

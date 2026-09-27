@@ -21,7 +21,7 @@ private const val TEMP_IDENTITY_HASH_PREFIX = "subspace-sync-temp:"
  * One sync's whole computed change set, bundled so [SubscriptionDao.applySync] stays under
  * detekt's `LongParameterList` threshold instead of taking each field separately. Built by
  * `SubscriptionSyncer` and handed to [SubscriptionDao.applySync] as a single immutable value —
- * that handoff, one change set to one `@Transaction` method, is the point of spec §6.5.
+ * that handoff, one change set to one `@Transaction` method, is the point of M4 spec §6.5.
  *
  * @property clearIds ids of existing rows whose `identityHash` [SubscriptionDao.applySync] must
  *   neutralise (via [SubscriptionDao.clearIdentityHash]) before writing any of [upserts]'s final
@@ -177,7 +177,7 @@ internal interface SubscriptionDao {
      * group; such a row is invisible to this query and therefore never reconciled — never
      * matched, never deleted, never protected from an identityHash collision the way a kept
      * row is. `SubscriptionSyncer`'s `ReconciliationConflict` backstop keeps that collision from
-     * crashing the sync, but the row itself sits outside spec §6.5's reconciliation table for as
+     * crashing the sync, but the row itself sits outside M4 spec §6.5's reconciliation table for as
      * long as it stays in that group.
      */
     @Query("SELECT * FROM profiles WHERE groupId = :groupId AND subscriptionKey IS NOT NULL")
@@ -228,7 +228,7 @@ internal interface SubscriptionDao {
      *
      * Plain `ABORT` (Room's default), matching [ProfileDao]'s own insert — **not** `REPLACE`
      * (Task 11 review fix, Critical 1). An earlier version of this method used `REPLACE` on
-     * `(groupId, identityHash)` conflict to absorb spec §4.3's documented duplicate-outbound
+     * `(groupId, identityHash)` conflict to absorb M4 spec §4.3's documented duplicate-outbound
      * collision, reasoning that `ABORT` would roll back the whole sync over one provider
      * sending a duplicate. That reasoning missed a sharper case: a *kept, active* row (spec D4)
      * is never in [applySync]'s `upserts` or `deleteIds` — it is untouched, holding its real
@@ -333,7 +333,7 @@ internal interface SubscriptionDao {
     }
 
     /**
-     * Applies one whole sync atomically (spec §6.5).
+     * Applies one whole sync atomically (M4 spec §6.5).
      *
      * Either the directives, the servers, the group name and the timestamp all land, or none do.
      * A half-applied subscription is the same hazard §A.3.1 describes for half-applied routing,
@@ -342,7 +342,7 @@ internal interface SubscriptionDao {
      * Takes a single [SyncChangeSet] rather than each field as its own parameter — partly for
      * detekt's `LongParameterList`, but mainly because it keeps `SubscriptionSyncer` from ever
      * calling the individual pieces of a sync separately: it computes the whole set first and
-     * hands it over once, which is the transaction-boundary property spec §6.5 requires.
+     * hands it over once, which is the transaction-boundary property M4 spec §6.5 requires.
      *
      * [SyncChangeSet.subscriptionId]/[SyncChangeSet.groupId]/[SyncChangeSet.fetchedAt] are taken
      * as bare values rather than a whole `SubscriptionEntity` (Task 11 review fix, Important 3):

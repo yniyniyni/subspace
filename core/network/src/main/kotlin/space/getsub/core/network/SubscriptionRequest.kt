@@ -5,7 +5,7 @@ package space.getsub.core.network
 /**
  * Everything [SubscriptionFetcher] needs to perform one subscription fetch.
  *
- * @property url the subscription URL. A secret (§5.6) — never logged.
+ * @property url the subscription URL. A secret (ARCHITECTURE.md §5.6) — never logged.
  * @property hwidEnabled §A.4.1: on by default. Off is a user choice that breaks
  *   limit-enabled providers, and the resulting failure must say so ([FetchFailure.HwidRequired]).
  * @property userAgentOverride §A.4.2's per-subscription override.
@@ -23,7 +23,7 @@ public data class SubscriptionRequest(
     val timeoutSeconds: Int,
     val proxyPort: Int? = null,
 ) {
-    // §5.6: url is a secret. The generated data-class toString() would print
+    // ARCHITECTURE.md §5.6: url is a secret. The generated data-class toString() would print
     // it verbatim, which is exactly the "reaches a log line" failure mode
     // this class exists to avoid — this is a structural guard against a
     // future `request.toString()` in a debug log, not a fix for a leak that
@@ -31,7 +31,7 @@ public data class SubscriptionRequest(
     // are what makes a logged instance useful for debugging at all.
     //
     // proxyPort is deliberately not printed either — not because it is a
-    // secret (§5.6: a port is not one) but because adding it here would be
+    // secret (ARCHITECTURE.md §5.6: a port is not one) but because adding it here would be
     // scope creep on a redaction override that exists for exactly one
     // reason. Leaving it off keeps the printed shape stable for anyone
     // already relying on it in a log line.

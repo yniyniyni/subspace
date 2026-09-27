@@ -62,7 +62,7 @@ public enum class ConversionDrop {
 /**
  * A converted profile and everything the conversion could not carry.
  *
- * §5.6: [profile] holds domains the user visits, and [RoutingProfile] already
+ * ARCHITECTURE.md §5.6: [profile] holds domains the user visits, and [RoutingProfile] already
  * redacts. This wrapper must not undo that.
  */
 public data class RoutingConversion(
@@ -84,7 +84,7 @@ private val UNSUPPORTED_MATCHERS =
  * Converts a raw Xray config's `routing` (and `dns`) blocks into a profile the
  * app's importer can review and apply.
  *
- * The app's override branch (spec §3.2) deletes a passthrough config's own
+ * The app's override branch (M7 spec §3.2) deletes a passthrough config's own
  * routing wholesale; this is how a user keeps it instead. It feeds
  * `RoutingProfileImporter.preview`, so the review sheet, fingerprint gate and
  * geo-download flow are M6's and unchanged.

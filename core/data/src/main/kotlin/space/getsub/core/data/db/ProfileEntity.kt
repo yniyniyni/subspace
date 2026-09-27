@@ -84,14 +84,14 @@ internal data class ProfileEntity(
      * migrated row that has never been analysed stores `Unvalidated` instead.
      *
      * A [space.getsub.core.parser.PassthroughRejection] name, never a
-     * message — §5.6 forbids persisting anything derived from config contents,
+     * message — ARCHITECTURE.md §5.6 forbids persisting anything derived from config contents,
      * and §10.4 wants a reason the UI can render in the user's own language.
      *
      * Meaningful only for `kind = RAW_JSON`. A `TYPED` row leaves it null.
      */
     val passthroughRejection: String? = null,
 ) {
-    // §5.6, same structural guard the subscription entities carry: address, outbound and rawJson
+    // ARCHITECTURE.md §5.6, same structural guard the subscription entities carry: address, outbound and rawJson
     // are the server address, the serialized credential set (UUID, REALITY key material) and the
     // raw config. subscriptionKey is derived from provider-supplied fields and is redacted with
     // them; identityHash is a hash, and ids, kind, protocol, port and timestamps are shape rather

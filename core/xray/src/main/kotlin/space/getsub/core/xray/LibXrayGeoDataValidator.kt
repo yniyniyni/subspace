@@ -45,7 +45,7 @@ constructor() : GeoDataValidator {
             // important one:
             //
             //  - libXray reports an absent file and a corrupt one as the same
-            //    failed envelope, and §5.6 forbids inspecting its error string,
+            //    failed envelope, and ARCHITECTURE.md §5.6 forbids inspecting its error string,
             //    which can quote the path.
             //  - **protobuf accepts zero bytes as a valid empty message.** A
             //    truncated or empty download would therefore pass countGeoData
@@ -64,7 +64,7 @@ constructor() : GeoDataValidator {
                 LibXrayInvoke.call("countGeoData", payload)
                 GeoValidation.Valid
             } catch (e: XrayException) {
-                // §5.6: the class name only. libXray's message quotes the path it
+                // ARCHITECTURE.md §5.6: the class name only. libXray's message quotes the path it
                 // failed to parse, and a custom source's filename is user data.
                 android.util.Log.w(TAG, "geo validation rejected a file: ${e.javaClass.simpleName}")
                 GeoValidation.NotGeoData

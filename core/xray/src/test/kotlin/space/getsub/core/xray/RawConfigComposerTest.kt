@@ -221,7 +221,7 @@ class RawConfigComposerTest {
         socks["sniffing"] shouldBe expected
     }
 
-    // §5.6: the device-found logcat leak — one line per destination the user reaches.
+    // ARCHITECTURE.md §5.6: the device-found logcat leak — one line per destination the user reaches.
     @Test
     fun `log is forced to a redacting shape`() {
         val log = composed()["log"] as JsonObject
@@ -382,7 +382,7 @@ class RawConfigComposerTest {
         tags shouldBe listOf("proxy", "direct", "block")
     }
 
-    // Spec §4.2: our own rules are what run, so our sniffing defaults are correct here.
+    // M7 spec §4.2: our own rules are what run, so our sniffing defaults are correct here.
     @Test
     fun `the override branch uses our sniffing defaults, not the config's`() {
         val result = RawConfigComposer.compose(panelLike, settings, "/data/geo", override)

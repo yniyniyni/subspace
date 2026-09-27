@@ -11,7 +11,7 @@ import space.getsub.core.parser.SubscriptionParser
 /**
  * Instrumented because it needs the libXray AAR. This is the only part of M2
  * that cannot run on the JVM, which is why it lives here and not in
- * `:core:parser` — §7's near-100% coverage target stays achievable because the
+ * `:core:parser` — ARCHITECTURE.md §7's near-100% coverage target stays achievable because the
  * parser itself never depends on this.
  */
 @RunWith(AndroidJUnit4::class)

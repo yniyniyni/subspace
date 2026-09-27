@@ -16,7 +16,7 @@ import org.junit.Test
  * on an outbound that does not reach a server** — that was discovered three
  * times because it had been written down as examples instead of as an invariant.
  *
- * The hazard is §5.2 in every case: a `freedom` member sends proxied traffic,
+ * The hazard is ARCHITECTURE.md §5.2 in every case: a `freedom` member sends proxied traffic,
  * including the `dns-module` catch-all's, outside the tunnel; a `blackhole` one
  * drops it. Both silently.
  *
@@ -150,7 +150,7 @@ class OverrideTargetInvariantsTest {
                 reachable.filter { tag ->
                     tag in reserved || analysis.outboundProtocolsByTag[tag] in NON_SERVER_PROTOCOLS
                 }
-            // §5.6: `label` is this test's own text; no config content is surfaced.
+            // ARCHITECTURE.md §5.6: `label` is this test's own text; no config content is surfaced.
             check(offending.isEmpty()) {
                 "[$label] resolved to a target that can reach a non-server outbound"
             }

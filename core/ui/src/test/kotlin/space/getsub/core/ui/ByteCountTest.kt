@@ -20,7 +20,7 @@ class ByteCountTest {
     @Test
     fun `past the 32-bit boundary`() {
         // Guards the whole delta-accumulation chain: a formatter that narrowed
-        // to Int would undo spec §1.3 at the last step.
+        // to Int would undo M8.5 spec §1.3 at the last step.
         assertEquals("8.0 GB", formatByteCount(8L * 1024 * 1024 * 1024))
     }
 }

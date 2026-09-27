@@ -52,7 +52,7 @@ private class ProgressCallbackException(cause: Throwable) : RuntimeException(cau
  * `InvalidUrl` to it would widen exhaustive `when`s across `:core:data` for two
  * cases that only exist here.
  *
- * §5.6: no member carries a URL, a path, or a body.
+ * ARCHITECTURE.md §5.6: no member carries a URL, a path, or a body.
  */
 public enum class GeoFetchFailure {
     InvalidUrl,

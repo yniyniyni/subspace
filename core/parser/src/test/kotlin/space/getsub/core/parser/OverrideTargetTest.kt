@@ -6,11 +6,11 @@ import io.kotest.matchers.shouldBe
 import org.junit.Test
 
 /**
- * The precedence rule from design §3.3, one case per branch.
+ * The precedence rule from design M7.5 spec §3.3, one case per branch.
  *
  * `reserved` is what the override branch would append — `TunnelService` supplies
  * the real set, which is `direct`/`block` plus `dns-out` only when a DNS plan is
- * present (design §3.4).
+ * present (design M7.5 spec §3.4).
  */
 class OverrideTargetTest {
     private val reserved = setOf("direct", "block", "dns-out")
@@ -89,7 +89,7 @@ class OverrideTargetTest {
     @Test
     fun `an untagged outbound beside a tagged server is not ambiguity`() {
         // This shape runs today and must keep running: a blank tag is never a
-        // candidate, so two of them cannot collide (design §3.3).
+        // candidate, so two of them cannot collide (design M7.5 spec §3.3).
         val json =
             """
             {
@@ -200,7 +200,7 @@ class OverrideTargetTest {
         resolve(json) shouldBe OverrideTarget.Unresolvable(OverrideBlocker.BalancerSelectsNothing)
     }
 
-    // --- §3.4: the collision guard ----------------------------------------
+    // --- M7.5 spec §3.4: the collision guard ----------------------------------------
 
     @Test
     fun `a selector that would capture an appended outbound is refused`() {
@@ -224,7 +224,7 @@ class OverrideTargetTest {
         // one *server* outbound, and `serverOutboundTags()` filters the rest out —
         // so without this the balancer resolves, our `dns-module` catch-all names
         // it, and the core spreads resolver queries across a `freedom` member that
-        // leaves the tunnel. §5.2, silently.
+        // leaves the tunnel. ARCHITECTURE.md §5.2, silently.
         val json =
             """
             {
@@ -277,10 +277,10 @@ class OverrideTargetTest {
 
     @Test
     fun `catch-alls naming a dead and a live balancer are undecidable`() {
-        // Branch review M2. Design §3.3: "Zero, or two or more distinct balancers,
+        // Branch review M2. Design M7.5 spec §3.3: "Zero, or two or more distinct balancers,
         // is Unresolvable". Filtering the references by liveness first would rescue
         // this to `EU` — a guess about which of the config's own catch-alls fires,
-        // which is the evaluation-order question §3.3 refuses to answer.
+        // which is the evaluation-order question M7.5 spec §3.3 refuses to answer.
         val json =
             """
             {
@@ -373,7 +373,7 @@ class OverrideTargetTest {
         // Xray takes the first MATCH, so among two rules that both match
         // everything the first fires and the second is dead. Picking either is a
         // claim about evaluation order this project has not measured (design
-        // §3.3), so it refuses instead.
+        // M7.5 spec §3.3), so it refuses instead.
         val json =
             """
             {
@@ -546,7 +546,7 @@ class OverrideTargetTest {
     @Test
     fun `a lone rule limited to one network does not single out a balancer`() {
         // It names EU for TCP and says nothing about where UDP should go, so it is
-        // not the config declaring a default — design §3.3 admits `network` for
+        // not the config declaring a default — design M7.5 spec §3.3 admits `network` for
         // "tcp,udp" specifically.
         val json =
             """

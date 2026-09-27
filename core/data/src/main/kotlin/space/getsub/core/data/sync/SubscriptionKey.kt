@@ -58,7 +58,7 @@ package space.getsub.core.data.sync
  * on `(groupId, identityHash)` downstream. `subscriptionKey` disambiguates by
  * name, not by outbound content, so that collision is out of scope for this
  * function and is tracked as a bounded limitation for a later milestone
- * (spec §4.3).
+ * (M4 spec §4.3).
  */
 internal fun subscriptionKeysFor(names: List<String>): List<String> {
     val trimmed = names.map(String::trim)

@@ -19,7 +19,7 @@ import space.getsub.core.parser.OverrideTarget
 public data class TunnelSettings(
     /** Loopback SOCKS port, allocated at connect time. §10.6 forbids a literal. */
     val socksPort: Int,
-    /** Advertised to both the `dns` block and `VpnService.Builder.addDnsServer` (§5.2). */
+    /** Advertised to both the `dns` block and `VpnService.Builder.addDnsServer` (ARCHITECTURE.md §5.2). */
     val dnsServer: String,
     val enableSniffing: Boolean,
     /**
@@ -68,7 +68,7 @@ public data class TunnelSettings(
  *
  * A sealed result rather than a nullable String: "unsupported protocol" and
  * "generation failed" are different things to a user, and §10.4 says the
- * message is the only diagnostic they can hand back — §5.6 forbids logging
+ * message is the only diagnostic they can hand back — ARCHITECTURE.md §5.6 forbids logging
  * the config that would otherwise explain it.
  */
 public sealed interface ConfigResult {
@@ -121,7 +121,7 @@ private const val DNS_OUT_OUTBOUND_JSON = """{ "tag": "dns-out", "protocol": "dn
  */
 private val TYPED_PATH_TARGET = OverrideTarget.ViaOutbound("proxy")
 
-@Suppress("TooManyFunctions") // One object per wire shape (§6); splitting it would scatter the shape's single author.
+@Suppress("TooManyFunctions") // One object per wire shape (ARCHITECTURE.md §6); splitting it would scatter the shape's single author.
 public object XrayConfigGenerator {
     /**
      * Dispatches on the profile's protocol.
@@ -159,7 +159,7 @@ public object XrayConfigGenerator {
 
         sb.appendLine("{")
         sb.appendLine("""  "log": {""")
-        // §5.6, and this one was found on a device, not by reading: without
+        // ARCHITECTURE.md §5.6, and this one was found on a device, not by reading: without
         // "access": "none", Xray writes a line to logcat for EVERY destination
         // the user reaches —
         //
@@ -187,7 +187,7 @@ public object XrayConfigGenerator {
     }
 
     /**
-     * §5.2, half one. The other half is `VpnService.Builder.addDnsServer()`, and
+     * ARCHITECTURE.md §5.2, half one. The other half is `VpnService.Builder.addDnsServer()`, and
      * M6.5 adds a third that matters more than either: the port-53 hijack in
      * [appendRouting], which is what makes any of this reach an app's resolver.
      *
@@ -201,7 +201,7 @@ public object XrayConfigGenerator {
     }
 
     /**
-     * §6's routing block. Empty in M1; M5 fills it from the active rule set.
+     * ARCHITECTURE.md §6's routing block. Empty in M1; M5 fills it from the active rule set.
      *
      * A null [routing] and a null [dns] reproduce the M1 block exactly —
      * `IPIfNonMatch` and an empty rule array — because the tunnel that block
@@ -240,7 +240,7 @@ public object XrayConfigGenerator {
      * A null port changes nothing: this is the one call site that can make the
      * typed path's output differ from the M1 shape the golden file pins, and
      * every other caller of [generate] gets that shape back byte-identical
-     * (spec §2.4 makes the same promise on the passthrough side, in
+     * (M8.5 spec §2.4 makes the same promise on the passthrough side, in
      * `RawConfigComposer`).
      */
     private fun appendMetrics(
@@ -397,7 +397,7 @@ public object XrayConfigGenerator {
      * Emits the transport's own settings object, when the source specified one.
      *
      * Every key here is verified against Xray-core v26.7.11 —
-     * `infra/conf/transport_method.go`, the version §14.3 pins: `WebSocketConfig`
+     * `infra/conf/transport_method.go`, the version ARCHITECTURE.md §14.3 pins: `WebSocketConfig`
      * (`path`, `host`, `headers`), `GRPCConfig` (`serviceName`), `SplitHTTPConfig`
      * (`path`, `host`, `mode`). §10.5 applies with full force in this function —
      * an invented key is either silently ignored, which presents as a tunnel that
@@ -481,7 +481,7 @@ public object XrayConfigGenerator {
  *
  * `skipFallback` on the scoped domestic server is load-bearing: without it a
  * domestic miss falls through to the remote resolver, leaking in exactly the
- * direction the profile author tried to prevent (spec §7.2).
+ * direction the profile author tried to prevent (M6.5 spec §7.2).
  */
 private fun DnsServerSpec.render(): String {
     if (domains.isEmpty()) return jsonString(address)
@@ -504,10 +504,10 @@ private fun DnsServerSpec.render(): String {
  * guarantees this. The catch-all is: it is emitted unconditionally, on every
  * non-null plan, matching `inboundTag: ["dns-module"]` with no address filter,
  * so *all* of the resolver's own traffic is claimed before rule 3 can see it,
- * regardless of which matches happen to be set (spec §7.3).
+ * regardless of which matches happen to be set (M6.5 spec §7.3).
  *
  * The catch-all's target is `proxy`, never `direct`: a resolver query sent to
- * `direct` leaves the tunnel, which is the exact §5.2 leak this plan exists to
+ * `direct` leaves the tunnel, which is the exact ARCHITECTURE.md §5.2 leak this plan exists to
  * prevent.
  */
 private fun dnsRuleLines(

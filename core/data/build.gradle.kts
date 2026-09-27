@@ -68,7 +68,7 @@ dependencies {
 
     // Task 12: an in-memory SubscriptionRepository builder, shared with :app's
     // androidTest so SubscriptionRefreshWorkerTest can drive a real repository
-    // without depending on :core:data's internal DAO/Database types (§4 keeps
+    // without depending on :core:data's internal DAO/Database types (M4 spec §4 keeps
     // those internal on purpose — DI-only construction).
     testFixturesImplementation(project(":core:model"))
     testFixturesImplementation(project(":core:network"))

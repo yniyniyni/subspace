@@ -33,9 +33,9 @@ import javax.inject.Inject
  *   anywhere else.
  *
  * A silent rename on either side, not a compile error, is what this class
- * going blank in the viewer would actually look like. Spec §3.4.
+ * going blank in the viewer would actually look like. M8.5 spec §3.4.
  *
- * Every line here was redacted at capture (spec §3.2), so nothing this class
+ * Every line here was redacted at capture (M8.5 spec §3.2), so nothing this class
  * returns needs redacting again — and nothing it returns may be assumed to
  * contain a secret that has to be withheld from a share.
  */
@@ -48,7 +48,7 @@ public class LogRepository(
     ) : this(File(context.filesDir, LOG_DIR_NAME))
 
     /**
-     * Oldest first. Reads on IO — a full ring is up to 1 MiB (spec §3.3).
+     * Oldest first. Reads on IO — a full ring is up to 1 MiB (M8.5 spec §3.3).
      *
      * `log.1` and `log.0` are each read inside their own [runCatching], not one
      * shared around both: a single shared block would let a failure reading

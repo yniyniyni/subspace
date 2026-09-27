@@ -16,7 +16,7 @@ import space.getsub.core.model.ProfileDns
 /**
  * The `routing_rule_sets.dnsJson` column's codec.
  *
- * Storage stays one column (spec §4.2): the type and meaning are unchanged from
+ * Storage stays one column (M6.5 spec §4.2): the type and meaning are unchanged from
  * M6, only the canonicalisation is now ours. No Room migration.
  *
  * Written in **Happ's own key names**, not ours. Rows written by M6 hold those

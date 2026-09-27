@@ -17,7 +17,7 @@ import javax.inject.Singleton
  * **Why a holder and not a navigation argument.** Same reasoning as [PendingRoutingImport]: a
  * `RoutingProfile(conversion)` route argument lives in the back stack, and `NavBackStackEntry`
  * arguments are `Bundle`-backed and marshalled into the Activity's saved-instance-state on
- * process death (§5.6). [RoutingConversion.profile] is the domains and addresses a config's own
+ * process death (ARCHITECTURE.md §5.6). [RoutingConversion.profile] is the domains and addresses a config's own
  * routing block names, which is exactly the config material that must not travel through a
  * channel that writes to disk. This holder keeps it in process memory for the seconds between
  * the editor's "Use this config's routing rules" action and the review sheet, and nowhere else.
@@ -31,7 +31,7 @@ import javax.inject.Singleton
  * A conversion lost to process death is the right outcome, same as a link: the user taps "Use
  * this config's routing rules" again.
  *
- * §5.6: [toString] never renders [RoutingConversion.profile]'s contents — only whether something
+ * ARCHITECTURE.md §5.6: [toString] never renders [RoutingConversion.profile]'s contents — only whether something
  * is waiting.
  */
 @Singleton

@@ -192,7 +192,7 @@ class XrayControllerTest {
                     configFile.writeText((result as ConfigResult.Ok).json)
                     controller.validate(configFile)
                 } catch (e: XrayException) {
-                    // §5.6: libXray's message can quote the generated config.
+                    // ARCHITECTURE.md §5.6: libXray's message can quote the generated config.
                     fail("the core rejected DNS shape $label: ${e.javaClass.simpleName}")
                 } finally {
                     configFile.delete()
@@ -249,7 +249,7 @@ class XrayControllerTest {
                 try {
                     controller.validate(configFile)
                 } catch (e: XrayException) {
-                    // §5.6: the message can quote the config back, so it must not
+                    // ARCHITECTURE.md §5.6: the message can quote the config back, so it must not
                     // reach the failure text. The network name is ours, not the
                     // user's, and is what identifies which case failed.
                     fail("the core rejected an emitted ${stream.network} config: ${e.javaClass.simpleName}")
@@ -290,7 +290,7 @@ class XrayControllerTest {
             try {
                 controller.validate(configFile)
             } catch (e: XrayException) {
-                // §5.6: the message can quote the config back.
+                // ARCHITECTURE.md §5.6: the message can quote the config back.
                 fail("the core rejected a two-inbound config: ${e.javaClass.simpleName}")
             } finally {
                 configFile.delete()
@@ -300,7 +300,7 @@ class XrayControllerTest {
     @Test
     fun malformedConfigIsRejectedWithARealError() =
         runTest {
-            // §6: catch a bad config here rather than letting runXray fail in a way
+            // ARCHITECTURE.md §6: catch a bad config here rather than letting runXray fail in a way
             // that is hard to attribute (§10.4). Proves validate() can actually fail
             // — a validator that always passes is worse than none.
             val configFile = File(cacheDir, "instr-broken.json").apply { writeText("{ not json") }
@@ -356,7 +356,7 @@ class XrayControllerTest {
             try {
                 controller.validate(configFile)
             } catch (e: XrayException) {
-                // §5.6: the message can quote the config back.
+                // ARCHITECTURE.md §5.6: the message can quote the config back.
                 fail("the core rejected a geosite: rule against a real geosite.dat: ${e.javaClass.simpleName}")
             } finally {
                 configFile.delete()
@@ -383,14 +383,14 @@ class XrayControllerTest {
     @Test
     fun reportsNotRunningBeforeStart() =
         runTest {
-            // §5.5: connection state comes from the core, never from a local guess.
+            // ARCHITECTURE.md §5.5: connection state comes from the core, never from a local guess.
             assertTrue(!XrayController().isRunning())
         }
 
     @Test
     fun stopIsSafeWhenNothingIsRunning() =
         runTest {
-            // §5.4: teardown runs from disconnect, onRevoke, and onDestroy, any of
+            // ARCHITECTURE.md §5.4: teardown runs from disconnect, onRevoke, and onDestroy, any of
             // which can fire when the core is already down. It must not throw.
             XrayController().stop()
         }

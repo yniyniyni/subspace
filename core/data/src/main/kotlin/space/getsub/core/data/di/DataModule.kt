@@ -106,7 +106,7 @@ internal object DataModule {
     /**
      * Assembles [GeoAssetRepository] from its Room DAO plus the two seams this
      * module cannot supply itself: [GeoDataValidator] is a `:core:xray` call and
-     * [GeoAssetRoot] is a path `:app` computes (§4 forbids `:core:data` from
+     * [GeoAssetRoot] is a path `:app` computes (M5 spec §4 forbids `:core:data` from
      * depending on either), so both come from `:app`'s `GeoModule` via Hilt's
      * shared app component. [GeoAssetRepository]'s constructor is `internal` to
      * this module on purpose (§11) — production reaches it only through this
@@ -135,7 +135,7 @@ internal object DataModule {
      * translates its outcome into [GeoAssetRepository]'s narrower contract.
      *
      * This lives here rather than in `:app`'s `GeoModule` because `:core:network`
-     * is `:core:data`'s own I/O boundary (§4) — `GeoFileFetcher` is not visible
+     * is `:core:data`'s own I/O boundary (M5 spec §4) — `GeoFileFetcher` is not visible
      * from `:app` at all, `checkModuleBoundaries` enforces exactly that, and the
      * same seam already exists for the subscription pipeline
      * (`SubscriptionSyncFailure`, in this module, for the identical reason).

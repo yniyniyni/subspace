@@ -6,7 +6,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.Test
 
 /**
- * §5.6: server addresses, UUIDs, REALITY keys and subscription URLs are
+ * ARCHITECTURE.md §5.6: server addresses, UUIDs, REALITY keys and subscription URLs are
  * secrets. A ParseFailure is a diagnostic, and diagnostics reach logs, crash
  * reports, and the in-app log viewer.
  *

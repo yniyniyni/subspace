@@ -65,7 +65,7 @@ internal fun profileId(
 public data class ParseFailure private constructor(
     /**
      * Entry index, 0-based. Lets a user say "entry 143 failed" without pasting
-     * entry 143 anywhere (§5.6).
+     * entry 143 anywhere (ARCHITECTURE.md §5.6).
      */
     val index: Int,
     val reason: ParseFailureReason,

@@ -17,7 +17,7 @@ import androidx.compose.runtime.CompositionLocalProvider
  * should be added. A wallpaper-derived scheme would replace
  * `--color-connected` with whatever tone Android's algorithm assigns it, and
  * that color is not decorative: the design system reserves it exclusively
- * for an established tunnel (see [SubspaceColors]), and §5.5 makes
+ * for an established tunnel (see [SubspaceColors]), and ARCHITECTURE.md §5.5 makes
  * connection state the one thing this app's UI must never misreport.
  * Dynamic color can silently reassign a semantic meaning that this app
  * treats as a correctness property, not a style choice — so it stays off,

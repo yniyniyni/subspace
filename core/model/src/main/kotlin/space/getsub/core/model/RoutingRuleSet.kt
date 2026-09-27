@@ -43,7 +43,7 @@ public data class RuleBucket(
     /** True when this bucket would emit no rule at all. */
     public val isEmpty: Boolean get() = sites.isEmpty() && ips.isEmpty()
 
-    /** §5.6: entries are user browsing data. See [RoutingRuleSet.toString]. */
+    /** ARCHITECTURE.md §5.6: entries are user browsing data. See [RoutingRuleSet.toString]. */
     override fun toString(): String = "RuleBucket(sites=<redacted, ${sites.size}>, ips=<redacted, ${ips.size}>)"
 }
 
@@ -81,13 +81,13 @@ public data class RoutingRuleSet(
      * it emits a trailing catch-all rule to `direct`. Getting this backwards
      * routes a profile's traffic the opposite way from its author's intent,
      * which is why it is honoured in M6 rather than deferred with the DNS
-     * fields it was first grouped with (spec §1.1).
+     * fields it was first grouped with (M6 spec §1.1).
      */
     public val globalProxy: Boolean? = null,
 ) {
     init {
         require(order.size == RouteOutcome.entries.size && order.toSet() == RouteOutcome.entries.toSet()) {
-            // Names an enum vocabulary, never an entry — §5.6.
+            // Names an enum vocabulary, never an entry — ARCHITECTURE.md §5.6.
             "order must be a permutation of every RouteOutcome, was ${order.size} of ${RouteOutcome.entries.size}"
         }
     }
@@ -100,7 +100,7 @@ public data class RoutingRuleSet(
         get() = buckets.values.sumOf { it.sites.size + it.ips.size }
 
     /**
-     * §5.6: every entry is a domain or address the user visits, and the generated
+     * ARCHITECTURE.md §5.6: every entry is a domain or address the user visits, and the generated
      * data-class `toString()` would print all of them into any log line that
      * interpolates a rule set. A structural guard against a future
      * `Log.d("$ruleSet")`, not a fix for a leak that exists today — the same

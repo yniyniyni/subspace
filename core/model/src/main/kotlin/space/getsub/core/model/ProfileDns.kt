@@ -28,7 +28,7 @@ public enum class DnsTransport(
  * address for [DnsTransport.DOU], and for DoH it is the **bootstrap** address the
  * resolver's own hostname needs (spec §5.1, research §3).
  *
- * §5.6: both fields are provider-chosen hostnames. See the [toString] override.
+ * ARCHITECTURE.md §5.6: both fields are provider-chosen hostnames. See the [toString] override.
  */
 public data class DnsResolver(
     public val transport: DnsTransport,
@@ -96,7 +96,7 @@ public data class ProfileDns(
     /** True when this is the rejected-block sentinel. See [INVALID]. */
     public val isInvalid: Boolean get() = this === INVALID
 
-    /** §5.6: resolver endpoints and host mappings never reach a log line. */
+    /** ARCHITECTURE.md §5.6: resolver endpoints and host mappings never reach a log line. */
     override fun toString(): String =
         "ProfileDns(remote=$remote, domestic=$domestic, " +
             "hosts=<redacted, ${hosts.size} entries>, fakeDns=$fakeDns)"
@@ -119,7 +119,7 @@ public object DnsValidation {
      * True for an IPv4 or IPv6 literal, false for a hostname.
      *
      * Deliberately not `InetAddress.getByName`, which performs a DNS lookup for a
-     * hostname — a blocking network call inside a validator (§5.3), and one that
+     * hostname — a blocking network call inside a validator (ARCHITECTURE.md §5.3), and one that
      * would make validation depend on the very resolver being configured.
      */
     public fun isAddressLiteral(value: String): Boolean {

@@ -20,7 +20,7 @@ import androidx.room.PrimaryKey
  * it in every delete path. Deleting the group removes this row, its directives,
  * its overrides, and (via [ProfileEntity]'s own cascade) its servers.
  *
- * [url] is a secret (§5.6). It is never logged, never included in a diagnostic,
+ * [url] is a secret (ARCHITECTURE.md §5.6). It is never logged, never included in a diagnostic,
  * and redacted for display.
  *
  * [lastFetchDetail] is a closed vocabulary — a `FetchFailure` name — never a raw
@@ -55,7 +55,7 @@ internal data class SubscriptionEntity(
     val lastFetchDetail: String?,
     val createdAt: Long,
 ) {
-    // §5.6: url is a secret. The generated data-class toString() would print
+    // ARCHITECTURE.md §5.6: url is a secret. The generated data-class toString() would print
     // it verbatim, which is exactly the "reaches a log line" failure mode
     // this class exists to avoid — a structural guard against a future
     // `Timber.d("$subscription")`, not a fix for a leak that exists today.
@@ -82,7 +82,7 @@ internal data class SubscriptionEntity(
  * `DirectiveKind.Url` for several keys (`support-url`, `fallback-url`,
  * `sub-info-button-link`, `server-address-resolve-dns-domain`, among others)
  * and plaintext credentials for `socks-auth-password`/`http-auth-password`, so
- * a validated, in-vocabulary [value] can still be a URL or a password. §5.6's
+ * a validated, in-vocabulary [value] can still be a URL or a password. ARCHITECTURE.md §5.6's
  * "no server addresses, no config contents" bars both, so [value] gets the
  * same `toString()` treatment as [SubscriptionEntity.url].
  */

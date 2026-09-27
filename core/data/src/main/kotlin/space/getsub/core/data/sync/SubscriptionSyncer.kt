@@ -46,17 +46,17 @@ private const val MAX_LOG_KEY_LENGTH = 64
 /**
  * ARCHITECTURE.md §A.1's pipeline, end to end: fetch → split → validate →
  * parse → reconcile → persist, with the persist stage landing in one
- * [SubscriptionDao.applySync] transaction (spec §6.5).
+ * [SubscriptionDao.applySync] transaction (M4 spec §6.5).
  *
  * Lives in `:core:data` rather than `:feature:profiles` because the UI and the
  * background worker must call the same code — a worker reaching into a
  * feature module's internals to sync is the shape that makes the two paths
  * drift.
  *
- * Entirely on [Dispatchers.IO] (§5.3).
+ * Entirely on [Dispatchers.IO] (ARCHITECTURE.md §5.3).
  *
  * [proxyLocator] is how a subscription refresh reaches the tunnel's loopback
- * HTTP proxy (spec §5.4): `:app` supplies the only implementation, over
+ * HTTP proxy (M5 spec §5.4): `:app` supplies the only implementation, over
  * `TunnelClient`'s published state, because `:core:data` cannot depend on
  * `:service` (§4). A background refresh with no bound service — or no tunnel
  * up at all — gets null back and fetches directly; that is correct fallback
@@ -78,7 +78,7 @@ internal constructor(
      * @param activeProfileId the profile the tunnel is currently using, if
      *   any. A server the provider has dropped is kept and flagged rather
      *   than deleted when it matches (spec D4) — deleting it would leave
-     *   §5.5's single source of truth holding a `profileId` that no longer
+     *   ARCHITECTURE.md §5.5's single source of truth holding a `profileId` that no longer
      *   resolves.
      */
     public suspend fun sync(
@@ -215,7 +215,7 @@ internal constructor(
     }
 
     /**
-     * Spec §6.5's reconciliation table, computed here and handed to [SubscriptionDao.applySync]
+     * M4 spec §6.5's reconciliation table, computed here and handed to [SubscriptionDao.applySync]
      * as one change set.
      *
      * Returns [SyncResult.ReconciliationConflict] instead of [SyncResult.Synced] if
@@ -224,7 +224,7 @@ internal constructor(
      * backstop; `ProfileRepository.move`'s KDoc documents one way that can still happen). The
      * whole transaction rolls back on any thrown exception, so this is a clean "nothing landed"
      * failure, never a partial write — and the exception's own message is never surfaced,
-     * because it can quote this table's column values (§5.6), the same hazard
+     * because it can quote this table's column values (ARCHITECTURE.md §5.6), the same hazard
      * `ProfileRepository.move`'s existing catch guards against for the same exception type.
      */
     private suspend fun reconcile(
@@ -289,15 +289,15 @@ internal constructor(
             dao.applySync(changeSet)
 
             if (built.duplicatesDropped > 0) {
-                // Counts only — never a name, never an address (§5.6).
-                Log.w(TAG, "sync dropped ${built.duplicatesDropped} duplicate-outbound server(s) — see spec §4.3")
+                // Counts only — never a name, never an address (ARCHITECTURE.md §5.6).
+                Log.w(TAG, "sync dropped ${built.duplicatesDropped} duplicate-outbound server(s) — see M4 spec §4.3")
             }
             if (built.balancerMembersCollapsed > 0) {
                 // Deliberately a separate count and a separate line from duplicatesDropped above:
                 // these were never colliding outbounds. They are a balancer element's other
                 // destinations (research §5b) collapsing into the one row that already represents
                 // that logical server — folding this into "duplicate-outbound" would misdescribe
-                // why the row count is lower than the parsed count (§10.4). Counts only (§5.6).
+                // why the row count is lower than the parsed count (§10.4). Counts only (ARCHITECTURE.md §5.6).
                 val collapsed = built.balancerMembersCollapsed
                 Log.i(TAG, "sync collapsed $collapsed balancer-member profile(s) into their surviving row")
             }
@@ -335,7 +335,7 @@ private data class ParsedResponse(
  * split by *why* (§10.1/§10.4: a count that folds two different reasons into one number
  * misdescribes whichever one it hides).
  *
- * @property duplicatesDropped spec §4.3's byte-identical-outbound collisions only — see
+ * @property duplicatesDropped M7 spec §4.3's byte-identical-outbound collisions only — see
  *   [SyncResult.Synced]'s KDoc.
  * @property balancerMembersCollapsed how many profiles were a balancer element's non-surviving
  *   destinations (research §5b), collapsed into the one row that already represents that logical
@@ -383,7 +383,7 @@ private data class UpsertBuildResult(
  * content-based identity that makes the *document*, not one arbitrarily-chosen destination
  * outbound, the thing this row's identity is pinned to.
  *
- * Resolves spec §4.3's documented, bounded duplicate-outbound collision **before** any DB write
+ * Resolves M4 spec §4.3's documented, bounded duplicate-outbound collision **before** any DB write
  * (Task 11 review fix, Critical 1 and Important 2): a computed `identityHash` already claimed —
  * by an earlier entry in this same batch, or by [protectedHashes] (spec D4's kept-active rows,
  * which this sync never touches and must never let a new entry silently displace) — drops that
@@ -470,7 +470,7 @@ private fun buildUpserts(
     return UpsertBuildResult(entities, duplicatesDropped, balancerMembersCollapsed)
 }
 
-/** The first failure's redacted reason (§5.6) — never the body. [ParseFailure]'s fields are closed vocabulary. */
+/** The first failure's redacted reason (ARCHITECTURE.md §5.6) — never the body. [ParseFailure]'s fields are closed vocabulary. */
 private fun List<ParseFailure>.redactedDetail(): String =
     firstOrNull()?.let { "${it.reason}: ${it.detail}" } ?: "unknown"
 

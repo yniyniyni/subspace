@@ -9,7 +9,7 @@ import org.json.JSONObject
  * Thrown when libXray rejects a request.
  *
  * The message can quote the config back, so callers must redact before it
- * reaches a log or the UI (§5.6). `ConnectionState.failure()` does this.
+ * reaches a log or the UI (ARCHITECTURE.md §5.6). `ConnectionState.failure()` does this.
  */
 public class XrayException(
     message: String,

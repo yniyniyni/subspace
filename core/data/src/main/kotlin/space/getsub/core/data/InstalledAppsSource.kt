@@ -46,7 +46,7 @@ constructor(
      * defect, not a cosmetic one.
      *
      * On [Dispatchers.IO]: this walks every installed package and resolves a
-     * label for each, which is far too slow for the main thread (§5.3).
+     * label for each, which is far too slow for the main thread (ARCHITECTURE.md §5.3).
      */
     public suspend fun installed(): List<InstalledApp> =
         withContext(Dispatchers.IO) {

@@ -31,7 +31,7 @@ class SubscriptionSyncFailureTest {
 
     @Test
     fun everyFetchFailureTranslatesToItsOwnSyncFailure() {
-        // Total and injective: no member silently collapses onto another's meaning (§7's taxonomy
+        // Total and injective: no member silently collapses onto another's meaning (M4 spec §7's taxonomy
         // is closed, and a collapse here would show the user the wrong diagnosis).
         val translated = FetchFailure.entries.map { it.toSyncFailure() }
 

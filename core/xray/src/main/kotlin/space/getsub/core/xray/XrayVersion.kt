@@ -22,7 +22,7 @@ private const val FIELD_VERSION = "version"
  * permitted seam across the `:core:xray` boundary a feature module may call
  * through, same as [XrayController]'s own public methods.
  *
- * §5.3: every libXray call is slow, hence [io] (default [Dispatchers.IO]).
+ * ARCHITECTURE.md §5.3: every libXray call is slow, hence [io] (default [Dispatchers.IO]).
  * §10.4: a failure here must be legible, not silently swallowed —
  * [space.getsub.core.xray.LibXrayInvoke.call] already throws
  * [XrayException] on a failed envelope, and this does not catch it. Callers

@@ -177,7 +177,7 @@ private fun ConnectVisualState.actionDescription(): String =
  * A tap during [ConnectVisualState.Connecting] is silently refused: [onClick]
  * is only invoked outside that state. This guard lives here, not in the
  * caller, so every consumer gets it — a second tap mid-start must not queue a
- * second connect attempt (§5.3: the start sequence is already slow and
+ * second connect attempt (ARCHITECTURE.md §5.3: the start sequence is already slow and
  * async; a queued second start is a race, not a retry).
  *
  * [ConnectVisualState.Reconnecting] is deliberately **not** covered by that

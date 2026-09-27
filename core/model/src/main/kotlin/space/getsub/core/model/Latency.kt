@@ -47,7 +47,7 @@ public fun pingModeFrom(value: String?): PingMode =
  *
  * A typed value, never a message string: libXray's ping errors quote the config
  * that produced them, which carries the server address, UUID and REALITY key
- * (§5.6). The UI renders its own text from `strings.xml` off this enum.
+ * (ARCHITECTURE.md §5.6). The UI renders its own text from `strings.xml` off this enum.
  */
 public enum class LatencyOutcome {
     OK,

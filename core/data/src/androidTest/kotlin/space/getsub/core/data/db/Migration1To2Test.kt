@@ -70,7 +70,7 @@ class Migration1To2Test {
             cursor.getString(9) shouldBe "{}"
             cursor.isNull(10) shouldBe true // rawJson
             cursor.getInt(11) shouldBe 0
-            // The column every refresh must preserve — see spec §6.5.
+            // The column every refresh must preserve — see M4 spec §6.5.
             cursor.getLong(12) shouldBe 12345L
             cursor.isNull(13) shouldBe true // lastError
             cursor.getLong(14) shouldBe 100L
@@ -104,7 +104,7 @@ class Migration1To2Test {
     fun manyManualProfilesCoexistWithANullSubscriptionKey() {
         // SQLite treats NULLs as distinct in a UNIQUE index, which is what lets
         // one index serve both hand-imported and subscription-backed rows
-        // (spec §4.2). If this fails, the index was declared without allowing it.
+        // (M4 spec §4.2). If this fails, the index was declared without allowing it.
         helper.createDatabase(TEST_DB, 1).use { db ->
             db.execSQL(
                 "INSERT INTO profile_groups (id, name, source, position, createdAt) " +

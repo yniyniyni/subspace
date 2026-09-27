@@ -198,12 +198,12 @@ class RoutingRepositoryTest {
     /**
      * Stores [profile] the way a completed import leaves it.
      *
-     * `upsertProfile` alone is only step 1 of spec §7.4 — it writes the row as
+     * `upsertProfile` alone is only step 1 of M6 spec §7.4 — it writes the row as
      * `Pending` and publishes nothing. The `decideFor` gates below describe what
      * happens when a provider re-delivers content that already **landed**, so
      * their fixture has to reach the state `commitGeneration` produces. Setting
      * up with the bare upsert made these tests assert gate behaviour against a
-     * half-finished import, which is the state §7.5 requires to stay retryable.
+     * half-finished import, which is the state M6 spec §7.5 requires to stay retryable.
      */
     private suspend fun publish(profile: RoutingProfile) {
         val id = stack.repository.upsertProfile(profile, RoutingSourceKind.Header, subscriptionId = null)
@@ -557,7 +557,7 @@ class RoutingRepositoryTest {
         // true hasDns flag.
         stored.dns shouldBe profile.dns
         stored.assetGeneration shouldBe 0L
-        // §7.4 step 1: "Approved import writes the row with assetState = Pending."
+        // M6 spec §7.4 step 1: "Approved import writes the row with assetState = Pending."
         stored.assetState shouldBe RuleSetAssetState.Pending
         stored.assetFailure shouldBe null
         stored.toString() shouldNotContain "geosite:cn"

@@ -276,7 +276,7 @@ class ProfileRepositoryTest {
             after.identityHash shouldBe before.identityHash
         }
 
-    // Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (§4.2) makes
+    // Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (M3 spec §4.2) makes
     // ProfileDao.updateProfile's default ABORT conflict strategy throw
     // SQLiteConstraintException when the recomputed identity collides with a sibling
     // profile already in the group. Before this fix, ProfileRepository.update() let that

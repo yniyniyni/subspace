@@ -48,7 +48,7 @@ public class InMemoryRoutingStack(context: Context) {
      * `decideFor` must still recognise identical content as unchanged: the stored
      * column records what an *older* algorithm computed, and treating it as
      * authoritative makes every profile re-prompt on the first sync after an
-     * upgrade — spec §4.3's "one unexplained review sheet per user".
+     * upgrade — M6.5 spec §4.3's "one unexplained review sheet per user".
      */
     public fun forgeStoredFingerprints(value: String) {
         database.openHelper.writableDatabase.execSQL(

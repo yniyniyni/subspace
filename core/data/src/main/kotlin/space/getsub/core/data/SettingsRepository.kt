@@ -260,7 +260,7 @@ internal constructor(
      *
      * Stored as a comma-joined id list: [space.getsub.core.model.GeoSource] ids are
      * plain hyphenated identifiers the catalogue defines (never user-supplied text or a URL), so a
-     * plain split is safe and carries nothing §5.6 would otherwise redact.
+     * plain split is safe and carries nothing ARCHITECTURE.md §5.6 would otherwise redact.
      */
     public val selectedGeoSourceIds: Flow<Set<String>> =
         dao.observe(KEY_SELECTED_GEO_SOURCE_IDS).map { stored ->
@@ -326,7 +326,7 @@ internal constructor(
      *
      * The default is today's hardcoded literal, deliberately: making the default
      * identical to current behaviour is what lets the generator keep emitting the
-     * hardware-proven M1 config byte-for-byte when nothing asks for DNS (§7.4).
+     * hardware-proven M1 config byte-for-byte when nothing asks for DNS (M6.5 spec §7.4).
      */
     public val dnsResolver: Flow<DnsResolver> =
         dao.observeDnsSnapshot().map { snapshot ->
@@ -351,10 +351,10 @@ internal constructor(
     }
 
     /**
-     * Whether the tunnel is *supposed* to be up (spec §1).
+     * Whether the tunnel is *supposed* to be up (M8 spec §1).
      *
      * Half the session intent; [activeProfileId] is the other half. Written by
-     * `TunnelService` alone — §5.5, `:main` renders it and never sets it. It goes
+     * `TunnelService` alone — ARCHITECTURE.md §5.5, `:main` renders it and never sets it. It goes
      * true when a connect command is **accepted**, not when connect succeeds, so a
      * boot-time start that dies at `StartingCore` is still wanted and still retried.
      */
@@ -383,7 +383,7 @@ internal constructor(
     /** The one-shot counterpart to [activeProfileId], for the same reason. */
     public suspend fun activeProfileIdNow(): Long? = dao.value(KEY_ACTIVE_PROFILE)?.toLongOrNull()
 
-    /** Spec §4.2: connect on every boot when on, regardless of prior session state. */
+    /** M8 spec §4.2: connect on every boot when on, regardless of prior session state. */
     public val bootAutostart: Flow<Boolean> =
         dao.observe(KEY_BOOT_AUTOSTART).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
 
@@ -392,12 +392,12 @@ internal constructor(
     }
 
     /**
-     * Whether the TUN is retained while a wanted session is down (spec §6).
+     * Whether the TUN is retained while a wanted session is down (M8 spec §6).
      *
      * **Defaults to on.** For this app's audience a leak is the worse failure, and
      * the objection to defaulting on — sudden total loss of connectivity with no
      * visible cause — is answered by the notification, which says exactly that and
-     * offers the way out (spec §6.3).
+     * offers the way out (M8 spec §6.3).
      */
     public val failClosed: Flow<Boolean> =
         dao.observe(KEY_FAIL_CLOSED).map { stored -> stored?.toBooleanStrictOrNull() ?: true }
@@ -427,7 +427,7 @@ internal constructor(
         dao.put(SettingEntity(key = KEY_PER_TAG_BREAKDOWN, value = enabled.toString()))
     }
 
-    /** §9's "prompt once, respect refusal" (spec §7.2). */
+    /** §9's "prompt once, respect refusal" (M8 spec §7.2). */
     public val batteryPromptShown: Flow<Boolean> =
         dao.observe(KEY_BATTERY_PROMPT_SHOWN).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
 

@@ -12,7 +12,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * Review round 2, Important 3: this is the one fetch that carries a §5.6 secret — the subscription
+ * Review round 2, Important 3: this is the one fetch that carries a ARCHITECTURE.md §5.6 secret — the subscription
  * URL — and it had no runnable coverage of its proxy path at all. `ProxiedFetchTest` exercises only
  * [GeoFileFetcher]; `SubscriptionSyncerTest`'s proxy cases live in `:core:data`'s `androidTest` and
  * assert no more than "an `Int` reaches `SubscriptionRequest`", and nothing in this environment runs

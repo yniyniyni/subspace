@@ -29,7 +29,7 @@ private val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
  * in every string that ever reaches [redact] — including the config libXray
  * quotes back when `testXray` rejects one. `RoutingEntries` accepts any domain
  * body without whitespace, `/` or `:`, so `corp.internal.dat` is a legal routing
- * rule, and a routing rule is user browsing data under §5.6. Anchoring to the
+ * rule, and a routing rule is user browsing data under ARCHITECTURE.md §5.6. Anchoring to the
  * whole message means the exemption can only ever apply to a string that
  * contains nothing else — a config dump with a `.dat`-suffixed rule in it is not
  * one, and is redacted normally.

@@ -248,7 +248,7 @@ class RedactionTest {
     /**
      * §10.4: `FailureReason.GeoDataMissing`'s entire purpose is naming exactly
      * which `.dat` file is missing so the user re-downloads it instead of going
-     * looking for a broken server. A filename is shape, not content (§5.6) — it
+     * looking for a broken server. A filename is shape, not content (ARCHITECTURE.md §5.6) — it
      * is not the "server address" this function exists to protect, and if this
      * regresses the failure reads "Geo data missing — `<redacted>, <redacted>`",
      * which tells the user nothing.
@@ -288,7 +288,7 @@ class RedactionTest {
      * string this function ever sees, including the config libXray quotes back
      * when `testXray` rejects one. `RoutingEntries` accepts any domain body
      * without whitespace, `/` or `:`, so `corp.internal.dat` is a legal routing
-     * rule — and a routing rule is browsing data under §5.6. If either assertion
+     * rule — and a routing rule is browsing data under ARCHITECTURE.md §5.6. If either assertion
      * here starts passing a hostname through, the exemption has been widened
      * from "this message is a filename list" to "this token looks like a
      * filename", and that is a leak.

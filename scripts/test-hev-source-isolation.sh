@@ -15,7 +15,10 @@ fixture_lwip="$fixture_hev/third-part/lwip"
 fixture_prepare="$fixture_repo/scripts/prepare-hev-socks5-tunnel.sh"
 fixture_locked_prepare="$fixture_repo/scripts/prepare-hev-socks5-tunnel-locked.sh"
 fixture_lock_wrapper="$fixture_repo/scripts/with-hev-prepare-lock.pl"
-fixture_patch="$fixture_repo/third_party/hev-patches/0001-nonblocking-pending-stop.patch"
+fixture_patches=(
+    "$fixture_repo/third_party/hev-patches/0001-nonblocking-pending-stop.patch"
+    "$fixture_repo/third_party/hev-patches/0002-skip-timeout-if-not-alive.patch"
+)
 fixture_output="$fixture_repo/service/build/generated/hev-socks5-tunnel"
 expected_main_blob="4531e91976da4c57f596bb20eda5ed9f02747caf"
 valid_version_name="8e1052ec103a981107e8c0e2a2001ece5012321e.1.2.3"
@@ -149,7 +152,7 @@ assert_no_scoped_debris() {
 expect_malformed_output_rejected() {
     local label="$1"
 
-    if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
         >"$scratch_root/malformed-$label.log" 2>&1; then
         echo "preparation accepted malformed generated root: $label" >&2
         exit 1
@@ -167,7 +170,7 @@ start_paused_preparation() {
     mkfifo "$active_pause_fifo"
     SUBSPACE_HEV_PREPARE_TEST_PAUSE_FIFO="$active_pause_fifo" \
     SUBSPACE_HEV_PREPARE_TEST_PAUSE_READY="$active_pause_ready" \
-        "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+        "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
         >"$scratch_root/$label-holder.log" 2>&1 &
     runner_holder_pid=$!
     for _ in {1..200}; do
@@ -186,7 +189,7 @@ start_paused_preparation() {
 start_preparation_contender() {
     local label="$1"
 
-    "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
         >"$scratch_root/$label-contender.log" 2>&1 &
     runner_contender_pid=$!
     sleep 0.25
@@ -236,7 +239,7 @@ cp "$script_dir/with-hev-prepare-lock.pl" "$fixture_lock_wrapper"
 reset_external_sentinel
 rm -rf "$fixture_repo/service/build"
 ln -s "$external_dir" "$fixture_repo/service/build"
-if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
     >"$scratch_root/service-build-symlink.log" 2>&1; then
     echo "preparation accepted a symlinked service/build ancestor" >&2
     exit 1
@@ -247,13 +250,26 @@ rm "$fixture_repo/service/build"
 reset_external_sentinel
 mkdir -p "$fixture_repo/service/build"
 ln -s "$external_dir" "$fixture_repo/service/build/generated"
-if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
     >"$scratch_root/service-build-generated-symlink.log" 2>&1; then
     echo "preparation accepted a symlinked service/build/generated ancestor" >&2
     exit 1
 fi
 assert_external_sentinel_unchanged
 rm "$fixture_repo/service/build/generated"
+
+# A truncated patch series (0001 alone, missing 0002) must be refused, not
+# silently accepted as a shorter-but-valid series.
+clear_fixture_output
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[0]}" \
+    >"$scratch_root/truncated-series.log" 2>&1; then
+    echo "preparation accepted a truncated HEV patch series" >&2
+    exit 1
+fi
+if [[ -e "$fixture_output" ]]; then
+    echo "rejected truncated HEV patch series left generated output behind" >&2
+    exit 1
+fi
 
 # Kill the real preparation process while its shell is paused inside the
 # inherited-lock critical section. The pause is a Bash builtin, so it creates
@@ -275,14 +291,14 @@ cp "$outer_tracked" "$scratch_root/outer-tracked"
 cp "$nested_tracked" "$scratch_root/nested-tracked"
 
 printf '\n' >>"$outer_tracked"
-if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" >"$scratch_root/outer-tracked.log" 2>&1; then
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" >"$scratch_root/outer-tracked.log" 2>&1; then
     echo "preparation accepted a tracked outer HEV modification" >&2
     exit 1
 fi
 cp "$scratch_root/outer-tracked" "$outer_tracked"
 
 printf '\n' >>"$nested_tracked"
-if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" >"$scratch_root/nested-tracked.log" 2>&1; then
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" >"$scratch_root/nested-tracked.log" 2>&1; then
     echo "preparation accepted a tracked nested HEV modification" >&2
     exit 1
 fi
@@ -304,7 +320,7 @@ printf '\n/src/core/subspace-ignored-injection.c\n' >>"$nested_exclude"
 git -C "$fixture_hev" check-ignore -q src/subspace-ignored-injection.c
 git -C "$fixture_lwip" check-ignore -q src/core/subspace-ignored-injection.c
 
-"$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch"
+"$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}"
 if [[ -L "$fixture_output/current" ]]; then
     mutation_tree="$fixture_output/current"
 else
@@ -385,7 +401,7 @@ ln -s "versions/$valid_version_name" "$fixture_output/current"
 expect_malformed_output_rejected current-unreviewed-inventory
 
 clear_fixture_output
-"$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch"
+"$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}"
 
 # A malformed coordination path must fail closed without renaming or unlinking
 # a symlink that points outside the generated-output scope.
@@ -396,7 +412,7 @@ external_lock_blob="$(git hash-object "$external_lock_sentinel")"
 touch -t 200001010000 "$external_lock_sentinel"
 lock_path="${fixture_output}.prepare.lock"
 ln -s "$external_lock_sentinel" "$lock_path"
-if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
     >"$scratch_root/malformed-lock.log" 2>&1; then
     echo "preparation accepted a symlinked lock path" >&2
     exit 1
@@ -410,7 +426,7 @@ fi
 rm -f "$lock_path"
 
 mkdir "$lock_path"
-if "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+if "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
     >"$scratch_root/malformed-lock-directory.log" 2>&1; then
     echo "preparation accepted a directory as its lock path" >&2
     exit 1
@@ -420,13 +436,13 @@ if [[ ! -d "$lock_path" || -L "$lock_path" || -e "$fixture_output" ]]; then
     exit 1
 fi
 rmdir "$lock_path"
-"$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch"
+"$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}"
 
 # The internal implementation is not a public bypass. It rejects a missing
 # descriptor, and a caller-opened but unlocked descriptor cannot pass while a
 # real owner holds the expected lock inode.
 if /bin/bash "$fixture_locked_prepare" \
-    "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
     >"$scratch_root/direct-internal.log" 2>&1; then
     echo "internal HEV preparation accepted a missing inherited lock" >&2
     exit 1
@@ -438,7 +454,7 @@ lock_path="${fixture_output}.prepare.lock"
 exec 9<>"$lock_path"
 if SUBSPACE_HEV_PREPARE_LOCK_FD=9 \
     /bin/bash "$fixture_locked_prepare" \
-        "$fixture_hev" "$fixture_output" "$fixture_patch" \
+        "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
         >"$scratch_root/forged-lock-fd.log" 2>&1; then
     echo "internal HEV preparation accepted an unlocked forged descriptor" >&2
     exit 1
@@ -474,7 +490,7 @@ reader_pid=$!
 
 prepare_pids=()
 for iteration in {1..8}; do
-    "$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch" \
+    "$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}" \
         >"$scratch_root/concurrent-$iteration.log" 2>&1 &
     prepare_pids+=("$!")
 done
@@ -497,7 +513,7 @@ if [[ -e "$reader_failure" ]]; then
     exit 1
 fi
 
-"$fixture_prepare" "$fixture_hev" "$fixture_output" "$fixture_patch"
+"$fixture_prepare" "$fixture_hev" "$fixture_output" "${fixture_patches[@]}"
 if [[ ! -L "$fixture_output/current" ||
     "$(git hash-object "$fixture_output/current/src/hev-main.c")" != "$expected_main_blob" ]]; then
     echo "final concurrent HEV inventory is missing or corrupt" >&2

@@ -12,7 +12,11 @@ plugins {
 // usefully rather than with a screen of ndk-build errors.
 val hevDir = rootProject.file("third_party/hev-socks5-tunnel")
 val hevBaseCommit = "0a05221275a51a884d93328c55fc2fbc9e9b6974"
-val hevPatchFile = rootProject.file("third_party/hev-patches/0001-nonblocking-pending-stop.patch")
+val hevPatchFiles =
+    listOf(
+        rootProject.file("third_party/hev-patches/0001-nonblocking-pending-stop.patch"),
+        rootProject.file("third_party/hev-patches/0002-skip-timeout-if-not-alive.patch"),
+    )
 val prepareHevScript = rootProject.file("scripts/prepare-hev-socks5-tunnel.sh")
 val prepareHevLockedScript = rootProject.file("scripts/prepare-hev-socks5-tunnel-locked.sh")
 val prepareHevLockWrapper = rootProject.file("scripts/with-hev-prepare-lock.pl")
@@ -35,7 +39,7 @@ val preparePatchedHev =
         description = "Verifies the pinned HEV submodule and applies Subspace's parent-owned patch"
 
         inputs.property("hevBaseCommit", hevBaseCommit)
-        inputs.file(hevPatchFile)
+        inputs.files(hevPatchFiles)
         inputs.file(prepareHevScript)
         inputs.file(prepareHevLockedScript)
         inputs.file(prepareHevLockWrapper)
@@ -50,7 +54,7 @@ val preparePatchedHev =
             prepareHevScript.absolutePath,
             hevDir.absolutePath,
             patchedHevDir.get().asFile.absolutePath,
-            hevPatchFile.absolutePath,
+            *hevPatchFiles.map { it.absolutePath }.toTypedArray(),
         )
     }
 
@@ -61,7 +65,7 @@ val testHevSourceIsolation =
         dependsOn(preparePatchedHev)
 
         inputs.property("hevBaseCommit", hevBaseCommit)
-        inputs.file(hevPatchFile)
+        inputs.files(hevPatchFiles)
         inputs.file(prepareHevScript)
         inputs.file(prepareHevLockedScript)
         inputs.file(prepareHevLockWrapper)

@@ -36,7 +36,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import space.getsub.core.data.ThemePreference
 import space.getsub.core.model.DnsTransport
 import space.getsub.core.model.GeoDataKind
@@ -368,8 +370,17 @@ private fun TunnelSection(
         onOpenBatterySettings = { openBatterySettings(context) },
     )
 
-    LaunchedEffect(state.openVpnSettingsRequested) {
-        if (state.openVpnSettingsRequested) {
+    // Controller ruling R14 (M8.5 spec §6 #10, final fix wave finding #1): the confirm path on
+    // the battery dialog below starts the battery-optimisation list on top of this screen, which
+    // moves this screen off RESUMED without stopping it — Compose keeps composing frames until
+    // ON_STOP. Gating the deep link on RESUMED, rather than firing it the instant the ViewModel
+    // requests it, is what stops it from launching a frame later and burying that battery screen
+    // under ACTION_VPN_SETTINGS: the launch now waits for the user to come back from battery
+    // settings (or, when no prompt is due, fires immediately, since the screen is resumed then
+    // too).
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    LaunchedEffect(state.openVpnSettingsRequested, lifecycleState) {
+        if (shouldLaunchVpnSettings(state.openVpnSettingsRequested, lifecycleState)) {
             openVpnSettings(context)
             actions.onVpnSettingsOpened()
         }

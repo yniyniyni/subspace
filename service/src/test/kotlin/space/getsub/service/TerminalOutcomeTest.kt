@@ -363,4 +363,79 @@ class TerminalOutcomeTest {
                 .settle(1, ConnectionState.Disconnected, { false }, {}, onCommitted = { ran = true })
             ran shouldBe false
         }
+
+    /**
+     * Final fix wave finding #2: [settleHandlingLifecycleRejection] wraps [TerminalOutcome.settle]
+     * one-for-one and both `TunnelService` attach sites go through it exclusively, so if it ever
+     * stopped forwarding [TerminalOutcome.settle]'s `onCommitted` parameter, retry retirement,
+     * the counter reset, `trafficLoop.start()` and the detector install would all silently stop
+     * running — with no failing test to say why, since `onCommitted` defaults to `{}` and every
+     * other assertion here calls `settle` directly, never the wrapper. These three tests call the
+     * extension itself.
+     */
+    @Test
+    fun `settleHandlingLifecycleRejection runs onCommitted, not onLifecycleRejected, when committed`() =
+        runTest {
+            var committedRan = false
+            var lifecycleRejectedRan = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 1 }, publish = {})
+
+            val settled =
+                outcome.settleHandlingLifecycleRejection(
+                    gen = 1,
+                    state = ConnectionState.Disconnected,
+                    lifecycle = { true },
+                    persist = {},
+                    onLifecycleRejected = { lifecycleRejectedRan = true },
+                    onCommitted = { committedRan = true },
+                )
+
+            settled shouldBe TerminalSettlement.Committed
+            committedRan shouldBe true
+            lifecycleRejectedRan shouldBe false
+        }
+
+    @Test
+    fun `settleHandlingLifecycleRejection runs onLifecycleRejected, not onCommitted, when lifecycle is rejected`() =
+        runTest {
+            var committedRan = false
+            var lifecycleRejectedRan = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 1 }, publish = {})
+
+            val settled =
+                outcome.settleHandlingLifecycleRejection(
+                    gen = 1,
+                    state = ConnectionState.Disconnected,
+                    lifecycle = { false },
+                    persist = {},
+                    onLifecycleRejected = { lifecycleRejectedRan = true },
+                    onCommitted = { committedRan = true },
+                )
+
+            settled shouldBe TerminalSettlement.LifecycleRejected
+            lifecycleRejectedRan shouldBe true
+            committedRan shouldBe false
+        }
+
+    @Test
+    fun `settleHandlingLifecycleRejection runs neither callback when superseded`() =
+        runTest {
+            var committedRan = false
+            var lifecycleRejectedRan = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 2 }, publish = {})
+
+            val settled =
+                outcome.settleHandlingLifecycleRejection(
+                    gen = 1,
+                    state = ConnectionState.Disconnected,
+                    lifecycle = { true },
+                    persist = {},
+                    onLifecycleRejected = { lifecycleRejectedRan = true },
+                    onCommitted = { committedRan = true },
+                )
+
+            settled shouldBe TerminalSettlement.Superseded
+            committedRan shouldBe false
+            lifecycleRejectedRan shouldBe false
+        }
 }

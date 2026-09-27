@@ -88,7 +88,10 @@ internal data class RuleSetEditorState(
     val saveProblem: SaveProblem? = null,
     val saved: Boolean = false,
 ) {
-    /** The stored entries for [outcome]/[field]. ARCHITECTURE.md §5.6: this is the screen's whole job — display, never log. */
+    /**
+     * The stored entries for [outcome]/[field]. ARCHITECTURE.md §5.6: this is the
+     * screen's whole job — display, never log.
+     */
     fun bucket(
         outcome: RouteOutcome,
         field: BucketField,

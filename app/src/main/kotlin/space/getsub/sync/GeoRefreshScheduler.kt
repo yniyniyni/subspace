@@ -52,7 +52,7 @@ internal class GeoRefreshDecisions(
      * any row and nothing anywhere records that it happened. Left silent, a locked or corrupt
      * database becomes indistinguishable from "nothing was due today" — the ordinary case, most
      * days — which is exactly the shape §10.4 calls out by name. This lambda is what lets
-     * production log it (an exception class name only, §5.6 — no path, no URL) while keeping
+     * production log it (an exception class name only, ARCHITECTURE.md §5.6 — no path, no URL) while keeping
      * [refreshDue]'s never-throw guarantee provable by a plain JVM test, with no Android `Log` call
      * inside this class for that test to trip over.
      */
@@ -220,7 +220,7 @@ internal object GeoRefreshModule {
             workManager = workManager,
             dueFiles = { dueGeoRequests(geoAssets, System.currentTimeMillis()) },
             install = { request ->
-                // §5.6: the filename is shape, not a secret — the source URL that goes with it
+                // ARCHITECTURE.md §5.6: the filename is shape, not a secret — the source URL that goes with it
                 // is, and stays out of this line. Without this, a scheduled run that installed
                 // nothing (dueFiles() came back empty — the ordinary case, most days) is
                 // indistinguishable in the log from one that never ran at all, which is exactly
@@ -231,7 +231,7 @@ internal object GeoRefreshModule {
             onMetered = { settings.geoRefreshOnMetered.first() },
             // Review round 3, Residual 2: a locked or corrupt database must not be
             // indistinguishable from "nothing was due today" — see GeoRefreshDecisions'
-            // onDueFilesFailure KDoc. Exception class name only (§5.6): no path, no URL.
+            // onDueFilesFailure KDoc. Exception class name only (ARCHITECTURE.md §5.6): no path, no URL.
             onDueFilesFailure = { error ->
                 Log.w(TAG, "geo refresh: could not compute due files: ${error.javaClass.simpleName}")
             },

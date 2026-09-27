@@ -25,7 +25,7 @@ class GeoAssetPathTest {
 
     @Test
     fun theDirectoryIsNotTheCacheDirectory() {
-        // §5.6's neighbour: cache is more readily harvested, and the same
+        // ARCHITECTURE.md §5.6's neighbour: cache is more readily harvested, and the same
         // reasoning that puts the config in filesDir puts geo data there.
         geoAssetDirectory(context).absolutePath shouldEndWith "/files/geo"
     }

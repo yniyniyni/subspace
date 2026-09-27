@@ -10,7 +10,7 @@ import kotlinx.coroutines.CancellationException
  * is rethrown only after the reschedule attempt has completed.
  *
  * [reportFailure] receives only the exception's class name. Passing the [Exception] itself would
- * let a caller accidentally expose its message, which can contain profile fields or URLs (§5.6).
+ * let a caller accidentally expose its message, which can contain profile fields or URLs (ARCHITECTURE.md §5.6).
  */
 internal suspend fun runForegroundRefresh(
     refresh: suspend () -> Unit,

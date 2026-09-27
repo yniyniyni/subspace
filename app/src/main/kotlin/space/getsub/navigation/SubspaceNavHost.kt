@@ -178,7 +178,7 @@ fun SubspaceNavHost(
                 // SAME sheet instance the user opened it from — see its own
                 // KDoc for why that must be the Servers entry, not this
                 // destination's, and why the result does not travel through
-                // NavBackStackEntry.savedStateHandle (§5.6).
+                // NavBackStackEntry.savedStateHandle (ARCHITECTURE.md §5.6).
                 //
                 // remember keyed on this destination's OWN entry, not
                 // navController — lint's UnrememberedGetBackStackEntry rule

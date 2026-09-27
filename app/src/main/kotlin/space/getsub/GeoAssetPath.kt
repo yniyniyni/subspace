@@ -8,11 +8,11 @@ import java.io.File
 /**
  * Where installed geo databases (`geoip.dat`, `geosite.dat`, and any custom
  * `.dat` a user adds) live. Internal storage, not cache — same reasoning as
- * the config file (§5.6).
+ * the config file (ARCHITECTURE.md §5.6).
  *
  * This lives in `:app` rather than `:core:data` because `GeoModule` — the one
  * module with both `GeoAssetRepository` and this `Context`-scoped path in
- * scope (§4) — needs it to supply `GeoAssetRoot`, and `:core:xray`'s
+ * scope (M5 spec §4) — needs it to supply `GeoAssetRoot`, and `:core:xray`'s
  * `XrayController` needs the identical path, so the two must read it from one
  * function rather than risk two copies drifting apart.
  *

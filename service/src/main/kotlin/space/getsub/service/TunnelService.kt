@@ -3780,7 +3780,7 @@ class TunnelService : VpnService() {
     /**
      * [cancelBackoffRetry]'s body for callers that already hold [lock]. Five in this file:
      * [stopTunnel]'s one-shot state capture, [settleTerminalFailure]'s `lifecycle` lambda,
-     * [armBackoffRetryLocked]'s own cancel-then-arm, and — since the P1 fix — [attachTun] and
+     * [armBackoffRetryLocked]'s own cancel-then-arm, and — since M8.5 Task 9 — [attachTun] and
      * [attachRetainedTun]'s committed-`Connected` `onCommitted` lambdas (see
      * [cancelBackoffRetry]'s call-site list for why those two moved here).
      *

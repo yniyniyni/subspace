@@ -171,7 +171,7 @@ class NetworkTransitionTest {
     // ── Losing the network clears the suppression state ─────────────────────
     //
     // These pin an invariant that only became load-bearing once M8 spec §2.4's
-    // no-network-no-timer rule was enforced on both edges. `scheduleBackoffRetry`
+    // no-network-no-timer rule was enforced on both edges. `armBackoffRetryLocked`
     // now refuses to arm a timer while `activeNetwork` is null, so for a
     // `Reconnecting` session with no network the `onAvailable` callback is the
     // ONLY thing that can resume it. A suppressed callback used to cost one

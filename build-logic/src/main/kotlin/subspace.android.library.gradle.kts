@@ -10,7 +10,7 @@ extensions.configure<LibraryExtension> {
     // compileSdk is deliberately ahead of targetSdk (36, set in :app).
     // androidx.lifecycle 2.11 refuses to be consumed below 37. compileSdk only
     // governs which APIs are visible at build time and has no runtime effect, so
-    // ARCHITECTURE.md §9/§14.1's foregroundServiceType analysis — which depends on
+    // ARCHITECTURE.md §9/ARCHITECTURE.md §14.1's foregroundServiceType analysis — which depends on
     // targetSdk — is unaffected. Do not "align" these two numbers.
     compileSdk = 37
 
@@ -44,7 +44,7 @@ extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtensi
 val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
 
 dependencies {
-    // §11 puts parsers, config generation, and routing-rule mapping on JVM unit
+    // ARCHITECTURE.md §11 puts parsers, config generation, and routing-rule mapping on JVM unit
     // tests and expects them to be thorough, so every Android library module gets
     // the same unit-test kit the :core:model/:core:parser convention plugin has.
     add("testImplementation", libs.findLibrary("junit").get())
@@ -53,7 +53,7 @@ dependencies {
     add("androidTestImplementation", libs.findLibrary("junit").get())
     add("androidTestImplementation", libs.findLibrary("androidx-test-runner").get())
     add("androidTestImplementation", libs.findLibrary("androidx-test-ext-junit").get())
-    // XrayController's API is suspend-based (§5.3 puts every libXray call on IO),
+    // XrayController's API is suspend-based (ARCHITECTURE.md §5.3 puts every libXray call on IO),
     // so instrumented tests need runTest to drive it.
     add("androidTestImplementation", libs.findLibrary("kotlinx-coroutines-test").get())
 }

@@ -34,7 +34,7 @@ import javax.inject.Inject
  * [SyncResult] mapping unit-testable without a `Context`. [quantity] is
  * non-null only for the plural success case; the failure branch carries no
  * arguments at all, which is what guarantees no URL or body can be
- * interpolated into a message (§5.6).
+ * interpolated into a message (ARCHITECTURE.md §5.6).
  */
 internal data class UserMessage(
     @param:StringRes @param:PluralsRes val resId: Int,
@@ -43,7 +43,7 @@ internal data class UserMessage(
 
 /**
  * Maps a subscription sync outcome to what the user reads, without ever
- * touching the subscription's own URL or the fetch response body (§5.6) —
+ * touching the subscription's own URL or the fetch response body (ARCHITECTURE.md §5.6) —
  * [SyncResult]'s four variants carry only counts and a closed
  * [SubscriptionSyncFailure] vocabulary — `:core:data`'s own translation of
  * `:core:network`'s `FetchFailure`, never that type directly (see
@@ -95,7 +95,7 @@ private fun SyncResult.Synced.syncedMessage(): UserMessage =
  *
  * `internal`, not `private`: the subscription detail screen (Task 15) renders this exact
  * vocabulary for a *persisted* failure ([space.getsub.core.data.StoredSubscription.lastFetchStatus],
- * §7's taxonomy — see that module's `LastFetchState`/`toLastFetchState`) as well as this file's
+ * M4 spec §7's taxonomy — see that module's `LastFetchState`/`toLastFetchState`) as well as this file's
  * own ephemeral one. Sharing this eight-branch `when` is the point; re-deriving the same
  * enum-to-string mapping a second time in that screen's own file would be exactly the drift
  * [failureText]'s own KDoc warns `DetailField.labelRes` against for a different mapping.
@@ -141,11 +141,11 @@ private fun isSubscriptionUrl(url: String): Boolean = DirectiveKind.Url.canonica
  * ViewModel state for the same reason before Task 17 retired it —
  * `rememberSaveable` marshals its value into the hosting Activity's
  * saved-instance-state `Bundle`, and a pasted config can carry server
- * addresses, UUIDs and REALITY material (§5.6). Plain (non-`SavedStateHandle`)
+ * addresses, UUIDs and REALITY material (ARCHITECTURE.md §5.6). Plain (non-`SavedStateHandle`)
  * ViewModel state lives in process memory only and is gone on process death,
  * which is the right lifetime for this value — there is nothing here worth
  * surviving a process restart, and every byte of it is exactly the kind of
- * material §5.6 says must not sit somewhere it doesn't need to. [import]
+ * material ARCHITECTURE.md §5.6 says must not sit somewhere it doesn't need to. [import]
  * clears [input] once an import actually lands a profile (see its own KDoc);
  * a failed attempt keeps the text so the user can see and fix what they
  * pasted.
@@ -154,7 +154,7 @@ private fun isSubscriptionUrl(url: String): Boolean = DirectiveKind.Url.canonica
  * could not be read" — a stale/revoked URI, a provider I/O error, or a
  * permission revoked mid-flow. It carries nothing beyond the boolean itself:
  * an I/O exception's message can carry a path or provider detail, so it is
- * never read, let alone stored (§5.6).
+ * never read, let alone stored (ARCHITECTURE.md §5.6).
  *
  * [subscriptionResult] is Task 13's fifth route, "From subscription URL" —
  * the outcome of [ImportViewModel.addSubscription]'s call to
@@ -237,7 +237,7 @@ constructor(
     /**
      * Parses [raw] and persists whatever [SubscriptionParser] could make of it.
      *
-     * §5.6/§10.4: never throws and never logs [raw] — a clipboard paste or an
+     * ARCHITECTURE.md §5.6/§10.4: never throws and never logs [raw] — a clipboard paste or an
      * imported file *is* config content. [ImportState.failures] carries only
      * [ParseFailure]'s closed vocabulary, never the input that produced it.
      *
@@ -253,7 +253,7 @@ constructor(
         viewModelScope.launch {
             _state.update { ImportState(input = it.input, busy = true) }
 
-            // §5.3: the whole pass — a SHA-256 plus regex validation per
+            // ARCHITECTURE.md §5.3: the whole pass — a SHA-256 plus regex validation per
             // entry, a YAML document parse per Clash entry — must not run on
             // viewModelScope's Main.immediate dispatcher. Default, not IO:
             // this is pure CPU work with no blocking call in it, and IO's
@@ -301,7 +301,7 @@ constructor(
      * `new-url`/`fallback-url`, reused rather than re-implemented, because a
      * `file:` subscription URL typed by a user is the identical hazard in a
      * different place. A URL that fails this check is a silent no-op: this
-     * sheet has no separate field to report the failure against, and §5.6
+     * sheet has no separate field to report the failure against, and ARCHITECTURE.md §5.6
      * forbids echoing the text itself back in a message.
      *
      * [ProfileSource.addSubscription] (backed by
@@ -346,7 +346,7 @@ constructor(
  * The group name shown until the provider's own `profile-title` (if any)
  * lands on the first sync. Always the URL's host, never the full URL — the
  * path or query string is where a subscription token typically lives
- * (§5.6). [ImportViewModel.addSubscription] only calls this after
+ * (ARCHITECTURE.md §5.6). [ImportViewModel.addSubscription] only calls this after
  * [isSubscriptionUrl] has already accepted the same URL, which guarantees a
  * non-blank host (`DirectiveKind.Url`'s own rule) — `.orEmpty()` keeps this
  * total without a `!!` for the case that can't actually happen.

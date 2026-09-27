@@ -128,7 +128,7 @@ class HomeStateTest {
 
     @Test
     fun `the failure reason and detail survive until a retry begins`() {
-        // The state is mirrored verbatim (§5.5), so making it retryable must not
+        // The state is mirrored verbatim (ARCHITECTURE.md §5.5), so making it retryable must not
         // clear what it says — HomeScreen renders reason and detail from here.
         val state = HomeState(connection = failed, activeProfile = profile("tcp"))
 
@@ -154,7 +154,7 @@ class HomeStateTest {
         HomeState(activeProfile = profile("kcp")).activeProfileUnsupported shouldBe true
     }
 
-    // ── Disconnecting out of a reconnect (spec §7.3, ruling R23) ────────────
+    // ── Disconnecting out of a reconnect (M8 spec §7.3, ruling R23) ────────────
     //
     // A Retryable reason retries for as long as a network exists, so Reconnecting has no
     // bound, and with the kill switch on (the default) the user has no connectivity while

@@ -55,7 +55,7 @@ class SubscriptionDetailStateTest {
 
     @Test
     fun `the url is redacted for display`() {
-        // §5.6: the URL is a secret. Showing it in full invites a screenshot in
+        // ARCHITECTURE.md §5.6: the URL is a secret. Showing it in full invites a screenshot in
         // a support channel.
         redactUrl("https://panel.example.com/sub/abc123secret") shouldBe
             "https://panel.example.com/…"

@@ -22,7 +22,7 @@ import space.getsub.core.parser.routing.ConversionDrop
 import space.getsub.core.ui.theme.SubspaceTheme
 
 /**
- * Spec §6's five disclosures, as rendered. [ImportReviewViewModelTest] is the
+ * M6 spec §6's five disclosures, as rendered. [ImportReviewViewModelTest] is the
  * JVM proof that preview never fetches and confirm is the write; this is the
  * layout half no unit test can see.
  *

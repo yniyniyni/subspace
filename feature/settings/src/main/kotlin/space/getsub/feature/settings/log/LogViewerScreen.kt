@@ -68,7 +68,7 @@ private val LOADING_TOP_PADDING = 48.dp
  * floating nav pill hides while this is on screen, so it carries its own
  * [onBack] the same way those two do.
  *
- * Sharing is a deliberate decision, not an oversight (spec §3.4): every byte
+ * Sharing is a deliberate decision, not an oversight (M8.5 spec §3.4): every byte
  * [LogViewerState.lines] holds was already redacted at capture, so sending it
  * is exactly as exposing as displaying it on screen, and [RedactionNotice]
  * renders that guarantee so the user can see what they are about to send
@@ -118,7 +118,7 @@ internal data class LogViewerActions(
  * exists.
  *
  * A [LazyColumn] over [LogViewerState.lines], not a scrolling `Column`
- * materialising every line: the ring is bounded at ~1 MiB (spec §3.3), which is
+ * materialising every line: the ring is bounded at ~1 MiB (M8.5 spec §3.3), which is
  * thousands of lines on a long session, so only the visible rows may ever
  * compose — the same reasoning
  * [PerAppScreen][space.getsub.feature.routing.PerAppScreen]'s own
@@ -182,7 +182,7 @@ private fun HeaderRow(
 }
 
 /**
- * Spec §3.4: rendered once, above the log itself, so the user sees this
+ * M8.5 spec §3.4: rendered once, above the log itself, so the user sees this
  * guarantee before reaching [HeaderRow]'s share action — never re-derived
  * from [LogViewerState.lines], which arrive already redacted (see
  * [LogViewerState]'s own KDoc).
@@ -266,7 +266,7 @@ private fun LogLineList(
 private const val SHARE_TEXT_CHAR_LIMIT = 100_000
 
 /**
- * Spec §3.4: `ACTION_SEND` with the ring's contents as plain text, never a
+ * M8.5 spec §3.4: `ACTION_SEND` with the ring's contents as plain text, never a
  * `FileProvider` attachment — see [LogViewerScreen]'s own KDoc for the full
  * reasoning. The chooser lets the user pick where it goes; this function
  * itself makes no network call.

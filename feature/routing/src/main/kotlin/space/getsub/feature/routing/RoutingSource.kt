@@ -311,7 +311,7 @@ internal interface RoutingSource {
      * read stays **behind this source**, not in [RuleSetEditorViewModel] —
      * the same reason [GeoAssetRepository.installedFileNames] does its own
      * `File.isFile` calls rather than handing `geoDirectory()` to
-     * `RoutingViewModel` and letting it touch the filesystem directly (§3/§4:
+     * `RoutingViewModel` and letting it touch the filesystem directly (§3/M5 spec §4:
      * the module that owns a path does the I/O against it). [BoundRoutingSource]
      * wraps this in [Dispatchers.IO], the same treatment
      * [GeoAssetRepository.installedFileNames] gives its own reads. (A plain

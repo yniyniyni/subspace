@@ -16,7 +16,7 @@ private const val RULE_COUNT_KEY = "ruleCount"
 /**
  * One code `countGeoData` found in a geo database, as [GeoCategories] reads it.
  *
- * §5.6 is not in play here: a category code (`"cn"`, `"category-ads-all"`) is a
+ * ARCHITECTURE.md §5.6 is not in play here: a category code (`"cn"`, `"category-ads-all"`) is a
  * fixed, upstream-published vocabulary entry, not a site or address the user
  * visits — the same distinction [RuleSetRow.name] draws for a rule set's own
  * name.
@@ -31,7 +31,7 @@ internal data class GeoCategory(val code: String, val ruleCount: Int)
  *
  * [RuleSetEditorViewModel] uses this to drive the rule set editor's
  * "browse categories" affordance — see [GeoCategory]'s own KDoc for why that is
- * not a §5.6 concern.
+ * not a ARCHITECTURE.md §5.6 concern.
  *
  * Parses with `kotlinx-serialization-json`, not `org.json.JSONObject`. Fix
  * round 1 review: this file's first draft used `org.json` and added a

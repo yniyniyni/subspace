@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- §12: strings live here from the first commit; no hardcoded UI text.
-     §5.6: no string here may interpolate a server address, uuid, or key —
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no hardcoded UI text.
+     ARCHITECTURE.md §5.6: no string here may interpolate a server address, uuid, or key —
      only names (not secrets) and counts appear below. -->
 <resources>
     <string name="servers_title">Servers</string>
@@ -83,7 +83,7 @@
         <item quantity="other">This removes %1$d servers with it. This cannot be undone.</item>
     </plurals>
 
-    <!-- Task 19: AddServerSheet. §5.6 applies here too — nothing below may
+    <!-- Task 19: AddServerSheet. ARCHITECTURE.md §5.6 applies here too — nothing below may
          interpolate the pasted text or file content itself, only bounded
          counts and field names. -->
     <string name="import_sheet_title">Add server</string>
@@ -96,7 +96,7 @@
     <!-- Fix round 1, finding 2: shown when the picked file could not be read
          at all (a stale/revoked URI, or an I/O error mid-read) — never the
          underlying exception's own message, which can carry a path or
-         provider detail (§5.6). -->
+         provider detail (ARCHITECTURE.md §5.6). -->
     <string name="import_file_read_failed">Could not read that file</string>
 
     <!-- %1$d = profiles actually stored, %2$d = total entries attempted
@@ -111,7 +111,7 @@
     </plurals>
 
     <!-- Each failure line: %1$d = ParseFailure.index + 1 (a human-facing
-         1-based entry number, never the entry's own text — §5.6). -->
+         1-based entry number, never the entry's own text — ARCHITECTURE.md §5.6). -->
     <string name="import_failure_generic">Entry %1$d could not be read</string>
     <!-- %2$s = field name below, %3$d = expected length, %4$d = actual length. -->
     <string name="import_failure_length">Entry %1$d: %2$s must have length %3$d (actual: %4$d)</string>
@@ -142,7 +142,7 @@
     <string name="import_detail_field_plugin">Plugin</string>
 
     <!-- Task 13: the fifth AddServerSheet route, "From subscription URL"
-         (M3's plan Part 2 line 715 deferred it to M4). §5.6 applies here
+         (M3's plan Part 2 line 715 deferred it to M4). ARCHITECTURE.md §5.6 applies here
          too — the URL itself is never interpolated into any string below,
          only the closed FetchFailure/SyncResult vocabulary UserMessage
          carries (see SyncResult.toUserMessage() in ImportViewModel.kt). -->
@@ -177,7 +177,7 @@
     <string name="subscription_error_server">The server reported an error.</string>
     <string name="subscription_error_no_servers">No servers in this subscription.</string>
 
-    <!-- Task 21: the profile editor. §5.6 applies here too — every string below
+    <!-- Task 21: the profile editor. ARCHITECTURE.md §5.6 applies here too — every string below
          is a field LABEL or fixed vocabulary; the field VALUES (address, uuid,
          password, keys) live only in EditorState and are never interpolated
          into a resource string. -->
@@ -267,7 +267,7 @@
 
     <!-- One per PassthroughRejection member. Closed vocabulary, same shape as
          import_failure_* — the stored value is an enum name, never a message
-         derived from config contents (§5.6). -->
+         derived from config contents (ARCHITECTURE.md §5.6). -->
     <string name="editor_raw_json_rejected_unvalidated">
         This file was imported by an older version and has not been checked for running as written.
         Re-import it to validate the complete file; the recovered server details are used meanwhile.
@@ -288,7 +288,7 @@
         recovered from it and are used instead.
     </string>
 
-    <!-- One per PassthroughAdvisory member. §5.6 forbids putting anything derived from config
+    <!-- One per PassthroughAdvisory member. ARCHITECTURE.md §5.6 forbids putting anything derived from config
          contents on screen or in a log — none of these three names the offending tag/domain. -->
     <!-- PassthroughAdvisory.DanglingRoutingReference -->
     <string name="editor_raw_json_advisory_dangling_reference">
@@ -307,7 +307,7 @@
         are never resolved back to a domain.
     </string>
 
-    <!-- One per OverrideBlocker member. Same §5.6 rule as the advisories above:
+    <!-- One per OverrideBlocker member. Same ARCHITECTURE.md §5.6 rule as the advisories above:
          none of these names the offending tag. -->
     <!-- OverrideBlocker.AmbiguousOutboundTags -->
     <string name="editor_raw_json_override_ambiguous_tags">
@@ -356,7 +356,7 @@
          "Entry N" prefix — these are single-field validation errors on a form,
          not a list of parsed entries. %1$s is the field name (below). -->
     <!-- %1$s = a field label (e.g. "Network"), %2$s = its currently selected value. Backs both
-         EditorDropdownField's own button text and GroupDropdown's — §12: was a bare Kotlin
+         EditorDropdownField's own button text and GroupDropdown's — ARCHITECTURE.md §12: was a bare Kotlin
          string interpolation in both places (fix round 2, Minor finding 6). -->
     <string name="editor_dropdown_value">%1$s: %2$s</string>
     <string name="editor_error_length">%1$s must have length %2$d (actual: %3$d)</string>
@@ -365,16 +365,16 @@
     <string name="editor_error_unsupported">%1$s is not supported</string>
     <string name="editor_error_malformed">%1$s is malformed</string>
 
-    <!-- Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (§4.2)
+    <!-- Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (M3 spec §4.2)
          rejects a save whose edited outbound now matches a sibling profile in the same
-         group. §5.6: this string never names the address/UUID/whatever actually collided —
+         group. ARCHITECTURE.md §5.6: this string never names the address/UUID/whatever actually collided —
          only that it did, and what the user can do about it. -->
     <string name="editor_duplicate_identity">
         A profile with these settings already exists in this group. Change a setting — the
         address, port, or credential — or pick a different group, then save again.
     </string>
 
-    <!-- Task 15: the subscription detail screen. §5.6 applies throughout — the URL itself is
+    <!-- Task 15: the subscription detail screen. ARCHITECTURE.md §5.6 applies throughout — the URL itself is
          never interpolated (only SubscriptionDetailState.redactedUrl, already stripped down to
          scheme+host), and neither is any directive VALUE beyond the bounded, user-typed pin
          entries the user themselves just entered into the edit dialog below. -->
@@ -409,7 +409,7 @@
     <string name="subscription_detail_user_agent_save">Save</string>
 
     <string name="subscription_detail_delete_action">Delete subscription</string>
-    <!-- %1$s = the group/subscription name — never the URL (§5.6). -->
+    <!-- %1$s = the group/subscription name — never the URL (ARCHITECTURE.md §5.6). -->
     <string name="subscription_detail_delete_confirm_title">Delete “%1$s”?</string>
     <!-- %1$d = the subscription's real server count — this removes the group AND every server
          in it, the same cascading-delete warning servers_delete_group_message gives. -->

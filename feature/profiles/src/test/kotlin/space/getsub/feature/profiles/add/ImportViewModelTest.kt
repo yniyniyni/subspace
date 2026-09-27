@@ -76,7 +76,7 @@ class ImportViewModelTest {
 
     /**
      * Defect 1's third site (device fixes report): the target panel returns a
-     * top-level JSON **array** wrapping a whole Xray config. §6 stores raw
+     * top-level JSON **array** wrapping a whole Xray config. ARCHITECTURE.md §6 stores raw
      * Xray JSON byte-for-byte, but the capture at this call site was
      * `raw.takeIf { raw.trim().startsWith("{") }` — `false` for a leading
      * `[`, so a fixed parser alone would still silently store this as

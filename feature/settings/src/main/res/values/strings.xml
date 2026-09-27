@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ARCHITECTURE.md §12: strings live here from the first commit; no
-     hardcoded UI text. §5.6: nothing here interpolates a server address,
+     hardcoded UI text. ARCHITECTURE.md §5.6: nothing here interpolates a server address,
      uuid, or key — this screen has no such value to show in the first
      place. -->
 <resources>
@@ -65,11 +65,11 @@
     <string name="settings_boot_autostart_title">Connect at startup</string>
     <string name="settings_boot_autostart_summary">Connect every time the device starts. Not needed if always-on VPN is enabled.</string>
     <string name="settings_fail_closed_title">Block traffic when disconnected</string>
-    <!-- Names the per-app exception on purpose (spec §6.2): it is correct behaviour that looks like a leak. -->
+    <!-- Names the per-app exception on purpose (M8 spec §6.2): it is correct behaviour that looks like a leak. -->
     <string name="settings_fail_closed_summary">While reconnecting, block all traffic instead of letting it leave unprotected. Apps excluded from the tunnel are unaffected.</string>
     <string name="settings_battery_title">Battery optimisation</string>
     <string name="settings_battery_summary">Android may stop the tunnel while the screen is off. Exempt Subspace to keep it running.</string>
-    <!-- Spec §7.2, ARCHITECTURE.md §9: shown once, the moment the user turns on a setting that
+    <!-- M8 spec §7.2, ARCHITECTURE.md §9: shown once, the moment the user turns on a setting that
          says they want the tunnel to survive (boot autostart or fail-closed) — never at launch. -->
     <string name="settings_battery_prompt_title">Keep the tunnel running?</string>
     <string name="settings_battery_prompt_body">Android may stop the tunnel while the screen is off. Exempt Subspace from battery optimisation to keep it running.</string>
@@ -109,7 +109,7 @@
     <string name="settings_geo_persisted_recovery_failed">Installing it failed and could not fully recover — try again</string>
     <string name="settings_geo_persisted_unreadable">Last download could not be read as a geo database</string>
     <string name="settings_geo_persisted_not_geo_data">This is not a valid geo database for the type chosen</string>
-    <!-- %1$s is the install filename — a custom row's real identity (§5.6: filenames are shape,
+    <!-- %1$s is the install filename — a custom row's real identity (ARCHITECTURE.md §5.6: filenames are shape,
          not a secret), so two custom sources never render as identical rows. -->
     <string name="settings_geo_custom_source_label">Custom (%1$s)</string>
     <!-- %1$s is a formatted date, e.g. "2026-08-11". -->

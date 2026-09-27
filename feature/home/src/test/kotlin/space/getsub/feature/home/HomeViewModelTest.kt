@@ -39,7 +39,7 @@ import space.getsub.core.model.failure
  * [space.getsub.core.data.SettingsRepository.activeProfileId] names
  * — never `ProfileRepository`'s first row, the retired M1 shortcut — and mirror
  * [ConnectionState] from [TunnelConnection] verbatim rather than inferring it
- * locally (§5.5).
+ * locally (ARCHITECTURE.md §5.5).
  *
  * `viewModelScope` needs a Main dispatcher to run at all outside Android, hence
  * [UnconfinedTestDispatcher]. Every source [HomeViewModel] combines

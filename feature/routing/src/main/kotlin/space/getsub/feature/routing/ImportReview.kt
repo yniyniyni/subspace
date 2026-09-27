@@ -99,7 +99,7 @@ internal data class ImportReviewState(
     val bucketCounts: Map<RouteOutcome, Int> = emptyMap(),
     val defaultRouteIsDirect: Boolean = false,
     val geoDownloads: List<GeoDownloadPreview> = emptyList(),
-    /** The profile DNS block disclosed to the user, never logged (§5.6). */
+    /** The profile DNS block disclosed to the user, never logged (ARCHITECTURE.md §5.6). */
     val dns: ProfileDns? = null,
     /** Whether [dns] is effective or why it falls back to the app-level setting. */
     val dnsState: DnsState = DnsState.None,
@@ -126,7 +126,7 @@ internal data class ImportReviewState(
 )
 
 /**
- * Spec §6's confirmation for every routing-profile import channel.
+ * M6 spec §6's confirmation for every routing-profile import channel.
  *
  * Confirm is deliberately not the default-focused action: the user is
  * consenting to a Dangerous directive, and a sheet they can accept by
@@ -297,7 +297,7 @@ private fun ConversionDrop.messageRes(): Int =
  * The DNS block shown for informed consent (§A.1).
  *
  * Resolver values are intentionally rendered only here; they are never logged
- * and [ProfileDns.toString] redacts them under §5.6.
+ * and [ProfileDns.toString] redacts them under ARCHITECTURE.md §5.6.
  */
 @Composable
 private fun DnsReviewRows(

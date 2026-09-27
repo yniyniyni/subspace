@@ -16,7 +16,7 @@ import space.getsub.core.model.PerAppMode
  *   search must never be able to change what the user has chosen, nor what the
  *   screen believes they have chosen.
  * @param isDirty whether the draft differs from what is stored. Drives both the
- *   Save affordance and the leave-confirmation (spec §7.3).
+ *   Save affordance and the leave-confirmation (M5.5 spec §7.3).
  * @param isTunnelActive whether a tunnel is up, or is coming up for the first
  *   time, so the screen can say a save will reconnect it before the user commits
  *   rather than after. `Connecting` counts; `Reconnecting` does **not**, despite
@@ -34,7 +34,7 @@ internal data class PerAppState(
     /**
      * Allow-list mode with nothing ticked. The screen blocks Save on this and
      * `PerAppResolver` refuses to start on it — the UI gate is a hint, the
-     * service gate is the guarantee (§6.3), the same split
+     * service gate is the guarantee (M5.5 spec §6.3), the same split
      * [RoutingViewModel.activate] makes for `canActivate`.
      *
      * Read from [selectedCount] rather than from [rows] deliberately: `rows` is
@@ -49,11 +49,11 @@ internal data class PerAppState(
 /**
  * One application's row.
  *
- * §5.6: a package name identifies an app the user has installed, so it is never
+ * ARCHITECTURE.md §5.6: a package name identifies an app the user has installed, so it is never
  * logged. Rendering one on the user's own screen is not a disclosure.
  *
  * @param isInstalled false for a package selected earlier and uninstalled since.
- *   Shown and removable, never auto-pruned (spec §7.2).
+ *   Shown and removable, never auto-pruned (M5.5 spec §7.2).
  */
 internal data class AppRow(
     val packageName: String,

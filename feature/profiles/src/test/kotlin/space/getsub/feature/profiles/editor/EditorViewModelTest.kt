@@ -677,7 +677,7 @@ class EditorViewModelTest {
             source.lastMove shouldBe (typedProfile.id to 20L)
         }
 
-    // Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (§4.2)
+    // Task 21 fix round 1: ProfileEntity's unique (groupId, identityHash) index (M3 spec §4.2)
     // makes ProfileDao.updateProfile's default ABORT conflict strategy throw
     // SQLiteConstraintException when an edited outbound collides with a sibling profile
     // already in the group. Pre-fix, EditorViewModel.save() called ProfileSource.update()

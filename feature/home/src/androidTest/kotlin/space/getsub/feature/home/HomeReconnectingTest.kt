@@ -15,7 +15,7 @@ import space.getsub.core.model.FailureReason
 import space.getsub.core.ui.theme.SubspaceTheme
 
 /**
- * Spec §7.3 / §5.5: [ConnectionState.Reconnecting] is neither [ConnectionState.Connected]
+ * M8 spec §7.3 / ARCHITECTURE.md §5.5: [ConnectionState.Reconnecting] is neither [ConnectionState.Connected]
  * nor [ConnectionState.Failed], and rendering it as either is a lie the user acts on.
  */
 class HomeReconnectingTest {
@@ -50,7 +50,7 @@ class HomeReconnectingTest {
     }
 
     /**
-     * Spec §7.3, and ruling R23. A `Retryable` reason retries for as long as a network
+     * M8 spec §7.3, and ruling R23. A `Retryable` reason retries for as long as a network
      * exists, so this state has no bound; with the kill switch on (the default) the user has
      * no connectivity while it retries. Home is therefore the exit, and this asserts the tap
      * actually reaches [HomeActions.onDisconnect].

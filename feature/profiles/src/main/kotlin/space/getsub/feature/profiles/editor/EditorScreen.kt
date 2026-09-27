@@ -670,7 +670,7 @@ private fun RawJsonFields(
         }
         // §6: one message per PassthroughRejection member — never a generic
         // "not eligible" line, and never anything derived from the config's
-        // own text (§5.6).
+        // own text (ARCHITECTURE.md §5.6).
         state.passthroughRejection?.let { rejection ->
             Text(
                 text = stringResource(rejection.messageRes()),

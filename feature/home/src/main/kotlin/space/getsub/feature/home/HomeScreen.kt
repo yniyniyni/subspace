@@ -167,7 +167,7 @@ internal fun HomeScreenContent(
                     // refuses a tap of its own while Connecting, kept only
                     // so this `when` names every branch explicitly.
                     ConnectVisualState.Connecting -> Unit
-                    // Spec §7.3. Unlike Connecting, a reconnect has no bound —
+                    // M8 spec §7.3. Unlike Connecting, a reconnect has no bound —
                     // a Retryable reason retries for as long as a network
                     // exists — and with the kill switch on the user has no
                     // connectivity while it does. This is that state's only
@@ -213,7 +213,7 @@ internal fun HomeScreenContent(
         // Still deliberately NOT rendered: the route chip the design prototype
         // shows. This build measures no per-app routing yet (M5), and drawing
         // it with placeholder text would tell the user this security tool
-        // measured something it did not (§10.1).
+        // measured something it did not (M8.5 spec §10.1).
         //
         // The LATENCY tile was the first of that row to be fed (M4.5). The
         // DOWN/UP tiles beside it are fed by M8.5, from hev-socks5-tunnel's own
@@ -238,10 +238,10 @@ private fun ConnectionDetail(connection: ConnectionState) {
         }
 
         is ConnectionState.Failed -> {
-            // detail is redacted at construction (§5.6), so it is safe to
+            // detail is redacted at construction (ARCHITECTURE.md §5.6), so it is safe to
             // show. It is usually the core's own words, which beats a
             // generic message — §10.4: this is the only diagnostic a user
-            // can hand back, since §5.6 forbids logging the config that
+            // can hand back, since ARCHITECTURE.md §5.6 forbids logging the config that
             // would otherwise explain it.
             Text(
                 text = connection.detail,
@@ -252,7 +252,7 @@ private fun ConnectionDetail(connection: ConnectionState) {
 
         // M8.5 spec §4.2 (amended): whether traffic is currently blocked or flowing in the clear
         // is now shown in the label (labelRes reads Reconnecting.blocked).
-        // The distinction is carried by the ongoing notification (§4.4), which is
+        // The distinction is carried by the ongoing notification (M8.5 spec §4.4), which is
         // the surface a user sees while the app is backgrounded mid-reconnect.
         ConnectionState.Disconnected,
         ConnectionState.Disconnecting,
@@ -307,7 +307,7 @@ private const val MILLIS_PER_SECOND = 1_000L
  * `delayMillis` is read on the `OK` branch alone: libXray reports a failed ping
  * as a `10000`/`11000` sentinel, and `StatTile` formats nothing itself — it
  * renders exactly what it is handed, which makes formatting the caller's
- * responsibility and this branch the place §10.1 is either honoured or
+ * responsibility and this branch the place M8.5 spec §10.1 is either honoured or
  * violated. Tapping measures, and so does ping-on-launch once per session.
  * Nothing else: no measurement on connect, and no timer.
  *
@@ -317,7 +317,7 @@ private const val MILLIS_PER_SECOND = 1_000L
  * `TunnelClient`'s cached sample (see [TunnelConnection.traffic]'s KDoc).
  * [formatByteCount] does the formatting, same as [HomeState.latency]'s branch
  * above; `0 B` for no traffic yet is a real measurement, not a placeholder, so
- * unlike latency there is no em-dash variant here (§10.1). Not tappable: there
+ * unlike latency there is no em-dash variant here (M8.5 spec §10.1). Not tappable: there
  * is no on-demand action for traffic the way there is for a latency test, only
  * the passive per-second stream [HomeViewModel] mirrors into
  * [HomeState.traffic].
@@ -448,13 +448,13 @@ private fun ActiveServerTile(
  *
  * [ConnectionState.Reconnecting] maps to [ConnectVisualState.Reconnecting], its
  * own visual state — not to [ConnectVisualState.Connecting], which is where it
- * started (spec §7.3). `Connecting` renders identically but refuses every tap
+ * started (M8 spec §7.3). `Connecting` renders identically but refuses every tap
  * inside `ConnectControl` itself, and a reconnect is unbounded: a `Retryable`
  * reason retries for as long as a network exists, and with the kill switch on
  * the user has no connectivity meanwhile. That mapping therefore produced a
  * state with no exit and no bound. [ConnectVisualState.Connected] was not the
  * alternative — it renders the connected colour and would claim a tunnel that
- * is down, the same false-reassurance defect §6.3's notification had.
+ * is down, the same false-reassurance defect M8 spec §6.3's notification had.
  *
  * [HomeState.canDisconnect] is true for `Reconnecting` and this mapping is what
  * lets that boolean reach the control: the tap handler and `ConnectControl`'s

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ARCHITECTURE.md §12: strings live here from the first commit; no
-     hardcoded UI text. §5.6: a rule set's own name is the only user-supplied
+     hardcoded UI text. ARCHITECTURE.md §5.6: a rule set's own name is the only user-supplied
      value shown by this screen (interpolated as %1$s below) — never an
      entry, a site or an IP. -->
 <resources>
@@ -60,7 +60,7 @@
     <string name="routing_dns_invalid">DNS block not understood — using your DNS setting</string>
     <string name="routing_dns_needs_sniffing">Needs sniffing on for FakeDNS</string>
 
-    <!-- Imported profiles are read-only; editing means editing a copy (spec §4.2). -->
+    <!-- Imported profiles are read-only; editing means editing a copy (M6 spec §4.2). -->
     <string name="routing_duplicate_label">Duplicate</string>
     <string name="routing_duplicate_description">Duplicate and edit %1$s</string>
 
@@ -71,7 +71,7 @@
     <string name="routing_empty_title">No rule sets yet</string>
     <string name="routing_empty_message">Create a rule set to block, proxy or route traffic directly by domain or address.</string>
 
-    <!-- Rule set editor (Task 16). §5.6: the name field is the only user-supplied value this
+    <!-- Rule set editor (Task 16). ARCHITECTURE.md §5.6: the name field is the only user-supplied value this
          screen echoes back — every entry field below only ever displays what the user themself
          typed into it, never logs it, and EntryProblem's own mapping below carries no entry
          text either. -->
@@ -99,7 +99,7 @@
 
     <string name="rule_set_editor_entry_hint">Domain, address or geosite:/geoip: code</string>
     <string name="rule_set_editor_add_description">Add entry</string>
-    <!-- §5.6: deliberately does not interpolate the entry itself, unlike routing_edit_description's
+    <!-- ARCHITECTURE.md §5.6: deliberately does not interpolate the entry itself, unlike routing_edit_description's
          rule-set name (a label the user chose, not a value it routes) — this row's own visible Text
          already carries the entry for a screen reader to reach. -->
     <string name="rule_set_editor_remove_entry_description">Remove entry</string>
@@ -118,10 +118,10 @@
          above, shown once near the Save button rather than on any one field. -->
     <string name="rule_set_editor_save_problem_invalid_entry">One of the stored entries is no longer valid. Remove or fix it before saving.</string>
     <string name="rule_set_editor_save_problem_write_failed">Could not save. Try again.</string>
-    <!-- %1$s is the conflicting rule set's own name — exempt from §5.6, see SaveProblem.NameConflict's own KDoc. -->
+    <!-- %1$s is the conflicting rule set's own name — exempt from ARCHITECTURE.md §5.6, see SaveProblem.NameConflict's own KDoc. -->
     <string name="rule_set_editor_save_problem_name_conflict">A rule set named \"%1$s\" already exists. Choose a different name.</string>
 
-    <!-- Per-app proxy picker (Task 8). §5.6: a package name and an app's own label are the only
+    <!-- Per-app proxy picker (Task 8). ARCHITECTURE.md §5.6: a package name and an app's own label are the only
          user-visible values this screen shows — never logged, see AppRow's own KDoc. -->
     <string name="per_app_title">Per-app proxy</string>
     <string name="per_app_mode_off">Off</string>
@@ -144,7 +144,7 @@
         <item quantity="other">%d apps selected</item>
     </plurals>
 
-    <!-- Import review sheet (Task 12). Spec §6: every channel confirms here.
+    <!-- Import review sheet (Task 12). M6 spec §6: every channel confirms here.
          Geo rows interpolate host and filename only — never a URL (§5.6).
          Profile name is the provider-supplied label, same exemption as
          routing_edit_description. -->
@@ -203,7 +203,7 @@
     <!-- Task 14. Shown only when converting a pasted config's routing (Task 13)
          loses something. Each is a rule kind the app's three-bucket model
          cannot express — see :core:parser's XrayRoutingConversion.kt. Counts
-         are appended by the caller; never quotes the rule or the config (§5.6). -->
+         are appended by the caller; never quotes the rule or the config (ARCHITECTURE.md §5.6). -->
     <string name="routing_conversion_drops_title">Not everything could be converted</string>
     <string name="routing_conversion_drop_unsupported_matcher">Rules matching on port, network or app (%1$d). Subspace rules match domains and addresses only.</string>
     <string name="routing_conversion_drop_unconditional">Rules with no domain or address to match (%1$d). They matched every connection in the original file, and a Subspace rule always needs something specific to match.</string>

@@ -77,7 +77,7 @@ constructor(
  *
  * `/onadd`'s activation is this class's job — [ImportPreview.willActivate]
  * describes `/add` only (no rule set currently active). Unchanged fingerprints
- * never raise the sheet (spec §7.3).
+ * never raise the sheet (M6 spec §7.3).
  */
 @HiltViewModel
 internal class ImportReviewViewModel
@@ -197,7 +197,7 @@ constructor(
      * Cancels the apply coroutine rather than the registry entry, so it works
      * before the row id exists. `RoutingProfileImporter` treats the resulting
      * cancellation as a cancelled generation: the previous one stays live and
-     * its files stay on disk (spec §7.4). State is restored here because the
+     * its files stay on disk (M6 spec §7.4). State is restored here because the
      * cancelled coroutine cannot restore it itself.
      */
     fun cancelApply() {

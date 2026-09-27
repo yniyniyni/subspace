@@ -72,7 +72,7 @@ private val INSTALLED_AT_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPatt
  *   identically to a transient `DownloadFailed` or a `RecoveryFailed` whose backups are stranded in
  *   staging awaiting recovery.
  * @property isCustom true when this row was built from an installed asset that does not match any
- *   currently selected catalogue source — a user-added source (§6, §4.1).
+ *   currently selected catalogue source — a user-added source (§6, M5 spec §4.1).
  */
 internal data class GeoRow(
     val sourceId: String,
@@ -263,7 +263,7 @@ internal fun SettingsGeoSection(
 }
 
 /**
- * One row: display name (the real filename for a custom source, §5.6 — filenames are shape, not
+ * One row: display name (the real filename for a custom source, ARCHITECTURE.md §5.6 — filenames are shape, not
  * a secret, and a generic "Custom source" label for every custom row left two of them
  * indistinguishable), size, licence, install date, status, an "Update now" action that always runs
  * (§A.5 — see [GeoAssetSource.install]'s KDoc), and — for a custom row only — a "Remove" action

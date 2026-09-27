@@ -156,7 +156,7 @@ private fun RuleSetCardHeader(
         }
         // A read-only row gets Duplicate in place of Edit, not beside it: the
         // next sync overwrites this set, so an edit made here would silently
-        // disappear (spec §4.2).
+        // disappear (M6 spec §4.2).
         if (row.isReadOnly) {
             // A word rather than an icon: the project depends only on
             // material-icons-core, which has no copy glyph, and adding

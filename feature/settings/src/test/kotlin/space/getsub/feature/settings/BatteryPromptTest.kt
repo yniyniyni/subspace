@@ -5,7 +5,7 @@ package space.getsub.feature.settings
 import io.kotest.matchers.shouldBe
 import org.junit.Test
 
-/** Spec §7.2 and ARCHITECTURE.md §9: prompt once, respect refusal. */
+/** M8 spec §7.2 and ARCHITECTURE.md §9: prompt once, respect refusal. */
 class BatteryPromptTest {
     @Test
     fun promptsWhenASurvivalSettingIsTurnedOn() {

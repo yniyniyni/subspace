@@ -55,7 +55,7 @@ private val BADGE_PADDING_VERTICAL = 2.dp
  * the name, protocol badge, transport, its measured latency, an active check, a
  * test button and an edit button.
  *
- * Still deliberately no address: an address is a secret (§5.6, and see
+ * Still deliberately no address: an address is a secret (ARCHITECTURE.md §5.6, and see
  * [ServerRow]'s own KDoc for why this projection carries no address field at
  * all). The latency slot was empty until M4.5 for a different reason — there was
  * no measurement to put in it, and a placeholder would have been an invented
@@ -149,7 +149,7 @@ internal fun ServerRowItem(
  * Timeout, unreachable and cancelled collapse into one message deliberately:
  * they are one thing to a user — it did not answer — and the split between them
  * only exists at all for `tcp` mode (`ProxyHeadProbe` cannot recover it without
- * parsing an error string that quotes the config, §5.6).
+ * parsing an error string that quotes the config, ARCHITECTURE.md §5.6).
  *
  * [RobotoMonoFontFamily] matches `StatTile` and `Type.kt`'s convention for every
  * machine-generated value in this design system.

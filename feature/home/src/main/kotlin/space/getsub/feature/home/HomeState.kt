@@ -10,7 +10,7 @@ import space.getsub.core.model.TrafficSample
 /**
  * What [HomeScreen] renders.
  *
- * §5.5: [connection] is a mirror of what [TunnelConnection] reports, never a
+ * ARCHITECTURE.md §5.5: [connection] is a mirror of what [TunnelConnection] reports, never a
  * value this screen infers on its own — see [HomeViewModel]'s `init` block.
  *
  * @property connection the tunnel's real state, from the service.
@@ -38,14 +38,14 @@ internal data class HomeState(
      * on ([HomeViewModel.onHomeShown]). Nothing else: M4.5 adds no measurement to
      * the connect path and no periodic refresh, so the tunnel start sequence is
      * untouched and nothing wakes the device to measure while the screen is off —
-     * the §11 six-hour case is hard enough already, and it belongs to M7.
+     * the ARCHITECTURE.md §11 six-hour case is hard enough already, and it belongs to M7.
      */
     val latency: LatencyResult? = null,
     /** True while the active profile's measurement is in flight. */
     val isMeasuringLatency: Boolean = false,
     /**
      * This session's traffic, mirrored from [TunnelConnection.traffic] verbatim
-     * (§5.5) — never derived locally.
+     * (ARCHITECTURE.md §5.5) — never derived locally.
      *
      * Null whenever [TunnelConnection.traffic] is null, which includes both "no
      * session" and the known gap [TunnelConnection.traffic]'s own KDoc and
@@ -87,7 +87,7 @@ internal data class HomeState(
      * until some unrelated lifecycle event happened to reset the state (PR #4 review, P1
      * finding B).
      *
-     * Retrying does not clear the failure: [connection] is mirrored from the service (§5.5),
+     * Retrying does not clear the failure: [connection] is mirrored from the service (ARCHITECTURE.md §5.5),
      * so the reason and redacted detail stay on screen until the service publishes the
      * retry's own first `Connecting`.
      *
@@ -104,7 +104,7 @@ internal data class HomeState(
      * True for [ConnectionState.Reconnecting] as well as [ConnectionState.Connected] and
      * [ConnectionState.Connecting].
      *
-     * Spec §7.3: a `Retryable` failure retries **indefinitely** while a network exists, so
+     * M8 spec §7.3: a `Retryable` failure retries **indefinitely** while a network exists, so
      * `Reconnecting` is not a state that ends on its own the way `Connecting` does. With the
      * kill switch on (the default) the user is sitting with no connectivity while it retries.
      * Excluding it here left the one state in the app that is both unbounded and

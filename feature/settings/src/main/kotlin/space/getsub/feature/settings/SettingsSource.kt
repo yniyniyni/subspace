@@ -112,7 +112,7 @@ internal interface SettingsSource {
 
     suspend fun setFailClosed(enabled: Boolean)
 
-    /** §9's "prompt once, respect refusal" (spec §7.2). See [SettingsRepository.batteryPromptShown]. */
+    /** §9's "prompt once, respect refusal" (M8 spec §7.2). See [SettingsRepository.batteryPromptShown]. */
     val batteryPromptShown: Flow<Boolean>
 
     suspend fun setBatteryPromptShown(shown: Boolean)

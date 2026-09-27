@@ -21,7 +21,7 @@ import androidx.compose.ui.semantics.semantics
 import space.getsub.core.ui.component.SettingRow
 
 /**
- * Spec §7, §7.1, §7.2: the settings that keep the tunnel running under the platform —
+ * Spec §7, M8 spec §7.1, M8 spec §7.2: the settings that keep the tunnel running under the platform —
  * always-on VPN (a deep link, never a switch: see [onOpenVpnSettings]'s own KDoc below),
  * connect-at-startup, the fail-closed kill switch, and battery-optimisation exemption.
  *

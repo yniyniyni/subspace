@@ -196,7 +196,7 @@ internal data class EditorState(
      * `true` when the last [EditorViewModel.save] was rejected because the edited outbound
      * (or the destination group, for a group change) already holds an identical profile —
      * [space.getsub.core.data.db.ProfileEntity]'s unique `(groupId, identityHash)`
-     * index (§4.2). Not a [FailureDetail] like [errors]: this is not one field being wrong,
+     * index (M3 spec §4.2). Not a [FailureDetail] like [errors]: this is not one field being wrong,
      * it is the whole draft colliding with a sibling row, so it renders as a single banner
      * (see [EditorScreen]) rather than attaching to any one text field. Reset to `false` at
      * the start of every [EditorViewModel.save] call, so it reflects only the most recent

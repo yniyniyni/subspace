@@ -206,7 +206,7 @@ constructor(
     }
 
     /**
-     * Spec §7.2, ARCHITECTURE.md §9: Doze is worth raising at the moment the user says they want
+     * M8 spec §7.2, ARCHITECTURE.md §9: Doze is worth raising at the moment the user says they want
      * the tunnel to survive, and nowhere else — not at construction, not on an unrelated setting
      * ([shouldPromptForBattery]'s own KDoc).
      *
@@ -241,10 +241,10 @@ constructor(
     }
 
     /**
-     * Spec §7.2 names three triggers — always-on, boot autostart and fail-closed — and only the
+     * M8 spec §7.2 names three triggers — always-on, boot autostart and fail-closed — and only the
      * latter two raised the prompt.
      *
-     * Always-on is a deep link to system settings (§7.1: this app cannot set it, so it is a link
+     * Always-on is a deep link to system settings (M8 spec §7.1: this app cannot set it, so it is a link
      * and never a switch), which means the app never learns whether the user actually enabled it.
      * Tapping the row is the strongest statement of "I want this tunnel to survive" that is
      * observable here, so that is what the prompt is hung on. The prompt is shown once ever
@@ -406,7 +406,7 @@ constructor(
      * and a wrong choice is a download that succeeds while every rule using it silently matches
      * nothing.
      *
-     * §5.6: [url] is never logged here or anywhere downstream — [GeoInstallResult] is a closed
+     * ARCHITECTURE.md §5.6: [url] is never logged here or anywhere downstream — [GeoInstallResult] is a closed
      * vocabulary that carries no URL, and that is the only thing this method's own callers ever
      * see back.
      *
@@ -474,7 +474,7 @@ constructor(
 }
 
 /**
- * Spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.
+ * M8 spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.
  * Prompt once, respect refusal."
  *
  * [survivalSettingJustEnabled] is the trigger — always-on, boot autostart or fail-closed being

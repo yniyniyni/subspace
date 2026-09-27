@@ -170,7 +170,7 @@ internal data class SettingsActions(
     val onBootAutostartChanged: (Boolean) -> Unit = {},
     val onFailClosedChanged: (Boolean) -> Unit = {},
     val onBatteryPromptResolved: () -> Unit = {},
-    // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
+    // Defaulted for the same reason as the three above. M8 spec §7.2's third battery-prompt
     // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
     val onAlwaysOnRequested: () -> Unit = {},
     // M8.5 spec §6 #10: consumes SettingsState.openVpnSettingsRequested once the screen has
@@ -345,7 +345,7 @@ private fun HwidControl(
  * [SettingsTunnelSection] renders its own "Tunnel" title internally, the same way
  * [SettingsDnsSection] does for "DNS".
  *
- * Also hosts the battery-optimisation prompt (Task 13, spec §7.2): [SettingsState.showBatteryPrompt]
+ * Also hosts the battery-optimisation prompt (Task 13, M8 spec §7.2): [SettingsState.showBatteryPrompt]
  * is true for the one moment between a survival setting being switched on and the user responding.
  * Both the dialog's own dismiss and its "open battery settings" action resolve through
  * [SettingsActions.onBatteryPromptResolved] — ARCHITECTURE.md §9's "respect refusal" means the
@@ -414,13 +414,13 @@ private fun XrayVersionState.displayText(): String =
         XrayVersionState.Unavailable -> stringResource(R.string.settings_about_xray_version_unavailable)
     }
 
-/** Spec §7.1: the app cannot set always-on VPN or its lockdown itself — both are system settings. */
+/** M8 spec §7.1: the app cannot set always-on VPN or its lockdown itself — both are system settings. */
 private fun openVpnSettings(context: Context) {
     launchSettingsIntent(context, Settings.ACTION_VPN_SETTINGS)
 }
 
 /**
- * Spec §7.2: the settings *list*, not `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — that direct
+ * M8 spec §7.2: the settings *list*, not `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — that direct
  * prompt needs the `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission, one of the most
  * policy-sensitive on Android, and ARCHITECTURE.md §14.7 says nothing here should foreclose Google
  * Play. One extra tap is cheaper than that permission, and no new permission is declared for it.

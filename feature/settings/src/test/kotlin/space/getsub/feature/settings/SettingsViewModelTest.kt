@@ -779,7 +779,7 @@ class SettingsViewModelTest {
             geoAssetSource.removed shouldBe emptyList()
         }
 
-    // ── The battery prompt's trigger (spec §7.2) ────────────────────────────
+    // ── The battery prompt's trigger (M8 spec §7.2) ────────────────────────────
     //
     // `survivalSettingJustEnabled` used to be passed as a literal `true`, with each caller
     // guarding itself with `if (enabled)`. The parameter could not be false in production, so

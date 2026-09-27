@@ -334,7 +334,7 @@ private fun DomainStrategy.displayName(): String =
 
 /**
  * One of the six buckets: its stored entries, an add field, and — only when
- * [categories] is non-empty — a "browse categories" affordance beside it. §5.6:
+ * [categories] is non-empty — a "browse categories" affordance beside it. ARCHITECTURE.md §5.6:
  * every entry below is exactly what the user themself typed or picked; nothing
  * here is logged.
  */
@@ -466,7 +466,7 @@ private fun CategoryPicker(
 }
 
 /**
- * [EntryProblem] carries no entry text (§5.6) — every branch below maps the
+ * [EntryProblem] carries no entry text (ARCHITECTURE.md §5.6) — every branch below maps the
  * closed-vocabulary problem itself to a fixed message, never anything the
  * user typed.
  */
@@ -482,7 +482,7 @@ private fun EntryProblem.toDisplayText(): String =
     }
 
 /**
- * [SaveProblem.NameConflict.name] is exempt from §5.6 the same way
+ * [SaveProblem.NameConflict.name] is exempt from ARCHITECTURE.md §5.6 the same way
  * [SaveProblem.NameConflict]'s own KDoc says — it is the conflicting rule
  * set's name, not an entry.
  */

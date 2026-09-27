@@ -470,7 +470,10 @@ private fun buildUpserts(
     return UpsertBuildResult(entities, duplicatesDropped, balancerMembersCollapsed)
 }
 
-/** The first failure's redacted reason (ARCHITECTURE.md §5.6) — never the body. [ParseFailure]'s fields are closed vocabulary. */
+/**
+ * The first failure's redacted reason (ARCHITECTURE.md §5.6) — never the body.
+ * [ParseFailure]'s fields are closed vocabulary.
+ */
 private fun List<ParseFailure>.redactedDetail(): String =
     firstOrNull()?.let { "${it.reason}: ${it.detail}" } ?: "unknown"
 

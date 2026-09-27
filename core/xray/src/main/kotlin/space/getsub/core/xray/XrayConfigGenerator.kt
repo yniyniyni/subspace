@@ -121,7 +121,8 @@ private const val DNS_OUT_OUTBOUND_JSON = """{ "tag": "dns-out", "protocol": "dn
  */
 private val TYPED_PATH_TARGET = OverrideTarget.ViaOutbound("proxy")
 
-@Suppress("TooManyFunctions") // One object per wire shape (ARCHITECTURE.md §6); splitting it would scatter the shape's single author.
+// One object per wire shape (ARCHITECTURE.md §6); splitting it would scatter the shape's single author.
+@Suppress("TooManyFunctions")
 public object XrayConfigGenerator {
     /**
      * Dispatches on the profile's protocol.

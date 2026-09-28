@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
+// TooManyFunctions: the ICU-soundness fix added three small, independently
+// tested gate predicates (hasNonAscii, keyedHostGate, labelledHostGate)
+// alongside the existing pattern/gate pairs. Each is a single necessary
+// condition kept separate so RedactionGateTest can pin it directly; merging
+// them back to satisfy a count would hide the exact thing under test.
+@file:Suppress("TooManyFunctions")
+
 package space.getsub.core.model
 
 private const val REDACTED = "<redacted>"
@@ -230,6 +237,39 @@ private val KEYED_WORDS = listOf("address", "server", "host", "sni", "domain")
 private val LABEL_WORDS = listOf("dial", "address", "server", "host", "lookup")
 
 /**
+ * True when [s] contains any character outside the ASCII range.
+ *
+ * Necessary before trusting [KEYED_WORDS]/[LABEL_WORDS] as a skip signal on a
+ * real device: Android's `java.util.regex` is ICU-backed, and ICU's
+ * case-insensitive matching does *full* Unicode case folding, which is
+ * sometimes many-to-one — German `ß` folds to `ss`, and the ligatures `ﬆ`/`ﬅ`
+ * fold to `st`. That means [KEYED_HOST_PATTERN]/[LABELLED_HOST_PATTERN], both
+ * compiled with `RegexOption.IGNORE_CASE`, can match `addreß`, `ADDREẞ`, `hoﬆ`
+ * or `hoﬅ` as the word `address`/`host` on-device, even though Kotlin's
+ * `String.contains(ignoreCase = true)` — which folds one character at a time
+ * and can never turn one character into two — says the word isn't there. A
+ * gate that trusted only the Kotlin keyword check would sometimes skip a
+ * pattern ICU would still fire on the real engine: a leak our JVM tests
+ * cannot see, because the JVM's `java.util.regex` doesn't fold this way.
+ * Any non-ASCII character forces the pattern to run instead. For pure-ASCII
+ * input, Kotlin's `ignoreCase` is already a superset of ICU's folding, so the
+ * cheap keyword check alone is safe and the gate can still skip.
+ */
+internal fun hasNonAscii(s: String): Boolean = s.any { it.code >= ASCII_LIMIT }
+
+/** Whether [s] contains any of [words], case-insensitively per Kotlin's (ASCII-safe) folding. */
+private fun containsAnyIgnoreCase(
+    s: String,
+    words: List<String>,
+): Boolean = words.any { s.contains(it, ignoreCase = true) }
+
+/** Necessary for [KEYED_HOST_PATTERN]: see [hasNonAscii] for why non-ASCII alone must pass. */
+internal fun keyedHostGate(s: String): Boolean = hasNonAscii(s) || containsAnyIgnoreCase(s, KEYED_WORDS)
+
+/** Necessary for [LABELLED_HOST_PATTERN]: see [hasNonAscii] for why non-ASCII alone must pass. */
+internal fun labelledHostGate(s: String): Boolean = hasNonAscii(s) || containsAnyIgnoreCase(s, LABEL_WORDS)
+
+/**
  * The same passes in the same order, each behind a **necessary** condition for
  * its pattern to match at all (M8.5 spec §3.2, as amended: row 7 measured ten
  * ungated regex passes at 1.31 ms per line). A gate may only skip a pattern that
@@ -247,13 +287,13 @@ private fun redactEveryPattern(message: String): String {
     }
     if (s.contains('.')) s = s.replace(HOSTNAME_PATTERN, SENTINEL)
     if (hasBase64Run(s)) s = s.replace(BASE64_BLOB_PATTERN, SENTINEL)
-    if (KEYED_WORDS.any { s.contains(it, ignoreCase = true) }) {
+    if (keyedHostGate(s)) {
         s = s.replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
     }
     if (hasColonBeforeWhitespace(s)) {
         s = s.replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
     }
-    if (LABEL_WORDS.any { s.contains(it, ignoreCase = true) }) {
+    if (labelledHostGate(s)) {
         s = s.replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
     }
     return s.replace(SENTINEL, REDACTED)
@@ -279,9 +319,22 @@ private fun hasBase64Run(s: String): Boolean {
     return false
 }
 
-/** Necessary for [BARE_HOST_PREFIX_PATTERN]: a `:` immediately followed by whitespace. */
-private fun hasColonBeforeWhitespace(s: String): Boolean {
-    for (i in 0 until s.length - 1) if (s[i] == ':' && s[i + 1].isWhitespace()) return true
+/** U+0085, NEL: Unicode `White_Space`, which ICU's `(?=\s)` matches, but [Char.isWhitespace] does not. */
+private const val NEL = '\u0085'
+
+/**
+ * Necessary for [BARE_HOST_PREFIX_PATTERN]: a `:` immediately followed by
+ * whitespace. `(?=\s)` is what the pattern actually tests, and on Android
+ * `\s` is ICU's `\p{White_Space}`, which recognises [NEL] even though
+ * [Char.isWhitespace] does not — checked explicitly here so the reason
+ * survives a `git blame` rather than being folded silently into
+ * `isWhitespace()`.
+ */
+internal fun hasColonBeforeWhitespace(s: String): Boolean {
+    for (i in 0 until s.length - 1) {
+        val next = s[i + 1]
+        if (s[i] == ':' && (next.isWhitespace() || next == NEL)) return true
+    }
     return false
 }
 

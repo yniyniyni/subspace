@@ -19,6 +19,23 @@ internal data class DnsSettingSnapshot(
 }
 
 /**
+ * The two Room rows that make up `:bg`'s last terminal connection failure
+ * (ARCHITECTURE.md §11 row 7). `reason` is a plain `FailureReason.name`; `detail` is the
+ * already-redacted text `ConnectionState.Failed` carries — see
+ * `SettingsRepository.lastTerminalFailure` for why this DAO hands back the raw pair
+ * rather than a typed `FailureReason`.
+ */
+internal data class TerminalFailureSettingSnapshot(
+    val reason: String?,
+    val detail: String?,
+) {
+    // ARCHITECTURE.md §5.6: `detail` is already redacted, but this mirrors
+    // DnsSettingSnapshot's defensive toString rather than trusting that no
+    // future caller logs this snapshot directly.
+    override fun toString(): String = "TerminalFailureSettingSnapshot(reason=$reason, detail=<redacted>)"
+}
+
+/**
  * Data access for [SettingEntity].
  *
  * A bare [Upsert] is safe here, unlike [ProfileDao.upsertProfile]: `key` is
@@ -49,6 +66,22 @@ internal interface SettingDao {
     @Query("SELECT value FROM settings WHERE `key` = :key")
     suspend fun value(key: String): String?
 
+    /**
+     * One-shot counterpart to [observeDnsSnapshot]: read once, when `:bg` seeds a new
+     * process's starting state, never collected — see
+     * `SettingsRepository.lastTerminalFailure`. Combined into one query for the same
+     * reason [observeDnsSnapshot] is: two independent reads could observe a write to
+     * `reason` without the paired write to `detail`, or vice versa.
+     */
+    @Query(
+        """
+        SELECT
+            (SELECT value FROM settings WHERE `key` = 'last_terminal_failure_reason') AS reason,
+            (SELECT value FROM settings WHERE `key` = 'last_terminal_failure_detail') AS detail
+        """,
+    )
+    suspend fun terminalFailureSnapshot(): TerminalFailureSettingSnapshot
+
     /** Inserts or overwrites a setting. */
     @Upsert
     suspend fun put(setting: SettingEntity)
@@ -74,6 +107,21 @@ internal interface SettingDao {
         if (this.value(key)?.toLongOrNull() != null) return false
         put(SettingEntity(key, value.toString()))
         return true
+    }
+
+    /**
+     * Writes both terminal-failure fields in one transaction, so [terminalFailureSnapshot]
+     * never reads one updated without the other. [SettingsRepository.setLastTerminalFailure]
+     * writes `""` for both to clear, the same convention every other clearable setting here
+     * uses, since this DAO exposes no delete.
+     */
+    @Transaction
+    suspend fun putTerminalFailure(
+        reason: String,
+        detail: String,
+    ) {
+        put(SettingEntity(key = "last_terminal_failure_reason", value = reason))
+        put(SettingEntity(key = "last_terminal_failure_detail", value = detail))
     }
 
     /** Clears [key] only while it still contains [expected], returning the changed-row count. */

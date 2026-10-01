@@ -2,12 +2,21 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.service
 
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.launch
 import space.getsub.core.model.ConnectionState
+import space.getsub.core.model.failure
 import java.util.concurrent.atomic.AtomicReference
+
+private const val TAG = "TerminalStateMemory"
 
 /**
  * Remembers the last terminal [ConnectionState.Failed] for as long as the `:bg`
- * process lives, so it outlives the `TunnelService` instance that published it.
+ * process lives, so it outlives the `TunnelService` instance that published it —
+ * and, since Task 20 (ARCHITECTURE.md §11 row 7, part 2), persists it through
+ * [persistence] so it outlives the *process* too.
  *
  * ## The bug this exists to close (ARCHITECTURE.md §11 row 7 / device check W2)
  *
@@ -24,28 +33,113 @@ import java.util.concurrent.atomic.AtomicReference
  * `super.onRevoke()` is skipped so nothing can overwrite the Revoked state — is
  * defending against the wrong mechanism.
  *
+ * ## Task 20: the same defect, one layer up
+ *
+ * A device run (Task 19c) found the process itself can die between the revoke and
+ * the user reopening the app — swiping Subspace from recents kills `:bg` once the
+ * revoke teardown has already ended the foreground service, and ActivityManager is
+ * then free to do so. [remembered] is a plain in-process field, so it does not
+ * survive that; the next process starts with nothing remembered and seeds
+ * `Disconnected` all over again. [persistence] is what closes that: every change
+ * [remembered] makes is mirrored to Room, and [loadPersisted] is what a brand-new
+ * process reads back.
+ *
+ * Deliberately **not** promoted to a timestamped, indefinitely-retained record. A
+ * revoke matters to the user who is looking at the app shortly afterwards; a
+ * revoke from last week resurfacing as the current state would be a worse lie than
+ * the one this fixes. Any non-terminal publish — the next `Connecting` included —
+ * still clears both [remembered] and the persisted row, so staleness needs no
+ * clock: it is simply impossible for a failure to outlive the next session that
+ * starts.
+ *
  * ## Scope: one memory per `:bg` process, like [SessionIntentGate]
  *
  * `@Singleton` in [ServiceModule] is what makes this one per process rather than
  * one per service instance, and that is the entire point of the binding — the same
- * reasoning [SessionIntentGate]'s KDoc gives for the same scope.
- *
- * Deliberately **not** persisted. A revoke matters to the user who is looking at
- * the app shortly afterwards; a revoke from last week resurfacing as the current
- * state would be a worse lie than the one this fixes. Process death is therefore
- * the expiry rule, and it needs no timestamp, no schema change, and no policy about
- * when a remembered failure goes stale.
+ * reasoning [SessionIntentGate]'s KDoc gives for the same scope. [scope] is this
+ * class's own, not any one `TunnelService` instance's: see the note on [scope]
+ * below for why that distinction is load-bearing now that there is a write to
+ * carry out, not just a field to read.
  *
  * ## Why an [AtomicReference] and not a `Mutex`
  *
  * [SessionIntentGate] serialises with a `Mutex` because its writes are suspending
- * Room calls. These are not: [record] is called from `publishLocked`, which already
- * runs under the service lock and is not `suspend`. A mutex here would be
- * unreachable ceremony at best and a suspension point in a non-suspending path at
- * worst.
+ * Room calls. [remembered]'s own update is not: [record] is called from
+ * `publishLocked`, which already runs under the service lock and is not
+ * `suspend`. A mutex here would be unreachable ceremony at best and a suspension
+ * point in a non-suspending path at worst. The Room write *is* suspending, which
+ * is exactly why it is queued onto [writes] and run on [scope] instead of awaited
+ * inline — see [record]'s KDoc.
+ *
+ * @property persistence the Room-backed seam [record] writes through and
+ *   [loadPersisted] reads through. A seam, not [space.getsub.core.data.SettingsRepository]
+ *   directly, so this class stays unit-testable with a fake — `TunnelService` is a
+ *   `VpnService` and this project carries no Robolectric (ARCHITECTURE.md §10.7).
+ * @property scope **This class's own scope, not a `TunnelService` instance's.**
+ *   A `record` call can be the very last thing a dying instance does — `onRevoke`
+ *   publishes `Failed(Revoked)` and the system can tear the instance down moments
+ *   later — and the write that makes it durable must not be cancelled by that
+ *   instance's `onDestroy`. [ServiceModule] constructs one scope here, scoped to
+ *   the `@Singleton` binding's own process lifetime, for exactly the reason
+ *   [SessionIntentGate] is itself process-scoped rather than per-instance.
  */
-internal class TerminalStateMemory {
+internal class TerminalStateMemory(
+    private val persistence: TerminalFailurePersistence,
+    private val scope: CoroutineScope,
+) {
     private val remembered = AtomicReference<ConnectionState.Failed?>(null)
+
+    /**
+     * One pending write, ordered and coalesced — see [consumeWrites] for what runs
+     * on the far end.
+     *
+     * [Channel.CONFLATED], not an unbounded buffer: [record] cannot suspend (it
+     * runs under `TunnelService`'s lock), so enqueuing must never block, and a
+     * capacity-1 "keep only the newest" buffer is exactly what the never-stale
+     * design calls for anyway. If a write for an older fact is still queued (not
+     * yet picked up) when a newer one arrives, the newer one simply replaces it in
+     * the buffer — nothing is lost that still matters, because by the time a
+     * superseded value would have reached Room the field it would have written is
+     * already wrong. What [Channel.CONFLATED] does **not** do is reorder or drop a
+     * write that is already *in flight*: see [consumeWrites].
+     */
+    private val writes = Channel<PersistedFailure?>(Channel.CONFLATED)
+
+    init {
+        scope.launch { consumeWrites() }
+    }
+
+    /**
+     * Drains [writes] one at a time, in the order they were enqueued, for as long
+     * as [scope] lives.
+     *
+     * This is the piece that keeps a quick `Failed → clear` from landing out of
+     * order. A single coroutine ever calls [TerminalFailurePersistence.save]; the
+     * `for` loop does not advance to the next queued value until the current
+     * [TerminalFailurePersistence.save] call returns, so a slow write for an older
+     * fact is never overtaken by a newer one that was enqueued while it was still
+     * in flight — the newer one simply waits in [writes]' one-slot buffer (and, if
+     * a third arrives before the first finishes, replaces it there, which is safe
+     * for the same reason noted on [writes]). An independent `scope.launch` per
+     * [record] call — the alternative this deliberately avoids — would give no
+     * such guarantee: two suspending Room writes dispatched to the same
+     * multi-threaded dispatcher can complete in either order, and the one that
+     * finishes last decides what Room remembers.
+     *
+     * A write failure is logged and dropped, never rethrown: a Room error here must
+     * not reach [scope]'s `CoroutineExceptionHandler`, if it has one bound at all,
+     * since nothing about a failed *persist* should affect the live tunnel (ARCHITECTURE.md §10.4) —
+     * the in-memory [remembered] already has the fact right regardless.
+     */
+    private suspend fun consumeWrites() {
+        for (next in writes) {
+            runCatching { persistence.save(next) }
+                .onFailure { e ->
+                    // ARCHITECTURE.md §5.6: the class name only, never the message.
+                    Log.e(TAG, "failed to persist terminal failure: ${e.javaClass.simpleName}")
+                }
+        }
+    }
 
     /**
      * Records [state] when it is terminal, and **clears** the memory for every
@@ -56,9 +150,27 @@ internal class TerminalStateMemory {
      * remembered failure is gone, so it can never be shown over a session that has
      * since started. `Disconnected` clears it too — an explicit stop is the user
      * ending the session, not a failure they need reported back.
+     *
+     * **Writes to [persistence] only when the remembered fact actually changes.**
+     * `publishLocked` calls this on *every* publish, including the once-a-second
+     * health-transition republishes `HealthDetector` drives while a session sits
+     * `Connected` — persisting on every one of those would turn a steady session
+     * into a steady stream of Room writes for a fact ([ConnectionState.Failed]'s
+     * absence) that never moved. [ConnectionState.Failed]'s own `equals` is what
+     * makes the re-recorded-same-failure case a no-op too: two [failure] calls
+     * with the same reason and detail produce equal instances, so retrying the
+     * same terminal state again is indistinguishable from not calling [record] at
+     * all.
+     *
+     * Never suspends: called from `publishLocked`, under `TunnelService`'s lock.
+     * [AtomicReference.getAndSet] decides synchronously whether anything changed;
+     * the write itself is handed to [writes], never awaited here.
      */
     fun record(state: ConnectionState) {
-        remembered.set(state as? ConnectionState.Failed)
+        val next = state as? ConnectionState.Failed
+        val previous = remembered.getAndSet(next)
+        if (previous == next) return
+        writes.trySend(next?.let { PersistedFailure(it.reason, it.detail) })
     }
 
     /** The remembered terminal failure, or null when none is outstanding. */
@@ -71,6 +183,34 @@ internal class TerminalStateMemory {
      * destroyed instance would have: the two guards that read `currentState`
      * already handle `Failed`, so they see what they would have seen had the
      * instance survived — which is the property this whole class buys.
+     *
+     * In-memory only, and still synchronous for exactly that reason: a brand-new
+     * `:bg` process has nothing in [remembered] yet, however long ago [persistence]
+     * last changed, so this seeds `Disconnected` and `onCreate` separately launches
+     * [loadPersisted] to recover the Room-persisted fact. `onCreate` must not
+     * `runBlocking` to read it inline (ARCHITECTURE.md §10.7's conventions /
+     * global constraints forbid it outside tests) — see `persistedSeedPublication`
+     * for the guard around publishing what [loadPersisted] eventually returns.
      */
     fun seedState(): ConnectionState = lastTerminal() ?: ConnectionState.Disconnected
+
+    /**
+     * Reads [persistence] for the failure a *previous* `:bg` process persisted.
+     *
+     * Reconstructs through [failure] rather than building
+     * [ConnectionState.Failed] directly — its constructor is private for exactly
+     * this reason (ARCHITECTURE.md §5.6) — which re-redacts [PersistedFailure.detail].
+     * That is a no-op on the text this class ever persists: [redact] is
+     * idempotent by construction (`core/model/Redaction.kt`), and every detail
+     * reaching [record] already passed through it once, in [ConnectionState.Failed]'s
+     * own constructor, before this class ever saw it.
+     *
+     * Null for "nothing to seed" covers two cases alike, deliberately: no failure
+     * was ever persisted, and a row was persisted but [TerminalFailurePersistence.load]
+     * could not make sense of it (an unknown `FailureReason` name). Callers do not
+     * need to, and must not, tell the two apart — ARCHITECTURE.md §10.4 says the wrong
+     * answer here is announcing a specific failure that was never real.
+     */
+    suspend fun loadPersisted(): ConnectionState.Failed? =
+        persistence.load()?.let { persisted -> failure(persisted.reason, persisted.detail) }
 }

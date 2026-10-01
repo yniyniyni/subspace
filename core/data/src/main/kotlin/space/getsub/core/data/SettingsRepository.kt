@@ -434,4 +434,38 @@ internal constructor(
     public suspend fun setBatteryPromptShown(shown: Boolean) {
         dao.put(SettingEntity(key = KEY_BATTERY_PROMPT_SHOWN, value = shown.toString()))
     }
+
+    /**
+     * The last terminal connection failure `:bg` persisted, as a raw
+     * `(reasonName, detail)` pair — either both null (nothing outstanding) or both
+     * set. One-shot like [tunnelSessionWantedNow], not a [Flow]: nothing collects
+     * this reactively, it is read once when a new `:bg` process seeds
+     * `TunnelService`'s starting state (ARCHITECTURE.md §11 row 7).
+     *
+     * Deliberately **not** typed to `FailureReason` here. Turning an unknown or
+     * future-version name into "no persisted failure" is `:service`'s call — its
+     * `TerminalStateMemory` persistence seam — the same layering split every other
+     * decode in this class keeps between a Room-shaped value and the typed model
+     * `:core:model` (and here, `:service`) owns.
+     */
+    public suspend fun lastTerminalFailure(): Pair<String?, String?> {
+        val snapshot = dao.terminalFailureSnapshot()
+        return snapshot.reason.takeUnless { it.isNullOrEmpty() } to snapshot.detail.takeUnless { it.isNullOrEmpty() }
+    }
+
+    /**
+     * Persists [reasonName]/[detail], or clears both when [reasonName] is null.
+     *
+     * [SettingDao] exposes no delete, so clearing writes `""` for both fields — the
+     * same convention [setActiveProfile] uses — and [lastTerminalFailure] reads an
+     * empty string back as null. [detail] is expected to already be redacted
+     * (ARCHITECTURE.md §5.6): `ConnectionState.Failed`'s constructor guarantees that for every
+     * value `:service` can pass here.
+     */
+    public suspend fun setLastTerminalFailure(
+        reasonName: String?,
+        detail: String?,
+    ) {
+        dao.putTerminalFailure(reason = reasonName.orEmpty(), detail = detail.orEmpty())
+    }
 }

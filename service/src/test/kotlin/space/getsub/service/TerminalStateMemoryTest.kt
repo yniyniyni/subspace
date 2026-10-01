@@ -2,8 +2,10 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.service
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -225,5 +227,102 @@ class TerminalStateMemoryTest {
             val memory = TerminalStateMemory(NoopPersistence, CoroutineScope(Dispatchers.Unconfined))
 
             memory.loadPersisted().shouldBeNull()
+        }
+
+    // ── Fix round 1: reconciling a stale persisted row (review Important 1) ────
+
+    @Test
+    fun `syncPersisted clears a stale persisted row that a race left remembered as null`() {
+        // The exact race from the review: Room holds a Revoked from the previous process.
+        // This process's memory starts empty, and a Connecting is recorded - the first
+        // genuine publish of the new session - before the async seed read resolves.
+        // record() alone cannot see this as a change (null -> null), so without
+        // syncPersisted the stale row survives untouched.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.record(ConnectionState.Connecting(StartupStage.AllocatingPort))
+        persistence.saved shouldBe emptyList()
+
+        memory.syncPersisted(
+            priorPersisted = revoked(),
+            current = ConnectionState.Connecting(StartupStage.AllocatingPort),
+        )
+
+        persistence.saved shouldBe listOf(null)
+        memory.lastTerminal() shouldBe null
+    }
+
+    @Test
+    fun `syncPersisted republishes a different real failure that raced in ahead of it`() {
+        // If a genuine new failure already landed through record() before the seed
+        // coroutine's guard declines, syncPersisted must not clobber it - the final
+        // persisted row has to match `current`, whatever it actually is.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        val raceWinner = failure(FailureReason.CoreStartFailed, "redacted")
+        memory.record(raceWinner)
+        persistence.saved shouldBe listOf(PersistedFailure(FailureReason.CoreStartFailed, "redacted"))
+
+        memory.syncPersisted(priorPersisted = revoked(), current = raceWinner)
+
+        memory.lastTerminal() shouldBe raceWinner
+        persistence.saved.last() shouldBe PersistedFailure(FailureReason.CoreStartFailed, "redacted")
+    }
+
+    @Test
+    fun `syncPersisted is a no-op when the live fact already matches what was persisted`() {
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+
+        memory.syncPersisted(priorPersisted = revoked(), current = revoked())
+
+        persistence.saved shouldBe emptyList()
+        memory.lastTerminal() shouldBe revoked()
+    }
+
+    // ── Fix round 1: a failed Room read must not reach the tunnel (review Important 2) ──
+
+    @Test
+    fun `loadPersisted returns null and persists nothing when the read throws`() =
+        runTest {
+            val persistence = FakePersistence()
+            val throwing =
+                object : TerminalFailurePersistence {
+                    override suspend fun load(): PersistedFailure? = error("SQLiteException: disk I/O error")
+
+                    override suspend fun save(failure: PersistedFailure?) {
+                        persistence.saved += failure
+                    }
+                }
+            val loggedErrors = mutableListOf<String>()
+            val memory =
+                TerminalStateMemory(
+                    persistence = throwing,
+                    scope = CoroutineScope(Dispatchers.Unconfined),
+                    logError = { msg -> loggedErrors += msg },
+                )
+
+            memory.loadPersisted().shouldBeNull()
+
+            // Nothing published (the null return is what onCreate's guard treats as
+            // "nothing to seed") and nothing persisted as a side effect of the failed read.
+            persistence.saved shouldBe emptyList()
+            // Reported, and only by exception class - ARCHITECTURE.md §5.6 forbids the message,
+            // which for a real SQLiteException can quote a bound value back.
+            loggedErrors shouldBe listOf("failed to read persisted terminal failure: IllegalStateException")
+        }
+
+    @Test
+    fun `loadPersisted rethrows CancellationException rather than treating it as a read failure`() =
+        runTest {
+            val cancelling =
+                object : TerminalFailurePersistence {
+                    override suspend fun load(): PersistedFailure? = throw CancellationException("scope cancelled")
+
+                    override suspend fun save(failure: PersistedFailure?) = Unit
+                }
+            val memory = TerminalStateMemory(cancelling, CoroutineScope(Dispatchers.Unconfined))
+
+            shouldThrow<CancellationException> { memory.loadPersisted() }
         }
 }

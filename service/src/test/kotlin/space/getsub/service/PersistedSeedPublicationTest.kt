@@ -66,7 +66,7 @@ class PersistedSeedPublicationTest {
     }
 
     @Test
-    fun `publishes nothing when the seed itself already remembered a failure and nothing moved`() {
+    fun `publishes the persisted failure again when the seed itself already remembered it and nothing moved`() {
         // Not a defect case, just confirms the guard does not special-case a non-Disconnected seed:
         // an unchanged Failed seed republishing itself is a harmless no-op the caller can dedupe,
         // and this function does not need to suppress it.

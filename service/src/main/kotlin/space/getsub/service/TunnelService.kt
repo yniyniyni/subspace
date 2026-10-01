@@ -1004,24 +1004,60 @@ class TunnelService : VpnService() {
         // again and re-registering a callback nothing is left to unregister.
         networkMonitorJob = scope.launch { collectSessionIntentForMonitor() }
         // Task 20 (ARCHITECTURE.md §11 row 7, part 2): the process-death half of the seed above.
-        // [terminalState.seedState] only ever answers from *this process's* memory, which is
-        // empty on a brand-new process even when Room remembers a failure from the one that
-        // just died — so this reads Room off-thread and publishes it only if [persistedSeedPublication]
-        // says nothing has moved since [seeded]/[generationAtSeed] were captured. On `scope`,
-        // not [terminalState]'s own process-lifetime scope: unlike the *write* this class makes
-        // on every `record()` (which must survive this instance), this *read* belongs only to
-        // this instance's startup, and `onDestroy`'s `scope.cancel()` correctly drops it if this
-        // instance dies before it resolves — the next instance seeds again on its own.
-        scope.launch {
-            val persisted = terminalState.loadPersisted()
-            synchronized(lock) {
+        // See [seedPersistedFailure]'s own KDoc for what this reads and why it is safe to run
+        // on this instance's own `scope` rather than [terminalState]'s process-lifetime one.
+        scope.launch { seedPersistedFailure(seeded, generationAtSeed) }
+    }
+
+    /**
+     * The asynchronous half of [onCreate]'s seed: reads what Room remembers from the
+     * *previous* `:bg` process and either publishes it or reconciles Room against
+     * whatever this process has already moved on to.
+     *
+     * [terminalState]'s synchronous [TerminalStateMemory.seedState] only ever answers
+     * from *this process's* memory, which is empty on a brand-new process even when
+     * Room remembers a failure from the one that just died. This is what recovers it —
+     * [TerminalStateMemory.loadPersisted] never throws (it catches and logs a Room
+     * read failure itself, ARCHITECTURE.md §10.4: see its KDoc for why that must not
+     * reach [scope]'s `errorHandler`, which would otherwise publish and then persist a
+     * fabricated `Failed(CoreStartFailed)` for a Room hiccup).
+     *
+     * Run on [scope], not [terminalState]'s own process-lifetime scope: unlike the
+     * *write* [TerminalStateMemory.record] makes on every call (which must survive this
+     * instance), this *read* belongs only to this instance's startup, and `onDestroy`'s
+     * `scope.cancel()` correctly drops it if this instance dies before it resolves — the
+     * next instance seeds again on its own.
+     *
+     * [persistedSeedPublication] decides whether [seeded]/[generationAtSeed] are still
+     * current. When they are not — something already moved `currentState` on while this
+     * read was in flight — the persisted row is not simply left alone: nothing this
+     * process has done necessarily looked like a change to [terminalState] itself
+     * (`remembered` starts null, the same reading as "nothing persisted"), so an
+     * untouched row could survive every future session in this process.
+     * [TerminalStateMemory.syncPersisted] is what reconciles it against the live fact
+     * instead.
+     *
+     * @param seeded what `onCreate`'s synchronous seed set `currentState` to.
+     * @param generationAtSeed `generation`, read in the same locked region as [seeded].
+     */
+    private suspend fun seedPersistedFailure(
+        seeded: ConnectionState,
+        generationAtSeed: Int,
+    ) {
+        val persisted = terminalState.loadPersisted()
+        synchronized(lock) {
+            val publication =
                 persistedSeedPublication(
                     current = currentState,
                     seeded = seeded,
                     persisted = persisted,
                     generationAtSeed = generationAtSeed,
                     generationNow = generation,
-                )?.let(::publishLocked)
+                )
+            if (publication != null) {
+                publishLocked(publication)
+            } else if (persisted != null) {
+                terminalState.syncPersisted(persisted, currentState)
             }
         }
     }

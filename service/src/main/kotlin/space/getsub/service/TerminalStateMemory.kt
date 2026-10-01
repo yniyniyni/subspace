@@ -48,10 +48,11 @@ private const val TAG = "TerminalStateMemory"
  * Deliberately **not** promoted to a timestamped, indefinitely-retained record. A
  * revoke matters to the user who is looking at the app shortly afterwards; a
  * revoke from last week resurfacing as the current state would be a worse lie than
- * the one this fixes. Any non-terminal publish — the next `Connecting` included —
- * still clears both [remembered] and the persisted row, so staleness needs no
- * clock: it is simply impossible for a failure to outlive the next session that
- * starts.
+ * the one this fixes. The next genuine session start — `Connecting` — still
+ * clears both [remembered] and the persisted row, so staleness needs no clock: it
+ * is simply impossible for a failure to outlive the next session that starts.
+ * [ConnectionState.Disconnecting] is the one state this rule does not apply to —
+ * see [record]'s KDoc (Task 20 fix round 2) for why.
  *
  * ## Scope: one memory per `:bg` process, like [SessionIntentGate]
  *
@@ -149,14 +150,40 @@ internal class TerminalStateMemory(
     }
 
     /**
-     * Records [state] when it is terminal, and **clears** the memory for every
-     * other state.
+     * Records [state] when it is terminal, **clears** the memory for every
+     * non-terminal state that is a genuine settlement, and ignores
+     * [ConnectionState.Disconnecting] entirely.
      *
-     * Clearing on any non-terminal publish is what makes staleness impossible
-     * without a clock: the instant a new session reaches `Connecting`, the
-     * remembered failure is gone, so it can never be shown over a session that has
-     * since started. `Disconnected` clears it too — an explicit stop is the user
-     * ending the session, not a failure they need reported back.
+     * Clearing on a genuine non-terminal publish is what makes staleness
+     * impossible without a clock: the instant a new session reaches `Connecting`,
+     * the remembered failure is gone, so it can never be shown over a session
+     * that has since started. `Disconnected` clears it too — an explicit stop is
+     * the user ending the session, not a failure they need reported back.
+     *
+     * **`Disconnecting` is excluded from that rule (Task 20 fix round 2, controller
+     * ruling R26), and the exclusion is load-bearing, not cosmetic.**
+     * `TunnelService.stopTunnel` unconditionally publishes `Disconnecting` as its
+     * *first* step, including when it is tearing down a session that is about to
+     * settle as `Failed` — `onDestroy` from a seeded `Failed(Revoked)` goes
+     * through exactly this path. If `Disconnecting` cleared like every other
+     * non-terminal state, that publish would queue a clear of the persisted row
+     * immediately, with the re-publish of `Failed` that should supersede it
+     * arriving only after the rest of teardown's steps complete. A device run
+     * (`docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`, "Row 21
+     * re-run after Task 20") found the window between those two publishes long
+     * enough for ActivityManager to `SIGKILL` the process mid-teardown: only the
+     * clear had reached Room, and the next cold open showed "Disconnected" over
+     * a revoke the user never saw resolved. Treating `Disconnecting` as pure
+     * transition — touching neither [remembered] nor [writes] — means the
+     * persisted fact can only ever be the *last settled* one: whatever `Failed`
+     * or `Disconnected` this teardown eventually reaches, published or not before
+     * the process dies.
+     *
+     * An explicit user disconnect **from** `Failed` still clears correctly under
+     * this rule: `stopTunnel`'s `Disconnecting` is ignored, and its final
+     * `Disconnected` publish is what does the clearing — the same write-on-change
+     * path every other transition uses, just reached one publish later than
+     * before.
      *
      * **Writes to [persistence] only when the remembered fact actually changes.**
      * `publishLocked` calls this on *every* publish, including the once-a-second
@@ -174,6 +201,7 @@ internal class TerminalStateMemory(
      * the write itself is handed to [writes], never awaited here.
      */
     fun record(state: ConnectionState) {
+        if (state is ConnectionState.Disconnecting) return
         val next = state as? ConnectionState.Failed
         val previous = remembered.getAndSet(next)
         if (previous == next) return

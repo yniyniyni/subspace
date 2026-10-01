@@ -170,6 +170,57 @@ class TerminalStateMemoryTest {
         persistence.saved shouldBe listOf(PersistedFailure(FailureReason.Revoked, "VPN permission revoked"))
     }
 
+    // ── Fix round 2: Disconnecting is transitional, not a clear (controller ruling R26) ──
+
+    @Test
+    fun `Disconnecting after a Failed leaves the persisted value as Failed, with no clear write`() {
+        // The exact device defect: TunnelService.stopTunnel(finalState = Failed) publishes
+        // Disconnecting first. If that cleared like every other non-terminal state, a process
+        // kill during the rest of teardown would leave only the clear in Room.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.record(revoked())
+
+        memory.record(ConnectionState.Disconnecting)
+
+        persistence.saved shouldBe listOf(PersistedFailure(FailureReason.Revoked, "VPN permission revoked"))
+        memory.lastTerminal() shouldBe revoked()
+    }
+
+    @Test
+    fun `Failed to Disconnecting to Failed causes zero additional writes`() {
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.record(revoked())
+
+        memory.record(ConnectionState.Disconnecting)
+        memory.record(revoked())
+
+        // Only the first record() wrote anything - Disconnecting touched nothing, so the
+        // second revoked() is re-recording the same already-remembered value.
+        persistence.saved shouldBe listOf(PersistedFailure(FailureReason.Revoked, "VPN permission revoked"))
+        memory.lastTerminal() shouldBe revoked()
+    }
+
+    @Test
+    fun `Failed to Disconnecting to Disconnected clears exactly once`() {
+        // An explicit user disconnect from Failed must still clear - just via the final
+        // Disconnected publish rather than the Disconnecting that precedes it.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.record(revoked())
+
+        memory.record(ConnectionState.Disconnecting)
+        memory.record(ConnectionState.Disconnected)
+
+        persistence.saved shouldBe
+            listOf(
+                PersistedFailure(FailureReason.Revoked, "VPN permission revoked"),
+                null,
+            )
+        memory.lastTerminal() shouldBe null
+    }
+
     @Test
     fun `a quick Failed to clear cannot be persisted out of order`() =
         runTest {

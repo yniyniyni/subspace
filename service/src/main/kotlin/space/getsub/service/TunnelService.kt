@@ -931,7 +931,18 @@ class TunnelService : VpnService() {
         // made a revoke read as `Disconnected` to anyone who opened the app after
         // the fact. Seeding the remembered failure makes this instance answer the
         // binder exactly as the destroyed one would have.
-        synchronized(lock) { currentState = terminalState.seedState() }
+        //
+        // Task 20 (ARCHITECTURE.md §11 row 7, part 2): captured alongside the seed, under the same
+        // locked region, so the coroutine launched near the end of this method can tell
+        // whether anything has moved by the time Room's answer comes back. No `runBlocking`
+        // here, ever — that read happens off this thread, below.
+        val seeded: ConnectionState
+        val generationAtSeed: Int
+        synchronized(lock) {
+            currentState = terminalState.seedState()
+            seeded = currentState
+            generationAtSeed = generation
+        }
         // ARCHITECTURE.md §5.6: a config left by a start that failed, or by a process the system
         // killed before onDestroy, holds the UUID and REALITY key. Nothing else
         // would ever remove it.
@@ -992,6 +1003,27 @@ class TunnelService : VpnService() {
         // `networkMonitor.stop()` and that final cancel from calling `start()`
         // again and re-registering a callback nothing is left to unregister.
         networkMonitorJob = scope.launch { collectSessionIntentForMonitor() }
+        // Task 20 (ARCHITECTURE.md §11 row 7, part 2): the process-death half of the seed above.
+        // [terminalState.seedState] only ever answers from *this process's* memory, which is
+        // empty on a brand-new process even when Room remembers a failure from the one that
+        // just died — so this reads Room off-thread and publishes it only if [persistedSeedPublication]
+        // says nothing has moved since [seeded]/[generationAtSeed] were captured. On `scope`,
+        // not [terminalState]'s own process-lifetime scope: unlike the *write* this class makes
+        // on every `record()` (which must survive this instance), this *read* belongs only to
+        // this instance's startup, and `onDestroy`'s `scope.cancel()` correctly drops it if this
+        // instance dies before it resolves — the next instance seeds again on its own.
+        scope.launch {
+            val persisted = terminalState.loadPersisted()
+            synchronized(lock) {
+                persistedSeedPublication(
+                    current = currentState,
+                    seeded = seeded,
+                    persisted = persisted,
+                    generationAtSeed = generationAtSeed,
+                    generationNow = generation,
+                )?.let(::publishLocked)
+            }
+        }
     }
 
     /**

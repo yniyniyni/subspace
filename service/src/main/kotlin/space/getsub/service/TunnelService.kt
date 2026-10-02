@@ -1051,6 +1051,18 @@ class TunnelService : VpnService() {
      * is made; this function only supplies the read, which — like [persisted] above —
      * must happen off the service lock because it suspends.
      *
+     * **Also skipped entirely once [TerminalStateMemory.hasRecorded] is true (fix wave
+     * #2, Minor 2).** [persisted] above and this process's own [TerminalStateMemory.record]
+     * writes race on independent coroutines with no ordering between them, so
+     * [TerminalStateMemory.loadPersisted]'s read can return a value from *behind* a
+     * write this process already made — stale relative to what [terminalState] already
+     * correctly remembers. Once anything in this process has called `record` even
+     * once, memory is authoritative and this function has nothing useful left to do:
+     * not publish (it could be publishing a fact this process has already superseded)
+     * and not [TerminalStateMemory.syncPersisted] either (it would briefly overwrite
+     * [terminalState]'s correct in-memory fact with the stale read before correcting
+     * it back, a window [TerminalStateMemory.lastTerminal] could be read from).
+     *
      * @param seeded what `onCreate`'s synchronous seed set `currentState` to.
      * @param generationAtSeed `generation`, read in the same locked region as [seeded].
      */
@@ -1061,6 +1073,7 @@ class TunnelService : VpnService() {
         val persisted = terminalState.loadPersisted()
         val intentWanted = settingsRepository.tunnelSessionWantedNow()
         synchronized(lock) {
+            if (terminalState.hasRecorded()) return@synchronized
             val publication =
                 persistedSeedPublication(
                     current = currentState,

@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.failure
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 private const val TAG = "TerminalStateMemory"
@@ -96,6 +97,21 @@ internal class TerminalStateMemory(
     private val logError: (String) -> Unit = { msg -> Log.e(TAG, msg) },
 ) {
     private val remembered = AtomicReference<ConnectionState.Failed?>(null)
+
+    /**
+     * Whether [record] has been called at least once in this process (fix wave #2,
+     * Minor 2). `true` regardless of what was recorded, including a
+     * [ConnectionState.Disconnecting] call that [record] itself treats as a no-op —
+     * what matters here is only that *this process* has already published through
+     * the ordinary path, not what it published.
+     *
+     * A separate flag rather than inferring this from [remembered]'s nullability: a
+     * non-terminal [record] call also sets [remembered] to `null` (there is no
+     * failure to remember), which reads identically to "nothing has ever been
+     * recorded" if nullability were the signal — exactly the case [hasRecorded]
+     * must not miss.
+     */
+    private val recorded = AtomicBoolean(false)
 
     /**
      * One pending write, ordered and coalesced — see [consumeWrites] for what runs
@@ -201,6 +217,7 @@ internal class TerminalStateMemory(
      * the write itself is handed to [writes], never awaited here.
      */
     fun record(state: ConnectionState) {
+        recorded.set(true)
         if (state is ConnectionState.Disconnecting) return
         val next = state as? ConnectionState.Failed
         val previous = remembered.getAndSet(next)
@@ -210,6 +227,21 @@ internal class TerminalStateMemory(
 
     /** The remembered terminal failure, or null when none is outstanding. */
     fun lastTerminal(): ConnectionState.Failed? = remembered.get()
+
+    /**
+     * Whether [record] has been called at least once in this process.
+     *
+     * `TunnelService.seedPersistedFailure`'s guard (fix wave #2, Minor 2): its Room
+     * read (`loadPersisted`) and this process's own queued write (`writes`, drained
+     * by [consumeWrites]) run on independent coroutines with no ordering between
+     * them, so that read can return a value from *behind* a write this process
+     * itself already made — stale relative to what [remembered] already correctly
+     * holds. Once [hasRecorded] is true, [remembered] is this process's own
+     * authoritative fact, and the caller skips acting on the racing Room read
+     * entirely rather than risk a window where [lastTerminal] briefly answers with
+     * the stale value `syncPersisted` would otherwise write through.
+     */
+    fun hasRecorded(): Boolean = recorded.get()
 
     /**
      * What a freshly created `TunnelService` should seed `currentState` with.

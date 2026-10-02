@@ -257,6 +257,44 @@ class TerminalStateMemoryTest {
                 )
         }
 
+    // ── Fix wave #2, Minor 2: memory is authoritative once record has run ──────
+
+    @Test
+    fun `hasRecorded is false until record is called`() {
+        bareMemory().hasRecorded() shouldBe false
+    }
+
+    @Test
+    fun `hasRecorded becomes true after a terminal record call`() {
+        val memory = bareMemory()
+
+        memory.record(revoked())
+
+        memory.hasRecorded() shouldBe true
+    }
+
+    @Test
+    fun `hasRecorded becomes true after a non-terminal record call too`() {
+        val memory = bareMemory()
+
+        memory.record(ConnectionState.Connecting(StartupStage.AllocatingPort))
+
+        memory.hasRecorded() shouldBe true
+    }
+
+    @Test
+    fun `hasRecorded becomes true even for a Disconnecting call, which records nothing else`() {
+        // A seed racing Room behind this process's own queued write is still a race
+        // worth closing even when the only thing recorded so far is Disconnecting -
+        // record() having been called at all is what makes memory authoritative here,
+        // not what it changed.
+        val memory = bareMemory()
+
+        memory.record(ConnectionState.Disconnecting)
+
+        memory.hasRecorded() shouldBe true
+    }
+
     @Test
     fun `loadPersisted reconstructs a Failed from the persistence seam`() =
         runTest {

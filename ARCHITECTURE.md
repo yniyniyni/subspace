@@ -358,6 +358,27 @@ never overwrites an existing `Failed`. Source:
 `docs/agent/specs/2026-09-17-m8.5-observability-design.md` §4 (as amended
 2026-09-26).
 
+**The last terminal failure survives process death (M8.5 Part 3).**
+`TerminalStateMemory` mirrors every change to the remembered `Failed` into
+the Room `settings` table (`TerminalFailurePersistence`), write-on-change
+only. A freshly created `TunnelService` seeds `currentState` from whatever
+this process already remembers — `Disconnected` on a brand-new process —
+then `onCreate` launches an asynchronous Room read that publishes the
+persisted failure if nothing has since moved `currentState` on. This closes
+the gap where swiping the app from recents kills `:bg` after a revoke's
+teardown has already ended the foreground service, and the reopened app
+read plain "Disconnected" over a `Failed(Revoked)` the user never
+dismissed. `ConnectionState.Disconnecting` is excluded from the
+write-on-change rule — it neither clears the remembered fact nor writes to
+Room — because `stopTunnel` publishes it unconditionally as teardown's
+first step, before the ordered teardown that may still settle as `Failed`
+runs; treating it as an ordinary clearable transition let a process kill
+landing mid-teardown win the race between that clearing publish and the
+later one that restores the correct terminal state. Source:
+`docs/agent/specs/2026-09-17-m8.5-observability-design.md` §9 row 21 (M8.5
+Part 3, Task 20 and fix round 2); verified on device in
+`docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`.
+
 ### 5.6 Do not log config contents
 
 Server addresses, UUIDs, REALITY keys, and subscription URLs are secrets.
@@ -372,6 +393,41 @@ session and survives into a device backup, readable by anyone with the
 device unlocked; redacting at capture means the secret this section warns
 about was never written there at all. Source:
 `docs/agent/specs/2026-09-17-m8.5-observability-design.md` §3.2.
+
+**Necessary-condition gates and the IPv6 candidate scanner (M8.5 Part 3,
+Tasks 13/21).** `redactEveryPattern` (`core/model/Redaction.kt`) checks a
+cheap, sound precondition before running each of its ten regex passes —
+e.g. `s.contains("://")` before `URL_PATTERN`, a keyword scan before
+`KEYED_HOST_PATTERN` — a gate may only skip a pattern that provably cannot
+match, never narrow what a pattern catches once it runs.
+`RedactionOracleTest` holds the gated function equal to an ungated byte
+copy across fixed cases and a 50,000+-sample generated corpus, including an
+IPv6-dense corpus added for the candidate scanner below.
+
+The ICU caveat that motivated an on-device probe: Android's
+`java.util.regex` is ICU-backed and does *full* Unicode case folding under
+`IGNORE_CASE` — German `ß` folds to `ss`, the ligatures `ﬆ`/`ﬅ` fold to
+`st` — so a keyword gate trusting only Kotlin's one-character-at-a-time
+`contains(ignoreCase = true)` can skip a pattern the real on-device engine
+would still match. `hasNonAscii` forces `KEYED_HOST_PATTERN` and
+`LABELLED_HOST_PATTERN` to run whenever the line has any non-ASCII
+character, and `hasColonBeforeWhitespace` checks `\u0085` (NEL) explicitly
+because ICU's `\s` matches it while `Char.isWhitespace()` does not.
+`IcuRedactionProbeTest`
+(`service/src/androidTest/kotlin/space/getsub/service/IcuRedactionProbeTest.kt`)
+proved this sound against the real engine, not the JVM oracle the unit
+tests use: 3/3 on device (2026-09-28), extended with two IPv6
+candidate-scan cases and re-run 5/5 (2026-10-02).
+
+`redactIpv6Candidates` replaces `IPV6_PATTERN`'s whole-string lookaround
+scan — row 7's measured dominant cost — with a linear maximal-run scanner
+that calls the same compiled pattern only on isolated candidate
+substrings, proven byte-identical to the previous behaviour by the same
+oracle test. **Known limit, pre-existing and kept by the byte-identical
+rule**: an IPv6 address immediately adjacent to a `.` (e.g.
+`.2001:db8::1`) is excluded from the candidate run and is not redacted by
+the IPv6 pass. Recorded for the owner, not fixed — closing it would change
+what the pattern catches, not how fast it runs.
 
 ---
 
@@ -1320,7 +1376,10 @@ opening, for every user, the port §6 closes.
 
 ### 14.5 tun2socks implementation — RESOLVED for now
 
-**`hev-socks5-tunnel` v2.16.0**, built from source via CMake/NDK.
+**`hev-socks5-tunnel` v2.16.0**, built from source via CMake/NDK. The build
+applies a small, reviewed patch series to the vendored source before
+compiling — see `THIRD_PARTY.md` for patches `0001` and `0002`, the latter
+the M8.5 W7/N5 teardown-hang fix (§5.5, §A.2).
 
 Xray's own TUN (`xray-tun-enable`, §A.3.4) stays on the roadmap as an
 additional option in a later milestone, not as a replacement. Building the
@@ -1546,27 +1605,58 @@ Mandatory rules:
       the M8.5 spec's §0.1, which rests on M8's teardown instrumentation
       (`f580d3d`, `705f4ab`) being read back from logcat repeatedly; see also
       `docs/agent/roadmap.md`'s M8.5 section.
-- [ ] Traffic counters, live log viewer — **M8.5.** Counters read
+- [x] Traffic counters, live log viewer — **M8.5.** Counters read
       `hev-socks5-tunnel`'s own TUN-level counters (§14.4); the log viewer
       reads a redacted on-disk ring (§5.6). Parts 1–2 were implemented on
       `feat/m8.5-observability` and verified on hardware (Pixel 8, Android
-      17) between 2026-09-21 and 2026-09-25. The checks covered: no secrets
-      in the ring; counter accuracy; totals and per-tag rows surviving both
-      restart branches; nothing extra listening with the breakdown off; ring
-      rotation; and teardown lines, `done` included, captured on normal,
-      short and burst sessions. **The box stays unticked**: the M8.5 spec's
-      §9 ties it to rows 9 and 13 as well, and those test Part 3's health
-      dimension, which is not built. Known limits, recorded in the M8.5
-      research notes:
+      17) between 2026-09-21 and 2026-09-25. Parts 3–4 added
+      `Connected.health`, `Reconnecting.blocked`, one notification reader and
+      a live tail (§5.5). **Ticked**: the M8.5 spec's §9 "Done when" rows
+      1–4, 9–13 and 17 all pass on hardware (Pixel 8, Android 17, 2026-09-28
+      to 2026-10-02; rows 13 and 16 fault-injected per controller ruling
+      R24) — logcat readable from the app's own UID; redaction at rest (zero
+      secret matches across every needle class); counter accuracy against
+      `/proc/net/dev`/`dumpsys netstats`; totals surviving a Wi-Fi↔cellular
+      retained-TUN restart; `Idle` never reading `Stalled`; the
+      breakdown-off/on pair and the pure-passthrough named reason; a
+      service-scope crash leaving both surfaces agreeing; and live-tail
+      follow/scroll-lock/rotation. Record:
+      `docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`.
+      Known limits, recorded in the M8.5 research notes:
       - Lines that logd drops on write under device-wide log pressure
         cannot be recovered by any logcat-based capture. The ring marks
         the gap rather than hiding it.
       - The loopback-cleartext fix for API < 37 is not yet verified on a
         device below 37.
-      - Part 3 (2026-09-26 onwards) adds `Connected.health`,
-        `Reconnecting.blocked`, one notification reader, and a live tail. Row
-        results in `docs/agent/research/2026-09-2*-m8.5-*.md`.
-- [ ] Always-on VPN, boot autostart, kill switch
+      - **Row 7 (redaction CPU under the spec's 2,800-connection flood) is
+        an open known limit — it is not one of the rows this tick names.**
+        On an R8, non-debuggable release build, the capture thread's share
+        of `:bg` CPU measured 47.5% ungated, 35.5% after gating each regex
+        pass behind a necessary-condition precondition (§5.6), and 29.6%
+        after replacing `IPV6_PATTERN`'s whole-string scan with a
+        byte-identical candidate-run scanner (§5.6) — all three still over
+        the row's <10% threshold. Remedy is owner-pending. Record:
+        `docs/agent/research/2026-09-26-m8.5-row7-release.md`.
+- [ ] Always-on VPN, boot autostart, kill switch — **M8.5.** W7/N5 (§14.5) is
+      closed: a session `terminate` was overwritten by a later
+      `hev_socks5_set_timeout` assignment from the connect/handshake phase in
+      hev-socks5-core, producing a teardown hang measured up to ~612 s on
+      hardware (`docs/agent/research/2026-09-26-m8.5-w7-repro.md`). The fix,
+      `third_party/hev-patches/0002-skip-timeout-if-not-alive.patch` (a
+      verbatim backport of upstream `162dd996`), was verified by 300
+      automated sub-second connect/disconnect cycles (zero teardowns over
+      2 s) plus 10 owner-run Wi-Fi-off disconnects during a live download
+      (12 teardowns produced, none stuck). The M8.5 spec's §9 "Done when"
+      gates this box on row 18 (the W7/N5 soak — **pass**) and M8's §11 rows
+      5 and 7 (rows 15 and 21 here). Row 21 (another VPN takes the route ⇒
+      `Failed(Revoked)` and stays there) **passes** after the persisted
+      terminal failure (§5.5) and a second fix round closing an
+      interrupted-teardown race the first round left open. **The box stays
+      unticked**: row 15, the overnight deep-Doze soak, has not run — it
+      needs a zero-touch night, and 15-minute `adb` polling is itself
+      Doze-resetting. Records:
+      `docs/agent/research/2026-09-26-m8.5-w7-repro.md`,
+      `docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`.
 - [ ] Material 3, light/dark, RU + EN localization
 
 ## A.3 Tier 2 — the actual differentiators

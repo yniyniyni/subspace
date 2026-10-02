@@ -37,9 +37,9 @@ import space.getsub.core.model.ConnectionState
  *   the time this guard runs, so `current == seeded` and the generation is
  *   unchanged, and this would otherwise publish the persisted `Failed` first.
  *   `reconcile(wanted = true, actual = Failed)` then answers `Release`
- *   (`ReconcileTest.aNullIntentStartOnAWantedFailureReleasesTheService`,
- *   controller ruling R27), not `Start` — so boot autostart and crash recovery
- *   could silently fail to connect whenever a terminal failure was persisted.
+ *   (`ReconcileTest.aNullIntentStartOnAWantedFailureReleasesTheService`), not
+ *   `Start` — so boot autostart and crash recovery could silently fail to
+ *   connect whenever a terminal failure was persisted.
  *   A wanted intent means any persisted failure is superseded: every terminal
  *   settlement clears intent alongside publishing, so intent being wanted again
  *   means something asked for a new session since that failure was recorded.
@@ -55,10 +55,14 @@ import space.getsub.core.model.ConnectionState
  * @param intentWanted `SettingsRepository.tunnelSessionWantedNow()`, read off
  *   the service lock before this function is called (it is a suspending Room
  *   read). A wanted intent makes this function decline regardless of the other
- *   two checks, per ARCHITECTURE.md §11 row 7 / controller ruling R27.
+ *   two checks, per ARCHITECTURE.md §11 row 7.
+ * @param alreadyRecorded `TerminalStateMemory.hasRecorded()`, read under the
+ *   lock. Once this process has recorded any state, memory is authoritative and
+ *   the Room read may be behind this process's own queued write, so it is never
+ *   published; `TerminalStateMemory.settleDeclinedSeed` handles the row instead.
  * @return [persisted] if it should be published, or null if there is nothing to
- *   publish, intent is wanted, or the service has moved on since it was
- *   seeded.
+ *   publish, intent is wanted, this process already recorded a state, or the
+ *   service has moved on since it was seeded.
  */
 // LongParameterList, ComplexCondition: each parameter and each disjunct above is an
 // independent guard with its own race it closes - see the KDoc. Collapsing any of
@@ -71,8 +75,14 @@ internal fun persistedSeedPublication(
     generationAtSeed: Int,
     generationNow: Int,
     intentWanted: Boolean,
+    alreadyRecorded: Boolean,
 ): ConnectionState? =
-    if (persisted == null || current != seeded || generationNow != generationAtSeed || intentWanted) {
+    if (persisted == null ||
+        current != seeded ||
+        generationNow != generationAtSeed ||
+        intentWanted ||
+        alreadyRecorded
+    ) {
         null
     } else {
         persisted

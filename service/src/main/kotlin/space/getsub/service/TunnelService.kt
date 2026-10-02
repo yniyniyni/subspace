@@ -1039,7 +1039,7 @@ class TunnelService : VpnService() {
      * because intent is wanted (below), which is exactly the case that needs the stale
      * row cleared rather than left for a future session to trip over.
      *
-     * **Also reads [SettingsRepository.tunnelSessionWantedNow] (controller ruling R27).**
+     * **Also reads [SettingsRepository.tunnelSessionWantedNow] (fix wave #2, Important 1).**
      * A null-intent reconcile (boot autostart, always-on, a sticky restart) is queued
      * independently of this coroutine, does two Room reads of its own before it reads
      * `currentState`, and usually loses the race to this one — so without this read,
@@ -1051,17 +1051,15 @@ class TunnelService : VpnService() {
      * is made; this function only supplies the read, which — like [persisted] above —
      * must happen off the service lock because it suspends.
      *
-     * **Also skipped entirely once [TerminalStateMemory.hasRecorded] is true (fix wave
-     * #2, Minor 2).** [persisted] above and this process's own [TerminalStateMemory.record]
-     * writes race on independent coroutines with no ordering between them, so
-     * [TerminalStateMemory.loadPersisted]'s read can return a value from *behind* a
-     * write this process already made — stale relative to what [terminalState] already
-     * correctly remembers. Once anything in this process has called `record` even
-     * once, memory is authoritative and this function has nothing useful left to do:
-     * not publish (it could be publishing a fact this process has already superseded)
-     * and not [TerminalStateMemory.syncPersisted] either (it would briefly overwrite
-     * [terminalState]'s correct in-memory fact with the stale read before correcting
-     * it back, a window [TerminalStateMemory.lastTerminal] could be read from).
+     * **Never publishes once [TerminalStateMemory.hasRecorded] is true (fix wave #2,
+     * Minor 2).** [persisted] above and this process's own [TerminalStateMemory.record]
+     * writes race on independent coroutines, so the read can be behind a write this
+     * process already made. Once anything here has called `record`, memory is
+     * authoritative and the read is not published. A declined non-null read still
+     * goes to [TerminalStateMemory.settleDeclinedSeed], which rewrites Room from
+     * memory: if the reconcile won the race with a `Connecting`, `record` saw
+     * `null -> null` and wrote nothing, and without that call the previous process's
+     * row would survive the session (final re-review #2, I-1).
      *
      * @param seeded what `onCreate`'s synchronous seed set `currentState` to.
      * @param generationAtSeed `generation`, read in the same locked region as [seeded].
@@ -1073,7 +1071,6 @@ class TunnelService : VpnService() {
         val persisted = terminalState.loadPersisted()
         val intentWanted = settingsRepository.tunnelSessionWantedNow()
         synchronized(lock) {
-            if (terminalState.hasRecorded()) return@synchronized
             val publication =
                 persistedSeedPublication(
                     current = currentState,
@@ -1082,11 +1079,12 @@ class TunnelService : VpnService() {
                     generationAtSeed = generationAtSeed,
                     generationNow = generation,
                     intentWanted = intentWanted,
+                    alreadyRecorded = terminalState.hasRecorded(),
                 )
             if (publication != null) {
                 publishLocked(publication)
             } else if (persisted != null) {
-                terminalState.syncPersisted(persisted, currentState)
+                terminalState.settleDeclinedSeed(persisted, currentState)
             }
         }
     }

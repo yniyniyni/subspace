@@ -1672,7 +1672,8 @@ Mandatory rules:
       Doze-resetting. It also needs a new device check to pass: boot
       autostart (or a sticky restart) actually reconnecting after a
       persisted terminal failure, instead of the service being released
-      without reconnecting — the race controller ruling R27 fixed. Records:
+      without reconnecting, the race the persisted-failure seed's intent
+      check closes. Records:
       `docs/agent/research/2026-09-26-m8.5-w7-repro.md`,
       `docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`.
 - [ ] Material 3, light/dark, RU + EN localization

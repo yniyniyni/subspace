@@ -426,6 +426,74 @@ class TerminalStateMemoryTest {
         memory.lastTerminal() shouldBe revoked()
     }
 
+    // ── Final re-review #2, I-1: a declined seed once this process has recorded ──
+
+    @Test
+    fun `settleDeclinedSeed clears a stale row once this process has already recorded`() {
+        // The re-review's path: Room holds a Revoked from the previous process, the
+        // null-intent reconcile wins the race and publishes Connecting (null -> null,
+        // no write), then the seed read returns. Skipping the seed entirely here left
+        // the Revoked in Room to resurface on the next cold open.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.record(ConnectionState.Connecting(StartupStage.AllocatingPort))
+        persistence.saved shouldBe emptyList()
+
+        memory.settleDeclinedSeed(
+            priorPersisted = revoked(),
+            current = ConnectionState.Connecting(StartupStage.AllocatingPort),
+        )
+
+        persistence.saved shouldBe listOf(null)
+        memory.lastTerminal() shouldBe null
+    }
+
+    @Test
+    fun `settleDeclinedSeed rewrites memory's fact, not a read that is behind this process's own write`() {
+        // The seed read can return this process's own earlier write. Memory is the
+        // authority: the last write must be the live fact, and memory must not change.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        val newer = failure(FailureReason.CoreStartFailed, "redacted")
+        memory.record(revoked())
+        memory.record(newer)
+
+        memory.settleDeclinedSeed(priorPersisted = revoked(), current = newer)
+
+        persistence.saved.last() shouldBe PersistedFailure(FailureReason.CoreStartFailed, "redacted")
+        memory.lastTerminal() shouldBe newer
+    }
+
+    @Test
+    fun `settleDeclinedSeed during Disconnecting does not adopt the stale read`() {
+        // ...so a later identical Failed still persists.
+        // syncPersisted would set remembered to the stale Revoked here; a later real
+        // Revoked would then look like no change and never reach Room, behind the
+        // clear this call must enqueue.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.record(ConnectionState.Connecting(StartupStage.AllocatingPort))
+        memory.record(ConnectionState.Disconnecting)
+
+        memory.settleDeclinedSeed(priorPersisted = revoked(), current = ConnectionState.Disconnecting)
+        memory.record(revoked())
+
+        persistence.saved shouldBe
+            listOf(null, PersistedFailure(FailureReason.Revoked, "VPN permission revoked"))
+        memory.lastTerminal() shouldBe revoked()
+    }
+
+    @Test
+    fun `settleDeclinedSeed before any record falls back to syncPersisted`() {
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+
+        memory.settleDeclinedSeed(priorPersisted = revoked(), current = ConnectionState.Disconnected)
+
+        persistence.saved shouldBe listOf(null)
+        memory.lastTerminal() shouldBe null
+    }
+
     // ── Fix round 1: a failed Room read must not reach the tunnel (review Important 2) ──
 
     @Test

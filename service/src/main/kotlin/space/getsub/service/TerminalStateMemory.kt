@@ -55,7 +55,7 @@ private const val TAG = "TerminalStateMemory"
  * session start — `Connecting` — still clears both [remembered] and the
  * persisted row, so staleness needs no clock: it is simply impossible for a
  * failure to outlive the next session that starts. (Since Important 1 of the
- * same fix wave, controller ruling R27, it is also not shown at all once a new
+ * same fix wave, it is also not shown at all once a new
  * session is wanted but has not yet reached `Connecting` — see
  * `persistedSeedPublication`'s `intentWanted` parameter.)
  * [ConnectionState.Disconnecting] is the one state this rule does not apply to —
@@ -243,9 +243,8 @@ internal class TerminalStateMemory(
      * them, so that read can return a value from *behind* a write this process
      * itself already made — stale relative to what [remembered] already correctly
      * holds. Once [hasRecorded] is true, [remembered] is this process's own
-     * authoritative fact, and the caller skips acting on the racing Room read
-     * entirely rather than risk a window where [lastTerminal] briefly answers with
-     * the stale value `syncPersisted` would otherwise write through.
+     * authoritative fact: the caller does not publish the Room read, and
+     * [settleDeclinedSeed] rewrites Room from memory instead of adopting the read.
      */
     fun hasRecorded(): Boolean = recorded.get()
 
@@ -321,6 +320,38 @@ internal class TerminalStateMemory(
     ) {
         remembered.set(priorPersisted)
         record(current)
+    }
+
+    /**
+     * What `TunnelService.seedPersistedFailure` does with a non-null Room read it
+     * declined to publish.
+     *
+     * Before this process has recorded anything, [remembered] is empty and the read is
+     * the only witness to what Room holds, so this is [syncPersisted].
+     *
+     * After [hasRecorded], the read may be behind this process's own queued write, so
+     * it is not adopted. But the row may still be the previous process's: a
+     * null-intent reconcile that won the race published `Connecting`, which [record]
+     * saw as `null -> null` and did not write (final re-review #2, I-1). So this
+     * enqueues [remembered]'s fact unconditionally, leaving [remembered] untouched.
+     * [writes] is ordered, and this runs under `TunnelService`'s lock like [record],
+     * so the last write Room receives is the live fact. The cost is at most one
+     * redundant write per service instance.
+     *
+     * [syncPersisted] would be wrong here: it sets [remembered] to the read, and if
+     * that read is stale and the current state is [ConnectionState.Disconnecting]
+     * (which [record] ignores), a later identical `Failed` would look unchanged and
+     * never reach Room.
+     */
+    fun settleDeclinedSeed(
+        priorPersisted: ConnectionState.Failed,
+        current: ConnectionState,
+    ) {
+        if (!recorded.get()) {
+            syncPersisted(priorPersisted, current)
+            return
+        }
+        writes.trySend(remembered.get()?.let { PersistedFailure(it.reason, it.detail) })
     }
 
     /**

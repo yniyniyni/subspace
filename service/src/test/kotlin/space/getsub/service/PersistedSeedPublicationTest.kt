@@ -28,6 +28,7 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 0,
             generationNow = 0,
             intentWanted = false,
+            alreadyRecorded = false,
         ) shouldBe revoked
     }
 
@@ -40,6 +41,7 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 0,
             generationNow = 0,
             intentWanted = false,
+            alreadyRecorded = false,
         ).shouldBeNull()
     }
 
@@ -52,6 +54,7 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 0,
             generationNow = 1,
             intentWanted = false,
+            alreadyRecorded = false,
         ).shouldBeNull()
     }
 
@@ -66,6 +69,7 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 0,
             generationNow = 0,
             intentWanted = false,
+            alreadyRecorded = false,
         ).shouldBeNull()
     }
 
@@ -81,6 +85,7 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 2,
             generationNow = 2,
             intentWanted = false,
+            alreadyRecorded = false,
         ) shouldBe revoked
     }
 
@@ -100,6 +105,7 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 0,
             generationNow = 0,
             intentWanted = true,
+            alreadyRecorded = false,
         ).shouldBeNull()
     }
 
@@ -112,6 +118,24 @@ class PersistedSeedPublicationTest {
             generationAtSeed = 2,
             generationNow = 2,
             intentWanted = true,
+            alreadyRecorded = false,
+        ).shouldBeNull()
+    }
+
+    @Test
+    fun `publishes nothing once this process has already recorded a state`() {
+        // Once record() has run in this process, memory is authoritative and the Room
+        // read may be behind this process's own queued write - see
+        // TerminalStateMemory.hasRecorded. Holds even with state, generation and
+        // intent all unchanged (a later service instance in the same process).
+        persistedSeedPublication(
+            current = disconnected,
+            seeded = disconnected,
+            persisted = revoked,
+            generationAtSeed = 0,
+            generationNow = 0,
+            intentWanted = false,
+            alreadyRecorded = true,
         ).shouldBeNull()
     }
 }

@@ -38,6 +38,39 @@ class RedactionOracleTest {
             "SNI=corp",
             "Domain: corp",
             "Dial corp",
+            // IPv6-dense corpus (M8.5 spec §3.2, Task 21): exercises
+            // redactIpv6Candidates's maximal-run scan and its dot-boundary
+            // check directly, rather than leaving them to chance in the
+            // generated corpus below.
+            "connect ::1 refused",
+            // IPv4-mapped notation: IPV4_PATTERN claims "1.2.3.4" first (it runs
+            // before the IPv6 pass), so by the time the scan sees this the "."
+            // immediately after "::ffff:" is still there but the digits after it
+            // are gone — a dot-boundary case that doesn't depend on IPV4_PATTERN's
+            // order to be meaningful.
+            "mapped ::ffff:1.2.3.4 blocked",
+            "route fe80::abcd%eth0 down",
+            // A hex/colon run immediately followed by '.': the dot-boundary check
+            // must leave this alone exactly as IPV6_PATTERN's own lookahead does,
+            // even though "12:34:ab" alone (sans the ".5") would be a candidate.
+            // Picked so nothing downstream (HOSTNAME_PATTERN needs 2+ letters after
+            // the last dot) redacts it either — confirmed against HEAD's redact()
+            // this is a true no-op, not masked by a later pass.
+            "build 12:34:ab.5 end",
+            // Single colons only: never reaches the >= 2 colon gate at all.
+            "ports host1:443 host2:8080 done",
+            // Hex letters with no "::" and only two colons: isIpv6Address's
+            // hex-letter branch, not its "::" branch.
+            "weird a:b:c end",
+            // Decimal-only with three colons: isIpv6Address's third branch
+            // (MIN_DECIMAL_ONLY_IPV6_COLONS), which none of the fixed cases above
+            // exercise — "started at 12:34:56" (RedactionTest) has only two.
+            "clock 01:02:03:04 marks",
+            // Malformed back-to-back "::": not a well-formed address, but the
+            // pattern doesn't validate RFC shape, only candidate shape plus
+            // isIpv6Address — both engines must agree it's still redacted.
+            "malformed ::1::2 input",
+            "upstream cdn.example.org:5353 failed",
         )
 
     private val pieces =
@@ -80,6 +113,16 @@ class RedactionOracleTest {
             "[Warning]",
             "app/proxyman",
             "i/o timeout",
+            // IPv6-dense pieces (Task 21), to let the generated corpus produce
+            // more of the shapes the fixed cases above pin directly.
+            "::",
+            "ffff:",
+            "%eth0",
+            "01:02:03:04",
+            "ab:cd",
+            ".",
+            ":443",
+            "a:b:c",
         )
 
     @Test

@@ -43,11 +43,14 @@ class RedactionOracleTest {
             // check directly, rather than leaving them to chance in the
             // generated corpus below.
             "connect ::1 refused",
-            // IPv4-mapped notation: IPV4_PATTERN claims "1.2.3.4" first (it runs
-            // before the IPv6 pass), so by the time the scan sees this the "."
-            // immediately after "::ffff:" is still there but the digits after it
-            // are gone — a dot-boundary case that doesn't depend on IPV4_PATTERN's
-            // order to be meaningful.
+            // IPv4-mapped notation: IPV4_PATTERN runs before the IPv6 pass and
+            // already claims the whole dotted part ("1.2.3.4" -> SENTINEL), so
+            // by the time the candidate scan sees this string the "." is gone
+            // entirely — this is *not* a dot-boundary case (nothing borders a
+            // literal "." any more by then). It's a plain "::ffff:" run the
+            // scan must still catch after an earlier pass has already rewritten
+            // part of the line — see the sentinel-adjacency cases below for the
+            // deliberate dot-boundary and sentinel-boundary tests.
             "mapped ::ffff:1.2.3.4 blocked",
             "route fe80::abcd%eth0 down",
             // A hex/colon run immediately followed by '.': the dot-boundary check
@@ -71,6 +74,55 @@ class RedactionOracleTest {
             // isIpv6Address — both engines must agree it's still redacted.
             "malformed ::1::2 input",
             "upstream cdn.example.org:5353 failed",
+            // Fix round 1 (review, Minor 1): a run preceded by '.' with no
+            // space in between — the dot-boundary check must reject this
+            // candidate exactly as IPV6_PATTERN's own lookbehind would.
+            "trace .2001:db8::1 end",
+            // An over-long run: 9 groups / 8 colons exceeds IPV6_PATTERN's own
+            // `{2,7}` repetition limit (max 7 colons via repeated groups, since
+            // the trailing group carries no colon). Neither the old whole-string
+            // scan nor the new per-run `matches()` can complete a match that
+            // needs an 8th colon, so both must agree: not a candidate.
+            "span 1:2:3:4:5:6:7:8:9 end",
+            // 5+ hex characters in one group: IPV6_PATTERN's group caps at
+            // `{0,4}` hex digits before its colon, so "12345:" can't be
+            // consumed by a single repetition — and the run can't start partway
+            // through either, since every interior position has a hex
+            // predecessor. Both engines must agree: no match anywhere in the run.
+            "retry 12345:a:b later",
+            // Exactly 8 bare colons: one more than the pattern's `{2,7}` max can
+            // represent even with every hex part empty, so the full run can
+            // never be consumed start-to-end.
+            "clock :::::::: tick",
+            // Exactly 9 bare colons: further past the limit than the 8-colon
+            // case above, for a second data point on the same boundary.
+            "clock ::::::::: tick",
+            // A run touching the literal "<redacted>" text already present in
+            // the input: redactEveryPattern's very first step rewrites any
+            // pre-existing "<redacted>" to SENTINEL before any pattern runs, so
+            // this also exercises "a run touching the sentinel" — just via the
+            // zeroth step rather than a later pattern's own output.
+            "note <redacted>:db8::1 end",
+            // A run touching the sentinel a *later* step's own earlier pass
+            // produced in this same redactEveryPattern call: UUID_PATTERN runs
+            // before the IPv6 pass and turns the UUID into SENTINEL ("R", not a
+            // hex digit), so the candidate scan must treat "R" as a non-member
+            // boundary and start the next run fresh right after it.
+            "id 11111111-2222-3333-4444-555555555555:db8::1 end",
+            // Unicode digit (Arabic-Indic ١, U+0661) immediately beside a run:
+            // isIpv6AlphabetChar is explicit ASCII Char ranges with no \d, so
+            // this must not be treated as part of the run by either engine —
+            // confirms there's no Unicode-digit class gap to match ICU's \d.
+            "digit ١::1 mark",
+            // Several candidates on one line, a mix of what gets redacted and
+            // what doesn't: a real address, a dot-excluded non-candidate, and a
+            // too-short hex/colon run, all in the same message.
+            "first 2001:db8::1 second 12:34:ab.5 third a:b fourth",
+            // A clock-shaped run embedded in a longer line, not just the bare
+            // fixed case RedactionTest pins on its own — isIpv6Address's
+            // false-positive guard (needs a hex letter, "::", or 3+ colons) must
+            // still leave a plain two-colon decimal run alone mid-sentence.
+            "log entry started at 12:34:56 for the session continues",
         )
 
     private val pieces =

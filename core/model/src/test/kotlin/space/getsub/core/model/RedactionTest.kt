@@ -178,6 +178,27 @@ class RedactionTest {
     }
 
     /**
+     * M8.5 spec §3.2, Task 21, fix round 1 (review, Important 1): pins the
+     * exact output for the two cases `IcuRedactionProbeTest` uses to isolate
+     * `redactIpv6Candidates` on-device, so the on-device assertions are known
+     * to match real `redact()` output on the JVM oracle before trusting them
+     * as exact-match assertions where there is no oracle to compare against.
+     *
+     * `"peer"` deliberately avoids every other pattern's keyword
+     * (`KEYED_HOST_PATTERN`/`LABELLED_HOST_PATTERN`'s address/server/host/sni/
+     * domain/dial/lookup list) and the address has no trailing
+     * colon-before-whitespace, so only the IPv6 pass can account for this
+     * exact output — unlike the review's rejected `"dial udp [...]"` example,
+     * which `LABELLED_HOST_PATTERN`'s own `dial`+`udp` match would swallow
+     * whole even with the IPv6 pass deleted.
+     */
+    @Test
+    fun `the ipv6 candidate scan is the only pass that can produce this exact output`() {
+        redact("peer 2001:db8::42 closed") shouldBe "peer <redacted> closed"
+        redact("build 12:34:ab.5 end") shouldBe "build 12:34:ab.5 end"
+    }
+
+    /**
      * The other half of the four above. §10.4 makes this string the only
      * diagnostic a user can hand back, so "the host is gone" is half a test —
      * these pin what is *left*, which is what makes the failure debuggable.

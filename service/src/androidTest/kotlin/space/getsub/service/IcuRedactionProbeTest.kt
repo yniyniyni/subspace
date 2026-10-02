@@ -3,6 +3,7 @@
 package space.getsub.service
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,27 +45,44 @@ class IcuRedactionProbeTest {
      * calls `IPV6_PATTERN.matches(run)` on the isolated candidate substring. The
      * equivalence argument in `Redaction.kt`'s KDoc depends on that single
      * `matches()` call seeing the same lookbehind/lookahead semantics ICU gives
-     * the old `replace()` call — this proves it on-device, not just on the JVM
-     * oracle in `RedactionOracleTest`.
+     * the old `replace()` call — this is the on-device check for that, not just
+     * the JVM oracle in `RedactionOracleTest`.
+     *
+     * Fix round 1 (review, Important 1): the input must be something *only*
+     * the IPv6 pass can catch, and the assertion must pin the exact output.
+     * The original version of this test used `"dial udp [2001:db8::42]:53: ..."`
+     * and only asserted the address was gone — but `"dial"` is a
+     * `LABELLED_HOST_PATTERN` keyword, so that pass alone (with `"udp"` as the
+     * optional protocol word) swallows the whole bracketed `[2001:db8::42]:53:`
+     * token regardless of whether the IPv6 pass runs at all. That test would
+     * still pass with `redactIpv6Candidates` deleted outright, which is not a
+     * proof of anything. `"peer"` is not a `KEYED_HOST_PATTERN` or
+     * `LABELLED_HOST_PATTERN` keyword, the address has no trailing
+     * colon-before-whitespace for `BARE_HOST_PREFIX_PATTERN` to catch, and
+     * nothing else in the pipeline can match a bare colon-delimited hex run —
+     * so an exact-output match here is only possible if the IPv6 candidate
+     * scan itself fired. Verified on the JVM (`RedactionTest`) that
+     * `redact()` actually produces this exact string before pinning it here.
      */
     @Test
     fun icuIpv6CandidateScanMatchesTheWholeRun() {
-        val out = redact("dial udp [2001:db8::42]:53: i/o timeout")
-        assertFalse("ICU candidate scan did not redact a real IPv6 address: $out", out.contains("2001:db8"))
+        val out = redact("peer 2001:db8::42 closed")
+        assertEquals("peer <redacted> closed", out)
     }
 
     /**
      * The candidate scan's dot-boundary check (a hex/colon run immediately
      * adjacent to `.` is never a candidate, mirroring `IPV6_PATTERN`'s own
      * `(?<![0-9A-Fa-f:.])` / `(?!...)` classes) must hold under ICU too, not
-     * only under the JVM's `java.util.regex`.
+     * only under the JVM's `java.util.regex`. Pins the exact, unchanged output
+     * (Fix round 1, review Important 1) rather than only the absence of
+     * `"<redacted>"`, which a passing-by-accident test could also satisfy for
+     * the wrong reason. Verified on the JVM (`RedactionTest`) that `redact()`
+     * actually leaves this line untouched before pinning it here.
      */
     @Test
     fun icuIpv6CandidateScanRespectsTheDotBoundary() {
         val out = redact("build 12:34:ab.5 end")
-        assertFalse(
-            "ICU dot-boundary check redacted a run IPV6_PATTERN's own lookaround would reject: $out",
-            out.contains("<redacted>"),
-        )
+        assertEquals("build 12:34:ab.5 end", out)
     }
 }

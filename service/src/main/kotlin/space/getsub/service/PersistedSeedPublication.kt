@@ -18,9 +18,9 @@ import space.getsub.core.model.ConnectionState
  * the lying-UI defect this whole mechanism exists to close (ARCHITECTURE.md §5.5).
  *
  * This function is the guard: it publishes [persisted] only if nothing has
- * moved since the synchronous seed captured [seeded] and [generationAtSeed].
- * Two independent checks, not one, because either alone has a gap a real
- * `TunnelService` can hit:
+ * moved since the synchronous seed captured [seeded] and [generationAtSeed],
+ * and no one currently wants a session. Three independent checks, not one,
+ * because any one alone has a gap a real `TunnelService` can hit:
  *
  * - **State identity** (`current == seeded`) catches a transition that does not
  *   bump `generation` — `onRevoke` publishing a second `Failed` over the seeded
@@ -31,6 +31,18 @@ import space.getsub.core.model.ConnectionState
  *   `currentState` to `Connecting` under the same lock it bumps the generation
  *   in, so in practice the two move together, but nothing here should depend on
  *   that remaining true.
+ * - **Intent** (`!intentWanted`) catches the case neither of the above can: a
+ *   queued `Reconcile(NullIntentStart)` (boot autostart, always-on, or a sticky
+ *   restart) has not yet reached its own `currentState`/`generation` read by
+ *   the time this guard runs, so `current == seeded` and the generation is
+ *   unchanged, and this would otherwise publish the persisted `Failed` first.
+ *   `reconcile(wanted = true, actual = Failed)` then answers `Release`
+ *   (`ReconcileTest.aNullIntentStartOnAWantedFailureReleasesTheService`,
+ *   controller ruling R27), not `Start` — so boot autostart and crash recovery
+ *   could silently fail to connect whenever a terminal failure was persisted.
+ *   A wanted intent means any persisted failure is superseded: every terminal
+ *   settlement clears intent alongside publishing, so intent being wanted again
+ *   means something asked for a new session since that failure was recorded.
  *
  * @param current `currentState`, read under the lock at the moment of
  *   publication.
@@ -40,17 +52,27 @@ import space.getsub.core.model.ConnectionState
  * @param generationAtSeed `generation`, read in the same locked region as
  *   [seeded].
  * @param generationNow `generation`, read again right before publication.
+ * @param intentWanted `SettingsRepository.tunnelSessionWantedNow()`, read off
+ *   the service lock before this function is called (it is a suspending Room
+ *   read). A wanted intent makes this function decline regardless of the other
+ *   two checks, per ARCHITECTURE.md §11 row 7 / controller ruling R27.
  * @return [persisted] if it should be published, or null if there is nothing to
- *   publish or the service has moved on since it was seeded.
+ *   publish, intent is wanted, or the service has moved on since it was
+ *   seeded.
  */
+// LongParameterList, ComplexCondition: each parameter and each disjunct above is an
+// independent guard with its own race it closes - see the KDoc. Collapsing any of
+// them loses a case a real TunnelService can hit.
+@Suppress("LongParameterList", "ComplexCondition")
 internal fun persistedSeedPublication(
     current: ConnectionState,
     seeded: ConnectionState,
     persisted: ConnectionState.Failed?,
     generationAtSeed: Int,
     generationNow: Int,
+    intentWanted: Boolean,
 ): ConnectionState? =
-    if (persisted == null || current != seeded || generationNow != generationAtSeed) {
+    if (persisted == null || current != seeded || generationNow != generationAtSeed || intentWanted) {
         null
     } else {
         persisted

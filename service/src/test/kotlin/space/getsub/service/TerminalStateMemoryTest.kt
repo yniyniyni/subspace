@@ -321,6 +321,22 @@ class TerminalStateMemoryTest {
     }
 
     @Test
+    fun `syncPersisted clears a stale persisted row when intent was wanted and nothing else moved`() {
+        // Fix wave #2, Important 1 (controller ruling R27): persistedSeedPublication
+        // declines to publish whenever intent is wanted, even when current == seeded,
+        // so seedPersistedFailure falls into the same syncPersisted branch as the
+        // moved-on race above. This pins that it clears the stale row here too, not
+        // just in the case where something else already changed currentState.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+
+        memory.syncPersisted(priorPersisted = revoked(), current = ConnectionState.Disconnected)
+
+        persistence.saved shouldBe listOf(null)
+        memory.lastTerminal() shouldBe null
+    }
+
+    @Test
     fun `syncPersisted is a no-op when the live fact already matches what was persisted`() {
         val persistence = FakePersistence()
         val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))

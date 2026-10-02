@@ -1035,7 +1035,21 @@ class TunnelService : VpnService() {
      * (`remembered` starts null, the same reading as "nothing persisted"), so an
      * untouched row could survive every future session in this process.
      * [TerminalStateMemory.syncPersisted] is what reconciles it against the live fact
-     * instead.
+     * instead. The same branch also fires whenever [persistedSeedPublication] declines
+     * because intent is wanted (below), which is exactly the case that needs the stale
+     * row cleared rather than left for a future session to trip over.
+     *
+     * **Also reads [SettingsRepository.tunnelSessionWantedNow] (controller ruling R27).**
+     * A null-intent reconcile (boot autostart, always-on, a sticky restart) is queued
+     * independently of this coroutine, does two Room reads of its own before it reads
+     * `currentState`, and usually loses the race to this one — so without this read,
+     * this function would publish the persisted `Failed` first, and
+     * `reconcile(wanted = true, actual = Failed)` answers `Release`
+     * (`ReconcileTest.aNullIntentStartOnAWantedFailureReleasesTheService`), not `Start`.
+     * Boot autostart and crash recovery could then silently fail to connect whenever a
+     * terminal failure was persisted. [persistedSeedPublication] is where the decision
+     * is made; this function only supplies the read, which — like [persisted] above —
+     * must happen off the service lock because it suspends.
      *
      * @param seeded what `onCreate`'s synchronous seed set `currentState` to.
      * @param generationAtSeed `generation`, read in the same locked region as [seeded].
@@ -1045,6 +1059,7 @@ class TunnelService : VpnService() {
         generationAtSeed: Int,
     ) {
         val persisted = terminalState.loadPersisted()
+        val intentWanted = settingsRepository.tunnelSessionWantedNow()
         synchronized(lock) {
             val publication =
                 persistedSeedPublication(
@@ -1053,6 +1068,7 @@ class TunnelService : VpnService() {
                     persisted = persisted,
                     generationAtSeed = generationAtSeed,
                     generationNow = generation,
+                    intentWanted = intentWanted,
                 )
             if (publication != null) {
                 publishLocked(publication)

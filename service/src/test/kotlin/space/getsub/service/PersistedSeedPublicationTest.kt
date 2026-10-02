@@ -27,6 +27,7 @@ class PersistedSeedPublicationTest {
             persisted = revoked,
             generationAtSeed = 0,
             generationNow = 0,
+            intentWanted = false,
         ) shouldBe revoked
     }
 
@@ -38,6 +39,7 @@ class PersistedSeedPublicationTest {
             persisted = null,
             generationAtSeed = 0,
             generationNow = 0,
+            intentWanted = false,
         ).shouldBeNull()
     }
 
@@ -49,6 +51,7 @@ class PersistedSeedPublicationTest {
             persisted = revoked,
             generationAtSeed = 0,
             generationNow = 1,
+            intentWanted = false,
         ).shouldBeNull()
     }
 
@@ -62,6 +65,7 @@ class PersistedSeedPublicationTest {
             persisted = revoked,
             generationAtSeed = 0,
             generationNow = 0,
+            intentWanted = false,
         ).shouldBeNull()
     }
 
@@ -76,6 +80,38 @@ class PersistedSeedPublicationTest {
             persisted = revoked,
             generationAtSeed = 2,
             generationNow = 2,
+            intentWanted = false,
         ) shouldBe revoked
+    }
+
+    // ── Fix wave #2, Important 1 (controller ruling R27) ───────────────────
+
+    @Test
+    fun `publishes nothing when intent is wanted, even though state and generation are unchanged`() {
+        // The race this closes: a null-intent reconcile (boot autostart, always-on,
+        // a sticky restart) queues behind this read with intent already wanted. If
+        // this published the stale Failed, reconcile would see (wanted, Failed) and
+        // answer Release (ReconcileTest.aNullIntentStartOnAWantedFailureReleasesTheService)
+        // instead of starting - boot autostart silently failing to connect.
+        persistedSeedPublication(
+            current = disconnected,
+            seeded = disconnected,
+            persisted = revoked,
+            generationAtSeed = 0,
+            generationNow = 0,
+            intentWanted = true,
+        ).shouldBeNull()
+    }
+
+    @Test
+    fun `an unchanged Failed seed is not republished either when intent is wanted`() {
+        persistedSeedPublication(
+            current = revoked,
+            seeded = revoked,
+            persisted = revoked,
+            generationAtSeed = 2,
+            generationNow = 2,
+            intentWanted = true,
+        ).shouldBeNull()
     }
 }

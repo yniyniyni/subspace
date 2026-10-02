@@ -336,6 +336,47 @@ class TerminalStateMemoryTest {
         memory.lastTerminal() shouldBe null
     }
 
+    // ── Fix wave #2, Minor 1: syncPersisted with current == Disconnecting ──────
+
+    @Test
+    fun `syncPersisted with current Disconnecting remembers the prior fact but writes nothing`() {
+        // record(Disconnecting) returns early (the same rule it applies when called
+        // directly), so the only effect is remembered catching up to what Room
+        // already holds - no write is enqueued because nothing there has changed.
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+
+        memory.syncPersisted(priorPersisted = revoked(), current = ConnectionState.Disconnecting)
+
+        persistence.saved shouldBe emptyList()
+        memory.lastTerminal() shouldBe revoked()
+    }
+
+    @Test
+    fun `a later Disconnected after a Disconnecting sync still clears the prior fact`() {
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.syncPersisted(priorPersisted = revoked(), current = ConnectionState.Disconnecting)
+
+        memory.record(ConnectionState.Disconnected)
+
+        persistence.saved shouldBe listOf(null)
+        memory.lastTerminal() shouldBe null
+    }
+
+    @Test
+    fun `a later different Failed after a Disconnecting sync still writes`() {
+        val persistence = FakePersistence()
+        val memory = TerminalStateMemory(persistence, CoroutineScope(Dispatchers.Unconfined))
+        memory.syncPersisted(priorPersisted = revoked(), current = ConnectionState.Disconnecting)
+
+        val newFailure = failure(FailureReason.CoreStartFailed, "redacted")
+        memory.record(newFailure)
+
+        persistence.saved shouldBe listOf(PersistedFailure(FailureReason.CoreStartFailed, "redacted"))
+        memory.lastTerminal() shouldBe newFailure
+    }
+
     @Test
     fun `syncPersisted is a no-op when the live fact already matches what was persisted`() {
         val persistence = FakePersistence()

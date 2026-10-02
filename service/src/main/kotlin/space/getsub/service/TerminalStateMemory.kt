@@ -256,6 +256,21 @@ internal class TerminalStateMemory(
      * new failure raced in between, in which case the write is redundant (Room
      * already holds it, from that failure's own [record] call) but still correct.
      *
+     * **`current == `[ConnectionState.Disconnecting] is not a special case here, and
+     * that is deliberate (fix wave #2, Minor 1).** [remembered] is still set to
+     * [priorPersisted] by the line below, but [record]`(Disconnecting)` returns
+     * immediately — the same early return documented on [record] — so nothing is
+     * enqueued to [writes] this call. The net effect is exactly [record]'s own
+     * `Disconnecting` rule, applied one layer up: the row Room already holds (it is
+     * [priorPersisted], after all — nothing has changed there) is left alone, and
+     * [remembered] now correctly reflects it rather than sitting at `null` as if
+     * this process had never heard of it. Whatever teardown settles to next —
+     * reached either through [record] directly or through another [syncPersisted]
+     * call — writes against that correct baseline: a later `Disconnected` clears it
+     * (`remembered` goes from [priorPersisted] to `null`, a real change), and a
+     * later different `Failed` overwrites it (also a real change). See
+     * `TerminalStateMemoryTest` for both.
+     *
      * @param priorPersisted what [loadPersisted] returned — the previous process's
      *   persisted failure. Only meaningful, and only called, when that read found
      *   something; a null read needs no reconciliation (see call site).

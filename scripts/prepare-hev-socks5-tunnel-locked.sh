@@ -393,6 +393,7 @@ if [[ -L "$output_dir/current" ]]; then
         exit 0
     fi
     echo "generated HEV current version does not match the complete reviewed inventory" >&2
+    echo "Remedy: run './gradlew :service:clean', or delete '$output_dir' directly, then rebuild." >&2
     exit 20
 fi
 

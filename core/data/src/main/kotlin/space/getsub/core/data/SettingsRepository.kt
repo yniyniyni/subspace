@@ -437,10 +437,14 @@ internal constructor(
 
     /**
      * The last terminal connection failure `:bg` persisted, as a raw
-     * `(reasonName, detail)` pair — either both null (nothing outstanding) or both
-     * set. One-shot like [tunnelSessionWantedNow], not a [Flow]: nothing collects
-     * this reactively, it is read once when a new `:bg` process seeds
-     * `TunnelService`'s starting state (ARCHITECTURE.md §11 row 7).
+     * `(reasonName, detail)` pair. Both null together is "nothing outstanding",
+     * but that is not the only shape this returns: `detail` is a plain `String`
+     * at the call site that persists it, so a reason can be stored with an empty
+     * detail, and `detail.takeUnless { it.isNullOrEmpty() }` below reads that back
+     * as `null` while `reasonName` is still set — a reason with no detail, not
+     * "both or neither". One-shot like [tunnelSessionWantedNow], not a [Flow]:
+     * nothing collects this reactively, it is read once when a new `:bg` process
+     * seeds `TunnelService`'s starting state (ARCHITECTURE.md §11 row 7).
      *
      * Deliberately **not** typed to `FailureReason` here. Turning an unknown or
      * future-version name into "no persisted failure" is `:service`'s call — its

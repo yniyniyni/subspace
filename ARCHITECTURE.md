@@ -396,10 +396,12 @@ about was never written there at all. Source:
 
 **Necessary-condition gates and the IPv6 candidate scanner (M8.5 Part 3,
 Tasks 13/21).** `redactEveryPattern` (`core/model/Redaction.kt`) checks a
-cheap, sound precondition before running each of its ten regex passes —
+cheap, sound precondition before running each of its nine regex passes —
 e.g. `s.contains("://")` before `URL_PATTERN`, a keyword scan before
 `KEYED_HOST_PATTERN` — a gate may only skip a pattern that provably cannot
-match, never narrow what a pattern catches once it runs.
+match, never narrow what a pattern catches once it runs. The tenth regex
+match in the pipeline, the geo-file-list exemption, lives one level up in
+`redact()` itself and is ungated: it runs against every message, unconditionally.
 `RedactionOracleTest` holds the gated function equal to an ungated byte
 copy across fixed cases and a 50,000+-sample generated corpus, including an
 IPv6-dense corpus added for the candidate scanner below.
@@ -415,19 +417,31 @@ character, and `hasColonBeforeWhitespace` checks `\u0085` (NEL) explicitly
 because ICU's `\s` matches it while `Char.isWhitespace()` does not.
 `IcuRedactionProbeTest`
 (`service/src/androidTest/kotlin/space/getsub/service/IcuRedactionProbeTest.kt`)
-proved this sound against the real engine, not the JVM oracle the unit
+confirmed this sound against the real engine, not the JVM oracle the unit
 tests use: 3/3 on device (2026-09-28), extended with two IPv6
-candidate-scan cases and re-run 5/5 (2026-10-02).
+candidate-scan cases and re-run 5/5 (2026-10-02). Five device examples are
+not a proof; "confirmed" is the honest word for what a handful of runs buys.
 
 `redactIpv6Candidates` replaces `IPV6_PATTERN`'s whole-string lookaround
 scan — row 7's measured dominant cost — with a linear maximal-run scanner
 that calls the same compiled pattern only on isolated candidate
 substrings, proven byte-identical to the previous behaviour by the same
 oracle test. **Known limit, pre-existing and kept by the byte-identical
-rule**: an IPv6 address immediately adjacent to a `.` (e.g.
-`.2001:db8::1`) is excluded from the candidate run and is not redacted by
-the IPv6 pass. Recorded for the owner, not fixed — closing it would change
-what the pattern catches, not how fast it runs.
+rule**: an IPv6 address immediately adjacent to a `.` on *either* side is
+excluded from the candidate run and is not redacted by the IPv6 pass —
+`redactIpv6Candidates` drops a run bounded by a preceding dot
+(`.2001:db8::1`) **and** one bounded by a following dot just as readily.
+The second case is the one that actually bites: a **sentence-final
+address is not redacted**. `connection to 2001:db8::1.` and `peer fd00::1.
+retrying` both come back from `redact()` unchanged — confirmed on the JVM
+2026-10-03 — and that sentence-final period is a completely ordinary way
+for a log line to end. This is a real at-rest leak under §5.6, not a
+cosmetic gap: the address reaches the on-disk session log ring verbatim.
+It is kept unfixed on this branch only because Task 21 was bound to
+byte-identical output against the pre-existing pattern, which this limit
+already was; closing it needs its own task, scoped to deciding what the
+IPv6 pass should do at a sentence boundary rather than preserving
+`IPV6_PATTERN`'s exact behaviour.
 
 ---
 
@@ -1613,8 +1627,9 @@ Mandatory rules:
       `Connected.health`, `Reconnecting.blocked`, one notification reader and
       a live tail (§5.5). **Ticked**: the M8.5 spec's §9 "Done when" rows
       1–4, 9–13 and 17 all pass on hardware (Pixel 8, Android 17, 2026-09-28
-      to 2026-10-02; rows 13 and 16 fault-injected per controller ruling
-      R24) — logcat readable from the app's own UID; redaction at rest (zero
+      to 2026-10-02; rows 13 and 16 verified by temporary fault-injected
+      builds, never committed) — logcat readable from the app's own UID;
+      redaction at rest (zero
       secret matches across every needle class); counter accuracy against
       `/proc/net/dev`/`dumpsys netstats`; totals surviving a Wi-Fi↔cellular
       retained-TUN restart; `Idle` never reading `Stalled`; the
@@ -1654,7 +1669,10 @@ Mandatory rules:
       interrupted-teardown race the first round left open. **The box stays
       unticked**: row 15, the overnight deep-Doze soak, has not run — it
       needs a zero-touch night, and 15-minute `adb` polling is itself
-      Doze-resetting. Records:
+      Doze-resetting. It also needs a new device check to pass: boot
+      autostart (or a sticky restart) actually reconnecting after a
+      persisted terminal failure, instead of the service being released
+      without reconnecting — the race controller ruling R27 fixed. Records:
       `docs/agent/research/2026-09-26-m8.5-w7-repro.md`,
       `docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`.
 - [ ] Material 3, light/dark, RU + EN localization

@@ -46,12 +46,18 @@ private const val TAG = "TerminalStateMemory"
  * [remembered] makes is mirrored to Room, and [loadPersisted] is what a brand-new
  * process reads back.
  *
- * Deliberately **not** promoted to a timestamped, indefinitely-retained record. A
- * revoke matters to the user who is looking at the app shortly afterwards; a
- * revoke from last week resurfacing as the current state would be a worse lie than
- * the one this fixes. The next genuine session start — `Connecting` — still
- * clears both [remembered] and the persisted row, so staleness needs no clock: it
- * is simply impossible for a failure to outlive the next session that starts.
+ * Deliberately **not** promoted to a timestamped, indefinitely-retained record
+ * (fix wave #2, Minor 6 reworded this paragraph for accuracy; the behaviour is
+ * unchanged). What this class shows is always a true fact — a revoke, or
+ * whatever else last settled as terminal, genuinely happened — but it can be
+ * old: nothing here timestamps it or ages it out, so a revoke from last week can
+ * still resurface if nothing has started a new session since. The next genuine
+ * session start — `Connecting` — still clears both [remembered] and the
+ * persisted row, so staleness needs no clock: it is simply impossible for a
+ * failure to outlive the next session that starts. (Since Important 1 of the
+ * same fix wave, controller ruling R27, it is also not shown at all once a new
+ * session is wanted but has not yet reached `Connecting` — see
+ * `persistedSeedPublication`'s `intentWanted` parameter.)
  * [ConnectionState.Disconnecting] is the one state this rule does not apply to —
  * see [record]'s KDoc (Task 20 fix round 2) for why.
  *

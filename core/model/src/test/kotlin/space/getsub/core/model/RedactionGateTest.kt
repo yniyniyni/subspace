@@ -60,4 +60,31 @@ class RedactionGateTest {
         hasColonBeforeWhitespace("no colon here") shouldBe false
         hasColonBeforeWhitespace("tcp://no-trailing-space:end") shouldBe false
     }
+
+    // Row 7, Pass 4 (docs/agent/research/2026-09-26-m8.5-row7-release.md): every
+    // xray line starts with its own timestamp, which opened the old `contains('.')`
+    // gates on every line.
+    private val xrayLine =
+        "2026/10/03 10:22:25.651837 [Warning] [3909243532] app/proxyman/inbound: " +
+            "connection ends > proxy/http: failed to read http request > malformed HTTP request \"ZZZZ BAD\""
+
+    @Test
+    fun `hasIpv4Shape needs three dot-digit pairs`() {
+        hasIpv4Shape("dial 203.0.113.44:443") shouldBe true
+        hasIpv4Shape("1.2.3") shouldBe false
+        hasIpv4Shape(xrayLine) shouldBe false
+    }
+
+    @Test
+    fun `hasIpv4Shape counts Unicode digits, which ICU's backslash-d matches`() {
+        hasIpv4Shape("\u0661.\u0662.\u0663.\u0664") shouldBe true
+    }
+
+    @Test
+    fun `hasHostnameShape needs a dot followed by two ASCII letters`() {
+        hasHostnameShape("lookup example.com") shouldBe true
+        hasHostnameShape("a.B1 x.Yz") shouldBe true
+        hasHostnameShape("a.b1") shouldBe false
+        hasHostnameShape(xrayLine) shouldBe false
+    }
 }

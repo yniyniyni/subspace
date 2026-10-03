@@ -176,7 +176,9 @@ internal fun redactIpv6Candidates(s: String): String {
         val start = i
         while (i < s.length && isIpv6AlphabetChar(s[i])) i++
         val run = s.substring(start, i)
-        out.append(if (isIpv6Candidate(s, start, i, run) && isIpv6Address(run)) SENTINEL else run)
+        // isIpv6Address first: both are pure, and it rejects a clock (`10:22:25`,
+        // the start of every xray line) without running the regex.
+        out.append(if (isIpv6Address(run) && isIpv6Candidate(s, start, i, run)) SENTINEL else run)
     }
     return out.toString()
 }
@@ -402,11 +404,11 @@ internal fun redactEveryPattern(message: String): String {
     var s = message.replace(REDACTED, SENTINEL)
     if (s.contains("://")) s = s.replace(URL_PATTERN, SENTINEL)
     if (s.contains('-')) s = s.replace(UUID_PATTERN, SENTINEL)
-    if (s.contains('.')) s = s.replace(IPV4_PATTERN, SENTINEL)
+    if (hasIpv4Shape(s)) s = s.replace(IPV4_PATTERN, SENTINEL)
     if (s.count { it == ':' } >= 2) {
         s = redactIpv6Candidates(s)
     }
-    if (s.contains('.')) s = s.replace(HOSTNAME_PATTERN, SENTINEL)
+    if (hasHostnameShape(s)) s = s.replace(HOSTNAME_PATTERN, SENTINEL)
     if (hasBase64Run(s)) s = s.replace(BASE64_BLOB_PATTERN, SENTINEL)
     if (keyedHostGate(s)) {
         s = s.replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
@@ -419,6 +421,39 @@ internal fun redactEveryPattern(message: String): String {
     }
     return s.replace(SENTINEL, REDACTED)
 }
+
+/** [IPV4_PATTERN]'s `(?:\d{1,3}\.){3}\d{1,3}` holds three `.`-then-digit pairs. */
+private const val IPV4_DOT_DIGIT_PAIRS = 3
+
+/**
+ * Necessary for [IPV4_PATTERN]: three places where a `.` is followed by a digit.
+ *
+ * Every xray line opens with `2026/10/03 10:22:25.651837`, so the old `contains('.')`
+ * gate ran this pass on every line (row 7, Pass 4). The digit test is
+ * [Char.isDigit], Unicode `Nd`, because ICU's `\d` matches every decimal digit, not
+ * only ASCII.
+ */
+internal fun hasIpv4Shape(s: String): Boolean {
+    var pairs = 0
+    for (i in 0 until s.length - 1) {
+        if (s[i] == '.' && s[i + 1].isDigit() && ++pairs >= IPV4_DOT_DIGIT_PAIRS) return true
+    }
+    return false
+}
+
+/**
+ * Necessary for [HOSTNAME_PATTERN]: a `.` followed by two ASCII letters, its
+ * `\.[a-zA-Z]{2,}` top-level label. The pattern has no `IGNORE_CASE`, so ICU's
+ * case folding cannot widen `[a-zA-Z]`.
+ */
+internal fun hasHostnameShape(s: String): Boolean {
+    for (i in 0 until s.length - 2) {
+        if (s[i] == '.' && isAsciiLetter(s[i + 1]) && isAsciiLetter(s[i + 2])) return true
+    }
+    return false
+}
+
+private fun isAsciiLetter(c: Char): Boolean = c in 'a'..'z' || c in 'A'..'Z'
 
 /** [BASE64_BLOB_PATTERN]'s minimum run length, mirrored in [hasBase64Run]'s gate. */
 private const val BASE64_RUN_LENGTH = 24

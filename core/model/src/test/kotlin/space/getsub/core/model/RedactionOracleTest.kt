@@ -130,6 +130,12 @@ class RedactionOracleTest {
             "address=2001:db8::1.",
             "lookup a:b:. done",
             "clock 12:34:56. done",
+            // Row 7, Pass 4: the real xray line shape. Its timestamp used to open the
+            // IPv4, hostname and IPv6 gates on every line.
+            "2026/10/03 10:22:25.651837 [Warning] [3909243532] app/proxyman/inbound: connection ends > " +
+                "proxy/http: failed to read http request > malformed HTTP request \"ZZZZ BAD\"",
+            "2026/10/03 10:22:25.651837 [Info] [1] from tcp:127.0.0.1:43210 accepted tcp:www.google.com:443",
+            "\u0661.\u0662.\u0663.\u0664 unicode digits",
         )
 
     private val pieces =
@@ -185,6 +191,10 @@ class RedactionOracleTest {
             // Sentence-final dots (the IPv6 leak fix): a dot followed by a space.
             ". ",
             "2001:db8::1.",
+            // Row 7, Pass 4: xray's timestamp and connection-id shapes.
+            "2026/10/03 10:22:25.651837 ",
+            "[3909243532]",
+            "\u0661.\u0662",
         )
 
     @Test

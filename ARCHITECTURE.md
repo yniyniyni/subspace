@@ -1669,11 +1669,11 @@ Mandatory rules:
       interrupted-teardown race the first round left open. **The box stays
       unticked**: row 15, the overnight deep-Doze soak, has not run — it
       needs a zero-touch night, and 15-minute `adb` polling is itself
-      Doze-resetting. It also needs a new device check to pass: boot
-      autostart (or a sticky restart) actually reconnecting after a
-      persisted terminal failure, instead of the service being released
-      without reconnecting, the race the persisted-failure seed's intent
-      check closes. Records:
+      Doze-resetting. The boot-autostart check this box also depended on
+      **passes** (2026-10-03): after a persisted `Failed(Revoked)`, a
+      simulated boot (both processes killed, `BOOT_COMPLETED` sent to
+      `BootReceiver`) reconnected, traffic flowed, and the stale row was
+      cleared. Records:
       `docs/agent/research/2026-09-26-m8.5-w7-repro.md`,
       `docs/agent/research/2026-09-28-m8.5-part3-device-verification.md`.
 - [ ] Material 3, light/dark, RU + EN localization

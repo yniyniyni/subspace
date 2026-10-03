@@ -178,6 +178,27 @@ class RedactionTest {
     }
 
     /**
+     * An address that ends a sentence used to pass straight through: the IPv6
+     * boundary treated *any* neighbouring `.` as "part of something larger", so
+     * `2001:db8::1.` was never a candidate and reached the log ring unredacted
+     * (ARCHITECTURE.md §5.6). A `.` that ends the string or is followed by
+     * whitespace is punctuation, not part of a larger token.
+     */
+    @Test
+    fun `an ipv6 address that ends a sentence is redacted`() {
+        redact("connection to 2001:db8::1.") shouldBe "connection to <redacted>."
+        redact("peer fd00::1. retrying") shouldBe "peer <redacted>. retrying"
+    }
+
+    /** A `.` that continues into more text still blocks the candidate, as before. */
+    @Test
+    fun `a dot that continues into more text still blocks the ipv6 candidate`() {
+        redact("build 12:34:ab.5 end") shouldBe "build 12:34:ab.5 end"
+        redact("trace .2001:db8::1 end") shouldBe "trace .2001:db8::1 end"
+        redact("started at 12:34:56.") shouldBe "started at 12:34:56."
+    }
+
+    /**
      * M8.5 spec §3.2, Task 21, fix round 1 (review, Important 1): pins the
      * exact output for the two cases `IcuRedactionProbeTest` uses to isolate
      * `redactIpv6Candidates` on-device, so the on-device assertions are known
@@ -192,6 +213,7 @@ class RedactionTest {
      * which `LABELLED_HOST_PATTERN`'s own `dial`+`udp` match would swallow
      * whole even with the IPv6 pass deleted.
      */
+
     @Test
     fun `the ipv6 candidate scan is the only pass that can produce this exact output`() {
         redact("peer 2001:db8::42 closed") shouldBe "peer <redacted> closed"

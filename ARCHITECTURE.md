@@ -426,22 +426,16 @@ not a proof; "confirmed" is the honest word for what a handful of runs buys.
 scan — row 7's measured dominant cost — with a linear maximal-run scanner
 that calls the same compiled pattern only on isolated candidate
 substrings, proven byte-identical to the previous behaviour by the same
-oracle test. **Known limit, pre-existing and kept by the byte-identical
-rule**: an IPv6 address immediately adjacent to a `.` on *either* side is
-excluded from the candidate run and is not redacted by the IPv6 pass —
-`redactIpv6Candidates` drops a run bounded by a preceding dot
-(`.2001:db8::1`) **and** one bounded by a following dot just as readily.
-The second case is the one that actually bites: a **sentence-final
-address is not redacted**. `connection to 2001:db8::1.` and `peer fd00::1.
-retrying` both come back from `redact()` unchanged — confirmed on the JVM
-2026-10-03 — and that sentence-final period is a completely ordinary way
-for a log line to end. This is a real at-rest leak under §5.6, not a
-cosmetic gap: the address reaches the on-disk session log ring verbatim.
-It is kept unfixed on this branch only because Task 21 was bound to
-byte-identical output against the pre-existing pattern, which this limit
-already was; closing it needs its own task, scoped to deciding what the
-IPv6 pass should do at a sentence boundary rather than preserving
-`IPV6_PATTERN`'s exact behaviour.
+oracle test, with one deliberate exception. **Sentence-final addresses
+(fixed 2026-10-03).** `IPV6_PATTERN`'s boundary rejects a neighbouring
+`.`, which keeps `12:34:ab.5` and dotted-quad tails out but also let
+`connection to 2001:db8::1.` and `peer fd00::1. retrying` reach the log ring
+verbatim, a real at-rest leak. A `.` that ends the string or is followed by
+whitespace now does not block the candidate (`endsSentence`); a `.` that
+continues into more text still does, and a preceding `.` (`.2001:db8::1`)
+still excludes the run. `RedactionOracleTest` models this one change on top
+of the frozen oracle (the qualifying `.` is swapped for a neutral character
+before the oracle runs), so every other output is still held byte-identical.
 
 ---
 

@@ -85,4 +85,15 @@ class IcuRedactionProbeTest {
         val out = redact("build 12:34:ab.5 end")
         assertEquals("build 12:34:ab.5 end", out)
     }
+
+    /**
+     * A sentence-final `.` no longer blocks an IPv6 candidate (the at-rest leak,
+     * ARCHITECTURE.md §5.6). The exact outputs are pinned on the JVM in
+     * `RedactionTest.an ipv6 address that ends a sentence is redacted`.
+     */
+    @Test
+    fun icuIpv6SentenceFinalAddressIsRedacted() {
+        assertEquals("connection to <redacted>.", redact("connection to 2001:db8::1."))
+        assertEquals("peer <redacted>. retrying", redact("peer fd00::1. retrying"))
+    }
 }

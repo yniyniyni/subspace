@@ -123,6 +123,13 @@ class RedactionOracleTest {
             // false-positive guard (needs a hex letter, "::", or 3+ colons) must
             // still leave a plain two-colon decimal run alone mid-sentence.
             "log entry started at 12:34:56 for the session continues",
+            // Sentence-final IPv6 (the leak fix): redacted now, where the oracle
+            // passed them through; `expected` models exactly this difference.
+            "connection to 2001:db8::1.",
+            "peer fd00::1. retrying",
+            "address=2001:db8::1.",
+            "lookup a:b:. done",
+            "clock 12:34:56. done",
         )
 
     private val pieces =
@@ -175,11 +182,14 @@ class RedactionOracleTest {
             ".",
             ":443",
             "a:b:c",
+            // Sentence-final dots (the IPv6 leak fix): a dot followed by a space.
+            ". ",
+            "2001:db8::1.",
         )
 
     @Test
     fun `the gated redaction equals the oracle on fixed samples`() {
-        fixed.forEach { line -> withClue(line) { redact(line) shouldBe oracleRedact(line) } }
+        fixed.forEach { line -> withClue(line) { redact(line) shouldBe expected(line) } }
     }
 
     @Test
@@ -187,7 +197,65 @@ class RedactionOracleTest {
         val rnd = Random(20260926)
         repeat(50_000) {
             val line = buildString { repeat(rnd.nextInt(1, 14)) { append(pieces[rnd.nextInt(pieces.size)]) } }
-            withClue(line) { redact(line) shouldBe oracleRedact(line) }
+            withClue(line) { redact(line) shouldBe expected(line) }
         }
+    }
+
+    /**
+     * The model check's own sanity: [expected] really is [oracleRedact] on every
+     * line without a sentence-final dot after a colon run, so the only lines it
+     * could ever disagree with the oracle on are the ones the leak fix targets.
+     */
+    @Test
+    fun `the model is the oracle wherever the leak fix does not apply`() {
+        expected("peer 2001:db8::42 closed") shouldBe oracleRedact("peer 2001:db8::42 closed")
+        expected("build 12:34:ab.5 end") shouldBe oracleRedact("build 12:34:ab.5 end")
+        expected("connection to 2001:db8::1.") shouldBe "connection to <redacted>."
+        oracleRedact("connection to 2001:db8::1.") shouldBe "connection to 2001:db8::1."
+    }
+
+    /**
+     * What `redact` must return: [oracleRedact], the frozen pre-gate copy, with
+     * exactly one deliberate change (the sentence-final IPv6 leak, ARCHITECTURE.md
+     * §5.6). The old code treated any `.` next to a hex/colon run as part of a larger
+     * token, so `2001:db8::1.` was never a candidate. The fix ignores a `.` that ends
+     * the string or is followed by whitespace.
+     *
+     * Modelled without touching the oracle: each such `.` after a run holding two
+     * or more colons is swapped for a [NEUTRAL] character before the oracle runs and
+     * swapped back afterwards. No pattern treats [NEUTRAL] as part of a token, so the
+     * oracle sees exactly the boundary the fix gives it.
+     */
+    private fun expected(line: String): String {
+        val marked = markSentenceFinalDots(line)
+        if (marked == line) return oracleRedact(line)
+        return oracleRedact(marked).replace(NEUTRAL, '.')
+    }
+
+    private fun markSentenceFinalDots(line: String): String {
+        val out = StringBuilder(line)
+        var i = 0
+        while (i < line.length) {
+            if (!isRunChar(line[i])) {
+                i++
+                continue
+            }
+            val start = i
+            while (i < line.length && isRunChar(line[i])) i++
+            val colons = (start until i).count { line[it] == ':' }
+            val dotEndsSentence =
+                i < line.length &&
+                    line[i] == '.' &&
+                    (i + 1 == line.length || line[i + 1].isWhitespace() || line[i + 1] == '\u0085')
+            if (colons >= 2 && dotEndsSentence) out.setCharAt(i, NEUTRAL)
+        }
+        return out.toString()
+    }
+
+    private fun isRunChar(c: Char): Boolean = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' || c == ':'
+
+    private companion object {
+        /** U+0002: matched by no pattern's token class except `\S`, where it stands in for the `.`. */
+        const val NEUTRAL = '\u0002'
     }
 }

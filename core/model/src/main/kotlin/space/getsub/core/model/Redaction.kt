@@ -112,7 +112,8 @@ private fun isIpv6AlphabetChar(c: Char): Boolean = (c in '0'..'9') || (c in 'a'.
 
 /**
  * Replaces exactly what `s.replace(IPV6_PATTERN) { if (isIpv6Address(it.value)) SENTINEL else it.value }`
- * would, without [IPV6_PATTERN]'s whole-string lookaround scan — row 7's measured
+ * would, with one deliberate difference (a sentence-final `.` does not block a
+ * candidate; see [endsSentence]), without [IPV6_PATTERN]'s whole-string lookaround scan — row 7's measured
  * dominant cost (M8.5 spec §3.2, Task 21; `docs/agent/research/2026-09-26-m8.5-row7-release.md`).
  *
  * ## Why this matches [IPV6_PATTERN] on every input
@@ -175,16 +176,47 @@ internal fun redactIpv6Candidates(s: String): String {
         val start = i
         while (i < s.length && isIpv6AlphabetChar(s[i])) i++
         val run = s.substring(start, i)
-        val precededByDot = start > 0 && s[start - 1] == '.'
-        val followedByDot = i < s.length && s[i] == '.'
-        val isCandidate =
-            !precededByDot &&
-                !followedByDot &&
-                run.count { it == ':' } >= MIN_IPV6_CANDIDATE_COLONS &&
-                IPV6_PATTERN.matches(run)
-        out.append(if (isCandidate && isIpv6Address(run)) SENTINEL else run)
+        out.append(if (isIpv6Candidate(s, start, i, run) && isIpv6Address(run)) SENTINEL else run)
     }
     return out.toString()
+}
+
+/**
+ * Whether the maximal run `s[start, end)` (= [run]) is [IPV6_PATTERN]'s one
+ * possible match: no `.` touching it (except a sentence-final one, see
+ * [endsSentence]), enough colons, and the pattern matches it whole.
+ */
+private fun isIpv6Candidate(
+    s: String,
+    start: Int,
+    end: Int,
+    run: String,
+): Boolean {
+    val precededByDot = start > 0 && s[start - 1] == '.'
+    val followedByDot = end < s.length && s[end] == '.' && !endsSentence(s, end)
+    return !precededByDot &&
+        !followedByDot &&
+        run.count { it == ':' } >= MIN_IPV6_CANDIDATE_COLONS &&
+        IPV6_PATTERN.matches(run)
+}
+
+/**
+ * Whether the `.` at [dot] is sentence punctuation rather than part of a larger
+ * token: it ends [s], or whitespace follows it.
+ *
+ * [IPV6_PATTERN]'s lookahead forbids any following `.`, which kept `12:34:ab.5`
+ * and dotted-quad tails out, but also let `connection to 2001:db8::1.` through
+ * unredacted (ARCHITECTURE.md §5.6). A dot followed by whitespace or the end
+ * cannot continue an address, a version or a hostname, so it does not block
+ * the candidate. Whitespace is [Char.isWhitespace] plus [NEL], the same test
+ * [hasColonBeforeWhitespace] uses.
+ */
+private fun endsSentence(
+    s: String,
+    dot: Int,
+): Boolean {
+    val next = dot + 1
+    return next == s.length || s[next].isWhitespace() || s[next] == NEL
 }
 
 /**

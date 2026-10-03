@@ -433,7 +433,11 @@ oracle test, with one deliberate exception. **Sentence-final addresses
 verbatim, a real at-rest leak. A `.` that ends the string or is followed by
 whitespace now does not block the candidate (`endsSentence`); a `.` that
 continues into more text still does, and a preceding `.` (`.2001:db8::1`)
-still excludes the run. `RedactionOracleTest` models this one change on top
+still excludes the run. "Whitespace" is only what both regex engines call
+`\s`, so a token a later rule redacts whole is never split. **Still open:**
+a dot followed by other punctuation, as in `(peer fd00::1.)`, a quoted
+`"…2001:db8::1."` or `2001:db8::1...`, still blocks the candidate, and
+those addresses reach the ring unless a keyed or labelled rule catches them. `RedactionOracleTest` models this one change on top
 of the frozen oracle (the qualifying `.` is swapped for a neutral character
 before the oracle runs), so every other output is still held byte-identical.
 

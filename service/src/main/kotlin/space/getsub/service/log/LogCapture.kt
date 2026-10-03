@@ -142,7 +142,8 @@ private const val ASCII_MAX = 0x7F
  * The length of [LOGCAT_PREFIX_PATTERN]'s prefix group in [line], or null when the
  * pattern does not match.
  *
- * Parsed by hand for plain-ASCII lines with no CR or LF, the shape every
+ * Parsed by hand for plain-ASCII lines with no LF, VT, FF or CR (ICU's `.` refuses
+ * all four; the JVM's only LF and CR), the shape every
  * `BufferedReader.readLine()` line from logcat has (row 7, Pass 4: the regex was
  * 7.5 % of the capture thread). On those, `\d`, `\s` and `.` mean the same thing
  * to the JVM and to ICU, and nothing can backtrack: each field ends where the
@@ -150,7 +151,7 @@ private const val ASCII_MAX = 0x7F
  * goes to the regex, which stays authoritative there.
  */
 internal fun logcatPrefixLength(line: String): Int? {
-    if (line.any { it.code > ASCII_MAX || it == '\n' || it == '\r' }) {
+    if (line.any { it.code > ASCII_MAX || it in '\n'..'\r' }) {
         return LOGCAT_PREFIX_PATTERN.matchEntire(line)?.groupValues?.get(1)?.length
     }
     return PrefixCursor(line).prefixLength()
@@ -165,17 +166,15 @@ private fun isAsciiDigit(c: Char): Boolean = c in '0'..'9'
 private class PrefixCursor(private val s: String) {
     private var i = 0
 
-    /** The pattern's prefix group, field by field; each step advances [i] or fails. */
-    private val steps: List<() -> Boolean> =
-        listOf(::date, ::spaces, ::time, ::spaces, ::ids, { oneOf("VDIWEF") }, ::spaces, ::tag)
-
     fun prefixLength(): Int? {
-        if (!steps.all { step -> step() }) return null
+        if (!STEPS.all { step -> step(this) }) return null
         while (i < s.length && isAsciiSpace(s[i])) i++
         return i
     }
 
     /** `\d{2}-\d{2}` */
+    private fun priority(): Boolean = oneOf("VDIWEF")
+
     private fun date(): Boolean = digits(2) && oneOf("-") && digits(2)
 
     /** `\d{2}:\d{2}:\d{2}\.\d{3}` */
@@ -214,6 +213,19 @@ private class PrefixCursor(private val s: String) {
     private companion object {
         /** The `\.\d{3}` after the seconds. */
         const val MILLIS_DIGITS = 3
+
+        /** The pattern's prefix group, field by field; each step advances `i` or fails. Built once, not per line. */
+        val STEPS: List<(PrefixCursor) -> Boolean> =
+            listOf(
+                PrefixCursor::date,
+                PrefixCursor::spaces,
+                PrefixCursor::time,
+                PrefixCursor::spaces,
+                PrefixCursor::ids,
+                PrefixCursor::priority,
+                PrefixCursor::spaces,
+                PrefixCursor::tag,
+            )
     }
 }
 

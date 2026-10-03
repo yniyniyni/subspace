@@ -165,28 +165,46 @@ private fun isIpv6AlphabetChar(c: Char): Boolean = (c in '0'..'9') || (c in 'a'.
  */
 internal fun redactIpv6Candidates(s: String): String {
     if (s.none { it == ':' }) return s
-    val out = StringBuilder(s.length)
+    // Built only once a run is replaced: most lines have none (row 7).
+    var out: StringBuilder? = null
+    var copied = 0
     var i = 0
     while (i < s.length) {
         if (!isIpv6AlphabetChar(s[i])) {
-            out.append(s[i])
             i++
             continue
         }
         val start = i
         while (i < s.length && isIpv6AlphabetChar(s[i])) i++
-        val run = s.substring(start, i)
         // isIpv6Address first: both are pure, and it rejects a clock (`10:22:25`,
         // the start of every xray line) without running the regex.
-        out.append(if (isIpv6Address(run) && isIpv6Candidate(s, start, i, run)) SENTINEL else run)
+        val replace =
+            countColons(s, start, i) >= MIN_IPV6_CANDIDATE_COLONS &&
+                s.substring(start, i).let { run -> isIpv6Address(run) && isIpv6Candidate(s, start, i, run) }
+        if (replace) {
+            val builder = out ?: StringBuilder(s.length).also { out = it }
+            builder.append(s, copied, start).append(SENTINEL)
+            copied = i
+        }
     }
-    return out.toString()
+    return out?.append(s, copied, s.length)?.toString() ?: s
+}
+
+private fun countColons(
+    s: String,
+    start: Int,
+    end: Int,
+): Int {
+    var n = 0
+    for (k in start until end) if (s[k] == ':') n++
+    return n
 }
 
 /**
- * Whether the maximal run `s[start, end)` (= [run]) is [IPV6_PATTERN]'s one
- * possible match: no `.` touching it (except a sentence-final one, see
- * [endsSentence]), enough colons, and the pattern matches it whole.
+ * Whether the maximal run `s[start, end)` (= [run]), already known to hold
+ * [MIN_IPV6_CANDIDATE_COLONS] colons, is [IPV6_PATTERN]'s one possible match: no
+ * `.` touching it (except a sentence-final one, see [endsSentence]) and the
+ * pattern matches it whole.
  */
 private fun isIpv6Candidate(
     s: String,
@@ -196,10 +214,7 @@ private fun isIpv6Candidate(
 ): Boolean {
     val precededByDot = start > 0 && s[start - 1] == '.'
     val followedByDot = end < s.length && s[end] == '.' && !endsSentence(s, end)
-    return !precededByDot &&
-        !followedByDot &&
-        run.count { it == ':' } >= MIN_IPV6_CANDIDATE_COLONS &&
-        IPV6_PATTERN.matches(run)
+    return !precededByDot && !followedByDot && IPV6_PATTERN.matches(run)
 }
 
 /**
@@ -210,16 +225,27 @@ private fun isIpv6Candidate(
  * and dotted-quad tails out, but also let `connection to 2001:db8::1.` through
  * unredacted (ARCHITECTURE.md §5.6). A dot followed by whitespace or the end
  * cannot continue an address, a version or a hostname, so it does not block
- * the candidate. Whitespace is [Char.isWhitespace] plus [NEL], the same test
- * [hasColonBeforeWhitespace] uses.
+ * the candidate. "Whitespace" is only what both regex engines call `\s`
+ * ([isRegexSpaceOnBothEngines]).
+ *
+ * Still open: a dot followed by anything else, as in `(peer fd00::1.)`, a quoted
+ * `"…2001:db8::1."` or `2001:db8::1...`, still blocks the candidate.
  */
 private fun endsSentence(
     s: String,
     dot: Int,
 ): Boolean {
     val next = dot + 1
-    return next == s.length || s[next].isWhitespace() || s[next] == NEL
+    return next == s.length || isRegexSpaceOnBothEngines(s[next])
 }
+
+/**
+ * `\s` as the JVM's regex and ICU agree on it: space, tab through CR, and [NEL].
+ * Deliberately narrower than [Char.isWhitespace], which also accepts U+001C–U+001F
+ * and Unicode spaces that `\S` (and so every later pass's token) still includes. A
+ * wider test would split a token a later rule would otherwise redact whole.
+ */
+private fun isRegexSpaceOnBothEngines(c: Char): Boolean = c == ' ' || c in '\t'..'\r' || c == NEL
 
 /**
  * A destination as the *value* of a named key: `"address":"vpnserver"` from a
@@ -352,9 +378,15 @@ internal const val LABELLED_TOKEN_GROUP = 4
  * config is.
  */
 public fun redact(message: String): String {
-    if (GEO_FILE_LIST_MESSAGE.matches(message)) return message
+    if (isGeoFileListCandidate(message) && GEO_FILE_LIST_MESSAGE.matches(message)) return message
     return redactEveryPattern(message)
 }
+
+/**
+ * Necessary for [GEO_FILE_LIST_MESSAGE]: the whole message must match, and its last
+ * name ends in `\.dat` (no `IGNORE_CASE`). Row 7: this match ran on every line.
+ */
+internal fun isGeoFileListCandidate(message: String): Boolean = message.endsWith(".dat")
 
 private val KEYED_WORDS = listOf("address", "server", "host", "sni", "domain")
 private val LABEL_WORDS = listOf("dial", "address", "server", "host", "lookup")
@@ -441,12 +473,13 @@ private const val IPV4_DOT_DIGIT_PAIRS = 3
  * Every xray line opens with `2026/10/03 10:22:25.651837`, so the old `contains('.')`
  * gate ran this pass on every line (row 7, Pass 4). The digit test is
  * [Char.isDigit], Unicode `Nd`, because ICU's `\d` matches every decimal digit, not
- * only ASCII.
+ * only ASCII. A high surrogate also counts: ICU matches by code point, and some `Nd`
+ * digits (U+1D7CE onwards) are outside the BMP.
  */
 internal fun hasIpv4Shape(s: String): Boolean {
     var pairs = 0
     for (i in 0 until s.length - 1) {
-        if (s[i] == '.' && s[i + 1].isDigit() && ++pairs >= IPV4_DOT_DIGIT_PAIRS) return true
+        if (s[i] == '.' && mayBeDigit(s[i + 1]) && ++pairs >= IPV4_DOT_DIGIT_PAIRS) return true
     }
     return false
 }
@@ -462,6 +495,8 @@ internal fun hasHostnameShape(s: String): Boolean {
     }
     return false
 }
+
+private fun mayBeDigit(c: Char): Boolean = c.isDigit() || c.isHighSurrogate()
 
 private fun isAsciiLetter(c: Char): Boolean = c in 'a'..'z' || c in 'A'..'Z'
 
@@ -521,21 +556,24 @@ private fun isAsciiRegexWhitespace(c: Char): Boolean = c == ' ' || c in '\t'..'\
  */
 internal fun redactBarePrefixes(s: String): String {
     if (hasNonAscii(s)) return s.replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
-    val out = StringBuilder(s.length)
+    var out: StringBuilder? = null
+    var copied = 0
     var i = 0
     while (i < s.length) {
         if (isAsciiRegexWhitespace(s[i])) {
-            out.append(s[i])
             i++
             continue
         }
         val start = i
         while (i < s.length && !isAsciiRegexWhitespace(s[i])) i++
         val isMatch = i < s.length && i - start >= 2 && s[i - 1] == ':'
-        val token = s.substring(start, i - 1)
-        if (isMatch && !isNotAHost(token)) out.append(SENTINEL).append(':') else out.append(s, start, i)
+        if (isMatch && !isNotAHost(s.substring(start, i - 1))) {
+            val builder = out ?: StringBuilder(s.length).also { out = it }
+            builder.append(s, copied, start).append(SENTINEL).append(':')
+            copied = i
+        }
     }
-    return out.toString()
+    return out?.append(s, copied, s.length)?.toString() ?: s
 }
 
 /**

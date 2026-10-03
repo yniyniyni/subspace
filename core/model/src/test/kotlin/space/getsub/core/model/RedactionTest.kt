@@ -198,6 +198,12 @@ class RedactionTest {
         redact("started at 12:34:56.") shouldBe "started at 12:34:56."
     }
 
+    /** Review finding 1: a dot before a character that is not regex whitespace is not sentence-final. */
+    @Test
+    fun `a dot before a non-whitespace control character does not split a later rule's token`() {
+        redact("dial fe80::1.\u001Fsecrethost") shouldBe "dial <redacted>"
+    }
+
     /**
      * M8.5 spec §3.2, Task 21, fix round 1 (review, Important 1): pins the
      * exact output for the two cases `IcuRedactionProbeTest` uses to isolate

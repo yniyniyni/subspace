@@ -34,6 +34,8 @@ class LogcatPrefixTest {
             "--------- beginning of main",
             "",
             "09-16 08:01:02.003 1 2 I Tag: trailing CR\r",
+            "09-16 08:01:02.003 1 2 I Tag: vertical\u000Btab",
+            "09-16 08:01:02.003 1 2 I Tag: form\u000Cfeed",
             "09-16 08:01:02.003 1 2 I Tag\nsplit: body",
             "09-16 08:01:02.003 1 2 I Tag: café",
             "\u0660\u0669-16 08:01:02.003 1 2 I Tag: Arabic-Indic month digits",

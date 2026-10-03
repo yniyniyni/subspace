@@ -130,6 +130,10 @@ class RedactionOracleTest {
             "address=2001:db8::1.",
             "lookup a:b:. done",
             "clock 12:34:56. done",
+            // Review finding 1: U+001F is not regex whitespace, so the dot before it is
+            // not sentence-final and LABELLED must still take the whole token.
+            "dial fe80::1.\u001Fsecrethost",
+            "host=fe80::1.\u001Fsecret",
             // Row 7, Pass 4: the real xray line shape. Its timestamp used to open the
             // IPv4, hostname and IPv6 gates on every line.
             "2026/10/03 10:22:25.651837 [Warning] [3909243532] app/proxyman/inbound: connection ends > " +
@@ -233,8 +237,10 @@ class RedactionOracleTest {
      *
      * Modelled without touching the oracle: each such `.` after a run holding two
      * or more colons is swapped for a [NEUTRAL] character before the oracle runs and
-     * swapped back afterwards. No pattern treats [NEUTRAL] as part of a token, so the
-     * oracle sees exactly the boundary the fix gives it.
+     * swapped back afterwards, so the oracle sees exactly the boundary the fix gives it.
+     * One known gap, in the strict direction: `isNotAHost` trims a trailing `.` but not
+     * [NEUTRAL], so a line like `dial udp.::.` would fail here although `redact` is
+     * right. It can only produce a false failure, never hide a regression.
      */
     private fun expected(line: String): String {
         val marked = markSentenceFinalDots(line)
@@ -256,7 +262,7 @@ class RedactionOracleTest {
             val dotEndsSentence =
                 i < line.length &&
                     line[i] == '.' &&
-                    (i + 1 == line.length || line[i + 1].isWhitespace() || line[i + 1] == '\u0085')
+                    (i + 1 == line.length || line[i + 1] == ' ' || line[i + 1] in '\t'..'\r' || line[i + 1] == '\u0085')
             if (colons >= 2 && dotEndsSentence) out.setCharAt(i, NEUTRAL)
         }
         return out.toString()

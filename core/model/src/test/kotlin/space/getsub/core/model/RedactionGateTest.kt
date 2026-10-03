@@ -78,6 +78,8 @@ class RedactionGateTest {
     @Test
     fun `hasIpv4Shape counts Unicode digits, which ICU's backslash-d matches`() {
         hasIpv4Shape("\u0661.\u0662.\u0663.\u0664") shouldBe true
+        // Mathematical bold digits, outside the BMP: ICU matches them by code point.
+        hasIpv4Shape("\uD835\uDFD0.\uD835\uDFCE.\uD835\uDFCF.\uD835\uDFD2") shouldBe true
     }
 
     @Test
@@ -120,5 +122,21 @@ class RedactionGateTest {
         // NEL is ICU whitespace but not ASCII: the fallback keeps ICU authoritative.
         redactBarePrefixes("corp:\u0085x") shouldBe bareByRegex("corp:\u0085x")
         redactBarePrefixes("café: down") shouldBe bareByRegex("café: down")
+    }
+
+    @Test
+    fun `isGeoFileListCandidate needs the message to end in dat`() {
+        isGeoFileListCandidate("geoip.dat, geosite.dat") shouldBe true
+        isGeoFileListCandidate("geoip.dat, geosite.DAT") shouldBe false
+        isGeoFileListCandidate(xrayLine) shouldBe false
+    }
+
+    @Test
+    fun `the scanners return the same instance when nothing changes`() {
+        // Row 7: allocation per line was most of what was left after the regexes.
+        val plain = "error: nothing to change here"
+        (redactBarePrefixes(plain) === plain) shouldBe true
+        val clock = "clock 10:22:25 only"
+        (redactIpv6Candidates(clock) === clock) shouldBe true
     }
 }

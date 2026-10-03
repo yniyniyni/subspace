@@ -2,6 +2,7 @@
 // Additional permission: see Stores Exception in LICENSE.
 package space.getsub.service.log
 
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 
@@ -66,26 +67,46 @@ internal class LogRing(
 
     private var appendsSinceExistenceCheck = 0
 
-    override fun append(line: String) {
+    override fun append(line: String) = appendAll(listOf(line))
+
+    /**
+     * Writes [lines] with one `write` per file they land in, rotating exactly where
+     * line-by-line appends would have: before any line that finds `log.0` full.
+     */
+    override fun appendAll(lines: List<String>) {
         synchronized(lock) {
-            runCatching { write((line + "\n").toByteArray(Charsets.UTF_8)) }
-                .onFailure { closeStream() }
+            runCatching { writeBatch(lines) }.onFailure { closeStream() }
         }
     }
 
-    private fun write(bytes: ByteArray) {
-        var out = openStream()
-        if (size >= maxBytesPerFile) {
-            // `LogRepository.clear` may have emptied the file from `:main`; only the
-            // real size decides a rotation.
-            size = out.channel.size()
-            if (size >= maxBytesPerFile) {
-                rotate()
-                out = openStream()
+    private fun writeBatch(lines: List<String>) {
+        openStream() // sets [size] from the file on first use, before the first check
+        val pending = ByteArrayOutputStream()
+        for (line in lines) {
+            if (size + pending.size() >= maxBytesPerFile) {
+                flushPending(pending)
+                rotateIfFull()
             }
+            pending.write((line + "\n").toByteArray(Charsets.UTF_8))
         }
-        out.write(bytes)
-        size += bytes.size
+        flushPending(pending)
+    }
+
+    private fun flushPending(pending: ByteArrayOutputStream) {
+        if (pending.size() == 0) return
+        openStream().write(pending.toByteArray())
+        size += pending.size()
+        pending.reset()
+    }
+
+    private fun rotateIfFull() {
+        // `LogRepository.clear` may have emptied the file from `:main`; only the
+        // real size decides a rotation.
+        size = openStream().channel.size()
+        if (size >= maxBytesPerFile) {
+            rotate()
+            openStream()
+        }
     }
 
     /**

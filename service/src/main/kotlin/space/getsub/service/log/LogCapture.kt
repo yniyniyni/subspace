@@ -237,6 +237,35 @@ private class PrefixCursor(private val s: String) {
  */
 internal fun interface LineSink {
     fun append(line: String)
+
+    /** A batch, in order. [LogRing] writes it in one system call; the default appends one by one. */
+    fun appendAll(lines: List<String>) = lines.forEach(::append)
+}
+
+/**
+ * Redacted lines waiting for one [LineSink.appendAll]. Only the capture thread touches
+ * it: lines are added in the read loop and [flush] runs from the same thread, either
+ * from the reader's idle hook or at the end of the capture.
+ */
+private class LineBatch(private val sink: LineSink) {
+    private val pending = ArrayList<String>()
+
+    fun add(line: String) {
+        pending += line
+        if (pending.size >= MAX_LINES) flush()
+    }
+
+    fun flush() {
+        if (pending.isEmpty()) return
+        val lines = pending.toList()
+        pending.clear()
+        sink.appendAll(lines)
+    }
+
+    private companion object {
+        /** Bounds memory if a burst outruns the read pacing. */
+        const val MAX_LINES = 256
+    }
 }
 
 /**
@@ -475,10 +504,21 @@ internal class LogCapture(
      * The pipeline itself, synchronous and without a thread, so a unit test can
      * assert the ARCHITECTURE.md §5.6 guarantee without spawning anything.
      */
-    internal fun captureOnce(lines: Sequence<String>) {
+    internal fun captureOnce(lines: Sequence<String>) = captureOnce(lines, LineBatch(ring))
+
+    /**
+     * Redacts every line into [batch]. The batch is flushed when the reader runs dry
+     * (its `onIdle`), when it fills, and at the end, so the ring gets one write per
+     * burst instead of one per line (row 7, Pass 5).
+     */
+    private fun captureOnce(
+        lines: Sequence<String>,
+        batch: LineBatch,
+    ) {
         for (line in lines) {
-            ring.append(redactLine(line))
+            batch.add(redactLine(line))
         }
+        batch.flush()
     }
 
     /**
@@ -500,13 +540,15 @@ internal class LogCapture(
         sinceEpochMillis: Long? = null,
         localZone: ZoneId = ZoneId.systemDefault(),
     ) {
-        val lines = reader.lines()
+        val batch = LineBatch(ring)
+        val lines = reader.lines(onIdle = batch::flush)
         captureOnce(
             if (sinceEpochMillis == null) {
                 lines
             } else {
                 ReplayHeadFilter(sinceEpochMillis, localZone).let { head -> lines.filter(head::keep) }
             },
+            batch,
         )
         if (reader.endedWithError) {
             ring.append(redactLine(ABNORMAL_END_MARKER))

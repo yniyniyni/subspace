@@ -192,4 +192,22 @@ class LogCaptureTest {
         assertFalse(reader.endedWithError)
         assertFalse("ended abnormally" in readAll(dir))
     }
+
+    /** Row 7, Pass 5: a burst reaches the ring as one batch, so one write. */
+    @Test
+    fun `a burst reaches the sink as one batch, in order`() {
+        val batches = mutableListOf<List<String>>()
+        val sink =
+            object : space.getsub.service.log.LineSink {
+                override fun append(line: String) {
+                    batches += listOf(line)
+                }
+
+                override fun appendAll(lines: List<String>) {
+                    batches += lines
+                }
+            }
+        LogCapture(sink).captureOnce(sequenceOf("one", "two", "three"))
+        assertTrue(batches.toString(), batches == listOf(listOf("one", "two", "three")))
+    }
 }

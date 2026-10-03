@@ -153,4 +153,24 @@ class LogRingTest {
         val dir = tmp.newFolder()
         assertTrue(LogRing.shared(dir) === LogRing.shared(File(dir.path)))
     }
+
+    @Test
+    fun `appendAll writes a batch in order`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir)
+        ring.append("first")
+        ring.appendAll(listOf("second", "third"))
+        assertEquals(listOf("first", "second", "third"), readAll(dir))
+    }
+
+    @Test
+    fun `a batch larger than a file still rotates and stays bounded`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir, maxBytesPerFile = 200)
+        ring.appendAll((0 until 40).map { "line-$it".padEnd(90, '.') })
+        val lines = readAll(dir)
+        assertTrue(lines.last().startsWith("line-39"))
+        assertTrue(lines.none { it.startsWith("line-0.") })
+        assertTrue("grew to ${totalBytes(dir)}", totalBytes(dir) <= 600)
+    }
 }

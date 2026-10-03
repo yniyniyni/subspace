@@ -79,6 +79,7 @@ internal const val SENTINEL_PREFIX = "subspace-log-capture-end"
  */
 internal class LogcatReader(
     private val signal: (pid: Int) -> Unit = { pid -> Os.kill(pid, OsConstants.SIGTERM) },
+    private val readIntervalMillis: Long = PacedInputStream.DEFAULT_INTERVAL_MILLIS,
     private val spawn: () -> Process,
 ) {
     /**
@@ -212,9 +213,9 @@ internal class LogcatReader(
      * about the *start sequence*, not about a logger that could otherwise abort
      * one.
      */
-    fun lines(): Sequence<String> {
+    fun lines(onIdle: () -> Unit = {}): Sequence<String> {
         val proc = spawnAndPublish() ?: return emptySequence()
-        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+        val reader = BufferedReader(InputStreamReader(PacedInputStream(proc.inputStream, readIntervalMillis, onIdle)))
         return sequence {
             try {
                 if (readPid(reader)) {

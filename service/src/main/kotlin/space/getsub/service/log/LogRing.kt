@@ -28,8 +28,10 @@ import java.io.FileOutputStream
  * **`log.0` stays open.** Opening, writing and closing it for every line, after
  * three `stat`s, was a quarter of the capture thread's CPU under a connection
  * storm (row 7, Pass 4, `docs/agent/research/2026-09-26-m8.5-row7-release.md`).
- * Each line is still one unbuffered `write`, so a killed process loses nothing it
- * did not lose before. The size is counted in memory and re-read from the open
+ * [append] is one unbuffered `write`; [appendAll], which the capture uses, writes a
+ * whole batch in one, so a killed process or an `IOException` can lose up to one batch
+ * (the capture flushes at most every 100 ms, and at most 256 lines at a time).
+ * The size is counted in memory and re-read from the open
  * file before any rotation, because `LogRepository.clear` in `:main` empties
  * `log.0` in place rather than deleting it (a deleted file would leave this
  * writer on an unlinked inode). There is one ring per directory per process
@@ -80,6 +82,9 @@ internal class LogRing(
     }
 
     private fun writeBatch(lines: List<String>) {
+        // The existence check counts lines, not stream opens, so a batch of many lines
+        // reaches it as soon as that many single appends would have.
+        appendsSinceExistenceCheck += lines.size
         openStream() // sets [size] from the file on first use, before the first check
         val pending = ByteArrayOutputStream()
         for (line in lines) {
@@ -125,9 +130,9 @@ internal class LogRing(
         return opened
     }
 
-    /** True between checks; on every [EXISTENCE_CHECK_INTERVAL]th call, whether `log.0` still exists. */
+    /** True between checks; once [EXISTENCE_CHECK_INTERVAL] lines have gone by, whether `log.0` exists. */
     private fun stillCurrent(): Boolean {
-        if (++appendsSinceExistenceCheck < EXISTENCE_CHECK_INTERVAL) return true
+        if (appendsSinceExistenceCheck < EXISTENCE_CHECK_INTERVAL) return true
         appendsSinceExistenceCheck = 0
         return current.exists()
     }

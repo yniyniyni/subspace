@@ -230,6 +230,11 @@ class RedactionOracleTest {
                 "2026/10/03 10:22:25.651837 [Warn] [1] ",
                 "2026/1/03 10:22:25 [Info] ",
                 "2026/10/03 10:22:25.651837 [Warning] [3909243532]  ",
+                // Review finding: a 24+ digit run is BASE64_BLOB_PATTERN's to redact, so the
+                // header must not swallow one.
+                "2026/10/03 10:22:25.651837 [Info] [123456789012345678901234] ",
+                "2026/10/03 10:22:25.123456789012345678901234 [Info] ",
+                "2026/10/03 10:22:25.1234567890 [Info] [12345678901] ",
             )
         val rnd = Random(20261003)
         repeat(20_000) {

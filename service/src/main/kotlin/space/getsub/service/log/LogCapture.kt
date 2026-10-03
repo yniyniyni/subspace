@@ -517,10 +517,13 @@ internal class LogCapture(
         lines: Sequence<String>,
         batch: LineBatch,
     ) {
-        for (line in lines) {
-            batch.add(redactLine(line))
+        try {
+            for (line in lines) {
+                batch.add(redactLine(line))
+            }
+        } finally {
+            batch.flush()
         }
-        batch.flush()
     }
 
     /**

@@ -229,7 +229,8 @@ private fun isIpv6Candidate(
  * ([isRegexSpaceOnBothEngines]).
  *
  * Still open: a dot followed by anything else, as in `(peer fd00::1.)`, a quoted
- * `"…2001:db8::1."` or `2001:db8::1...`, still blocks the candidate.
+ * `"…2001:db8::1."`, `2001:db8::1...`, or a dot before a no-break or other Unicode
+ * space (U+00A0, U+2000–U+200A, U+2028/9, U+3000), still blocks the candidate.
  */
 private fun endsSentence(
     s: String,
@@ -240,10 +241,11 @@ private fun endsSentence(
 }
 
 /**
- * `\s` as the JVM's regex and ICU agree on it: space, tab through CR, and [NEL].
- * Deliberately narrower than [Char.isWhitespace], which also accepts U+001C–U+001F
- * and Unicode spaces that `\S` (and so every later pass's token) still includes. A
- * wider test would split a token a later rule would otherwise redact whole.
+ * Space, tab through CR, and [NEL]: what ICU, the engine on the device, calls `\s`
+ * among these, and all of which the JVM's `\s` covers too except [NEL]. Deliberately
+ * narrower than [Char.isWhitespace], which also accepts U+001C–U+001F and Unicode
+ * spaces that `\S` (and so every later pass's token) still includes on at least one
+ * engine. A wider test would split a token a later rule would otherwise redact whole.
  */
 private fun isRegexSpaceOnBothEngines(c: Char): Boolean = c == ' ' || c in '\t'..'\r' || c == NEL
 
@@ -394,7 +396,8 @@ internal fun isGeoFileListCandidate(message: String): Boolean = message.endsWith
  *
  * Row 7: every xray line starts with that header, about a third of what redaction
  * would otherwise scan. It is digits, `/`, `:`, `.`, brackets and a fixed level word,
- * so it cannot hold a secret, and it ends in a space, so no pattern's token or `\b`
+ * with at most 10-digit runs (well under [BASE64_BLOB_PATTERN]'s 24), so it cannot
+ * hold a secret, and it ends in a space, so no pattern's token or `\b`
  * boundary can span it. Its `/` also means the whole body can never be a geo file
  * list, so skipping [GEO_FILE_LIST_MESSAGE] for the rest changes nothing.
  * `RedactionOracleTest` holds this equal to [redact] on header-led lines.

@@ -24,11 +24,22 @@ class PacedInputStreamTest {
         }
     }
 
+    /** A pipe that holds less than each read asks for: 5 bytes per read. */
+    private class Trickle : java.io.InputStream() {
+        override fun read(): Int = 'x'.code
+
+        override fun read(
+            b: ByteArray,
+            off: Int,
+            len: Int,
+        ): Int = minOf(len, 5).also { n -> b.fill('x'.code.toByte(), off, off + n) }
+    }
+
     private fun paced(
         time: FakeTime,
         onIdle: () -> Unit = {},
     ) = PacedInputStream(
-        ByteArrayInputStream(ByteArray(100) { 'x'.code.toByte() }),
+        Trickle(),
         intervalMillis = 100,
         onIdle = onIdle,
         nowMillis = { time.nowMillis },
@@ -76,5 +87,24 @@ class PacedInputStreamTest {
     @Test
     fun `available reports nothing, so the decoder never probes the pipe`() {
         paced(FakeTime()).available() shouldBe 0
+    }
+
+    /**
+     * Review finding: with an 8 KiB decoder buffer, one read per interval capped capture
+     * at ~80 KiB/s. A read that fills the whole request means a backlog, so the next
+     * read must not wait.
+     */
+    @Test
+    fun `a read that fills the request does not make the next one wait`() {
+        val time = FakeTime()
+        val stream =
+            PacedInputStream(
+                ByteArrayInputStream(ByteArray(1_000)),
+                intervalMillis = 100,
+                nowMillis = { time.nowMillis },
+                sleep = time::sleep,
+            )
+        repeat(5) { stream.read(ByteArray(100)) shouldBe 100 }
+        time.sleeps shouldBe emptyList()
     }
 }

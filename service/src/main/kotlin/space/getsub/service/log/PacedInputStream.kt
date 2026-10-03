@@ -17,6 +17,11 @@ import java.io.InputStream
  * [intervalMillis] longer than before, and a process killed in that window loses them,
  * just as it loses whatever is in the pipe today.
  *
+ * A read that fills its whole request skips the next wait: the reader above asks for
+ * 8 KiB at a time, so waiting after a full read would cap capture at about 80 KiB/s,
+ * barely above a connection storm, and a backlog would grow until logd dropped the
+ * reader. Pacing only ever waits when the pipe had less than a buffer's worth.
+ *
  * [onIdle] runs when the reader has used up everything it had, which is where the
  * capture flushes its batch of redacted lines to the ring.
  */
@@ -24,14 +29,19 @@ internal class PacedInputStream(
     input: InputStream,
     private val intervalMillis: Long = DEFAULT_INTERVAL_MILLIS,
     private val onIdle: () -> Unit = {},
-    private val nowMillis: () -> Long = System::currentTimeMillis,
+    // Monotonic: a wall-clock step back would otherwise put the capture thread to
+    // sleep for the size of the step, with nothing to wake it.
+    private val nowMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
     private val sleep: (Long) -> Unit = Thread::sleep,
 ) : FilterInputStream(input) {
     private var lastReadAt: Long? = null
 
+    /** The last read filled its whole request, so more is almost certainly waiting. */
+    private var backlog = false
+
     override fun read(): Int {
         pace()
-        return super.read().also { lastReadAt = nowMillis() }
+        return super.read().also { record(full = it >= 0) }
     }
 
     override fun read(
@@ -40,7 +50,12 @@ internal class PacedInputStream(
         len: Int,
     ): Int {
         pace()
-        return super.read(b, off, len).also { lastReadAt = nowMillis() }
+        return super.read(b, off, len).also { record(full = len > 0 && it == len) }
+    }
+
+    private fun record(full: Boolean) {
+        lastReadAt = nowMillis()
+        backlog = full
     }
 
     /**
@@ -52,6 +67,7 @@ internal class PacedInputStream(
 
     private fun pace() {
         onIdle()
+        if (backlog) return
         val last = lastReadAt ?: return
         val wait = last + intervalMillis - nowMillis()
         if (wait > 0) sleep(wait)
@@ -60,5 +76,7 @@ internal class PacedInputStream(
     internal companion object {
         /** About ten reads a second; the live viewer itself polls once a second. */
         const val DEFAULT_INTERVAL_MILLIS = 100L
+
+        private const val NANOS_PER_MILLI = 1_000_000L
     }
 }

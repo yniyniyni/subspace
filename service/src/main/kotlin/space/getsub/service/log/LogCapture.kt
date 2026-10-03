@@ -4,6 +4,7 @@ package space.getsub.service.log
 
 import android.util.Log
 import space.getsub.core.model.redact
+import space.getsub.core.model.redactLogBody
 import java.time.ZoneId
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -132,7 +133,8 @@ internal val LOGCAT_PREFIX_PATTERN =
  */
 private fun redactLine(line: String): String {
     val prefixLength = logcatPrefixLength(line) ?: return redact(line)
-    return line.substring(0, prefixLength) + redact(line.substring(prefixLength))
+    // redactLogBody is redact() that also keeps xray's own header verbatim (row 7).
+    return line.substring(0, prefixLength) + redactLogBody(line.substring(prefixLength))
 }
 
 /** The highest ASCII code point; anything above it goes to the regex. */

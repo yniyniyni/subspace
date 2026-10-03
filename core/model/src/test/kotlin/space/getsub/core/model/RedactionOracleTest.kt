@@ -216,6 +216,34 @@ class RedactionOracleTest {
     }
 
     /**
+     * Row 7: [redactLogBody] keeps xray's own fixed-format header verbatim and redacts
+     * only what follows. It must equal [redact] on the whole body for every input.
+     */
+    @Test
+    fun `redactLogBody equals redact on xray-headed lines`() {
+        val headers =
+            listOf(
+                "2026/10/03 10:22:25.651837 [Warning] [3909243532] ",
+                "2026/10/03 10:22:25 [Info] ",
+                "2026/10/03 10:22:25.6 [Error] [1] ",
+                "2026/10/03 10:22:25.651837 [Debug] [12]",
+                "2026/10/03 10:22:25.651837 [Warn] [1] ",
+                "2026/1/03 10:22:25 [Info] ",
+                "2026/10/03 10:22:25.651837 [Warning] [3909243532]  ",
+            )
+        val rnd = Random(20261003)
+        repeat(20_000) {
+            val rest = buildString { repeat(rnd.nextInt(0, 10)) { append(pieces[rnd.nextInt(pieces.size)]) } }
+            val line = headers[rnd.nextInt(headers.size)] + rest
+            withClue(line) { redactLogBody(line) shouldBe expected(line) }
+        }
+        fixed.forEach { rest ->
+            val line = headers[0] + rest
+            withClue(line) { redactLogBody(line) shouldBe expected(line) }
+        }
+    }
+
+    /**
      * The model check's own sanity: [expected] really is [oracleRedact] on every
      * line without a sentence-final dot after a colon run, so the only lines it
      * could ever disagree with the oracle on are the ones the leak fix targets.

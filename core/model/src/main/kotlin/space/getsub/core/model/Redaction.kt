@@ -388,6 +388,23 @@ public fun redact(message: String): String {
  */
 internal fun isGeoFileListCandidate(message: String): Boolean = message.endsWith(".dat")
 
+/**
+ * [redact] for a captured log body, keeping xray's own header verbatim:
+ * `2026/10/03 10:22:25.651837 [Warning] [3909243532] `.
+ *
+ * Row 7: every xray line starts with that header, about a third of what redaction
+ * would otherwise scan. It is digits, `/`, `:`, `.`, brackets and a fixed level word,
+ * so it cannot hold a secret, and it ends in a space, so no pattern's token or `\b`
+ * boundary can span it. Its `/` also means the whole body can never be a geo file
+ * list, so skipping [GEO_FILE_LIST_MESSAGE] for the rest changes nothing.
+ * `RedactionOracleTest` holds this equal to [redact] on header-led lines.
+ */
+public fun redactLogBody(body: String): String {
+    val header = xrayHeaderLength(body)
+    if (header == 0) return redact(body)
+    return body.substring(0, header) + redactEveryPattern(body.substring(header))
+}
+
 private val KEYED_WORDS = listOf("address", "server", "host", "sni", "domain")
 private val LABEL_WORDS = listOf("dial", "address", "server", "host", "lookup")
 

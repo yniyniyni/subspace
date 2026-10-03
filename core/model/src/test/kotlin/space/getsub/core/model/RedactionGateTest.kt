@@ -87,4 +87,38 @@ class RedactionGateTest {
         hasHostnameShape("a.b1") shouldBe false
         hasHostnameShape(xrayLine) shouldBe false
     }
+
+    /** What the bare-host pass did before the scanner: the regex, run on every input. */
+    private fun bareByRegex(line: String): String {
+        val pattern = BARE_HOST_PREFIX_PATTERN
+        return line.replace(pattern) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
+    }
+
+    @Test
+    fun `redactBarePrefixes matches the regex on every edge of the token shape`() {
+        listOf(
+            "vpnserver: connection refused",
+            "dial tcp: lookup vpnserver: no such host",
+            "a:: b",
+            ": b",
+            "x :y z",
+            "end with colon:",
+            "a:\tb",
+            "a:\u000Bb c:\u000Cd e:\re f:\ng",
+            "\u0001: masked",
+            "json: cannot unmarshal",
+            "two  spaces:  here",
+            "",
+            ":",
+            "a:b: c",
+            "  lead: x",
+        ).forEach { line -> redactBarePrefixes(line) shouldBe bareByRegex(line) }
+    }
+
+    @Test
+    fun `redactBarePrefixes falls back to the regex on non-ASCII input`() {
+        // NEL is ICU whitespace but not ASCII: the fallback keeps ICU authoritative.
+        redactBarePrefixes("corp:\u0085x") shouldBe bareByRegex("corp:\u0085x")
+        redactBarePrefixes("café: down") shouldBe bareByRegex("café: down")
+    }
 }

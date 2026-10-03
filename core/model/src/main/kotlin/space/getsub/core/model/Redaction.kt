@@ -380,11 +380,21 @@ private val LABEL_WORDS = listOf("dial", "address", "server", "host", "lookup")
  */
 internal fun hasNonAscii(s: String): Boolean = s.any { it.code >= ASCII_LIMIT }
 
-/** Whether [s] contains any of [words], case-insensitively per Kotlin's (ASCII-safe) folding. */
+/**
+ * Whether [s] contains any of [words] (all lowercase ASCII), ignoring case.
+ *
+ * Only reached for ASCII [s] (both gates check [hasNonAscii] first), where
+ * lowercasing once and searching is the same test as `contains(ignoreCase = true)`
+ * and much cheaper than its case-folded comparison at every position (row 7,
+ * Pass 4: 10 % of the capture thread).
+ */
 private fun containsAnyIgnoreCase(
     s: String,
     words: List<String>,
-): Boolean = words.any { s.contains(it, ignoreCase = true) }
+): Boolean {
+    val lower = s.lowercase()
+    return words.any { lower.contains(it) }
+}
 
 /** Necessary for [KEYED_HOST_PATTERN]: see [hasNonAscii] for why non-ASCII alone must pass. */
 internal fun keyedHostGate(s: String): Boolean = hasNonAscii(s) || containsAnyIgnoreCase(s, KEYED_WORDS)
@@ -414,7 +424,7 @@ internal fun redactEveryPattern(message: String): String {
         s = s.replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
     }
     if (hasColonBeforeWhitespace(s)) {
-        s = s.replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
+        s = redactBarePrefixes(s)
     }
     if (labelledHostGate(s)) {
         s = s.replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
@@ -492,6 +502,40 @@ internal fun hasColonBeforeWhitespace(s: String): Boolean {
         if (s[i] == ':' && (next.isWhitespace() || next == NEL)) return true
     }
     return false
+}
+
+/** ASCII `\s`, identical under the JVM's regex and ICU: tab, LF, VT, FF, CR, space. */
+private fun isAsciiRegexWhitespace(c: Char): Boolean = c == ' ' || c in '\t'..'\r'
+
+/**
+ * Exactly `s.replace(BARE_HOST_PREFIX_PATTERN) { replaceHead(it, BARE_TOKEN_GROUP) }`,
+ * without the regex on ASCII input (row 7, Pass 4: every xray line has an
+ * `inbound: ` that opens [hasColonBeforeWhitespace]).
+ *
+ * `(?<!\S)(\S+):(?=\s)` can only start where a token starts, and since `:` is
+ * itself `\S`, the colon it needs is the token's last character, with whitespace
+ * after it. So the scanner walks whitespace-separated tokens and matches a token of
+ * two or more characters ending in `:` that is followed by whitespace. Non-ASCII
+ * input goes to the regex, so ICU's `\s` (which includes NEL and other Unicode
+ * spaces) stays authoritative wherever the two could differ.
+ */
+internal fun redactBarePrefixes(s: String): String {
+    if (hasNonAscii(s)) return s.replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
+    val out = StringBuilder(s.length)
+    var i = 0
+    while (i < s.length) {
+        if (isAsciiRegexWhitespace(s[i])) {
+            out.append(s[i])
+            i++
+            continue
+        }
+        val start = i
+        while (i < s.length && !isAsciiRegexWhitespace(s[i])) i++
+        val isMatch = i < s.length && i - start >= 2 && s[i - 1] == ':'
+        val token = s.substring(start, i - 1)
+        if (isMatch && !isNotAHost(token)) out.append(SENTINEL).append(':') else out.append(s, start, i)
+    }
+    return out.toString()
 }
 
 /**

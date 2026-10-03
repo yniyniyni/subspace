@@ -39,6 +39,7 @@ private const val KEY_TUNNEL_SESSION_WANTED = "tunnel_session_wanted"
 private const val KEY_BOOT_AUTOSTART = "boot_autostart"
 private const val KEY_FAIL_CLOSED = "fail_closed"
 private const val KEY_PER_TAG_BREAKDOWN = "per_tag_breakdown"
+private const val KEY_LIGHTWEIGHT_MODE = "lightweight_mode"
 private const val KEY_BATTERY_PROMPT_SHOWN = "battery_prompt_shown"
 
 /**
@@ -425,6 +426,27 @@ internal constructor(
 
     public suspend fun setPerTagBreakdown(enabled: Boolean) {
         dao.put(SettingEntity(key = KEY_PER_TAG_BREAKDOWN, value = enabled.toString()))
+    }
+
+    /**
+     * Lightweight mode, for slower phones: no traffic numbers on screen and no session
+     * log. Off by default.
+     *
+     * `:bg` reads it when a session starts to decide whether to run log capture (a
+     * `logcat` process plus redaction of every line, the larger of the two costs), and
+     * follows it live to stop sending traffic samples to the UI. It never turns off the
+     * once-a-second counter read itself: that read is the only input to "nothing coming
+     * back" (M8.5 spec §4.3).
+     */
+    public val lightweightMode: Flow<Boolean> =
+        dao.observe(KEY_LIGHTWEIGHT_MODE).map { stored -> stored?.toBooleanStrictOrNull() ?: false }
+
+    /** The one-shot counterpart to [lightweightMode], for a session start. */
+    public suspend fun lightweightModeNow(): Boolean =
+        dao.value(KEY_LIGHTWEIGHT_MODE)?.toBooleanStrictOrNull() ?: false
+
+    public suspend fun setLightweightMode(enabled: Boolean) {
+        dao.put(SettingEntity(key = KEY_LIGHTWEIGHT_MODE, value = enabled.toString()))
     }
 
     /** §9's "prompt once, respect refusal" (M8 spec §7.2). */

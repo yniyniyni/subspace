@@ -67,6 +67,9 @@
     <string name="settings_fail_closed_title">Block traffic when disconnected</string>
     <!-- Names the per-app exception on purpose (M8 spec §6.2): it is correct behaviour that looks like a leak. -->
     <string name="settings_fail_closed_summary">While reconnecting, block all traffic instead of letting it leave unprotected. Apps excluded from the tunnel are unaffected.</string>
+    <string name="settings_lightweight_title">Lightweight mode</string>
+    <!-- Lightweight mode: what it turns off, what keeps working, and when each applies. -->
+    <string name="settings_lightweight_summary">Uses less CPU on slower phones. Hides traffic numbers now, and stops recording the session log from the next connection. Connection status, including \"nothing coming back\", keeps working.</string>
     <string name="settings_battery_title">Battery optimisation</string>
     <string name="settings_battery_summary">Android may stop the tunnel while the screen is off. Exempt Subspace to keep it running.</string>
     <!-- M8 spec §7.2, ARCHITECTURE.md §9: shown once, the moment the user turns on a setting that
@@ -132,6 +135,7 @@
     <string name="log_viewer_clear">Clear</string>
     <string name="log_viewer_share">Share</string>
     <string name="log_viewer_redaction_notice">Server addresses, IDs, keys and subscription links are removed before anything is written to this log.</string>
+    <string name="log_viewer_lightweight_notice">Lightweight mode is on: no new log lines are recorded. Turn it off in Settings and reconnect to start recording again.</string>
     <string name="log_viewer_back">Back</string>
     <!-- Prepended to a shared log that was too large to send in full (log_viewer_share
          truncates to the newest portion — see shareLogText's own KDoc). -->

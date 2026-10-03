@@ -136,6 +136,10 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(perTagBreakdown = enabled) } }
             .launchIn(viewModelScope)
 
+        settingsSource.lightweightMode
+            .onEach { enabled -> _state.update { it.copy(lightweightMode = enabled) } }
+            .launchIn(viewModelScope)
+
         // Ruling R43 (revises F2 / ruling R39): mirrors ConnectionState (ARCHITECTURE.md §5.5)
         // purely so SettingsState.perTagBreakdownSessionNoticeVisible has something to derive
         // from — see that property's own KDoc for why this plain mirror, with no latch of what
@@ -203,6 +207,16 @@ constructor(
      */
     fun onPerTagBreakdownChanged(enabled: Boolean) {
         viewModelScope.launch { settingsSource.setPerTagBreakdown(enabled) }
+    }
+
+    /**
+     * A CPU saver, not a survival setting, so it never routes through
+     * [maybePromptForBattery]. Traffic numbers go immediately; the session log stops from
+     * the next connection (`:bg` decides log capture when a session starts), which the
+     * switch's own summary says.
+     */
+    fun onLightweightModeChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setLightweightMode(enabled) }
     }
 
     /**

@@ -177,6 +177,10 @@ class HomeViewModelTest {
         var perTagBreakdownEnabled: Boolean = false
         override val perTagBreakdown: Flow<Boolean> get() = MutableStateFlow(perTagBreakdownEnabled)
 
+        /** Off by default, mirroring `SettingsRepository.lightweightMode`'s own default. */
+        var lightweightEnabled: Boolean = false
+        override val lightweightMode: Flow<Boolean> get() = MutableStateFlow(lightweightEnabled)
+
         /** Settable so a test can drive the failure branch, not only the happy one. */
         var resultToReturn: LatencyResult = LatencyResult.ok(42)
 
@@ -388,6 +392,33 @@ class HomeViewModelTest {
             val viewModel = HomeViewModel(tunnel, profileSource)
 
             viewModel.state.value.perTagBreakdownEnabled shouldBe true
+        }
+
+    @Test
+    fun `traffic is shown when lightweight mode is off`() =
+        runTest {
+            val settings = FakeSettings()
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(FakeTunnelConnection(), profileSource)
+
+            viewModel.state.value.trafficHidden shouldBe false
+        }
+
+    /** Lightweight mode hides the traffic tiles and the breakdown, even with the breakdown on. */
+    @Test
+    fun `lightweight mode hides traffic and the breakdown`() =
+        runTest {
+            val settings = FakeSettings()
+            val tunnel = FakeTunnelConnection()
+            tunnel.perTagBreakdownEnabled = true
+            tunnel.lightweightEnabled = true
+            val profileSource =
+                FakeActiveProfileSource(profiles = emptyList(), activeProfileId = settings.activeProfileId)
+            val viewModel = HomeViewModel(tunnel, profileSource)
+
+            viewModel.state.value.trafficHidden shouldBe true
+            viewModel.state.value.perTagBreakdownEnabled shouldBe false
         }
 
     @Test

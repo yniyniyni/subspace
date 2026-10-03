@@ -312,7 +312,8 @@ private const val MILLIS_PER_SECOND = 1_000L
  * Nothing else: no measurement on connect, and no timer.
  *
  * DOWN/UP: rendered only while [HomeState.connection] is
- * [ConnectionState.Connected] — never on [HomeState.traffic] alone, because an
+ * [ConnectionState.Connected] and [HomeState.trafficHidden] (lightweight mode) is
+ * off — never on [HomeState.traffic] alone, because an
  * ordinary in-session disconnect while the UI stays bound does not clear
  * `TunnelClient`'s cached sample (see [TunnelConnection.traffic]'s KDoc).
  * [formatByteCount] does the formatting, same as [HomeState.latency]'s branch
@@ -356,7 +357,7 @@ private fun StatTilesRow(
                 )
                 .semantics { contentDescription = latencyHint },
         )
-        if (state.connection is ConnectionState.Connected) {
+        if (state.connection is ConnectionState.Connected && !state.trafficHidden) {
             StatTile(
                 value = formatByteCount(state.traffic?.downlinkBytes ?: 0),
                 label = stringResource(R.string.home_traffic_down),

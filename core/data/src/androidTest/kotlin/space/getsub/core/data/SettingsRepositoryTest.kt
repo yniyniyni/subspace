@@ -408,6 +408,19 @@ class SettingsRepositoryTest {
             repository.perTagBreakdown.first() shouldBe true
         }
 
+    /** Lightweight mode is opt-in: nobody loses the session log or traffic numbers by default. */
+    @Test
+    fun lightweightModeDefaultsToOffAndRoundTrips() =
+        runTest {
+            repository.lightweightMode.first() shouldBe false
+            repository.lightweightModeNow() shouldBe false
+
+            repository.setLightweightMode(true)
+
+            repository.lightweightMode.first() shouldBe true
+            repository.lightweightModeNow() shouldBe true
+        }
+
     @Test
     fun batteryPromptShownDefaultsToFalse() =
         runTest {

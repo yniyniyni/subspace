@@ -63,6 +63,8 @@ internal data class HomeState(
      * identical from an empty list alone.
      */
     val perTagBreakdownEnabled: Boolean = false,
+    /** Lightweight mode is on: no down/up tiles. Mirrors [TunnelConnection.lightweightMode]. */
+    val trafficHidden: Boolean = false,
 ) {
     /**
      * Whether tapping the connect control should attempt a connection.

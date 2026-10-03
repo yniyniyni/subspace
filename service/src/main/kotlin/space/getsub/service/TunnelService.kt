@@ -615,6 +615,15 @@ class TunnelService : VpnService() {
     private var networkMonitorJob: Job? = null
 
     /**
+     * [SettingsRepository.lightweightMode], followed live so [broadcastTrafficSample]
+     * stops sending samples to the UI as soon as the user turns it on. Written only
+     * by [collectLightweightMode]; `@Volatile` because the sampler reads it from
+     * another coroutine.
+     */
+    @Volatile
+    private var lightweight = false
+
+    /**
      * §10.4: anything escaping a coroutine on [scope] must still produce a
      * legible state. Without this the failure is invisible — M8 spec §0.3, `:bg`
      * logging never reaches logcat — and the UI sits on `Connecting` until it
@@ -1009,6 +1018,38 @@ class TunnelService : VpnService() {
         // See [seedPersistedFailure]'s own KDoc for what this reads and why it is safe to run
         // on this instance's own `scope` rather than [terminalState]'s process-lifetime one.
         scope.launch { seedPersistedFailure(seeded, generationAtSeed) }
+        scope.launch { collectLightweightMode() }
+    }
+
+    /**
+     * [SettingsRepository.lightweightModeNow] for a session start. A failed read means
+     * off: the session keeps its log and breakdown, and a Room error never fails a
+     * connect over a convenience setting.
+     */
+    private suspend fun lightweightAtStart(): Boolean =
+        try {
+            settingsRepository.lightweightModeNow()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
+            Log.e(TAG, "lightweight-mode read failed: ${e.javaClass.simpleName}")
+            false
+        }
+
+    /**
+     * Keeps [lightweight] current. A failed Room read leaves it as it was (off on a
+     * fresh instance): the only effect is traffic samples still being sent, never a
+     * wrong connection state. Class name only in the log (ARCHITECTURE.md §5.6).
+     */
+    private suspend fun collectLightweightMode() {
+        settingsRepository.lightweightMode
+            .catch { e ->
+                if (e is CancellationException) throw e
+                Log.e(TAG, "lightweight-mode collector failed: ${e.javaClass.simpleName}")
+            }
+            .collect { enabled -> lightweight = enabled }
     }
 
     /**
@@ -1414,16 +1455,19 @@ class TunnelService : VpnService() {
      */
     private fun broadcastTrafficSample(sample: TrafficSample) {
         synchronized(lock) {
-            val parcel = TrafficSampleParcel.from(sample)
-            val count = callbacks.beginBroadcast()
-            repeat(count) { i ->
-                try {
-                    callbacks.getBroadcastItem(i).onTrafficSample(parcel)
-                } catch (e: android.os.RemoteException) {
-                    Log.w(TAG, "traffic callback dropped: ${e.javaClass.simpleName}")
+            // Lightweight mode: the UI gets no samples, but health below still does.
+            if (sendsTrafficToUi(lightweight)) {
+                val parcel = TrafficSampleParcel.from(sample)
+                val count = callbacks.beginBroadcast()
+                repeat(count) { i ->
+                    try {
+                        callbacks.getBroadcastItem(i).onTrafficSample(parcel)
+                    } catch (e: android.os.RemoteException) {
+                        Log.w(TAG, "traffic callback dropped: ${e.javaClass.simpleName}")
+                    }
                 }
+                callbacks.finishBroadcast()
             }
-            callbacks.finishBroadcast()
             // M8.5 spec §4.2/M8.5 spec §4.3: the sampler is health's only input. Published
             // through publishLocked, so the notification follows (Task 4).
             healthDetector?.let { detector ->
@@ -1527,9 +1571,13 @@ class TunnelService : VpnService() {
                 // M8.5 spec §3.3: capture starts here, once the service has actually
                 // entered foreground and before the start sequence below runs —
                 // not inside it, so a session that never reaches resolveAndStartCore
-                // is still captured.
-                logCapture.start()
+                // is still captured. Lightweight mode skips it for the whole session;
+                // the setting is read here, inside the startup coroutine, so it is
+                // still read before anything in the start sequence logs.
                 scope.launch {
+                    if (capturesSessionLog(lightweight = lightweightAtStart())) {
+                        logCapture.start()
+                    }
                     val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
                     when (val outcome = attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)) {
                         TunAttachOutcome.Settled -> Unit
@@ -1655,7 +1703,11 @@ class TunnelService : VpnService() {
         // guarantee only holds within one call. M8.5 spec §2's port rides along
         // in the *same* call rather than a second one — see allocateSessionPorts's
         // own KDoc for why a second call is the bug this replaced.
-        val breakdownEnabled = settingsRepository.perTagBreakdown.first()
+        val breakdownEnabled =
+            breakdownEnabled(
+                perTagBreakdown = settingsRepository.perTagBreakdown.first(),
+                lightweight = lightweightAtStart(),
+            )
         val allocated =
             try {
                 allocateSessionPorts(breakdownEnabled) { count -> xray.allocatePorts(count) }

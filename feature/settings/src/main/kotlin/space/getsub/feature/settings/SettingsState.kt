@@ -90,6 +90,8 @@ internal data class SettingsState(
      * [SettingsDiagnosticsSection]'s summary text for what turning it on exposes.
      */
     val perTagBreakdown: Boolean = false,
+    /** No traffic numbers and no session log, for slower phones. See [SettingsSource.lightweightMode]. */
+    val lightweightMode: Boolean = false,
     /**
      * True while a tunnel session is up, mirrored from [TunnelSessionSource] (ARCHITECTURE.md
      * ARCHITECTURE.md §5.5: never inferred locally — the same discipline

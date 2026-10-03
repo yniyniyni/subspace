@@ -13,4 +13,6 @@ package space.getsub.feature.settings.log
 internal data class LogViewerState(
     val lines: List<String> = emptyList(),
     val loading: Boolean = true,
+    /** Lightweight mode is on, so no new lines are being recorded; the screen says so. */
+    val lightweightMode: Boolean = false,
 )

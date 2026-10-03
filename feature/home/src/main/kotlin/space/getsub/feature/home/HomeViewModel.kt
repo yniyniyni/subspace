@@ -56,6 +56,14 @@ internal class HomeViewModel @Inject constructor(
             // setting (M8.5 spec §2), which HomeScreen needs to tell "off"
             // apart from perTag simply having nothing yet.
             .combine(tunnel.perTagBreakdown) { partial, enabled -> partial.copy(perTagBreakdownEnabled = enabled) }
+            // An eighth: lightweight mode hides traffic and the breakdown, whatever the
+            // breakdown setting says (`:bg` stops sending samples too).
+            .combine(tunnel.lightweightMode) { partial, lightweight ->
+                partial.copy(
+                    trafficHidden = lightweight,
+                    perTagBreakdownEnabled = partial.perTagBreakdownEnabled && !lightweight,
+                )
+            }
             .onEach { _state.value = it }
             .launchIn(viewModelScope)
     }

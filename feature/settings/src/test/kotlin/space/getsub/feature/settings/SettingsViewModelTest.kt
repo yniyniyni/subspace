@@ -195,6 +195,13 @@ class SettingsViewModelTest {
             _perTagBreakdown.value = enabled
         }
 
+        private val _lightweightMode = MutableStateFlow(false)
+        override val lightweightMode: Flow<Boolean> = _lightweightMode.asStateFlow()
+
+        override suspend fun setLightweightMode(enabled: Boolean) {
+            _lightweightMode.value = enabled
+        }
+
         var ignoringBatteryOptimizations: Boolean = false
 
         override suspend fun isIgnoringBatteryOptimizations(): Boolean = ignoringBatteryOptimizations
@@ -879,6 +886,32 @@ class SettingsViewModelTest {
             advanceUntilIdle()
 
             viewModel.state.value.openVpnSettingsRequested shouldBe false
+        }
+
+    // ── Lightweight mode (2026-10-03) ────────────────────────────────────────
+
+    @Test
+    fun `lightweight mode is off by default and survives a viewmodel restart`() =
+        runTest {
+            val source = FakeSettingsSource()
+            val first = viewModel(source)
+            advanceUntilIdle()
+            first.state.value.lightweightMode shouldBe false
+
+            first.onLightweightModeChanged(true)
+            advanceUntilIdle()
+
+            viewModel(source).state.value.lightweightMode shouldBe true
+        }
+
+    /** A CPU saver, not one of §7.2's survival settings: it must never raise the Doze prompt. */
+    @Test
+    fun `turning on lightweight mode does not prompt about battery`() =
+        runTest {
+            val viewModel = viewModel(FakeSettingsSource())
+            viewModel.onLightweightModeChanged(true)
+            advanceUntilIdle()
+            viewModel.state.value.showBatteryPrompt shouldBe false
         }
 
     // ── M8.5: the per-tag breakdown toggle (Task 15) ────────────────────────

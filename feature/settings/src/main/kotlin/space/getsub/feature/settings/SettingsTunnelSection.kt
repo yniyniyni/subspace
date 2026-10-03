@@ -5,6 +5,7 @@ package space.getsub.feature.settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
@@ -48,6 +49,8 @@ internal fun SettingsTunnelSection(
     onFailClosedChange: (Boolean) -> Unit,
     onOpenVpnSettings: () -> Unit,
     onOpenBatterySettings: () -> Unit,
+    // Defaulted so SettingsTunnelSectionTest, which predates it, needs no change.
+    onLightweightModeChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
@@ -102,6 +105,7 @@ internal fun SettingsTunnelSection(
             },
         )
 
+        LightweightModeRow(checked = state.lightweightMode, onCheckedChange = onLightweightModeChange)
         SettingRow(
             icon = Icons.Default.Info,
             label = stringResource(R.string.settings_battery_title),
@@ -112,4 +116,26 @@ internal fun SettingsTunnelSection(
             },
         )
     }
+}
+
+/** Lightweight mode's switch, split out to keep [SettingsTunnelSection] short. */
+@Composable
+private fun LightweightModeRow(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val title = stringResource(R.string.settings_lightweight_title)
+    SettingRow(
+        icon = Icons.Default.Build,
+        label = title,
+        supportingText = stringResource(R.string.settings_lightweight_summary),
+        labelCarriesSemantics = true,
+        trailing = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                modifier = Modifier.semantics { contentDescription = title },
+            )
+        },
+    )
 }

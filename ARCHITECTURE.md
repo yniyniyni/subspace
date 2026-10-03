@@ -1386,6 +1386,13 @@ the port can pull a Go heap profile out of the VPN process or trigger repeated
 blocks on exactly that reasoning; making them the default here would mean
 opening, for every user, the port §6 closes.
 
+**Lightweight mode (2026-10-03).** One opt-in switch for slower phones
+(`SettingsRepository.lightweightMode`, off by default). It stops `:bg` sending
+traffic samples to the UI and polling the per-tag breakdown, hides Home's traffic
+tiles, and skips log capture for sessions started while it is on. It does **not**
+stop the once-a-second hev counter read: that sample is the health detector's only
+input, so "nothing coming back" (§5.5) keeps working.
+
 ### 14.5 tun2socks implementation — RESOLVED for now
 
 **`hev-socks5-tunnel` v2.16.0**, built from source via CMake/NDK. The build

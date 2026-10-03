@@ -122,6 +122,7 @@ fun SettingsScreen(
             onAlwaysOnRequested = viewModel::onAlwaysOnRequested,
             onVpnSettingsOpened = viewModel::onVpnSettingsOpened,
             onPerTagBreakdownChanged = viewModel::onPerTagBreakdownChanged,
+            onLightweightModeChanged = viewModel::onLightweightModeChanged,
         ),
         navigation = navigation,
         modifier = modifier,
@@ -182,6 +183,8 @@ internal data class SettingsActions(
     // field) — neither SettingsHwidLayoutTest nor SettingsDnsSectionTest's full positional
     // construction bears on the diagnostics toggle.
     val onPerTagBreakdownChanged: (Boolean) -> Unit = {},
+    // Defaulted for the same reason as the fields above.
+    val onLightweightModeChanged: (Boolean) -> Unit = {},
 )
 
 /**
@@ -363,6 +366,7 @@ private fun TunnelSection(
         state = state,
         onBootAutostartChange = actions.onBootAutostartChanged,
         onFailClosedChange = actions.onFailClosedChanged,
+        onLightweightModeChange = actions.onLightweightModeChanged,
         // M8.5 spec §6 #10: the ViewModel decides whether a battery prompt comes first;
         // the deep link is launched from openVpnSettingsRequested below, never directly,
         // so the prompt can no longer be buried under the system VPN screen.

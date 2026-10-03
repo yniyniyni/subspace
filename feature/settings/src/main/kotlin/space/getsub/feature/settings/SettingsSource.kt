@@ -126,6 +126,11 @@ internal interface SettingsSource {
 
     suspend fun setPerTagBreakdown(enabled: Boolean)
 
+    /** No traffic numbers and no session log, for slower phones. See [SettingsRepository.lightweightMode]. */
+    val lightweightMode: Flow<Boolean>
+
+    suspend fun setLightweightMode(enabled: Boolean)
+
     /**
      * A fresh platform read of whether Android already exempts this app from battery
      * optimization — not a [Flow], since the only caller needs its value at one instant (the
@@ -213,6 +218,10 @@ constructor(
     override val perTagBreakdown: Flow<Boolean> = settingsRepository.perTagBreakdown
 
     override suspend fun setPerTagBreakdown(enabled: Boolean) = settingsRepository.setPerTagBreakdown(enabled)
+
+    override val lightweightMode: Flow<Boolean> = settingsRepository.lightweightMode
+
+    override suspend fun setLightweightMode(enabled: Boolean) = settingsRepository.setLightweightMode(enabled)
 
     override suspend fun isIgnoringBatteryOptimizations(): Boolean =
         withContext(Dispatchers.IO) {

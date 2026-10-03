@@ -45,6 +45,8 @@ internal class BoundTunnelConnection @Inject constructor(
 
     override val perTagBreakdown: Flow<Boolean> get() = settings.perTagBreakdown
 
+    override val lightweightMode: Flow<Boolean> get() = settings.lightweightMode
+
     override fun connect(
         profile: Profile,
         rowId: Long,

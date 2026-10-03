@@ -106,7 +106,10 @@ class LogViewerViewModelTest {
 
     @After fun tearDown() = Dispatchers.resetMain()
 
-    private fun viewModel(dir: File): LogViewerViewModel = LogViewerViewModel(LogRepository(dir))
+    private fun viewModel(
+        dir: File,
+        lightweight: Boolean = false,
+    ): LogViewerViewModel = LogViewerViewModel(LogRepository(dir), kotlinx.coroutines.flow.flowOf(lightweight))
 
     /** Opens the one subscription a test holds for its whole body — see the class KDoc. */
     private fun TestScope.subscribe(vm: LogViewerViewModel) {
@@ -203,4 +206,16 @@ class LogViewerViewModelTest {
     private companion object {
         const val AWAIT_TIMEOUT_MS = 5_000L
     }
+
+    /** Lightweight mode: the screen says no new lines are recorded, so an empty log is not a fault. */
+    @Test
+    fun `lightweight mode is surfaced so the screen can say so`() =
+        runTest(dispatcher) {
+            val vm = viewModel(tmp.newFolder("logs"), lightweight = true)
+            subscribe(vm)
+            val loaded = awaitState(vm) { !it.loading }
+
+            assertEquals(true, loaded.lightweightMode)
+            vm.stopAndJoin()
+        }
 }

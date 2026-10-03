@@ -134,6 +134,7 @@ internal fun LogViewerScreenContent(
         Column(modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING)) {
             HeaderRow(actions = actions)
             RedactionNotice(modifier = Modifier.padding(top = SECTION_GAP))
+            if (state.lightweightMode) LightweightNotice(modifier = Modifier.padding(top = SECTION_GAP))
         }
 
         when {
@@ -187,6 +188,20 @@ private fun HeaderRow(
  * from [LogViewerState.lines], which arrive already redacted (see
  * [LogViewerState]'s own KDoc).
  */
+/**
+ * Lightweight mode stops log capture from the next connection, so an empty or
+ * frozen log is expected, not a fault. Lines already recorded stay viewable.
+ */
+@Composable
+private fun LightweightNotice(modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.log_viewer_lightweight_notice),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
 @Composable
 private fun RedactionNotice(modifier: Modifier = Modifier) {
     Text(

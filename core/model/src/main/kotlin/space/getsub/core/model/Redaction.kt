@@ -415,18 +415,31 @@ internal fun hasNonAscii(s: String): Boolean = s.any { it.code >= ASCII_LIMIT }
 /**
  * Whether [s] contains any of [words] (all lowercase ASCII), ignoring case.
  *
- * Only reached for ASCII [s] (both gates check [hasNonAscii] first), where
- * lowercasing once and searching is the same test as `contains(ignoreCase = true)`
- * and much cheaper than its case-folded comparison at every position (row 7,
- * Pass 4: 10 % of the capture thread).
+ * Only reached for ASCII [s] (both gates check [hasNonAscii] first), where an
+ * ASCII-only case-insensitive comparison is the same test as
+ * `contains(ignoreCase = true)` and much cheaper than its case-folded comparison
+ * at every position; it also avoids lowercasing a copy (row 7, Passes 4 and 5).
  */
 private fun containsAnyIgnoreCase(
     s: String,
     words: List<String>,
+): Boolean = words.any { word -> containsAsciiIgnoreCase(s, word) }
+
+/** [word] (lowercase ASCII letters) in [s], ASCII case-insensitively, without copying [s]. */
+private fun containsAsciiIgnoreCase(
+    s: String,
+    word: String,
 ): Boolean {
-    val lower = s.lowercase()
-    return words.any { lower.contains(it) }
+    val last = s.length - word.length
+    for (start in 0..last) {
+        var k = 0
+        while (k < word.length && asciiLower(s[start + k]) == word[k]) k++
+        if (k == word.length) return true
+    }
+    return false
 }
+
+private fun asciiLower(c: Char): Char = if (c in 'A'..'Z') c + ('a' - 'A') else c
 
 /** Necessary for [KEYED_HOST_PATTERN]: see [hasNonAscii] for why non-ASCII alone must pass. */
 internal fun keyedHostGate(s: String): Boolean = hasNonAscii(s) || containsAnyIgnoreCase(s, KEYED_WORDS)
@@ -443,7 +456,9 @@ internal fun labelledHostGate(s: String): Boolean = hasNonAscii(s) || containsAn
  * pattern runs on the previous one's output.
  */
 internal fun redactEveryPattern(message: String): String {
-    var s = message.replace(REDACTED, SENTINEL)
+    // Both literal swaps are skipped when their first character is absent: they ran on
+    // every line, and Kotlin's replace scans the whole string either way (row 7).
+    var s = if (message.indexOf('<') >= 0) message.replace(REDACTED, SENTINEL) else message
     if (s.contains("://")) s = s.replace(URL_PATTERN, SENTINEL)
     if (s.contains('-')) s = s.replace(UUID_PATTERN, SENTINEL)
     if (hasIpv4Shape(s)) s = s.replace(IPV4_PATTERN, SENTINEL)
@@ -461,7 +476,7 @@ internal fun redactEveryPattern(message: String): String {
     if (labelledHostGate(s)) {
         s = s.replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
     }
-    return s.replace(SENTINEL, REDACTED)
+    return if (s.indexOf(SENTINEL[0]) >= 0) s.replace(SENTINEL, REDACTED) else s
 }
 
 /** [IPV4_PATTERN]'s `(?:\d{1,3}\.){3}\d{1,3}` holds three `.`-then-digit pairs. */

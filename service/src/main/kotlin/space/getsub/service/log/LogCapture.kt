@@ -82,7 +82,7 @@ private const val UNEXPECTED_END_MARKER = "log capture ended unexpectedly (logca
  * of this pattern — so this note exists to make the assumption visible to
  * whoever next adds one.
  */
-private val LOGCAT_PREFIX_PATTERN =
+internal val LOGCAT_PREFIX_PATTERN =
     Regex("""^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+\d+\s+\d+\s+[VDIWEF]\s+[^:\s\n\r][^:\n\r]*:\s*)(.*)$""")
 
 /**
@@ -131,10 +131,90 @@ private val LOGCAT_PREFIX_PATTERN =
  * changing that shape or adding a new phase line elsewhere.
  */
 private fun redactLine(line: String): String {
-    val match = LOGCAT_PREFIX_PATTERN.matchEntire(line) ?: return redact(line)
-    val prefix = match.groupValues[1]
-    val body = match.groupValues[2]
-    return prefix + redact(body)
+    val prefixLength = logcatPrefixLength(line) ?: return redact(line)
+    return line.substring(0, prefixLength) + redact(line.substring(prefixLength))
+}
+
+/** The highest ASCII code point; anything above it goes to the regex. */
+private const val ASCII_MAX = 0x7F
+
+/**
+ * The length of [LOGCAT_PREFIX_PATTERN]'s prefix group in [line], or null when the
+ * pattern does not match.
+ *
+ * Parsed by hand for plain-ASCII lines with no CR or LF, the shape every
+ * `BufferedReader.readLine()` line from logcat has (row 7, Pass 4: the regex was
+ * 7.5 % of the capture thread). On those, `\d`, `\s` and `.` mean the same thing
+ * to the JVM and to ICU, and nothing can backtrack: each field ends where the
+ * next field's class begins, and the tag ends at its first `:`. Any other line
+ * goes to the regex, which stays authoritative there.
+ */
+internal fun logcatPrefixLength(line: String): Int? {
+    if (line.any { it.code > ASCII_MAX || it == '\n' || it == '\r' }) {
+        return LOGCAT_PREFIX_PATTERN.matchEntire(line)?.groupValues?.get(1)?.length
+    }
+    return PrefixCursor(line).prefixLength()
+}
+
+/** ASCII `\s`: tab, LF, VT, FF, CR, space. */
+private fun isAsciiSpace(c: Char): Boolean = c == ' ' || c in '\t'..'\r'
+
+private fun isAsciiDigit(c: Char): Boolean = c in '0'..'9'
+
+/** A forward-only reader over one ASCII line, for [logcatPrefixLength]. */
+private class PrefixCursor(private val s: String) {
+    private var i = 0
+
+    /** The pattern's prefix group, field by field; each step advances [i] or fails. */
+    private val steps: List<() -> Boolean> =
+        listOf(::date, ::spaces, ::time, ::spaces, ::ids, { oneOf("VDIWEF") }, ::spaces, ::tag)
+
+    fun prefixLength(): Int? {
+        if (!steps.all { step -> step() }) return null
+        while (i < s.length && isAsciiSpace(s[i])) i++
+        return i
+    }
+
+    /** `\d{2}-\d{2}` */
+    private fun date(): Boolean = digits(2) && oneOf("-") && digits(2)
+
+    /** `\d{2}:\d{2}:\d{2}\.\d{3}` */
+    private fun time(): Boolean =
+        digits(2) && oneOf(":") && digits(2) && oneOf(":") && digits(2) && oneOf(".") && digits(MILLIS_DIGITS)
+
+    /** `\d+\s+\d+\s+`: pid, then tid. */
+    private fun ids(): Boolean = run(::isAsciiDigit) && spaces() && run(::isAsciiDigit) && spaces()
+
+    private fun spaces(): Boolean = run(::isAsciiSpace)
+
+    /** Exactly one character from [chars]. */
+    private fun oneOf(chars: String): Boolean = (i < s.length && s[i] in chars).also { if (it) i++ }
+
+    private fun digits(n: Int): Boolean {
+        val end = i + n
+        val ok = end <= s.length && (i until end).all { isAsciiDigit(s[it]) }
+        if (ok) i = end
+        return ok
+    }
+
+    /** One or more characters matching [accept]. */
+    private fun run(accept: (Char) -> Boolean): Boolean {
+        val start = i
+        while (i < s.length && accept(s[i])) i++
+        return i > start
+    }
+
+    /** `[^:\s\n\r][^:\n\r]*:` — the tag runs to its first colon, which it consumes. */
+    private fun tag(): Boolean {
+        val colon = if (i < s.length && s[i] != ':' && !isAsciiSpace(s[i])) s.indexOf(':', i) else -1
+        if (colon >= 0) i = colon + 1
+        return colon >= 0
+    }
+
+    private companion object {
+        /** The `\.\d{3}` after the seconds. */
+        const val MILLIS_DIGITS = 3
+    }
 }
 
 /**

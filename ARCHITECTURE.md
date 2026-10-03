@@ -1641,14 +1641,18 @@ Mandatory rules:
         the gap rather than hiding it.
       - The loopback-cleartext fix for API < 37 is not yet verified on a
         device below 37.
-      - **Row 7 (redaction CPU under the spec's 2,800-connection flood) is
-        an open known limit — it is not one of the rows this tick names.**
-        On an R8, non-debuggable release build, the capture thread's share
-        of `:bg` CPU measured 47.5% ungated, 35.5% after gating each regex
-        pass behind a necessary-condition precondition (§5.6), and 29.6%
-        after replacing `IPV6_PATTERN`'s whole-string scan with a
-        byte-identical candidate-run scanner (§5.6) — all three still over
-        the row's <10% threshold. Remedy is owner-pending. Record:
+      - **Row 7 (capture CPU under the spec's 2,800-connection flood):
+        accepted by the owner at 8–14% (2026-10-03).** On an R8 release
+        build the capture thread's share of `:bg` CPU went from 47.5%
+        ungated to about 10% warm (5–10% across runs, the spread coming
+        from the rest of `:bg`) and 11–14% for the first floods after an
+        install, while the JIT warms; per line, 1.14 ms → ~0.16 ms. What
+        changed: sharper necessary-condition gates and ASCII scanners in
+        place of most regex passes (§5.6, output byte-identical), xray's
+        own header kept verbatim, `log.0` held open, and logcat read and
+        the ring written in batches (one read per 100 ms unless a backlog
+        is waiting; up to ~0.1 s of lines lost if the process is killed
+        mid-batch). 800 lines/s are captured without loss. Record:
         `docs/agent/research/2026-09-26-m8.5-row7-release.md`.
 - [ ] Always-on VPN, boot autostart, kill switch — **M8.5.** W7/N5 (§14.5) is
       closed: a session `terminate` was overwritten by a later

@@ -171,8 +171,15 @@ public class TunnelClient private constructor(
             }
         }
 
-    /** Starts a bind attempt. [isBound] remains false until its handshake completes. */
+    /** One binding however many activity instances hold it; see [BindRefCount]. */
+    private val bindHolders = BindRefCount()
+
+    /**
+     * Starts a bind attempt, or joins the one already held. [isBound] remains false until
+     * the first holder's handshake completes.
+     */
     public fun bind() {
+        if (!bindHolders.acquire()) return
         isBound = false
         context.bindService(
             Intent(context, TunnelService::class.java),
@@ -188,6 +195,8 @@ public class TunnelClient private constructor(
      * keep, a live link to the service.
      */
     public fun unbind() {
+        // Another holder (a relaunched MainActivity whose onStart ran first) still needs it.
+        if (!bindHolders.release()) return
         isBound = false
         try {
             service?.unregisterCallback(callback)

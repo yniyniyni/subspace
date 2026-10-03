@@ -8,6 +8,9 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import space.getsub.core.data.GeoAssetRepository
 import space.getsub.core.data.SettingsRepository
 import space.getsub.core.xray.XrayController
@@ -41,12 +44,22 @@ internal object ServiceModule {
     /**
      * `@Singleton` for the same reason as the gate above, and it is equally load-bearing:
      * the terminal state has to survive the `TunnelService` instance that published it,
-     * because on device (§11 row 7) the instance is replaced while the process lives on.
+     * because on device (ARCHITECTURE.md §11 row 7) the instance is replaced while the process lives on.
      * One per instance would reproduce exactly the bug [TerminalStateMemory] closes.
+     *
+     * Task 20 (ARCHITECTURE.md §11 row 7, part 2) widens that to process death: [TerminalStateMemory]
+     * now writes through [RoomTerminalFailurePersistence] to Room, on a [CoroutineScope] built
+     * here rather than borrowed from any one `TunnelService` instance's own `scope` — see
+     * [TerminalStateMemory]'s KDoc on its `scope` property for why a write must not be cancelled
+     * by the `onDestroy` of the instance that happened to trigger it.
      */
     @Provides
     @Singleton
-    fun terminalStateMemory(): TerminalStateMemory = TerminalStateMemory()
+    fun terminalStateMemory(settingsRepository: SettingsRepository): TerminalStateMemory =
+        TerminalStateMemory(
+            persistence = RoomTerminalFailurePersistence(settingsRepository),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        )
 
     /**
      * Wires the real core into [BoundPassthroughValidator]'s `testConfig` lambda. The actual

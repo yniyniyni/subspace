@@ -112,7 +112,7 @@ internal interface SettingsSource {
 
     suspend fun setFailClosed(enabled: Boolean)
 
-    /** §9's "prompt once, respect refusal" (spec §7.2). See [SettingsRepository.batteryPromptShown]. */
+    /** §9's "prompt once, respect refusal" (M8 spec §7.2). See [SettingsRepository.batteryPromptShown]. */
     val batteryPromptShown: Flow<Boolean>
 
     suspend fun setBatteryPromptShown(shown: Boolean)
@@ -125,6 +125,11 @@ internal interface SettingsSource {
     val perTagBreakdown: Flow<Boolean>
 
     suspend fun setPerTagBreakdown(enabled: Boolean)
+
+    /** No traffic numbers and no session log, for slower phones. See [SettingsRepository.lightweightMode]. */
+    val lightweightMode: Flow<Boolean>
+
+    suspend fun setLightweightMode(enabled: Boolean)
 
     /**
      * A fresh platform read of whether Android already exempts this app from battery
@@ -213,6 +218,10 @@ constructor(
     override val perTagBreakdown: Flow<Boolean> = settingsRepository.perTagBreakdown
 
     override suspend fun setPerTagBreakdown(enabled: Boolean) = settingsRepository.setPerTagBreakdown(enabled)
+
+    override val lightweightMode: Flow<Boolean> = settingsRepository.lightweightMode
+
+    override suspend fun setLightweightMode(enabled: Boolean) = settingsRepository.setLightweightMode(enabled)
 
     override suspend fun isIgnoringBatteryOptimizations(): Boolean =
         withContext(Dispatchers.IO) {

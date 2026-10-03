@@ -6,11 +6,11 @@ package space.getsub.core.model
  * Where the running tunnel's loopback HTTP proxy is, if there is one.
  *
  * An interface in `:core:model` because `:core:data` needs it (to route
- * subscription and geo fetches through the tunnel, spec §5.4) and cannot
+ * subscription and geo fetches through the tunnel, M5 spec §5.4) and cannot
  * depend on `:service` (§4). `:app` implements it over `TunnelClient`'s
  * published state — the only place both are visible.
  *
- * §5.5 still holds: an implementation reads the state the service publishes,
+ * ARCHITECTURE.md §5.5 still holds: an implementation reads the state the service publishes,
  * and never keeps a local guess about whether the tunnel is up.
  *
  * A `fun interface` so test/fixture call sites in other modules can supply

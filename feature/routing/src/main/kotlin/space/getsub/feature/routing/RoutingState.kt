@@ -45,11 +45,11 @@ internal data class GeoProgress(
 /**
  * One rule set's row.
  *
- * §5.6: nothing here carries an entry, a site or an IP — only a name (which the user chose to
+ * ARCHITECTURE.md §5.6: nothing here carries an entry, a site or an IP — only a name (which the user chose to
  * label the set, not a value it routes) and a count. [subscriptionName] is a group name the
  * provider chose, not its URL.
  *
- * @param missingGeoFiles `requiredGeoFiles() - installedFileNames()` (spec §4.3) — non-empty
+ * @param missingGeoFiles `requiredGeoFiles() - installedFileNames()` (M5 spec §4.3) — non-empty
  *   means activation is blocked until these are downloaded. The only input [canActivate] reads.
  * @param hasFailedGeoUpdate whether any geo file this rule set needs last failed to download or
  *   install — the "Last update failed" marker. Deliberately independent of [missingGeoFiles]: a
@@ -68,7 +68,7 @@ internal data class GeoProgress(
  *   is deliberately not persisted: a bar restored from Room after a process death would describe
  *   a coroutine that no longer exists and could never advance.
  * @param isReadOnly derived from [sourceKind], never stored. There is no third state, and a
- *   stored flag could disagree with the provenance it is supposed to follow (spec §4.2).
+ *   stored flag could disagree with the provenance it is supposed to follow (M6 spec §4.2).
  */
 internal data class RuleSetRow(
     val id: Long,
@@ -94,6 +94,6 @@ internal data class RuleSetRow(
 ) {
     val canActivate: Boolean get() = missingGeoFiles.isEmpty()
 
-    /** Imported profiles are edited by duplicating them (spec §4.2). */
+    /** Imported profiles are edited by duplicating them (M6 spec §4.2). */
     val isReadOnly: Boolean get() = sourceKind != null
 }

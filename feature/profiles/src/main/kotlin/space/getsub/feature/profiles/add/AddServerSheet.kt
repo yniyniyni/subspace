@@ -79,7 +79,7 @@ internal const val ADD_SUBSCRIPTION_FIELD_TEST_TAG = "add-subscription-field"
  * Every entry [space.getsub.core.parser.SubscriptionParser] cannot
  * read is a [ParseFailure], never a lost row (§7) — this sheet reports both
  * halves of the outcome, listed by [ParseFailure.index] so a user can be told
- * which entry failed without that entry ever being rendered (§5.6).
+ * which entry failed without that entry ever being rendered (ARCHITECTURE.md §5.6).
  *
  * @param open whether the sheet is shown — see [SubspaceBottomSheet]'s own
  *   `open` for why closed means "not composed", not "composed but invisible".
@@ -125,8 +125,8 @@ private fun AddServerSheetBody(
     // them to the same ImportViewModel.import(raw) the paste field uses (task
     // brief §"Clipboard and file import ... both feed the same import(raw)")
     // — a file is config content exactly like a paste, so the read runs off
-    // the main thread (§5.3) and nothing about its content is ever logged
-    // (§5.6).
+    // the main thread (ARCHITECTURE.md §5.3) and nothing about its content is ever logged
+    // (ARCHITECTURE.md §5.6).
     //
     // Fix round 1, finding 2: some content providers return a null
     // InputStream instead of throwing for a stale/revoked URI, and a real
@@ -134,7 +134,7 @@ private fun AddServerSheetBody(
     // IOException/SecurityException from anywhere in this chain. Both are
     // caught here rather than left to crash the coroutine, and both resolve
     // to the same `text == null` outcome ImportViewModel.reportFileReadFailure
-    // renders — neither branch reads the exception's own message (§5.6: an
+    // renders — neither branch reads the exception's own message (ARCHITECTURE.md §5.6: an
     // I/O exception can carry a path or provider detail).
     val openDocument =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -171,7 +171,7 @@ private fun AddServerSheetBody(
             onInputChanged = viewModel::onInputChanged,
             onImportClick = { viewModel.import(state.input) },
             // "*/*": a subscription can be a share-link list, base64 blob,
-            // Clash YAML or raw Xray JSON (§7) — SubscriptionParser detects
+            // Clash YAML or raw Xray JSON (ARCHITECTURE.md §7) — SubscriptionParser detects
             // the shape itself, so this does not narrow by extension or
             // MIME type the way a single-format picker would.
             onImportFromFileClick = { openDocument.launch(arrayOf("*/*")) },
@@ -291,7 +291,7 @@ internal fun AddServerSheetContent(
  * typing — see [ImportActions]'s own KDoc. `remember`, not
  * `rememberSaveable`: same reasoning [ImportState.input]'s KDoc gives for
  * keeping pasted config text out of the Activity's saved-instance-state
- * `Bundle` (§5.6) applies to a subscription URL too.
+ * `Bundle` (ARCHITECTURE.md §5.6) applies to a subscription URL too.
  */
 @Composable
 private fun AddSubscriptionSection(
@@ -325,7 +325,7 @@ private fun AddSubscriptionSection(
  * Renders a [UserMessage] — a plural with [UserMessage.quantity] for the one
  * success shape ([space.getsub.core.data.sync.SyncResult.Synced]),
  * a plain string in the app's default color otherwise (every failure
- * variant, §12/§5.6: never the subscription's own URL or the provider's
+ * variant, §12/ARCHITECTURE.md §5.6: never the subscription's own URL or the provider's
  * response, only this closed vocabulary).
  */
 @Composable

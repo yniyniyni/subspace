@@ -375,7 +375,7 @@ class SettingsRepositoryTest {
         }
 
     /**
-     * Spec §6.4: a leak is the worse failure for this app's audience, and §6.3's
+     * M8 spec §6.4: a leak is the worse failure for this app's audience, and M8 spec §6.3's
      * notification action is what makes defaulting on safe. This is an invariant,
      * not a preference — flipping it changes what happens to every existing user
      * on upgrade, silently.
@@ -406,6 +406,19 @@ class SettingsRepositoryTest {
             repository.setPerTagBreakdown(true)
 
             repository.perTagBreakdown.first() shouldBe true
+        }
+
+    /** Lightweight mode is opt-in: nobody loses the session log or traffic numbers by default. */
+    @Test
+    fun lightweightModeDefaultsToOffAndRoundTrips() =
+        runTest {
+            repository.lightweightMode.first() shouldBe false
+            repository.lightweightModeNow() shouldBe false
+
+            repository.setLightweightMode(true)
+
+            repository.lightweightMode.first() shouldBe true
+            repository.lightweightModeNow() shouldBe true
         }
 
     @Test

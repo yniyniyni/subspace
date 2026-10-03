@@ -21,10 +21,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -32,7 +32,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -50,8 +54,11 @@ private val LOADING_INDICATOR_SIZE = 32.dp
 private val LOADING_TOP_PADDING = 48.dp
 
 /**
- * The session log viewer (spec §3.4): the redacted on-disk ring, tailed
- * manually via [LogViewerActions.onRefresh], with a share action.
+ * The session log viewer (M8.5 spec §3.4, as amended): the redacted on-disk
+ * ring, tailed live at 1 Hz via [LogRepository.tail][space.getsub.core.data.LogRepository.tail]
+ * while this screen is visible, with a share action. The list follows new
+ * lines only when the reader was already at the end ([shouldFollow]); a
+ * reader who scrolled up to read older lines is not pulled back down.
  *
  * Reached from Settings' new "Diagnostics" section
  * ([SettingsDiagnosticsSection][space.getsub.feature.settings.SettingsDiagnosticsSection]),
@@ -61,7 +68,7 @@ private val LOADING_TOP_PADDING = 48.dp
  * floating nav pill hides while this is on screen, so it carries its own
  * [onBack] the same way those two do.
  *
- * Sharing is a deliberate decision, not an oversight (spec §3.4): every byte
+ * Sharing is a deliberate decision, not an oversight (M8.5 spec §3.4): every byte
  * [LogViewerState.lines] holds was already redacted at capture, so sending it
  * is exactly as exposing as displaying it on screen, and [RedactionNotice]
  * renders that guarantee so the user can see what they are about to send
@@ -87,7 +94,6 @@ fun LogViewerScreen(
         state = state,
         actions =
         LogViewerActions(
-            onRefresh = viewModel::refresh,
             onClear = viewModel::clear,
             onShare = { shareLogText(context, state.lines) },
             onBack = onBack,
@@ -101,7 +107,6 @@ fun LogViewerScreen(
  * [PerAppActions][space.getsub.feature.routing.PerAppActions] is.
  */
 internal data class LogViewerActions(
-    val onRefresh: () -> Unit,
     val onClear: () -> Unit,
     val onShare: () -> Unit,
     val onBack: () -> Unit,
@@ -113,7 +118,7 @@ internal data class LogViewerActions(
  * exists.
  *
  * A [LazyColumn] over [LogViewerState.lines], not a scrolling `Column`
- * materialising every line: the ring is bounded at ~1 MiB (spec §3.3), which is
+ * materialising every line: the ring is bounded at ~1 MiB (M8.5 spec §3.3), which is
  * thousands of lines on a long session, so only the visible rows may ever
  * compose — the same reasoning
  * [PerAppScreen][space.getsub.feature.routing.PerAppScreen]'s own
@@ -129,6 +134,7 @@ internal fun LogViewerScreenContent(
         Column(modifier = Modifier.padding(horizontal = CONTENT_HORIZONTAL_PADDING)) {
             HeaderRow(actions = actions)
             RedactionNotice(modifier = Modifier.padding(top = SECTION_GAP))
+            if (state.lightweightMode) LightweightNotice(modifier = Modifier.padding(top = SECTION_GAP))
         }
 
         when {
@@ -166,12 +172,6 @@ private fun HeaderRow(
             Text(text = stringResource(R.string.log_viewer_title), style = MaterialTheme.typography.headlineMedium)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = actions.onRefresh) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = stringResource(R.string.log_viewer_refresh),
-                )
-            }
             IconButton(onClick = actions.onShare) {
                 Icon(imageVector = Icons.Default.Share, contentDescription = stringResource(R.string.log_viewer_share))
             }
@@ -183,11 +183,25 @@ private fun HeaderRow(
 }
 
 /**
- * Spec §3.4: rendered once, above the log itself, so the user sees this
+ * M8.5 spec §3.4: rendered once, above the log itself, so the user sees this
  * guarantee before reaching [HeaderRow]'s share action — never re-derived
  * from [LogViewerState.lines], which arrive already redacted (see
  * [LogViewerState]'s own KDoc).
  */
+/**
+ * Lightweight mode stops log capture from the next connection, so an empty or
+ * frozen log is expected, not a fault. Lines already recorded stay viewable.
+ */
+@Composable
+private fun LightweightNotice(modifier: Modifier = Modifier) {
+    Text(
+        text = stringResource(R.string.log_viewer_lightweight_notice),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
 @Composable
 private fun RedactionNotice(modifier: Modifier = Modifier) {
     Text(
@@ -229,7 +243,22 @@ private fun LogLineList(
     lines: List<String>,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(modifier = modifier.fillMaxWidth()) {
+    val listState = rememberLazyListState()
+    // rememberSaveable, not remember: rememberLazyListState() above is itself saveable, so a
+    // configuration change (a rotation) restores the scroll position but would leave this at its
+    // initial 0 if it were plain remember. The first post-rotation effect would then see
+    // previousSize == 0 against the real (larger) lines.size, and shouldFollow's own
+    // shrunk-or-first-emission rule would read that as "first emission" and scroll a
+    // deliberately scrolled-up reader to the bottom.
+    var previousSize by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(lines.size) {
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (lines.isNotEmpty() && shouldFollow(lastVisible, previousSize)) {
+            listState.scrollToItem(lines.lastIndex)
+        }
+        previousSize = lines.size
+    }
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
         items(lines) { line ->
             Text(
                 text = line,
@@ -258,7 +287,7 @@ private fun LogLineList(
 private const val SHARE_TEXT_CHAR_LIMIT = 100_000
 
 /**
- * Spec §3.4: `ACTION_SEND` with the ring's contents as plain text, never a
+ * M8.5 spec §3.4: `ACTION_SEND` with the ring's contents as plain text, never a
  * `FileProvider` attachment — see [LogViewerScreen]'s own KDoc for the full
  * reasoning. The chooser lets the user pick where it goes; this function
  * itself makes no network call.

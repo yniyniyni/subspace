@@ -352,12 +352,12 @@ constructor(
 
     /**
      * Syncs every subscription that is due now. Called by the worker (interval trigger) and at
-     * launch (spec §8's "on launch" trigger).
+     * launch (M4 spec §8's "on launch" trigger).
      *
      * @param onOpen when true, also requires `subscription-auto-update-open-enable` — the provider
      *   directive that specifically governs refresh-on-app-open, distinct from
      *   `subscription-auto-update-enable`'s general kill switch which [dueChecks] already applies to
-     *   both triggers. A user pin on either key overrides the provider (spec §8), the same
+     *   both triggers. A user pin on either key overrides the provider (M4 spec §8), the same
      *   precedence [dueChecks] already gives the general switch.
      */
     suspend fun refreshDue(
@@ -430,7 +430,7 @@ constructor(
 
     private suspend fun dueChecks(now: Long): List<DueCheck> =
         subscriptions.observeSubscriptions().first().mapNotNull { subscription ->
-            // A provider may disable auto-update entirely (spec §8). A user pin
+            // A provider may disable auto-update entirely (M4 spec §8). A user pin
             // overrides that — a provider cannot stop a user who pinned it on.
             if (!autoUpdateEnabled(subscription.id)) return@mapNotNull null
 

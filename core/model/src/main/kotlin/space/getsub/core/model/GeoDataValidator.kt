@@ -10,7 +10,7 @@ import java.io.File
  * [wireValue] is what libXray's `countGeoData` expects as its `geoType`. There is
  * **no way to infer this from the bytes** — both are protobuf, and feeding a
  * `GeoIPList` to the site parser fails in a way indistinguishable from
- * corruption. Every source therefore declares it (spec §4.1).
+ * corruption. Every source therefore declares it (M5 spec §4.1).
  */
 public enum class GeoDataKind(
     public val wireValue: String,

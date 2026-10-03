@@ -173,7 +173,7 @@ class OverrideInvariantsTest {
         try {
             block()
         } catch (e: AssertionError) {
-            // §5.6: the label and target are this test's own literals, never config text.
+            // ARCHITECTURE.md §5.6: the label and target are this test's own literals, never config text.
             throw AssertionError("[$label | $target | dns=${dns != null}] ${e.message}", e)
         }
     }

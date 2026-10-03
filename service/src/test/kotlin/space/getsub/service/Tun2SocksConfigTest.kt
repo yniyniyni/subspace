@@ -23,7 +23,7 @@ class Tun2SocksConfigTest {
 
     @Test
     fun `points the tunnel at loopback`() {
-        // §6's companion: the Xray inbound binds 127.0.0.1 only, so the tunnel
+        // ARCHITECTURE.md §6's companion: the Xray inbound binds 127.0.0.1 only, so the tunnel
         // must dial the same place. Anything else would not reach the core.
         tun2socksConfig(socksPort = 10808, mtu = 8500) shouldContain "address: 127.0.0.1"
     }
@@ -38,7 +38,7 @@ class Tun2SocksConfigTest {
         // The interface already exists — VpnService.Builder created and addressed
         // it, and upstream ignores these keys entirely when handed an external fd.
         // Restating them here would be a second source of truth for something
-        // §5.2 depends on.
+        // ARCHITECTURE.md §5.2 depends on.
         val config = tun2socksConfig(socksPort = 10808, mtu = 8500)
         config shouldNotContain "ipv4"
         config shouldNotContain "ipv6"
@@ -47,7 +47,7 @@ class Tun2SocksConfigTest {
 
     @Test
     fun `enables udp relay`() {
-        // Without this, UDP is dropped and DNS over the tunnel fails — a §5.2
+        // Without this, UDP is dropped and DNS over the tunnel fails — a ARCHITECTURE.md §5.2
         // leak that looks like "some sites do not load".
         tun2socksConfig(socksPort = 10808, mtu = 8500) shouldContain "udp: 'udp'"
     }

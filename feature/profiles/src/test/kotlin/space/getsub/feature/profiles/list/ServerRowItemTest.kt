@@ -14,7 +14,7 @@ import org.junit.Test
  * surrogate pair, so even code-point-aware truncation still cuts one in half.
  *
  * Fixture names below are invented, not copied from a real subscription
- * (§5.6) — they reproduce the shapes the device run actually hit: a leading
+ * (ARCHITECTURE.md §5.6) — they reproduce the shapes the device run actually hit: a leading
  * pictograph, a mid-string flag, plain Latin, plain Cyrillic, all-emoji, and
  * blank.
  */

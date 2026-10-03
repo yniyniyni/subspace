@@ -7,7 +7,7 @@ import org.junit.Test
 
 /**
  * Fix round 1, Finding 1: `TunnelService` cannot be unit-tested directly
- * (§11), so the retry loop's attempt counter is extracted here to make the
+ * (ARCHITECTURE.md §11), so the retry loop's attempt counter is extracted here to make the
  * one behaviour most likely to be missed — a successful connect resetting the
  * count — a real, checked invariant rather than something read off private
  * service state.

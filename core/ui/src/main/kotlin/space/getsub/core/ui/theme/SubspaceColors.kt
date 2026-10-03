@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.Color
  *
  * [connected] is not decoration. The design system's own note calls its halo
  * "the only glow in the system — reserved exclusively for an established
- * tunnel; never decorative", and §5.5 makes connection state the one thing the
+ * tunnel; never decorative", and ARCHITECTURE.md §5.5 makes connection state the one thing the
  * UI must never misreport. Keeping it out of the Material roles means no
  * component picks it up by accident.
  */

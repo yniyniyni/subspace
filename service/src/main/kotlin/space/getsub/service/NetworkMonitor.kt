@@ -63,7 +63,7 @@ internal class NetworkTransitionDebouncer(
      * while still allowing a torn pair.
      *
      * This mattered less when a suppressed callback cost one wasted wakeup. It
-     * is load-bearing now that `TunnelService.scheduleBackoffRetry` arms no timer
+     * is load-bearing now that `TunnelService.armBackoffRetryLocked` arms no timer
      * without a network: a lost update here can suppress the only callback that
      * would resume a `Reconnecting` session, which strands it for good.
      */
@@ -145,8 +145,8 @@ internal class NetworkTransitionDebouncer(
      * network is gone there is no working tunnel to protect, and whatever arrives
      * next is the thing the session has been waiting for.
      *
-     * This became load-bearing when spec §2.4's no-network-no-timer rule started
-     * being enforced on both edges: `scheduleBackoffRetry` now refuses to arm a
+     * This became load-bearing when M8 spec §2.4's no-network-no-timer rule started
+     * being enforced on both edges: `armBackoffRetryLocked` now refuses to arm a
      * timer while `activeNetwork` is null, which makes this callback the *only*
      * thing that can resume a `Reconnecting` session with no network. A
      * suppressed `onAvailable` used to cost one wasted wakeup, because the timer
@@ -185,7 +185,7 @@ internal class NetworkTransitionDebouncer(
  *
  * Fail-closed means sitting with no network and waiting, and this is the thing
  * being waited on. Registering only while connected would make the no-network
- * case unrecoverable without a timer, which spec §2.4 forbids.
+ * case unrecoverable without a timer, which M8 spec §2.4 forbids.
  *
  * The constructor parameter is [onNetworkLost], not `onLost`: the overridden
  * `ConnectivityManager.NetworkCallback.onLost(Network)` below has the same name
@@ -373,7 +373,7 @@ internal class NetworkMonitor(
      * what is current afterwards does.
      *
      * A null [ConnectivityManager.getActiveNetwork] is a genuine no-connectivity
-     * state and takes §2.4's path: cancel the retry timer and wait, rather than
+     * state and takes M8 spec §2.4's path: cancel the retry timer and wait, rather than
      * arm a timer that would run in Doze.
      *
      * Runs on [callbackThread], so [onChanged] and [onNetworkLost] are invoked

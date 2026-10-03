@@ -96,7 +96,7 @@ fun PerAppScreen(
     // confirmation, and PerAppScreenContent's fixed (state, actions, modifier)
     // signature has no channel to report a dialog back up. One flag, one
     // dialog, both paths route through the onBack built into actions below —
-    // spec §7.3: a back gesture must never silently commit or drop an edit.
+    // M5.5 spec §7.3: a back gesture must never silently commit or drop an edit.
     var showDiscardDialog by remember { mutableStateOf(false) }
 
     BackHandler(enabled = state.isDirty) { showDiscardDialog = true }
@@ -277,7 +277,7 @@ private fun ModeRow(
 }
 
 /**
- * The UI half of [PerAppState.isEmptyAllowList]'s guard (§6.3) — styled like
+ * The UI half of [PerAppState.isEmptyAllowList]'s guard (M5.5 spec §6.3) — styled like
  * [RuleSetRow]'s own blocking marker, the same red-warning-icon-plus-text
  * shape for the same reason: a control being disabled below is a hint, this
  * text is the explanation.
@@ -303,7 +303,7 @@ private fun EmptyAllowListWarning(modifier: Modifier = Modifier) {
     }
 }
 
-/** Spec §7.3: told before committing, not after the tunnel drops. */
+/** M5.5 spec §7.3: told before committing, not after the tunnel drops. */
 @Composable
 private fun ReconnectNotice(modifier: Modifier = Modifier) {
     Text(
@@ -363,7 +363,7 @@ private fun AppRowList(
 
 /**
  * One app: its icon, label and package name, plus [AppRow.isInstalled]'s
- * marker when false — shown, never hidden (spec §7.2). §5.6: the package
+ * marker when false — shown, never hidden (M5.5 spec §7.2). ARCHITECTURE.md §5.6: the package
  * name is rendered, not logged.
  *
  * The package name is skipped as supporting text when it equals [AppRow.label]
@@ -414,7 +414,7 @@ private fun AppRowItem(
  * [packageName]'s launcher icon, resolved from the platform rather than
  * carried on [AppRow] — see [space.getsub.core.data.InstalledAppsSource]'s
  * own KDoc for why a `Drawable` stays out of the data layer. `null` for a
- * package no longer installed (spec §7.2's ghost rows): nothing to resolve,
+ * package no longer installed (M5.5 spec §7.2's ghost rows): nothing to resolve,
  * and the row's own "not installed" text already says so.
  *
  * [Image], not `Icon`: an app's launcher icon is full-colour art, not a

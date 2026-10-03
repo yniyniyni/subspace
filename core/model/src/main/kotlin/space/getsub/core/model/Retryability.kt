@@ -25,14 +25,14 @@ public enum class Retryability {
  * How many `establish()` failures are absorbed before the session is treated as
  * terminal.
  *
- * Spec §2.3: `establish()` returns null both under resource pressure and when
+ * M8 spec §2.3: `establish()` returns null both under resource pressure and when
  * VPN consent has quietly gone, and nothing at that call site tells them apart.
  * Small on purpose — an unbounded retry against revoked consent never succeeds.
  */
 public const val TUN_ESTABLISH_ATTEMPT_CAP: Int = 3
 
 /**
- * Spec §2.2.
+ * M8 spec §2.2.
  *
  * Deliberately has **no `else` branch**: a `FailureReason` added later must not
  * fall into a default that silently absorbs it. The compiler is the check, the

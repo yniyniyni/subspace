@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- §12: strings live here from the first commit; no hardcoded UI text.
-     §5.6: nothing here may interpolate a server address or profile name. -->
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no hardcoded UI text.
+     ARCHITECTURE.md §5.6: nothing here may interpolate a server address or profile name. -->
 <resources>
     <string name="tunnel_session_name">Subspace</string>
     <string name="notification_channel_tunnel">Tunnel</string>
     <string name="notification_connecting">Connecting…</string>
     <string name="notification_state_connected">Connected</string>
+    <!-- M8.5 spec §4.3: Connected, uplink moving, nothing coming back. A display state,
+         not a failure; the tunnel is not torn down. No address or name (ARCHITECTURE.md §5.6). -->
+    <string name="notification_state_stalled">Connected — nothing coming back</string>
     <string name="notification_state_reconnecting_blocked">Reconnecting — traffic is blocked</string>
     <string name="notification_state_reconnecting_open">Reconnecting — traffic is not protected</string>
     <string name="notification_action_disconnect">Disconnect</string>

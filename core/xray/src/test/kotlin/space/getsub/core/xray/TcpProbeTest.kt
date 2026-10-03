@@ -61,7 +61,7 @@ class TcpProbeTest {
     @Test
     fun `the socket is bound before the protector sees it, so it has an fd to protect`() =
         runTest {
-            // The regression guard for the §5.1 defect a device run exposed:
+            // The regression guard for the ARCHITECTURE.md §5.1 defect a device run exposed:
             // VpnService.protect(Socket) resolves the socket's file descriptor,
             // and an unbound socket has none yet — so protecting one marks
             // nothing and quietly reports success. The symptom was a measurement

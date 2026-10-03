@@ -160,7 +160,7 @@ class SubscriptionRefreshWorkerTest {
         }
 
     /**
-     * Review round 1, Important 2: `subscription-auto-update-open-enable` is spec §8's directive for
+     * Review round 1, Important 2: `subscription-auto-update-open-enable` is M4 spec §8's directive for
      * the on-launch trigger specifically, distinct from `subscription-auto-update-enable`'s general
      * kill switch. `refreshDue(onOpen = true)` — what `SubspaceApplication` calls at launch — must
      * skip a subscription that opted out of refresh-on-open, while the interval path

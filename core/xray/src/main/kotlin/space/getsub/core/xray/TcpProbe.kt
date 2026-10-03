@@ -49,7 +49,7 @@ public class TcpProbe(
      * would make a cold-cache and a warm-cache measurement incomparable, which
      * defeats the sort this feeds.
      */
-    // Every catch below is a deliberate swallow, and the reason is §5.6 rather
+    // Every catch below is a deliberate swallow, and the reason is ARCHITECTURE.md §5.6 rather
     // than convenience: `UnknownHostException` and `SocketTimeoutException` put
     // the hostname in their message, and a server address is a secret. The
     // failure is not lost — it becomes a typed LatencyOutcome the UI renders its
@@ -65,7 +65,7 @@ public class TcpProbe(
                 try {
                     InetAddress.getByName(address)
                 } catch (e: UnknownHostException) {
-                    // §5.6: the exception message contains the hostname. Never logged.
+                    // ARCHITECTURE.md §5.6: the exception message contains the hostname. Never logged.
                     return@withContext LatencyResult.failed(LatencyOutcome.UNREACHABLE)
                 }
 
@@ -82,13 +82,13 @@ public class TcpProbe(
                 // the tunnel was up reported 1–6 ms for servers in Amsterdam,
                 // Newark and Singapore. The unprotected connect went into the TUN,
                 // where tun2socks accepts locally and returns immediately — so the
-                // number was the round trip to the phone itself. §5.1's exact
+                // number was the round trip to the phone itself. ARCHITECTURE.md §5.1's exact
                 // signature, and SocketProtector's KDoc warns that a failed
                 // protect surfaces only as a symptom.
                 socket.bind(InetSocketAddress(0))
 
                 // Before connect, never after: an unprotected connect is already
-                // inside the TUN by the time it returns (§5.1).
+                // inside the TUN by the time it returns (ARCHITECTURE.md §5.1).
                 protector?.protect(socket)
                 val start = System.nanoTime()
                 try {

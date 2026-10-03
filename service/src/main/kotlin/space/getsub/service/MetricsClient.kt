@@ -135,7 +135,7 @@ private const val STRUCTURAL_FAILURE_THRESHOLD = 10
 private val failureStreaks = ConcurrentHashMap<Int, Int>()
 
 /**
- * §5.6: never logs config contents — only the failing exception's class name,
+ * ARCHITECTURE.md §5.6: never logs config contents — only the failing exception's class name,
  * and only once per port, after [STRUCTURAL_FAILURE_THRESHOLD] *consecutive*
  * failures on it. Not logged per-tick: at one tick per second, that would be
  * exactly the noisy-per-second logging this fix was told to avoid, for a

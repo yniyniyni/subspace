@@ -16,7 +16,7 @@ import space.getsub.core.parser.parseFailure
 /**
  * Covers [failureText]: an exhaustive `when` over [FailureDetail] and
  * [DetailField] (§7's closed vocabulary), so every variant renders and none
- * of them can carry the input that produced it (§5.6).
+ * of them can carry the input that produced it (ARCHITECTURE.md §5.6).
  *
  * Instrumented, not a plain JVM test, despite the task brief's own file list
  * grouping it under `src/test` alongside `ImportViewModelTest.kt` — deviation
@@ -77,7 +77,7 @@ class FailureTextTest {
 
     @Test
     fun noRenderedFailureContainsThePastedInput() {
-        // §5.6 as a test. FailureDetail has no free-text channel, so this
+        // ARCHITECTURE.md §5.6 as a test. FailureDetail has no free-text channel, so this
         // holds by construction — asserted anyway, because the type could
         // grow one. 198.51.100.0/24 is RFC 5737 documentation space: a
         // plausible-looking address that must never appear regardless of

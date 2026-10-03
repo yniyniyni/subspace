@@ -11,7 +11,7 @@ import space.getsub.core.parser.SubscriptionParser
 /**
  * A second opinion on lines our parser could not read.
  *
- * `:core:parser` is deliberately lenient — §7 requires that one bad line in two
+ * `:core:parser` is deliberately lenient — ARCHITECTURE.md §7 requires that one bad line in two
  * hundred does not lose the other 199, which is precisely what libXray will not
  * do, since it rejects a malformed batch wholesale. That leniency is why we
  * wrote our own parser rather than delegating.
@@ -63,7 +63,7 @@ import space.getsub.core.parser.SubscriptionParser
  *    another link list, indexed against the decoded text rather than
  *    [originalText]) — the per-line guard below still applies: no candidate
  *    line reaches libXray unless it contains `://`. Every real share link
- *    this project supports (§7: `vless`, `vmess`, `trojan`, `ss`, `socks`)
+ *    this project supports (ARCHITECTURE.md §7: `vless`, `vmess`, `trojan`, `ss`, `socks`)
  *    requires a `scheme://` prefix, and base64 — standard or URL-safe
  *    alphabet — never contains a `:` character, so no fragment of an encoded
  *    blob can ever satisfy it. That guard can never suppress a genuine,
@@ -139,7 +139,7 @@ public object ShareLinkFallback {
     }
 
     /**
-     * Every share link this project supports (§7: `vless`, `vmess`, `trojan`,
+     * Every share link this project supports (ARCHITECTURE.md §7: `vless`, `vmess`, `trojan`,
      * `ss`, `socks`) has a `scheme://` prefix, and base64 — standard or
      * URL-safe alphabet — never contains `:`. So this both filters out
      * hopeless input (saving a JNI call) and is the second correctness guard
@@ -174,7 +174,7 @@ public object ShareLinkFallback {
         text.lineSequence().any { it.trimEnd() == "proxies:" || it.startsWith("proxies:") }
 
     /**
-     * §5.6: `ShareLinkConverter`'s own KDoc warns that the core's error message
+     * ARCHITECTURE.md §5.6: `ShareLinkConverter`'s own KDoc warns that the core's error message
      * can quote the config. Nothing from this path reaches a log unredacted,
      * and the exception itself is swallowed — a failed second opinion is not an
      * error, it is the expected outcome for genuinely malformed input.
@@ -190,7 +190,7 @@ public object ShareLinkFallback {
      * missing from a build variant, or its native library fails to load, the
      * JVM raises `UnsatisfiedLinkError` or `NoClassDefFoundError` — both
      * `Error`, not `Exception`, so both would sail through a
-     * `catch (Exception)` and out through [retry], breaking §7's never-throw
+     * `catch (Exception)` and out through [retry], breaking ARCHITECTURE.md §7's never-throw
      * promise on this path for the whole subscription.
      *
      * Deliberately **not** `Throwable`: that would also swallow

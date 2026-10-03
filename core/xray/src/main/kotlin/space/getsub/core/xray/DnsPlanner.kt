@@ -15,7 +15,7 @@ public data class DnsServerSpec(
     public val domains: List<String> = emptyList(),
     public val skipFallback: Boolean = false,
 ) {
-    /** §5.6: a resolver endpoint is a provider-chosen hostname. */
+    /** ARCHITECTURE.md §5.6: a resolver endpoint is a provider-chosen hostname. */
     override fun toString(): String =
         "DnsServerSpec(address=<redacted>, domains=${domains.size}, skipFallback=$skipFallback)"
 }
@@ -24,7 +24,7 @@ public data class DnsServerSpec(
  * Everything the generator needs to emit a `dns` block and its routing rules.
  *
  * [directMatch] and [proxyMatch] are the addresses the two resolver-traffic rules
- * match on — spec §7.3 distinguishes the resolvers by **address** rather than by a
+ * match on — M6.5 spec §7.3 distinguishes the resolvers by **address** rather than by a
  * per-server `tag`, because whether `NameServerObject.tag` overrides `dns.tag` for
  * routing is unsourced (research §6) and this design needs no answer to it.
  */
@@ -35,13 +35,13 @@ public data class DnsPlan(
     public val directMatch: String?,
     public val proxyMatch: String?,
 ) {
-    /** §5.6: hosts and resolver addresses never reach a log line. */
+    /** ARCHITECTURE.md §5.6: hosts and resolver addresses never reach a log line. */
     override fun toString(): String =
         "DnsPlan(servers=${servers.size}, hosts=<redacted, ${hosts.size} entries>, " +
             "fakeDns=$fakeDns, matches=<redacted>)"
 
     /**
-     * The address to hand `VpnService.Builder.addDnsServer` (§5.2, half two).
+     * The address to hand `VpnService.Builder.addDnsServer` (ARCHITECTURE.md §5.2, half two).
      *
      * Largely cosmetic while the port-53 hijack is in place, which is the point of
      * stating it: if the hijack ever fails to match, the bypass reaches the
@@ -91,7 +91,7 @@ public object DnsPlanner {
 
     /**
      * Null when nothing asks for DNS — no profile block, and the setting at its
-     * default. Spec §7.4: that null is what keeps the M1 config byte-identical,
+     * default. M6.5 spec §7.4: that null is what keeps the M1 config byte-identical,
      * and the M1 config is the one proven on hardware.
      *
      * Controller ruling R2: a *present* profile block that asks for nothing —
@@ -150,7 +150,7 @@ public object DnsPlanner {
      * directly. Without this the app-level bootstrap IP was stored, shown in the
      * settings screen, and silently dropped: no `hosts` entry, and
      * [DnsPlan.tunAdvertisedAddress] finding no literal fell back to the app default
-     * rather than §7.6's "domestic-or-bootstrap IP". Found on hardware, M6.5 device run.
+     * rather than M6.5 spec §7.6's "domestic-or-bootstrap IP". Found on hardware, M6.5 device run.
      *
      * Only when the setting is what supplies the server — a profile that names its own
      * resolver has already been through the parser — and only when the profile's own
@@ -230,7 +230,7 @@ public object DnsPlanner {
         // present to catch the rest does scoping to the direct bucket make sense;
         // and with no direct bucket to scope to, the domestic server is omitted
         // entirely rather than emitted unscoped ahead of remote, which would
-        // silently answer everything and invert the profile (spec §7.2.1).
+        // silently answer everything and invert the profile (M6.5 spec §7.2.1).
         dns.domestic?.xrayAddress()?.let { address ->
             when {
                 dns.remote == null -> servers += DnsServerSpec(address)

@@ -20,7 +20,7 @@ import javax.inject.Inject
 /**
  * The per-app picker's state holder.
  *
- * Edits are a **draft** (spec §7.3): [setMode] and [toggle] mutate this class
+ * Edits are a **draft** (M5.5 spec §7.3): [setMode] and [toggle] mutate this class
  * only, and [save] is the single call that writes. On a connected tunnel that
  * write is a reconnect, so committing once at an explicit Save rather than on
  * every toggle is the difference between one drop and one per tick.
@@ -80,7 +80,7 @@ constructor(
     }
 
     /**
-     * Selected rows first, each group still sorted by label (spec §7.2). Ghost
+     * Selected rows first, each group still sorted by label (M5.5 spec §7.2). Ghost
      * rows are selected by definition, so they sort in among the selected group
      * by their fallback label rather than trailing the whole list.
      *
@@ -94,7 +94,7 @@ constructor(
         rows.sortedWith(compareByDescending<AppRow> { it.isSelected }.thenBy { it.label.lowercase() })
 
     /**
-     * Rows for packages that are selected but no longer installed (spec §7.2).
+     * Rows for packages that are selected but no longer installed (M5.5 spec §7.2).
      * The label falls back to the package name because there is no application to
      * ask for one — which is also what tells the user which entry is the ghost.
      */

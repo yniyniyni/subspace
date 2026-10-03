@@ -4,6 +4,7 @@ package space.getsub.service.log
 
 import android.util.Log
 import space.getsub.core.model.redact
+import space.getsub.core.model.redactLogBody
 import java.time.ZoneId
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -82,7 +83,7 @@ private const val UNEXPECTED_END_MARKER = "log capture ended unexpectedly (logca
  * of this pattern — so this note exists to make the assumption visible to
  * whoever next adds one.
  */
-private val LOGCAT_PREFIX_PATTERN =
+internal val LOGCAT_PREFIX_PATTERN =
     Regex("""^(\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d{3}\s+\d+\s+\d+\s+[VDIWEF]\s+[^:\s\n\r][^:\n\r]*:\s*)(.*)$""")
 
 /**
@@ -131,10 +132,103 @@ private val LOGCAT_PREFIX_PATTERN =
  * changing that shape or adding a new phase line elsewhere.
  */
 private fun redactLine(line: String): String {
-    val match = LOGCAT_PREFIX_PATTERN.matchEntire(line) ?: return redact(line)
-    val prefix = match.groupValues[1]
-    val body = match.groupValues[2]
-    return prefix + redact(body)
+    val prefixLength = logcatPrefixLength(line) ?: return redact(line)
+    // redactLogBody is redact() that also keeps xray's own header verbatim (row 7).
+    return line.substring(0, prefixLength) + redactLogBody(line.substring(prefixLength))
+}
+
+/** The highest ASCII code point; anything above it goes to the regex. */
+private const val ASCII_MAX = 0x7F
+
+/**
+ * The length of [LOGCAT_PREFIX_PATTERN]'s prefix group in [line], or null when the
+ * pattern does not match.
+ *
+ * Parsed by hand for plain-ASCII lines with no LF, VT, FF or CR (ICU's `.` refuses
+ * all four; the JVM's only LF and CR), the shape every
+ * `BufferedReader.readLine()` line from logcat has (row 7, Pass 4: the regex was
+ * 7.5 % of the capture thread). On those, `\d`, `\s` and `.` mean the same thing
+ * to the JVM and to ICU, and nothing can backtrack: each field ends where the
+ * next field's class begins, and the tag ends at its first `:`. Any other line
+ * goes to the regex, which stays authoritative there.
+ */
+internal fun logcatPrefixLength(line: String): Int? {
+    if (line.any { it.code > ASCII_MAX || it in '\n'..'\r' }) {
+        return LOGCAT_PREFIX_PATTERN.matchEntire(line)?.groupValues?.get(1)?.length
+    }
+    return PrefixCursor(line).prefixLength()
+}
+
+/** ASCII `\s`: tab, LF, VT, FF, CR, space. */
+private fun isAsciiSpace(c: Char): Boolean = c == ' ' || c in '\t'..'\r'
+
+private fun isAsciiDigit(c: Char): Boolean = c in '0'..'9'
+
+/** A forward-only reader over one ASCII line, for [logcatPrefixLength]. */
+private class PrefixCursor(private val s: String) {
+    private var i = 0
+
+    fun prefixLength(): Int? {
+        if (!STEPS.all { step -> step(this) }) return null
+        while (i < s.length && isAsciiSpace(s[i])) i++
+        return i
+    }
+
+    /** `\d{2}-\d{2}` */
+    private fun priority(): Boolean = oneOf("VDIWEF")
+
+    private fun date(): Boolean = digits(2) && oneOf("-") && digits(2)
+
+    /** `\d{2}:\d{2}:\d{2}\.\d{3}` */
+    private fun time(): Boolean =
+        digits(2) && oneOf(":") && digits(2) && oneOf(":") && digits(2) && oneOf(".") && digits(MILLIS_DIGITS)
+
+    /** `\d+\s+\d+\s+`: pid, then tid. */
+    private fun ids(): Boolean = run(::isAsciiDigit) && spaces() && run(::isAsciiDigit) && spaces()
+
+    private fun spaces(): Boolean = run(::isAsciiSpace)
+
+    /** Exactly one character from [chars]. */
+    private fun oneOf(chars: String): Boolean = (i < s.length && s[i] in chars).also { if (it) i++ }
+
+    private fun digits(n: Int): Boolean {
+        val end = i + n
+        val ok = end <= s.length && (i until end).all { isAsciiDigit(s[it]) }
+        if (ok) i = end
+        return ok
+    }
+
+    /** One or more characters matching [accept]. */
+    private fun run(accept: (Char) -> Boolean): Boolean {
+        val start = i
+        while (i < s.length && accept(s[i])) i++
+        return i > start
+    }
+
+    /** `[^:\s\n\r][^:\n\r]*:` — the tag runs to its first colon, which it consumes. */
+    private fun tag(): Boolean {
+        val colon = if (i < s.length && s[i] != ':' && !isAsciiSpace(s[i])) s.indexOf(':', i) else -1
+        if (colon >= 0) i = colon + 1
+        return colon >= 0
+    }
+
+    private companion object {
+        /** The `\.\d{3}` after the seconds. */
+        const val MILLIS_DIGITS = 3
+
+        /** The pattern's prefix group, field by field; each step advances `i` or fails. Built once, not per line. */
+        val STEPS: List<(PrefixCursor) -> Boolean> =
+            listOf(
+                PrefixCursor::date,
+                PrefixCursor::spaces,
+                PrefixCursor::time,
+                PrefixCursor::spaces,
+                PrefixCursor::ids,
+                PrefixCursor::priority,
+                PrefixCursor::spaces,
+                PrefixCursor::tag,
+            )
+    }
 }
 
 /**
@@ -145,12 +239,41 @@ private fun redactLine(line: String): String {
  */
 internal fun interface LineSink {
     fun append(line: String)
+
+    /** A batch, in order. [LogRing] writes it in one system call; the default appends one by one. */
+    fun appendAll(lines: List<String>) = lines.forEach(::append)
+}
+
+/**
+ * Redacted lines waiting for one [LineSink.appendAll]. Only the capture thread touches
+ * it: lines are added in the read loop and [flush] runs from the same thread, either
+ * from the reader's idle hook or at the end of the capture.
+ */
+private class LineBatch(private val sink: LineSink) {
+    private val pending = ArrayList<String>()
+
+    fun add(line: String) {
+        pending += line
+        if (pending.size >= MAX_LINES) flush()
+    }
+
+    fun flush() {
+        if (pending.isEmpty()) return
+        val lines = pending.toList()
+        pending.clear()
+        sink.appendAll(lines)
+    }
+
+    private companion object {
+        /** Bounds memory if a burst outruns the read pacing. */
+        const val MAX_LINES = 256
+    }
 }
 
 /**
  * Joins [LogcatReader] → [redactLine] → [LogRing].
  *
- * **Spec §3.2: redaction happens here, at capture, not at display.** The reason
+ * **M8.5 spec §3.2: redaction happens here, at capture, not at display.** The reason
  * is at-rest exposure rather than display. A log file in `filesDir` carrying
  * server addresses, UUIDs and REALITY keys is a secret on disk that outlives
  * the session, survives into a device backup, and is readable by anyone with
@@ -224,7 +347,7 @@ internal class LogCapture(
     private val lock = Any()
 
     /**
-     * Spec §3.3: capture is tied to session lifetime — started when the service
+     * M8.5 spec §3.3: capture is tied to session lifetime — started when the service
      * enters foreground, stopped in teardown, and stopped **last**, after the
      * teardown phases are logged.
      *
@@ -233,7 +356,7 @@ internal class LogCapture(
      * but [stop] is also reached from `onRevoke()` and `onDestroy()`
      * (`TunnelService.kt`), both of which call it **directly**, bypassing the
      * coordinator — the same fact `tun2socks_jni.c`'s own locking-contract
-     * comment cites: "§5.4 says disconnect, onRevoke, and onDestroy are not
+     * comment cites: "ARCHITECTURE.md §5.4 says disconnect, onRevoke, and onDestroy are not
      * serialised with each other". Without a lock here, a `stop()` and a
      * `start()` can interleave as `running = false` / read `reader` (A) /
      * `if (running) return` sees false and proceeds (B) / `running = true`,
@@ -381,11 +504,25 @@ internal class LogCapture(
 
     /**
      * The pipeline itself, synchronous and without a thread, so a unit test can
-     * assert the §5.6 guarantee without spawning anything.
+     * assert the ARCHITECTURE.md §5.6 guarantee without spawning anything.
      */
-    internal fun captureOnce(lines: Sequence<String>) {
-        for (line in lines) {
-            ring.append(redactLine(line))
+    internal fun captureOnce(lines: Sequence<String>) = captureOnce(lines, LineBatch(ring))
+
+    /**
+     * Redacts every line into [batch]. The batch is flushed when the reader runs dry
+     * (its `onIdle`), when it fills, and at the end, so the ring gets one write per
+     * burst instead of one per line (row 7, Pass 5).
+     */
+    private fun captureOnce(
+        lines: Sequence<String>,
+        batch: LineBatch,
+    ) {
+        try {
+            for (line in lines) {
+                batch.add(redactLine(line))
+            }
+        } finally {
+            batch.flush()
         }
     }
 
@@ -408,13 +545,15 @@ internal class LogCapture(
         sinceEpochMillis: Long? = null,
         localZone: ZoneId = ZoneId.systemDefault(),
     ) {
-        val lines = reader.lines()
+        val batch = LineBatch(ring)
+        val lines = reader.lines(onIdle = batch::flush)
         captureOnce(
             if (sinceEpochMillis == null) {
                 lines
             } else {
                 ReplayHeadFilter(sinceEpochMillis, localZone).let { head -> lines.filter(head::keep) }
             },
+            batch,
         )
         if (reader.endedWithError) {
             ring.append(redactLine(ABNORMAL_END_MARKER))

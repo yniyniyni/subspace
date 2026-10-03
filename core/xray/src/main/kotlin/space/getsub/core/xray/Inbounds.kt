@@ -29,7 +29,7 @@ internal val DEFAULT_SNIFFING = SniffingSettings(listOf("http", "tls", "quic"))
  * [sniffing] is null when the caller wants no `sniffing` block at all. The
  * passthrough path passes the *config's own* block rather than
  * [DEFAULT_SNIFFING], because substituting ours changes which of the config's
- * rules match (spec §4.2).
+ * rules match (M7 spec §4.2).
  * [tag] defaults to the typed path's stable name; the passthrough composer
  * supplies the source config's original SOCKS tag so its untouched
  * `routing.rules[].inboundTag` references keep matching.

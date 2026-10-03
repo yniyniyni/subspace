@@ -22,7 +22,7 @@ import space.getsub.core.parser.routing.RoutingConversion
 import javax.inject.Inject
 
 /**
- * Backs the rule set list screen: the activation gate (§4.3 of the M5 spec)
+ * Backs the rule set list screen: the activation gate (M5 spec §4.3 of the M5 spec)
  * that decides whether each stored [space.getsub.core.model.RoutingRuleSet]
  * can be turned on, and the write path for turning one on, off, or deleting
  * it.
@@ -95,7 +95,7 @@ constructor(
     /**
      * Copies [id]'s rules into a new, editable rule set with no provenance.
      *
-     * Spec §4.2's other half: an imported profile is read-only because its
+     * M6 spec §4.2's other half: an imported profile is read-only because its
      * provider owns it and the next sync overwrites it, so editing means
      * editing a copy the provider does not own.
      */

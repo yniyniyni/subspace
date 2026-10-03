@@ -201,7 +201,7 @@ internal data class RoutingListActions(
     val onCreateRuleSet: () -> Unit,
     val onEditRuleSet: (Long) -> Unit,
     val onBack: () -> Unit,
-    /** Copies a read-only profile into an editable set, then opens it (spec §4.2). */
+    /** Copies a read-only profile into an editable set, then opens it (M6 spec §4.2). */
     val onDuplicate: (Long) -> Unit = {},
     /** Stops an in-flight generation, leaving the previous one live. */
     val onCancelDownload: (Long) -> Unit = {},

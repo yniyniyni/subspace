@@ -16,7 +16,7 @@ private const val HEX_RADIX = 16
  *
  * This is the *parsed* shape, not the stored one: [toRuleSet] projects it onto
  * `RoutingRuleSet`, which is what M5 already stores, generates rules from, and
- * gates on. There is no second table and no second rule model — see spec §4.1.
+ * gates on. There is no second table and no second rule model — see M6 spec §4.1.
  *
  * Sourced field-by-field in `docs/agent/research/2026-08-20-happ-routing-profiles.md`
  * §3. Two fields there are deliberately treated differently and the difference is
@@ -29,7 +29,7 @@ private const val HEX_RADIX = 16
  *   guessed chunk protocol against an unpublished format is exactly the failure
  *   §10.5 exists to prevent.
  *
- * §5.6: [buckets] holds domains and addresses the user visits, and [dns] can
+ * ARCHITECTURE.md §5.6: [buckets] holds domains and addresses the user visits, and [dns] can
  * hold resolver hostnames. The generated `toString()` would print all of them —
  * see the override.
  *
@@ -41,7 +41,7 @@ private const val HEX_RADIX = 16
  * @property geoIpUrl the optional provider URL for the geoip database.
  * @property geoSiteUrl the optional provider URL for the geosite database.
  * @property lastUpdated the profile's own unix seconds, or null when absent or
- *   unparseable. Null means the monotonicity gate cannot apply (spec §7.3).
+ *   unparseable. Null means the monotonicity gate cannot apply (M6 spec §7.3).
  * @property dns the profile's DNS block, applied by M6.5. Null when the profile
  *   carried none of the DNS keys; [ProfileDns.INVALID] when it carried some and
  *   they could not be understood (spec §5).
@@ -78,7 +78,7 @@ public data class RoutingProfile(
     /**
      * A stable hash of everything that changes what this profile *does*.
      *
-     * Drives spec §7.3's silent-no-op rule: a subscription re-delivers its
+     * Drives M6 spec §7.3's silent-no-op rule: a subscription re-delivers its
      * `happRouting` value on every sync, and re-prompting the user for an
      * identical profile would train them to tap through the one confirmation
      * this milestone's security posture rests on.
@@ -130,7 +130,7 @@ public data class RoutingProfile(
     /**
      * The stored form. [id] is 0 for an import that has not resolved to a row yet;
      * `RoutingRuleSetDao.upsertByIdOrName` resolves a colliding name to the
-     * existing row, which is M6's "a name collision is an update" rule (§7.2).
+     * existing row, which is M6's "a name collision is an update" rule (M6 spec §7.2).
      */
     public fun toRuleSet(id: Long = 0): RoutingRuleSet =
         RoutingRuleSet(

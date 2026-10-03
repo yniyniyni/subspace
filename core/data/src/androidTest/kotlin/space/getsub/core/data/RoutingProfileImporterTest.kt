@@ -280,7 +280,7 @@ class RoutingProfileImporterTest {
 
     // Was `anUnchangedFailedProfileIsStillAnUnconditionalNoOp`, which asserted
     // that re-importing an identical link after a failed install did nothing.
-    // Spec §7.5 says the opposite: Failed "clears on a successful retry", and
+    // M6 spec §7.5 says the opposite: Failed "clears on a successful retry", and
     // the refresh cap "exists to stop a chatty profile hammering a CDN, not to
     // tell the device's owner no". The old assertion made a transient network
     // failure permanent — the row could only be cleared by deleting it.
@@ -343,7 +343,7 @@ class RoutingProfileImporterTest {
                     lastUpdated = older.lastUpdated.shouldNotBeNull() + 60,
                     // A new source, so the update genuinely fetches. Reusing the
                     // first profile's URL would now be served from its own live
-                    // generation (§7.4.1), and this test needs a download to block in.
+                    // generation (M6 spec §7.4.1), and this test needs a download to block in.
                     geoIpUrl = "https://assets.example/newer-geoip.dat",
                     buckets = mapOf(
                         RouteOutcome.DIRECT to
@@ -421,7 +421,7 @@ class RoutingProfileImporterTest {
                 original.copy(
                     lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
                     // A new source: an update that reuses its own URL is copied
-                    // from the live generation (§7.4.1) and never reaches the
+                    // from the live generation (M6 spec §7.4.1) and never reaches the
                     // downloader this test is failing on purpose.
                     geoIpUrl = "https://assets.example/updated-geoip.dat",
                     buckets = mapOf(
@@ -870,10 +870,10 @@ class RoutingProfileImporterTest {
         settings.activeRoutingRuleSetId.first() shouldBe null
     }
 
-    // Regression, device run 2026-08-22 item 9: §7.4.1's dedupe excluded the
+    // Regression, device run 2026-08-22 item 9: M6 spec §7.4.1's dedupe excluded the
     // row being updated, so a profile re-fetched its own unchanged geo files on
     // every update. On a 73 MB geosite that is not merely wasteful — the
-    // re-download cannot finish inside §7.5's three-minute cap, so a geo-backed
+    // re-download cannot finish inside M6 spec §7.5's three-minute cap, so a geo-backed
     // profile became permanently un-updatable on a slow link.
     @Test
     fun anUpdateReusesTheSetsOwnLiveGenerationInsteadOfRefetchingIt() = runTest {
@@ -920,7 +920,7 @@ class RoutingProfileImporterTest {
         val next =
             sampleProfile().copy(
                 lastUpdated = sampleProfile().lastUpdated.shouldNotBeNull() + 60,
-                // New sources, so the update actually fetches: §7.4.1 now serves
+                // New sources, so the update actually fetches: M6 spec §7.4.1 now serves
                 // an unchanged URL from this set's own live generation, which
                 // would make the injected download failure unreachable.
                 geoIpUrl = "https://assets.example/next-geoip.dat",
@@ -1412,7 +1412,7 @@ class RoutingProfileImporterTest {
     }
 
     // The other half: once something has actually been published, an identical
-    // re-delivery is still the silent no-op spec §7.3 requires.
+    // re-delivery is still the silent no-op M6 spec §7.3 requires.
     @Test
     fun anIdenticalReimportAfterASuccessfulInstallStaysSilent() {
         runBlocking {
@@ -1809,7 +1809,7 @@ class RoutingProfileImporterTest {
                     lastUpdated = original.lastUpdated.shouldNotBeNull() + 60,
                     // A new source, so there is an in-flight download to cancel.
                     // Reusing the original URL is now a local copy from this
-                    // set's own live generation (§7.4.1) and never blocks.
+                    // set's own live generation (M6 spec §7.4.1) and never blocks.
                     geoIpUrl = "https://assets.example/cancelled-geoip.dat",
                     buckets = mapOf(RouteOutcome.DIRECT to RuleBucket(ips = listOf("geoip:cn"))),
                 )

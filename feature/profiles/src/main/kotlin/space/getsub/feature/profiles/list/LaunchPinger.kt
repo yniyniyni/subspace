@@ -52,7 +52,7 @@ internal class LaunchPinger(
         // absorbed it silently — a reconnect is a start sequence pending or in
         // flight, so navigating here mid-reconnect could launch a proxy-head
         // burst (one Xray instance per server) against the retrying core. Spec
-        // §2.2 chose this shape for FailureReason.retryability for the same
+        // M8 spec §2.2 chose this shape for FailureReason.retryability for the same
         // reason: a state added later must not fall through whichever branch
         // happens to catch it.
         val startSequenceBusy =

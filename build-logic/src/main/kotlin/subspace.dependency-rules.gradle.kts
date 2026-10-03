@@ -7,7 +7,7 @@
 //   - :feature:* modules never depend on each other
 //   - :service depends on :core:* but never on :feature:*
 //   - :core:* modules never depend on :feature:* modules (not stated as a
-//     standalone bullet in §4, but §3's three-layer model — core beneath
+//     standalone bullet in ARCHITECTURE.md §4, but ARCHITECTURE.md §3's three-layer model — core beneath
 //     feature beneath app — clearly forbids the inversion; a :core module
 //     pulling in a :feature module would make the dependency graph
 //     circular in spirit even where Gradle would still happily resolve it)
@@ -68,7 +68,7 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
     // real AGP plumbing, not a boundary violation. Rather than name that
     // (and every future AGP internal configuration like it) explicitly,
     // drop self-references generically: a project depending on itself is
-    // never a §4 violation under any of the rules below regardless of which
+    // never a ARCHITECTURE.md §4 violation under any of the rules below regardless of which
     // configuration it came from.
     val projectDeps = configurations
         .filter { it.isCanBeDeclared }
@@ -83,19 +83,21 @@ val moduleBoundaries = tasks.register("checkModuleBoundaries") {
 
         if (path.startsWith(":feature:")) {
             projectDeps.filter { it.startsWith(":feature:") }.forEach {
-                violations += "$path depends on $it — :feature:* modules must never depend on each other (§4)"
+                violations += "$path depends on $it — :feature:* modules must never depend " +
+                    "on each other (ARCHITECTURE.md §4)"
             }
         }
 
         if (path == ":service") {
             projectDeps.filter { it.startsWith(":feature:") }.forEach {
-                violations += "$path depends on $it — :service must never depend on :feature:* (§4)"
+                violations += "$path depends on $it — :service must never depend on :feature:* (ARCHITECTURE.md §4)"
             }
         }
 
         if (path.startsWith(":core:")) {
             projectDeps.filter { it.startsWith(":feature:") }.forEach {
-                violations += "$path depends on $it — :core:* must never depend on :feature:* (§3/§4)"
+                violations += "$path depends on $it — :core:* must never depend on :feature:* " +
+                    "(ARCHITECTURE.md §3/ARCHITECTURE.md §4)"
             }
         }
 

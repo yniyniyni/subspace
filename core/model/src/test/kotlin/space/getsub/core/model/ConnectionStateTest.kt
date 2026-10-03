@@ -12,7 +12,7 @@ class ConnectionStateTest {
     @Test
     fun `failure redacts the detail string`() {
         // libXray quotes the offending config back in its error text, so the
-        // realistic failure detail carries both an address and a UUID (§5.6).
+        // realistic failure detail carries both an address and a UUID (ARCHITECTURE.md §5.6).
         val state =
             failure(
                 FailureReason.CoreStartFailed,
@@ -40,7 +40,7 @@ class ConnectionStateTest {
      * `ConnectionState.Failed(reason, raw)` or
      * `existing.copy(detail = raw)` produce an unredacted instance without ever
      * calling [failure] — and [ConnectionState.Failed.detail] comes from
-     * `XrayException`, which quotes the config back (§5.6).
+     * `XrayException`, which quotes the config back (ARCHITECTURE.md §5.6).
      *
      * Asserted by reflection rather than by a commented-out line, because the
      * thing being checked is precisely that the alternative does not compile,
@@ -71,11 +71,22 @@ class ConnectionStateTest {
 
     @Test
     fun `every startup stage is distinct`() {
-        // The stage is the only diagnostic available when §5.6 forbids logging
+        // The stage is the only diagnostic available when ARCHITECTURE.md §5.6 forbids logging
         // the config, so a duplicated ordinal would be a real loss.
         StartupStage.entries
             .map { it.ordinal }
             .toSet()
             .size shouldBe StartupStage.entries.size
+    }
+
+    @Test
+    fun `a connected state starts idle, because nothing has been observed yet`() {
+        ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080).health shouldBe Health.Idle
+    }
+
+    @Test
+    fun `reconnecting carries whether the kill switch is blackholing`() {
+        ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = true).blocked shouldBe true
+        ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = false).blocked shouldBe false
     }
 }

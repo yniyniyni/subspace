@@ -4,9 +4,15 @@ package space.getsub.core.data
 
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import javax.inject.Inject
 
 /**
@@ -28,9 +34,9 @@ import javax.inject.Inject
  *   anywhere else.
  *
  * A silent rename on either side, not a compile error, is what this class
- * going blank in the viewer would actually look like. Spec §3.4.
+ * going blank in the viewer would actually look like. M8.5 spec §3.4.
  *
- * Every line here was redacted at capture (spec §3.2), so nothing this class
+ * Every line here was redacted at capture (M8.5 spec §3.2), so nothing this class
  * returns needs redacting again — and nothing it returns may be assumed to
  * contain a secret that has to be withheld from a share.
  */
@@ -43,7 +49,7 @@ public class LogRepository(
     ) : this(File(context.filesDir, LOG_DIR_NAME))
 
     /**
-     * Oldest first. Reads on IO — a full ring is up to 1 MiB (spec §3.3).
+     * Oldest first. Reads on IO — a full ring is up to 1 MiB (M8.5 spec §3.3).
      *
      * `log.1` and `log.0` are each read inside their own [runCatching], not one
      * shared around both: a single shared block would let a failure reading
@@ -57,19 +63,51 @@ public class LogRepository(
             readRingFile(File(dir, "log.1")) + readRingFile(File(dir, "log.0"))
         }
 
+    /**
+     * Empties `log.0` in place and deletes `log.1`.
+     *
+     * `:bg`'s `LogRing` keeps `log.0` open in append mode (row 7: opening it per
+     * line was a quarter of the capture thread). Deleting it would leave that
+     * writer on an unlinked inode, and every line after the clear would vanish.
+     * Truncating keeps the same inode, so the writer's next append lands at the
+     * start of the now-empty file. `log.1` is not held open, so deleting it is safe.
+     */
     public suspend fun clear() {
         withContext(Dispatchers.IO) {
             runCatching {
-                File(dir, "log.0").delete()
+                val log0 = File(dir, "log.0")
+                if (log0.isFile) FileOutputStream(log0).close()
                 File(dir, "log.1").delete()
             }
         }
     }
 
+    /**
+     * The ring, live (M8.5 spec §3.4, as amended): the current snapshot, then a
+     * re-emission whenever the ring changes. A 1 Hz stat of the two files, with
+     * incremental reads ([LogRingTail]); FileObserver was rejected because
+     * inotify fires once per written line and stops delivering if collected.
+     * Cold: nothing polls unless collected, which is how the viewer stops on
+     * pause.
+     */
+    public fun tail(
+        intervalMillis: Long = TAIL_INTERVAL_MILLIS,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    ): Flow<List<String>> =
+        flow {
+            val tail = LogRingTail(dir)
+            emit(tail.poll().orEmpty())
+            while (true) {
+                delay(intervalMillis)
+                tail.poll()?.let { emit(it) }
+            }
+        }.flowOn(dispatcher)
+
     private fun readRingFile(file: File): List<String> =
         runCatching { file.takeIf { it.exists() }?.readLines() }.getOrNull().orEmpty()
 
-    private companion object {
-        const val LOG_DIR_NAME = "logs"
+    public companion object {
+        private const val LOG_DIR_NAME = "logs"
+        public const val TAIL_INTERVAL_MILLIS: Long = 1_000L
     }
 }

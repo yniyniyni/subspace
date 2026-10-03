@@ -200,7 +200,7 @@ class LatencyRunnerTest {
         runTest {
             // The scope belongs to TunnelService and carries the start-sequence
             // CoroutineExceptionHandler. An escaping throw therefore published a
-            // fabricated CoreStartFailed — §5.5's lying UI while the tunnel was
+            // fabricated CoreStartFailed — ARCHITECTURE.md §5.5's lying UI while the tunnel was
             // still up — and left currentState Failed, which opens the
             // duplicate-connect guard and leaks the live TUN fd (§5.4).
             val results = mutableListOf<LatencyResult>()

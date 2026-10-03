@@ -318,7 +318,7 @@ class XrayRoutingConversionTest {
         convert(json)!!.profile.name shouldBe "Pasted config"
     }
 
-    // §5.6: entries are browsing data and must not reach a log line.
+    // ARCHITECTURE.md §5.6: entries are browsing data and must not reach a log line.
     @Test
     fun `toString redacts entries`() {
         val json =

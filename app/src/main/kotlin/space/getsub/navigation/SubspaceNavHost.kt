@@ -3,7 +3,10 @@
 package space.getsub.navigation
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
@@ -96,7 +99,8 @@ private const val SETTINGS_VALUE = "settings"
  * the device's own `navigationBars` inset height (63px / ~24dp, read from
  * `WindowInsets changed: ... navigationBars:[0,0,0,63]` in logcat for this
  * device/orientation), i.e. that inset counted twice. This `Box` arrangement
- * does not double-count it. Individual screens reserve
+ * does not double-count it. The top is different: the [NavHost] pads for
+ * `statusBars` itself, once, for every destination. Individual screens reserve
  * [space.getsub.core.ui.component.FLOATING_NAV_CONTENT_BOTTOM_PADDING]
  * themselves for exactly the same reason — that constant's own KDoc says so.
  *
@@ -131,7 +135,15 @@ fun SubspaceNavHost(
     )
 
     Box(modifier = modifier.fillMaxSize()) {
-        NavHost(navController = navController, startDestination = startDestination) {
+        // The activity draws edge to edge, and nothing else pads for the status bar: every
+        // screen's header used to start at the top of the display, under it (Servers'
+        // "Add server" and the Session log's Back button could not be tapped). Top only;
+        // the bottom inset stays with FloatingNavigationBar, as above.
+        NavHost(
+            navController = navController,
+            startDestination = startDestination,
+            modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+        ) {
             topLevelDestinations(navController, onRequestConsent)
             composable<Servers> {
                 // Task 19: ServersScreen now owns its own add-server flow
@@ -178,7 +190,7 @@ fun SubspaceNavHost(
                 // SAME sheet instance the user opened it from — see its own
                 // KDoc for why that must be the Servers entry, not this
                 // destination's, and why the result does not travel through
-                // NavBackStackEntry.savedStateHandle (§5.6).
+                // NavBackStackEntry.savedStateHandle (ARCHITECTURE.md §5.6).
                 //
                 // remember keyed on this destination's OWN entry, not
                 // navController — lint's UnrememberedGetBackStackEntry rule

@@ -128,7 +128,7 @@ class SubscriptionImportTest {
 
     @Test
     fun noMessageCarriesAFormatArgumentThatCouldHoldAUrl() {
-        // §5.6. The failure branch takes no arguments at all, so there is
+        // ARCHITECTURE.md §5.6. The failure branch takes no arguments at all, so there is
         // nowhere for a URL or a body to be interpolated.
         SubscriptionSyncFailure.entries.forEach {
             SyncResult.Failed(it).toUserMessage().quantity shouldBe null

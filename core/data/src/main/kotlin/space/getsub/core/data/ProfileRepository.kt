@@ -71,7 +71,7 @@ public data class StoredProfile(
      */
     val passthroughRejection: PassthroughRejection? = null,
 ) {
-    // §5.6: this is the type that crosses out of :core:data carrying a server address, an
+    // ARCHITECTURE.md §5.6: this is the type that crosses out of :core:data carrying a server address, an
     // Outbound (UUID and REALITY key material) and the raw config, so the redaction has to hold
     // here as well as on the entity it was mapped from — exactly the reasoning StoredSubscription
     // already applies to its URL.
@@ -82,7 +82,7 @@ public data class StoredProfile(
             "droppedFromSubscriptionAt=$droppedFromSubscriptionAt, " +
             "passthroughRejection=$passthroughRejection)"
 
-    /** RAW_JSON runs through the typed projection in M3 (§6). */
+    /** RAW_JSON runs through the typed projection in M3 (ARCHITECTURE.md §6). */
     public val compatibilityMode: Boolean get() = kind == ProfileKind.RAW_JSON
 
     /**
@@ -129,7 +129,7 @@ public data class StoredProfile(
  * its source wrote.
  *
  * `kcp`/`mkcp`, `httpupgrade` and `hysteria` are real transports Xray supports and this
- * generator does not, so they are absent on purpose. Hysteria2 generation is M8's, and §6
+ * generator does not, so they are absent on purpose. Hysteria2 generation is M8's, and ARCHITECTURE.md §6
  * warns its config shape is unlike every other protocol's.
  *
  * Lives in `:core:data` rather than `:core:xray` because `:core:data` cannot depend on
@@ -254,7 +254,7 @@ internal constructor(
      * [space.getsub.core.parser.analysePassthrough] once per distinct
      * [Profile.rawJson] value, and the verdict is stored as
      * [ProfileEntity.passthroughRejection] — `null` means the row is eligible to run
-     * as written (design §6). When that analysis reports
+     * as written (design ARCHITECTURE.md §6). When that analysis reports
      * [space.getsub.core.parser.PassthroughAnalysis.isBalancer], the element's
      * outbounds are balancer members, not several servers the user picks between
      * (research §5b: the target panel's own "auto | best server" entry is exactly this
@@ -289,7 +289,7 @@ internal constructor(
      * element differing only in their `xhttp` settings, colliding because the typed
      * projection had no field for them — is closed:
      * [space.getsub.core.model.TransportOptions.Xhttp] now carries path, host and
-     * mode, and [identityHashOf] hashes the whole outbound. §6's lossy-projection gap is
+     * mode, and [identityHashOf] hashes the whole outbound. ARCHITECTURE.md §6's lossy-projection gap is
      * narrower than it was, not gone: an outbound differing only in a field still outside
      * the model (`XHTTPObject`'s padding and session-id options, `tcpSettings` header
      * obfuscation) collides the same way.
@@ -387,13 +387,13 @@ internal constructor(
      * Moves a profile to a different group. A no-op (returns `true`) if the profile no
      * longer exists.
      *
-     * @return `false` if [ProfileEntity]'s unique `(groupId, identityHash)` index (§4.2)
+     * @return `false` if [ProfileEntity]'s unique `(groupId, identityHash)` index (M3 spec §4.2)
      *   already holds an identical outbound in [toGroupId] — [ProfileDao.moveProfile]'s
      *   default `ABORT` conflict strategy throws [SQLiteConstraintException] rather than
      *   silently dropping the write, and that exception carries this table's column values
      *   in its message, so it is caught and turned into a plain `false` here rather than
      *   let propagate: nothing above `:core:data` may see a config value inside a
-     *   diagnostic (§5.6). `true` otherwise.
+     *   diagnostic (ARCHITECTURE.md §5.6). `true` otherwise.
      *
      * **Undocumented until Task 11 review round 2, recorded now:** nothing stops [toGroupId]
      * from being a subscription-sourced group. A hand-imported profile moved there keeps
@@ -403,7 +403,7 @@ internal constructor(
      * later sync's insert or update can still collide with its `identityHash`, in which case
      * `SubscriptionSyncer` catches the resulting `SQLiteConstraintException` and returns
      * `SyncResult.ReconciliationConflict` — the sync fails cleanly rather than crashing — but
-     * the moved-in row itself is simply outside spec §6.5's reconciliation for as long as it
+     * the moved-in row itself is simply outside M4 spec §6.5's reconciliation for as long as it
      * stays in that group.
      */
     public suspend fun move(
@@ -440,12 +440,12 @@ internal constructor(
      *
      * @return `false` if the recomputed [identityHash] collides with another profile
      *   already in this profile's group — [ProfileEntity]'s unique `(groupId,
-     *   identityHash)` index (§4.2) makes that a real possibility (editing a profile's
+     *   identityHash)` index (M3 spec §4.2) makes that a real possibility (editing a profile's
      *   outbound until it matches a sibling's), and [ProfileDao.updateTypedProfile]'s `ABORT`
      *   conflict strategy throws [SQLiteConstraintException] rather than silently
      *   dropping the write. That exception can quote this table's column values, so it is
      *   caught here and turned into a plain `false` rather than let propagate past
-     *   `:core:data` (§5.6) — see [move] for the same treatment of the same index. `true`
+     *   `:core:data` (ARCHITECTURE.md §5.6) — see [move] for the same treatment of the same index. `true`
      *   otherwise, including the no-op case where the profile no longer exists.
      */
     public suspend fun update(
@@ -487,7 +487,7 @@ internal constructor(
     /**
      * Records a connection failure.
      *
-     * [redactedDetail] must never contain config contents (§5.6) — callers pass a category,
+     * [redactedDetail] must never contain config contents (ARCHITECTURE.md §5.6) — callers pass a category,
      * not the underlying exception message. The other of the two writes `:bg` performs on
      * this table (spec D4). Nothing else in the app calls this.
      */

@@ -19,7 +19,7 @@ import space.getsub.core.model.failure
  * outcome, suspended to persist it, and *then* mutated service lifecycle state — so a
  * teardown or a newer start that ran during the suspension left a stale coroutine to resume
  * and reassert lifecycle it no longer owned. The connected path could restore the connected
- * foreground notification after teardown had removed it (§5.5's lying UI). The failed path
+ * foreground notification after teardown had removed it (ARCHITECTURE.md §5.5's lying UI). The failed path
  * could remove a *newer* connection's foreground state, or `stopSelf()` its service.
  *
  * That is not reachable through `TunnelService` in a JVM test — it is a `VpnService`, and
@@ -270,5 +270,172 @@ class TerminalOutcomeTest {
             )
 
             stateAtWriteTime shouldBe "connected"
+        }
+
+    @Test
+    fun `a computed state is built after lifecycle, under the lock`() =
+        runTest {
+            val lock = Any()
+            var lifecycleRan = false
+            var builtUnderLock = false
+            var builtAfterLifecycle = false
+            val published = mutableListOf<ConnectionState>()
+            val outcome = TerminalOutcome(lock, currentGeneration = { 1 }, publish = { published += it })
+
+            outcome.settleComputed(
+                gen = 1,
+                lifecycle = {
+                    lifecycleRan = true
+                    true
+                },
+                state = {
+                    builtUnderLock = Thread.holdsLock(lock)
+                    builtAfterLifecycle = lifecycleRan
+                    ConnectionState.Disconnected
+                },
+                persist = {},
+            ) shouldBe TerminalSettlement.Committed
+
+            builtUnderLock shouldBe true
+            builtAfterLifecycle shouldBe true
+            published shouldBe listOf(ConnectionState.Disconnected)
+        }
+
+    @Test
+    fun `a superseded generation never builds its computed state`() =
+        runTest {
+            var built = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 2 }, publish = {})
+
+            outcome.settleComputed(
+                gen = 1,
+                lifecycle = { true },
+                state = {
+                    built = true
+                    ConnectionState.Disconnected
+                },
+                persist = {},
+            ) shouldBe TerminalSettlement.Superseded
+
+            built shouldBe false
+        }
+
+    @Test
+    fun `onCommitted runs under the lock, after publish, before persist`() =
+        runTest {
+            val lock = Any()
+            val order = mutableListOf<String>()
+            var underLock = false
+            val outcome = TerminalOutcome(lock, currentGeneration = { 1 }, publish = { order += "publish" })
+
+            outcome.settle(
+                gen = 1,
+                state = ConnectionState.Disconnected,
+                lifecycle = {
+                    order += "lifecycle"
+                    true
+                },
+                persist = { order += "persist" },
+                onCommitted = {
+                    underLock = Thread.holdsLock(lock)
+                    order += "committed"
+                },
+            )
+
+            order shouldBe listOf("lifecycle", "publish", "committed", "persist")
+            underLock shouldBe true
+        }
+
+    @Test
+    fun `onCommitted never runs for a superseded generation`() =
+        runTest {
+            var ran = false
+            TerminalOutcome(Any(), currentGeneration = { 2 }, publish = {})
+                .settle(1, ConnectionState.Disconnected, { true }, {}, onCommitted = { ran = true })
+            ran shouldBe false
+        }
+
+    @Test
+    fun `onCommitted never runs when lifecycle is rejected`() =
+        runTest {
+            var ran = false
+            TerminalOutcome(Any(), currentGeneration = { 1 }, publish = {})
+                .settle(1, ConnectionState.Disconnected, { false }, {}, onCommitted = { ran = true })
+            ran shouldBe false
+        }
+
+    /**
+     * Final fix wave finding #2: [settleHandlingLifecycleRejection] wraps [TerminalOutcome.settle]
+     * one-for-one and both `TunnelService` attach sites go through it exclusively, so if it ever
+     * stopped forwarding [TerminalOutcome.settle]'s `onCommitted` parameter, retry retirement,
+     * the counter reset, `trafficLoop.start()` and the detector install would all silently stop
+     * running — with no failing test to say why, since `onCommitted` defaults to `{}` and every
+     * other assertion here calls `settle` directly, never the wrapper. These three tests call the
+     * extension itself.
+     */
+    @Test
+    fun `settleHandlingLifecycleRejection runs onCommitted, not onLifecycleRejected, when committed`() =
+        runTest {
+            var committedRan = false
+            var lifecycleRejectedRan = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 1 }, publish = {})
+
+            val settled =
+                outcome.settleHandlingLifecycleRejection(
+                    gen = 1,
+                    state = ConnectionState.Disconnected,
+                    lifecycle = { true },
+                    persist = {},
+                    onLifecycleRejected = { lifecycleRejectedRan = true },
+                    onCommitted = { committedRan = true },
+                )
+
+            settled shouldBe TerminalSettlement.Committed
+            committedRan shouldBe true
+            lifecycleRejectedRan shouldBe false
+        }
+
+    @Test
+    fun `settleHandlingLifecycleRejection runs onLifecycleRejected, not onCommitted, when lifecycle is rejected`() =
+        runTest {
+            var committedRan = false
+            var lifecycleRejectedRan = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 1 }, publish = {})
+
+            val settled =
+                outcome.settleHandlingLifecycleRejection(
+                    gen = 1,
+                    state = ConnectionState.Disconnected,
+                    lifecycle = { false },
+                    persist = {},
+                    onLifecycleRejected = { lifecycleRejectedRan = true },
+                    onCommitted = { committedRan = true },
+                )
+
+            settled shouldBe TerminalSettlement.LifecycleRejected
+            lifecycleRejectedRan shouldBe true
+            committedRan shouldBe false
+        }
+
+    @Test
+    fun `settleHandlingLifecycleRejection runs neither callback when superseded`() =
+        runTest {
+            var committedRan = false
+            var lifecycleRejectedRan = false
+            val outcome = TerminalOutcome(Any(), currentGeneration = { 2 }, publish = {})
+
+            val settled =
+                outcome.settleHandlingLifecycleRejection(
+                    gen = 1,
+                    state = ConnectionState.Disconnected,
+                    lifecycle = { true },
+                    persist = {},
+                    onLifecycleRejected = { lifecycleRejectedRan = true },
+                    onCommitted = { committedRan = true },
+                )
+
+            settled shouldBe TerminalSettlement.Superseded
+            committedRan shouldBe false
+            lifecycleRejectedRan shouldBe false
         }
 }

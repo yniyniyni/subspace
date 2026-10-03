@@ -19,8 +19,8 @@ import javax.inject.Singleton
  * Supplies the two seams `:core:data`'s `DataModule.geoAssetRepository` needs
  * but cannot construct itself: the validator, and the install root.
  *
- * `:core:data` must not depend on `:core:xray` (§4: [LibXrayGeoDataValidator]
- * is a libXray call) or on `:app` (§4: [geoAssetDirectory] lives here), and
+ * `:core:data` must not depend on `:core:xray` (M5 spec §4: [LibXrayGeoDataValidator]
+ * is a libXray call) or on `:app` (M5 spec §4: [geoAssetDirectory] lives here), and
  * `:app` sits downstream of both — so this is the one place with both halves in
  * scope. Hilt aggregates every `@InstallIn(SingletonComponent::class)` module at
  * the app component, so a `:core:data` provider depending on a binding declared
@@ -28,7 +28,7 @@ import javax.inject.Singleton
  *
  * The [space.getsub.core.data.GeoDownloader] binding those seams also
  * feed is provided by `DataModule` itself, not here: `GeoFileFetcher` lives in
- * `:core:network`, which only `:core:data` may depend on (§4,
+ * `:core:network`, which only `:core:data` may depend on (M5 spec §4,
  * `checkModuleBoundaries`) — `:app` cannot see it at all.
  */
 @Module

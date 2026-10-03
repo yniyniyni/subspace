@@ -70,6 +70,9 @@ internal interface TunnelConnection {
      */
     val perTagBreakdown: Flow<Boolean>
 
+    /** Lightweight mode: Home hides traffic and the breakdown. See `SettingsRepository.lightweightMode`. */
+    val lightweightMode: Flow<Boolean>
+
     /**
      * Measures one profile — a one-element run, the same path the Servers list
      * takes.

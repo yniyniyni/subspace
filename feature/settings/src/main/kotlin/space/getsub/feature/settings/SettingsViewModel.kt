@@ -136,6 +136,10 @@ constructor(
             .onEach { enabled -> _state.update { it.copy(perTagBreakdown = enabled) } }
             .launchIn(viewModelScope)
 
+        settingsSource.lightweightMode
+            .onEach { enabled -> _state.update { it.copy(lightweightMode = enabled) } }
+            .launchIn(viewModelScope)
+
         // Ruling R43 (revises F2 / ruling R39): mirrors ConnectionState (ARCHITECTURE.md §5.5)
         // purely so SettingsState.perTagBreakdownSessionNoticeVisible has something to derive
         // from — see that property's own KDoc for why this plain mirror, with no latch of what
@@ -206,7 +210,17 @@ constructor(
     }
 
     /**
-     * Spec §7.2, ARCHITECTURE.md §9: Doze is worth raising at the moment the user says they want
+     * A CPU saver, not a survival setting, so it never routes through
+     * [maybePromptForBattery]. Traffic numbers go immediately; the session log stops from
+     * the next connection (`:bg` decides log capture when a session starts), which the
+     * switch's own summary says.
+     */
+    fun onLightweightModeChanged(enabled: Boolean) {
+        viewModelScope.launch { settingsSource.setLightweightMode(enabled) }
+    }
+
+    /**
+     * M8 spec §7.2, ARCHITECTURE.md §9: Doze is worth raising at the moment the user says they want
      * the tunnel to survive, and nowhere else — not at construction, not on an unrelated setting
      * ([shouldPromptForBattery]'s own KDoc).
      *
@@ -216,7 +230,7 @@ constructor(
      * was decoration, tested but never exercised. Switching a survival setting *off* now reaches
      * this function and is refused here, in the one place that decides.
      */
-    private suspend fun maybePromptForBattery(justEnabled: Boolean) {
+    private suspend fun maybePromptForBattery(justEnabled: Boolean): Boolean {
         // No early return on [justEnabled], deliberately. One was added here to skip the two
         // reads below when the outcome is already determined, and it reinstated precisely the
         // property `be1ee7f` removed: with it, [shouldPromptForBattery]'s first conjunct could
@@ -237,29 +251,55 @@ constructor(
                 survivalSettingJustEnabled = justEnabled,
             )
         if (show) _state.update { it.copy(showBatteryPrompt = true) }
+        return show
     }
 
     /**
-     * Spec §7.2 names three triggers — always-on, boot autostart and fail-closed — and only the
+     * M8 spec §7.2 names three triggers — always-on, boot autostart and fail-closed — and only the
      * latter two raised the prompt.
      *
-     * Always-on is a deep link to system settings (§7.1: this app cannot set it, so it is a link
+     * Always-on is a deep link to system settings (M8 spec §7.1: this app cannot set it, so it is a link
      * and never a switch), which means the app never learns whether the user actually enabled it.
      * Tapping the row is the strongest statement of "I want this tunnel to survive" that is
      * observable here, so that is what the prompt is hung on. The prompt is shown once ever
      * (`batteryPromptShown`), so treating the tap as intent cannot become nagging.
+     *
+     * M8.5 spec §6 #10: the deep link to `ACTION_VPN_SETTINGS` is deferred until the prompt is
+     * answered, rather than launched alongside it, so the prompt can no longer land behind the
+     * system VPN screen. When no prompt is due, [openVpnSettingsRequested][SettingsState] is set
+     * immediately here instead.
      */
-    fun onAlwaysOnOpened() {
-        viewModelScope.launch { maybePromptForBattery(justEnabled = true) }
+    fun onAlwaysOnRequested() {
+        viewModelScope.launch {
+            val prompted = maybePromptForBattery(justEnabled = true)
+            _state.update {
+                if (prompted) it.copy(vpnSettingsAfterPrompt = true) else it.copy(openVpnSettingsRequested = true)
+            }
+        }
+    }
+
+    /** M8.5 spec §6 #10: consumes [SettingsState.openVpnSettingsRequested] once the screen has acted on it. */
+    fun onVpnSettingsOpened() {
+        _state.update { it.copy(openVpnSettingsRequested = false) }
     }
 
     /**
      * Either response to the battery prompt — including a plain dismissal — records
      * [SettingsSource.batteryPromptShown] so the prompt never returns. "Respect refusal" (§9)
      * means this call happens whatever the user chose, not only on acceptance.
+     *
+     * M8.5 spec §6 #10: if this prompt was raised by [onAlwaysOnRequested]
+     * ([SettingsState.vpnSettingsAfterPrompt]), resolving it now requests the deferred VPN
+     * settings deep link.
      */
     fun onBatteryPromptResolved() {
-        _state.update { it.copy(showBatteryPrompt = false) }
+        _state.update {
+            it.copy(
+                showBatteryPrompt = false,
+                openVpnSettingsRequested = it.openVpnSettingsRequested || it.vpnSettingsAfterPrompt,
+                vpnSettingsAfterPrompt = false,
+            )
+        }
         viewModelScope.launch { settingsSource.setBatteryPromptShown(true) }
     }
 
@@ -380,7 +420,7 @@ constructor(
      * and a wrong choice is a download that succeeds while every rule using it silently matches
      * nothing.
      *
-     * §5.6: [url] is never logged here or anywhere downstream — [GeoInstallResult] is a closed
+     * ARCHITECTURE.md §5.6: [url] is never logged here or anywhere downstream — [GeoInstallResult] is a closed
      * vocabulary that carries no URL, and that is the only thing this method's own callers ever
      * see back.
      *
@@ -448,7 +488,7 @@ constructor(
 }
 
 /**
- * Spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.
+ * M8 spec §7.2. ARCHITECTURE.md §9: "Prompt the user to exempt the app, or the tunnel dies in Doze.
  * Prompt once, respect refusal."
  *
  * [survivalSettingJustEnabled] is the trigger — always-on, boot autostart or fail-closed being

@@ -152,7 +152,7 @@ internal interface RoutingRuleSetDao {
     )
 
     /**
-     * Atomically publishes a fully materialised profile generation (spec §7.4).
+     * Atomically publishes a fully materialised profile generation (M6 spec §7.4).
      *
      * Rules and [generation] move in one statement, together with the successful
      * state/failure pair, so no observer can see rules referring to a generation

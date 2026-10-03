@@ -8,7 +8,7 @@
 //
 // ARCHITECTURE.md §10.2: this looks like boilerplate and is load-bearing. It is
 // the hop that turns raw IP packets off the TUN fd into SOCKS connections
-// against the loopback inbound (§3, packet path). Do not refactor it for
+// against the loopback inbound (ARCHITECTURE.md §3, packet path). Do not refactor it for
 // elegance; change one thing at a time and verify on device.
 //
 // ── Locking contract ────────────────────────────────────────────────────────
@@ -19,13 +19,13 @@
 //
 // An earlier revision let the worker clear `running` under the lock, which
 // forced nativeStop to drop the lock around quit()+join to avoid deadlocking.
-// That was a real bug, not a style question: §5.4 says disconnect, onRevoke,
+// That was a real bug, not a style question: ARCHITECTURE.md §5.4 says disconnect, onRevoke,
 // and onDestroy are not serialised with each other, so two teardowns could both
 // observe running==1, both call hev_socks5_tunnel_quit(), and both join one tid.
 // The second quit() never returns — upstream's hev_socks5_tunnel_stop busy-waits
 // for event_fds[1] to become valid, and the first stop already closed it. The
 // result is a teardown thread spinning at 10 Hz forever with the TUN fd still
-// open, which is precisely the wedged-until-reboot state §5.4 exists to prevent.
+// open, which is precisely the wedged-until-reboot state ARCHITECTURE.md §5.4 exists to prevent.
 
 #include <jni.h>
 #include <errno.h>
@@ -136,7 +136,7 @@ run_tunnel (void *arg)
     int rc = hev_socks5_tunnel_main_from_str (args->config, args->config_len,
                                               args->tun_fd);
     if (rc != 0) {
-        // §5.6: the tunnel config carries only the loopback SOCKS port — no
+        // ARCHITECTURE.md §5.6: the tunnel config carries only the loopback SOCKS port — no
         // addresses, no keys — so the return code is safe to log. Never log the
         // config itself.
         LOGE ("tunnel exited with %d", rc);
@@ -177,7 +177,7 @@ Java_space_getsub_service_Tun2Socks_nativeStart (JNIEnv *env,
 
     // hev_socks5_tunnel_main_from_str ABORTS THE PROCESS on an invalid fd
     // rather than returning -1 — observed on device: passing -1 killed the test
-    // runner outright. The two-process split (§3) is why that is survivable in
+    // runner outright. The two-process split (ARCHITECTURE.md §3) is why that is survivable in
     // production, but a start sequence must fail legibly (§10.4), so this is
     // refused at the boundary.
     //
@@ -257,7 +257,7 @@ Java_space_getsub_service_Tun2Socks_nativeStop (JNIEnv *env,
     (void)clazz;
 
     // Held for the whole function. Safe because the worker never takes it, and
-    // required because §5.4's three teardown paths can arrive concurrently —
+    // required because ARCHITECTURE.md §5.4's three teardown paths can arrive concurrently —
     // see the locking contract at the top of this file.
     pthread_mutex_lock (&lock);
 

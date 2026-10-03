@@ -48,7 +48,7 @@ class PerAppScreenContentTest {
         rule.onNodeWithText("Maps").assertIsDisplayed()
     }
 
-    // §7.2: shown and flagged, never silently dropped.
+    // M5.5 spec §7.2: shown and flagged, never silently dropped.
     @Test
     fun anUninstalledSelectionIsMarkedRatherThanHidden() {
         val ghost = AppRow("com.example.deleted", "com.example.deleted", isSelected = true, isInstalled = false)
@@ -60,7 +60,7 @@ class PerAppScreenContentTest {
         rule.onNodeWithText("Not installed").assertIsDisplayed()
     }
 
-    // The warning is the UI half of §6.3's guard. Save must be unavailable, not
+    // The warning is the UI half of M5.5 spec §6.3's guard. Save must be unavailable, not
     // merely discouraged.
     @Test
     fun anEmptyAllowListWarnsAndBlocksSave() {
@@ -79,7 +79,7 @@ class PerAppScreenContentTest {
         rule.onNodeWithText("Save").assertIsNotEnabled()
     }
 
-    // Spec §7.3: the user is told before committing, not after the tunnel drops.
+    // M5.5 spec §7.3: the user is told before committing, not after the tunnel drops.
     // isTunnelActive covers Connecting as well as Connected — the notice has to
     // reach the cold-start window, which is where a save is most likely to
     // surprise someone.

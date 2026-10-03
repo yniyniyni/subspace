@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- §12: strings live here from the first commit; no hardcoded UI text.
-     §5.6: no string here may interpolate a server address, uuid, or key. -->
+<!-- ARCHITECTURE.md §12: strings live here from the first commit; no hardcoded UI text.
+     ARCHITECTURE.md §5.6: no string here may interpolate a server address, uuid, or key. -->
 <resources>
     <string name="home_title">Subspace</string>
 
@@ -11,7 +11,7 @@
     <string name="home_add_first_server">Add your first server</string>
     <string name="home_add_server">Add server</string>
     <!-- %1$s is a device-clock-derived elapsed-time string (DateUtils.formatElapsedTime),
-         e.g. "3:12" or "1:04:20" — not a server address, uuid, or key (§5.6). -->
+         e.g. "3:12" or "1:04:20" — not a server address, uuid, or key (ARCHITECTURE.md §5.6). -->
     <string name="home_connected_uptime">Connected for %1$s</string>
     <!-- Shown when the active server decoded fine but StoredProfile.connectable is false
          (fix round 2, Important finding 4) — e.g. VLESS over ws/grpc, which :core:xray
@@ -22,12 +22,13 @@
     <string name="state_disconnected">Disconnected</string>
     <string name="state_disconnecting">Disconnecting…</string>
     <string name="state_connected">Connected</string>
-    <!-- Spec §7.3: Reconnecting is its own state, mirrored from the service, never
-         Connected or Failed. One steady label, with no blocked/open variant: whether
-         traffic is blocked is the ongoing notification's to report (§6.3), and Home
-         showing it too would mean widening ConnectionState.Reconnecting and its parcel
-         discriminant. Deferred to M8.5. -->
-    <string name="home_state_reconnecting">Reconnecting…</string>
+    <!-- M8.5 spec §4.2 (amended): Reconnecting is its own state, mirrored from the service,
+         never Connected or Failed. Whether traffic is blocked comes from the published
+         Reconnecting.blocked, the same fact the notification reads (M8.5 spec §4.4). -->
+    <string name="home_state_reconnecting_blocked">Reconnecting… traffic is blocked</string>
+    <string name="home_state_reconnecting_open">Reconnecting… traffic is not protected</string>
+    <!-- M8.5 spec §4.3: connected, uplink moving, nothing coming back. -->
+    <string name="home_state_stalled">Connected — nothing coming back</string>
 
     <string name="stage_allocating_port">Allocating port…</string>
     <string name="stage_generating_config">Generating config…</string>
@@ -66,7 +67,7 @@
          the tunnel carries, including traffic routed direct — not a proxied-vs-direct
          split. Rendered only for a live session (ConnectionState.Connected); "0 B" is
          a real measurement, never a placeholder, so unlike latency there is no
-         em-dash variant (§10.1). -->
+         em-dash variant (M8.5 spec §10.1). -->
     <string name="home_traffic_down">Downloaded</string>
     <string name="home_traffic_up">Uploaded</string>
 
@@ -75,7 +76,7 @@
          BreakdownSection's own KDoc for the three states an empty row list can mean. -->
     <string name="home_breakdown_header">By server</string>
     <!-- %1$s and %2$s are already-formatted byte counts (formatByteCount), same as the
-         DOWN/UP tiles above — never raw numbers (§10.1). -->
+         DOWN/UP tiles above — never raw numbers (M8.5 spec §10.1). -->
     <string name="home_breakdown_row_traffic">%1$s down · %2$s up</string>
     <!-- Shown in place of rows when the setting is on, the active server is a
          pasted (RAW_JSON) config, and no rows have arrived this connection.

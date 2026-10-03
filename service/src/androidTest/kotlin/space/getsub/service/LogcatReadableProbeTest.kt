@@ -11,7 +11,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Spec §3.1: can a non-privileged app read its own UID's logcat on this device?
+ * M8.5 spec §3.1: can a non-privileged app read its own UID's logcat on this device?
  *
  * `READ_LOGS` is not grantable to ordinary apps. The documented behaviour is
  * that logd returns only the caller's own UID's entries, which is the whole
@@ -38,7 +38,7 @@ class LogcatReadableProbeTest {
             }
 
         assertTrue(
-            "logcat did not return our own line — spec §3.6 fallback applies",
+            "logcat did not return our own line — M8.5 spec §3.6 fallback applies",
             found,
         )
     }

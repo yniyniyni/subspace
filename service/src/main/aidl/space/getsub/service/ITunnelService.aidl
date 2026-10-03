@@ -18,7 +18,7 @@ interface ITunnelService {
     /**
      * `oneway` deliberately. The Binder method only enqueues into the service's
      * serial coordinator; teardown joins the tun2socks worker and stops the Go
-     * core from that consumer, never from the caller's UI thread (§5.3).
+     * core from that consumer, never from the caller's UI thread (ARCHITECTURE.md §5.3).
      */
     oneway void disconnect();
 
@@ -28,7 +28,7 @@ interface ITunnelService {
      * `VpnService.Builder`'s allow/deny calls apply at establish() time only, so a
      * live session keeps whatever selection it was built with (ARCHITECTURE.md §8).
      * This restarts the current session with the profile :bg already holds — the UI
-     * does not re-supply one, because §5.5 makes the service the source of truth for
+     * does not re-supply one, because ARCHITECTURE.md §5.5 makes the service the source of truth for
      * what is connected.
      *
      * A no-op when nothing is connected. `oneway` for the reason disconnect() is: it
@@ -38,7 +38,7 @@ interface ITunnelService {
     oneway void reapplyPerApp();
 
     /**
-     * §5.5: after process death the UI must rebind and re-read actual state.
+     * ARCHITECTURE.md §5.5: after process death the UI must rebind and re-read actual state.
      * This is that call. The UI never infers connection state locally — an app
      * showing "Disconnected" while the tunnel is up is worse than one that
      * crashes.
@@ -60,7 +60,7 @@ interface ITunnelService {
      *
      * `oneway` for the reason disconnect() is: a measurement blocks for up to the
      * timeout, and a synchronous binder call would charge that to the caller's UI
-     * thread (§5.3).
+     * thread (ARCHITECTURE.md §5.3).
      *
      * Ids, not ProfileParcels: :bg already has Room access, and marshalling forty
      * profiles into one transaction runs at binder's 1 MB ceiling for no benefit.

@@ -23,9 +23,16 @@ public sealed interface ConnectionState {
         /**
          * The loopback HTTP proxy port, or 0 when the tunnel carries no HTTP
          * inbound. `:main` dials this so subscription and geo fetches travel
-         * through the tunnel (spec §5.4).
+         * through the tunnel (M5 spec §5.4).
          */
         val httpProxyPort: Int = 0,
+        /**
+         * Whether traffic is observably coming back (M8.5 spec §4.2, M8.5 spec §4.3).
+         * [Health.Idle] until the service's detector has seen something: a
+         * session nobody is using is indistinguishable from a dead one, and
+         * saying so is the point.
+         */
+        val health: Health = Health.Idle,
     ) : ConnectionState
 
     public data object Disconnecting : ConnectionState
@@ -33,7 +40,7 @@ public sealed interface ConnectionState {
     /**
      * A retryable failure is being worked through; session intent is still held.
      *
-     * Spec §2.1. Distinct from [Connecting], which is the *first* attempt and has a
+     * M8 spec §2.1. Distinct from [Connecting], which is the *first* attempt and has a
      * [StartupStage] to show; and from [Failed], which is terminal and means the
      * user must act. Rendering either of those here would be a lie the user acts on.
      *
@@ -41,10 +48,21 @@ public sealed interface ConnectionState {
      *   [space.getsub.core.model.retryability].
      * @property attempt 1-based, so the UI can say how long this has been going and
      *   [TUN_ESTABLISH_ATTEMPT_CAP] has something to compare against.
+     * @property blocked true while a TUN fd is held with no core serving it: the
+     *   fail-closed kill switch is blackholing the session's traffic.
      */
     public data class Reconnecting(
         val reason: FailureReason,
         val attempt: Int,
+        /**
+         * True while a TUN fd is held with no core serving it: the fail-closed
+         * kill switch is blackholing the session's traffic (M8.5 spec §4.2, as
+         * amended). This is the **observed** TUN, not the fail-closed setting:
+         * an attempt that failed before adopting an fd holds nothing, however
+         * the setting reads. No default, so every construction site has to
+         * decide.
+         */
+        val blocked: Boolean,
     ) : ConnectionState
 
     /**
@@ -61,7 +79,7 @@ public sealed interface ConnectionState {
      *
      * This matters more here than it did for `ParseFailure` in `:core:parser`,
      * which got the same treatment: [detail] originates in `XrayException`,
-     * whose own KDoc warns the core quotes the config back at you (§5.6),
+     * whose own KDoc warns the core quotes the config back at you (ARCHITECTURE.md §5.6),
      * where a `ParseFailure`'s detail is structured text our own validators
      * wrote.
      */
@@ -85,11 +103,30 @@ public sealed interface ConnectionState {
 }
 
 /**
+ * What the traffic counters say about a [ConnectionState.Connected] session
+ * (M8.5 spec §4.2, as amended).
+ *
+ * Decided in `:service` from the TUN-level counters alone, so it cannot tell
+ * proxied from direct traffic: a dead proxy reads [Open] while direct-routed
+ * traffic flows (ARCHITECTURE.md §14.4).
+ */
+public enum class Health {
+    /** Downlink carried data recently. */
+    Open,
+
+    /** Nothing observed recently, so nothing can be concluded. Never an alarm. */
+    Idle,
+
+    /** Uplink has carried data for the whole stall window and nothing came back. */
+    Stalled,
+}
+
+/**
  * How far the start sequence got.
  *
  * Granular on purpose. §10.4 warns that a swallowed start-sequence failure
  * produces "UI says connected, nothing works, no log line" — the stage says where
- * it broke without needing a log, which matters because §5.6 forbids logging the
+ * it broke without needing a log, which matters because ARCHITECTURE.md §5.6 forbids logging the
  * one thing that would otherwise identify the problem.
  */
 public enum class StartupStage {
@@ -184,7 +221,7 @@ public enum class FailureReason {
  * The only supported way to build a [ConnectionState.Failed].
  *
  * Redaction happens here rather than at log time because redaction that depends
- * on remembering to call a helper is redaction that eventually fails (§5.6), and
+ * on remembering to call a helper is redaction that eventually fails (ARCHITECTURE.md §5.6), and
  * libXray's error strings quote the config back at you.
  *
  * "Only supported" is now "only possible": see the note on

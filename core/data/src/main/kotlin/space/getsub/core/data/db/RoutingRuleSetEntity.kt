@@ -20,7 +20,7 @@ import androidx.room.PrimaryKey
  * already exists as an **update**, not a duplicate (§A.3.1). Enforcing that in
  * the schema now is what stops M6 from needing a migration.
  *
- * §5.6: the six entry columns are the domains and addresses the user visits.
+ * ARCHITECTURE.md §5.6: the six entry columns are the domains and addresses the user visits.
  * The generated `toString()` would print them verbatim — see the override.
  */
 @Entity(
@@ -56,9 +56,9 @@ internal data class RoutingRuleSetEntity(
     val sourceKind: String? = null,
     /** The subscription that delivered it. `ON DELETE CASCADE` is §A.1's rule. */
     val subscriptionId: Long? = null,
-    /** The profile's own `LastUpdated`, unix seconds. The monotonicity gate (spec §7.3). */
+    /** The profile's own `LastUpdated`, unix seconds. The monotonicity gate (M6 spec §7.3). */
     val lastUpdated: Long? = null,
-    /** `RoutingProfile.fingerprint()`. Drives the silent-no-op rule (spec §7.3). */
+    /** `RoutingProfile.fingerprint()`. Drives the silent-no-op rule (M6 spec §7.3). */
     val fingerprint: String? = null,
     val geoIpUrl: String? = null,
     val geoSiteUrl: String? = null,
@@ -72,7 +72,7 @@ internal data class RoutingRuleSetEntity(
     val dnsJson: String? = null,
     /** Stored, never read. Research §3.3. */
     val useChunkFiles: Boolean? = null,
-    /** Which generation directory under `geo/sets/<id>/` is live (spec §7.4). */
+    /** Which generation directory under `geo/sets/<id>/` is live (M6 spec §7.4). */
     @ColumnInfo(defaultValue = "0")
     val assetGeneration: Long = 0,
     /** A `RuleSetAssetState` name. */

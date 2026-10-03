@@ -13,7 +13,7 @@ import space.getsub.feature.profiles.add.UserMessage
  *
  * Deliberately **not** the text shown on screen: fix round 1 found the
  * previous version of this file rendering this constant's value directly in
- * [ServersScreen]'s protocol chip, which bypassed `strings.xml` (§12) and
+ * [ServersScreen]'s protocol chip, which bypassed `strings.xml` (ARCHITECTURE.md §12) and
  * meant the sentinel a translator's string could never diverge from the
  * literal comparison value without breaking the filter. `ServersScreen`
  * instead resolves this sentinel to `R.string.servers_protocol_filter_all`
@@ -134,14 +134,14 @@ internal data class ServersGroup(
 /**
  * One stored server, projected for display.
  *
- * Deliberately carries no address: §5.6 treats a server address as a secret,
+ * Deliberately carries no address: ARCHITECTURE.md §5.6 treats a server address as a secret,
  * and a server list is exactly where showing or logging one is tempting. The
  * node row this backs (ARCHITECTURE.md-facing brief for Task 18) renders a
  * code tile derived from [name], not [address][space.getsub.core.data.StoredProfile.address].
  *
  * @property compatibilityMode mirrors [space.getsub.core.data.StoredProfile.compatibilityMode].
  *   Shown as "compatibility mode", never "raw": passthrough execution of a
- *   hand-pasted config is not implemented (§6), and "raw" alone would promise
+ *   hand-pasted config is not implemented (ARCHITECTURE.md §6), and "raw" alone would promise
  *   behaviour this build does not have.
  * @property connectable mirrors [space.getsub.core.data.StoredProfile.connectable] —
  *   see its own KDoc for what makes a row connectable (VLESS over `tcp`, `ws`, `grpc` or

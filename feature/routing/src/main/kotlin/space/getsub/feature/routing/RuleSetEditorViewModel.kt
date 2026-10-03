@@ -50,7 +50,7 @@ internal sealed interface SaveProblem {
      * [RoutingSource.ruleSetNamed] itself and refuses rather than letting the
      * collision happen silently.
      *
-     * [name] is exempt from §5.6 the same way [RuleSetRow.name] is: a label
+     * [name] is exempt from ARCHITECTURE.md §5.6 the same way [RuleSetRow.name] is: a label
      * the user chose to identify a rule set, not a value it routes.
      */
     data class NameConflict(val name: String) : SaveProblem
@@ -88,7 +88,10 @@ internal data class RuleSetEditorState(
     val saveProblem: SaveProblem? = null,
     val saved: Boolean = false,
 ) {
-    /** The stored entries for [outcome]/[field]. §5.6: this is the screen's whole job — display, never log. */
+    /**
+     * The stored entries for [outcome]/[field]. ARCHITECTURE.md §5.6: this is the
+     * screen's whole job — display, never log.
+     */
     fun bucket(
         outcome: RouteOutcome,
         field: BucketField,

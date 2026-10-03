@@ -12,9 +12,9 @@ import space.getsub.core.model.RoutingProfile
 /**
  * Spec §9's mandated fingerprint-stability case.
  *
- * §4.3: M6 stored the DNS block as an opaque string and folded it into the
+ * M6.5 spec §4.3: M6 stored the DNS block as an opaque string and folded it into the
  * fingerprint verbatim, so canonicalising on write would have moved the
- * fingerprint of every DNS-carrying profile already on a device — and §7.3 makes
+ * fingerprint of every DNS-carrying profile already on a device — and M6.5 spec §7.3 makes
  * that fingerprint the silent-no-op gate, so each move costs one unexplained
  * review sheet. The fix is to fold the **typed projection**: a row stored by M6
  * in Happ's key order and a freshly parsed profile then agree regardless of byte

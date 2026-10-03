@@ -132,7 +132,7 @@ constructor(
 
     /**
      * Fetches [request], retrying once if the connection died before any answer arrived. Always on
-     * [Dispatchers.IO] (§5.3).
+     * [Dispatchers.IO] (ARCHITECTURE.md §5.3).
      *
      * M4's device run turned up a reproducible habit: a refresh reports "could not reach the
      * server", and tapping refresh again immediately succeeds. Three things make that this
@@ -247,7 +247,7 @@ constructor(
 }
 
 /**
- * Maps status and headers to the §7 taxonomy.
+ * Maps status and headers to the M4 spec §7 taxonomy.
  *
  * The HWID headers are checked **before** the status code, and independently of
  * it, because Remnawave does not report either HWID condition with an error
@@ -270,7 +270,7 @@ constructor(
  *
  * The success branch's read is capped at [MAX_SUBSCRIPTION_BODY_BYTES]. An
  * over-cap body maps to [FetchFailure.ServerError]: the taxonomy is closed
- * (§7), and of the existing members this is the closest fit — the server (or
+ * (M4 spec §7), and of the existing members this is the closest fit — the server (or
  * whatever answered on its behalf) sent a response this client cannot safely
  * accept, the same category as any other response it cannot make sense of.
  * Not [FetchFailure.ClientError]: nothing about the outgoing request was
@@ -335,7 +335,7 @@ private fun Response.hasHwidFailureMarker(): Boolean =
  * This throwable's class name, plus its root cause's when that differs — never any message.
  *
  * See [FetchOutcome.Failed.detail] for why the message is excluded and why the class name alone is
- * safe under §5.6. The root cause is included because OkHttp wraps: the interesting half of a
+ * safe under ARCHITECTURE.md §5.6. The root cause is included because OkHttp wraps: the interesting half of a
  * failed handshake is usually the `EOFException`/`ConnectException` underneath a generic
  * `SSLException`, and "SSLException" on its own would leave this field almost as uninformative as
  * the taxonomy member it accompanies.

@@ -42,7 +42,7 @@ class MetricsFetchFailureTest {
         repeat(10) { fetchMetricsPayload(port = invalidPort + 2, timeoutMillis = 50, warn = warnings::add) }
         assertEquals(1, warnings.size)
         assertTrue("expected the exception's simple class name in the warning", warnings[0].isNotBlank())
-        // §5.6: never the port, the URL, or any payload/config content — only
+        // ARCHITECTURE.md §5.6: never the port, the URL, or any payload/config content — only
         // the failing exception's class name and the fixed template text.
         assertFalse(warnings[0].contains("127.0.0.1"))
         assertFalse(warnings[0].contains("://"))

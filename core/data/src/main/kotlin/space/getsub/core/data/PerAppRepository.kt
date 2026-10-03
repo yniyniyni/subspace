@@ -78,7 +78,7 @@ constructor(
 }
 
 /**
- * Spec §4.3, and the two asymmetries that matter.
+ * M5.5 spec §4.3, and the two asymmetries that matter.
  *
  * [PerAppMode.Off] reports no packages at all, so a selection left behind by a
  * mode the user switched off cannot reach `VpnService.Builder`.

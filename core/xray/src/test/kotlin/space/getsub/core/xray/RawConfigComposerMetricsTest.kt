@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import org.junit.Test
 
 /**
- * Task 14b, spec §2.4: the pure passthrough branch must never carry
+ * Task 14b, M8.5 spec §2.4: the pure passthrough branch must never carry
  * `stats`/`policy`/`metrics` — it runs a config exactly as written, and
  * injecting these three would break that promise. Only the override branch,
  * which already replaces `routing`/`dns` wholesale, may carry them.

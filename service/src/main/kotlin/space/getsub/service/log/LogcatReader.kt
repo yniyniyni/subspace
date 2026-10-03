@@ -11,14 +11,14 @@ import java.util.UUID
 /**
  * The constant half of every capture's end-of-drain sentinel (N1 / R46). The
  * other half is a per-reader random nonce — see [LogcatReader.sentinel]. The
- * line carries nothing else: no config, no session detail (§5.6).
+ * line carries nothing else: no config, no session detail (ARCHITECTURE.md §5.6).
  */
 internal const val SENTINEL_PREFIX = "subspace-log-capture-end"
 
 /**
  * Owns a `logcat` subprocess and emits its lines.
  *
- * Spec §3.1: this exists rather than an in-process log facade because
+ * M8.5 spec §3.1: this exists rather than an in-process log facade because
  * xray-core's `GoLog` output and hev's `subspace-tun2socks` output are native
  * lines no Kotlin facade can see — and those are exactly the lines that explain
  * why a dial failed. `:main` and `:bg` share a UID, so one reader sees both.
@@ -79,6 +79,7 @@ internal const val SENTINEL_PREFIX = "subspace-log-capture-end"
  */
 internal class LogcatReader(
     private val signal: (pid: Int) -> Unit = { pid -> Os.kill(pid, OsConstants.SIGTERM) },
+    private val readIntervalMillis: Long = PacedInputStream.DEFAULT_INTERVAL_MILLIS,
     private val spawn: () -> Process,
 ) {
     /**
@@ -212,9 +213,9 @@ internal class LogcatReader(
      * about the *start sequence*, not about a logger that could otherwise abort
      * one.
      */
-    fun lines(): Sequence<String> {
+    fun lines(onIdle: () -> Unit = {}): Sequence<String> {
         val proc = spawnAndPublish() ?: return emptySequence()
-        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+        val reader = BufferedReader(InputStreamReader(PacedInputStream(proc.inputStream, readIntervalMillis, onIdle)))
         return sequence {
             try {
                 if (readPid(reader)) {
@@ -416,7 +417,7 @@ private const val LOGCAT_VIA_SHELL = "echo \$\$; exec logcat \"\$@\""
  * **`-T <epoch>`, where the epoch is [LogCapture.start]'s wall-clock reading
  * (N1 / R46; replaces I2's `-T 1`).** Without a `-T`/`-t`, `logcat` dumps this
  * UID's entire retained buffer before it starts following — review finding
- * I2, confirmed on device: a ring the spec (§3.5) calls a record of *one
+ * I2, confirmed on device: a ring the spec (M8.5 spec §3.5) calls a record of *one
  * session* began with `--------- beginning of main` and a pre-session `:main`
  * line. I2's fix, `-T 1`, still replayed one line of history — in practice
  * always the previous session's last line, which after N1 was the very `done`

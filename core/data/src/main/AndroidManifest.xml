@@ -15,7 +15,7 @@
       still use the network, and a user cannot exclude an app the picker does not
       show. A silently partial list reads as a bug, not as a policy.
 
-      §14.7's distribution targets are GitHub Releases and IzzyOnDroid, neither of
+      ARCHITECTURE.md §14.7's distribution targets are GitHub Releases and IzzyOnDroid, neither of
       which cares. Nothing here forecloses Play — VPN clients are an accepted use
       case for this permission, and that is a Console declaration rather than a
       code change.

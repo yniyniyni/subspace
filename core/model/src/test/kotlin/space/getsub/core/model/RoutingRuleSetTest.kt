@@ -63,7 +63,7 @@ class RoutingRuleSetTest {
         RuleBucket(ips = listOf("10.0.0.0/8")).isEmpty shouldBe false
     }
 
-    // §5.6: entries are the domains and addresses the user visits. The generated
+    // ARCHITECTURE.md §5.6: entries are the domains and addresses the user visits. The generated
     // data-class toString() would print them verbatim into any log line that
     // interpolates a rule set — a structural guard, matching SubscriptionEntity
     // and FetchOutcome.Success.

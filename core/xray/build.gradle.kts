@@ -25,7 +25,7 @@ dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:parser"))
     implementation(group = "", name = "libxray", ext = "aar")
-    // §5.3: every libXray call is slow and runs on Dispatchers.IO.
+    // ARCHITECTURE.md §5.3: every libXray call is slow and runs on Dispatchers.IO.
     implementation(libs.kotlinx.coroutines.core)
     // Tree rewriting for the passthrough config path. Already used by :core:parser
     // and :core:data — a new module edge, not a new dependency (§10.7). The typed

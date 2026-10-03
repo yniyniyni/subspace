@@ -7,7 +7,7 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Owns the `wanted` half of the session intent (spec §1.1) so that a settlement
+ * Owns the `wanted` half of the session intent (M8 spec §1.1) so that a settlement
  * cannot clear intent that belongs to a newer session.
  *
  * ## The bug this exists to close
@@ -106,7 +106,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * `Nothing`-or-`Stop` when it was written, `a4e3e14` made both arms answer
  * `Nothing`, the third outcome made both answer `Release` — and `Release` was
  * wrong too, for [ReconcileTrigger.NetworkLost], which returns `Nothing` from
- * spec §2.4's early return before intent is read
+ * M8 spec §2.4's early return before intent is read
  * (`ReconcileTest.anUnwantedFailureSurvivesEveryTrigger` pins both halves).
  * Naming the property the argument needs, rather than whichever arm happens to
  * deliver it, is what stops a fifth.
@@ -176,7 +176,7 @@ internal class SessionIntentGate(
     fun currentToken(): Int = token.get()
 
     /**
-     * Spec §1.2: intent goes true when a connect is **accepted**, not when it
+     * M8 spec §1.2: intent goes true when a connect is **accepted**, not when it
      * succeeds — and the token moves with it, in the same critical section.
      *
      * @return the token this call minted, taken inside that critical section.

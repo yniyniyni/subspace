@@ -178,6 +178,55 @@ class RedactionTest {
     }
 
     /**
+     * An address that ends a sentence used to pass straight through: the IPv6
+     * boundary treated *any* neighbouring `.` as "part of something larger", so
+     * `2001:db8::1.` was never a candidate and reached the log ring unredacted
+     * (ARCHITECTURE.md §5.6). A `.` that ends the string or is followed by
+     * whitespace is punctuation, not part of a larger token.
+     */
+    @Test
+    fun `an ipv6 address that ends a sentence is redacted`() {
+        redact("connection to 2001:db8::1.") shouldBe "connection to <redacted>."
+        redact("peer fd00::1. retrying") shouldBe "peer <redacted>. retrying"
+    }
+
+    /** A `.` that continues into more text still blocks the candidate, as before. */
+    @Test
+    fun `a dot that continues into more text still blocks the ipv6 candidate`() {
+        redact("build 12:34:ab.5 end") shouldBe "build 12:34:ab.5 end"
+        redact("trace .2001:db8::1 end") shouldBe "trace .2001:db8::1 end"
+        redact("started at 12:34:56.") shouldBe "started at 12:34:56."
+    }
+
+    /** Review finding 1: a dot before a character that is not regex whitespace is not sentence-final. */
+    @Test
+    fun `a dot before a non-whitespace control character does not split a later rule's token`() {
+        redact("dial fe80::1.\u001Fsecrethost") shouldBe "dial <redacted>"
+    }
+
+    /**
+     * M8.5 spec §3.2, Task 21, fix round 1 (review, Important 1): pins the
+     * exact output for the two cases `IcuRedactionProbeTest` uses to isolate
+     * `redactIpv6Candidates` on-device, so the on-device assertions are known
+     * to match real `redact()` output on the JVM oracle before trusting them
+     * as exact-match assertions where there is no oracle to compare against.
+     *
+     * `"peer"` deliberately avoids every other pattern's keyword
+     * (`KEYED_HOST_PATTERN`/`LABELLED_HOST_PATTERN`'s address/server/host/sni/
+     * domain/dial/lookup list) and the address has no trailing
+     * colon-before-whitespace, so only the IPv6 pass can account for this
+     * exact output — unlike the review's rejected `"dial udp [...]"` example,
+     * which `LABELLED_HOST_PATTERN`'s own `dial`+`udp` match would swallow
+     * whole even with the IPv6 pass deleted.
+     */
+
+    @Test
+    fun `the ipv6 candidate scan is the only pass that can produce this exact output`() {
+        redact("peer 2001:db8::42 closed") shouldBe "peer <redacted> closed"
+        redact("build 12:34:ab.5 end") shouldBe "build 12:34:ab.5 end"
+    }
+
+    /**
      * The other half of the four above. §10.4 makes this string the only
      * diagnostic a user can hand back, so "the host is gone" is half a test —
      * these pin what is *left*, which is what makes the failure debuggable.
@@ -248,7 +297,7 @@ class RedactionTest {
     /**
      * §10.4: `FailureReason.GeoDataMissing`'s entire purpose is naming exactly
      * which `.dat` file is missing so the user re-downloads it instead of going
-     * looking for a broken server. A filename is shape, not content (§5.6) — it
+     * looking for a broken server. A filename is shape, not content (ARCHITECTURE.md §5.6) — it
      * is not the "server address" this function exists to protect, and if this
      * regresses the failure reads "Geo data missing — `<redacted>, <redacted>`",
      * which tells the user nothing.
@@ -288,7 +337,7 @@ class RedactionTest {
      * string this function ever sees, including the config libXray quotes back
      * when `testXray` rejects one. `RoutingEntries` accepts any domain body
      * without whitespace, `/` or `:`, so `corp.internal.dat` is a legal routing
-     * rule — and a routing rule is browsing data under §5.6. If either assertion
+     * rule — and a routing rule is browsing data under ARCHITECTURE.md §5.6. If either assertion
      * here starts passing a hostname through, the exemption has been widened
      * from "this message is a filename list" to "this token looks like a
      * filename", and that is a leak.

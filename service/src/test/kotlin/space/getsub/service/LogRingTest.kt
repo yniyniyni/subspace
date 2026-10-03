@@ -112,4 +112,65 @@ class LogRingTest {
         assertTrue("ring must not be empty", lines.isNotEmpty())
         assertTrue(lines.last().startsWith("line-49"))
     }
+
+    // Row 7, Pass 4: append used to stat log.0 three times and open, write and
+    // close it for every line (a quarter of the capture thread). The ring now
+    // holds log.0 open, and these pin what that must not break.
+
+    @Test
+    fun `lines after a clear that empties log 0 in place stay visible`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir)
+        ring.append("before")
+        java.io.FileOutputStream(File(dir, "log.0")).close() // what LogRepository.clear does
+        ring.append("after")
+        assertEquals(listOf("after"), readAll(dir))
+    }
+
+    @Test
+    fun `a clear does not trigger an early rotation`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir, maxBytesPerFile = 200)
+        repeat(2) { ring.append("line-$it".padEnd(99, '.')) }
+        java.io.FileOutputStream(File(dir, "log.0")).close()
+        ring.append("after")
+        assertEquals(false, File(dir, "log.1").exists())
+        assertEquals(listOf("after"), readAll(dir))
+    }
+
+    @Test
+    fun `a deleted log 0 is recreated within one check interval`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir)
+        ring.append("before")
+        File(dir, "log.0").delete()
+        repeat(LogRing.EXISTENCE_CHECK_INTERVAL) { ring.append("line-$it") }
+        assertEquals("line-${LogRing.EXISTENCE_CHECK_INTERVAL - 1}", readAll(dir).last())
+    }
+
+    @Test
+    fun `one ring per directory in a process`() {
+        val dir = tmp.newFolder()
+        assertTrue(LogRing.shared(dir) === LogRing.shared(File(dir.path)))
+    }
+
+    @Test
+    fun `appendAll writes a batch in order`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir)
+        ring.append("first")
+        ring.appendAll(listOf("second", "third"))
+        assertEquals(listOf("first", "second", "third"), readAll(dir))
+    }
+
+    @Test
+    fun `a batch larger than a file still rotates and stays bounded`() {
+        val dir = tmp.newFolder()
+        val ring = LogRing(dir, maxBytesPerFile = 200)
+        ring.appendAll((0 until 40).map { "line-$it".padEnd(90, '.') })
+        val lines = readAll(dir)
+        assertTrue(lines.last().startsWith("line-39"))
+        assertTrue(lines.none { it.startsWith("line-0.") })
+        assertTrue("grew to ${totalBytes(dir)}", totalBytes(dir) <= 600)
+    }
 }

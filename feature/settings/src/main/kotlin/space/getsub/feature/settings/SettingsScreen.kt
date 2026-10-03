@@ -26,6 +26,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -35,7 +36,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import space.getsub.core.data.ThemePreference
 import space.getsub.core.model.DnsTransport
 import space.getsub.core.model.GeoDataKind
@@ -116,8 +119,10 @@ fun SettingsScreen(
             onBootAutostartChanged = viewModel::onBootAutostartChanged,
             onFailClosedChanged = viewModel::onFailClosedChanged,
             onBatteryPromptResolved = viewModel::onBatteryPromptResolved,
-            onAlwaysOnOpened = viewModel::onAlwaysOnOpened,
+            onAlwaysOnRequested = viewModel::onAlwaysOnRequested,
+            onVpnSettingsOpened = viewModel::onVpnSettingsOpened,
             onPerTagBreakdownChanged = viewModel::onPerTagBreakdownChanged,
+            onLightweightModeChanged = viewModel::onLightweightModeChanged,
         ),
         navigation = navigation,
         modifier = modifier,
@@ -168,13 +173,18 @@ internal data class SettingsActions(
     val onBootAutostartChanged: (Boolean) -> Unit = {},
     val onFailClosedChanged: (Boolean) -> Unit = {},
     val onBatteryPromptResolved: () -> Unit = {},
-    // Defaulted for the same reason as the three above. Spec §7.2's third battery-prompt
+    // Defaulted for the same reason as the three above. M8 spec §7.2's third battery-prompt
     // trigger: always-on is a deep link, not a switch, so the tap is what the app can observe.
-    val onAlwaysOnOpened: () -> Unit = {},
+    val onAlwaysOnRequested: () -> Unit = {},
+    // M8.5 spec §6 #10: consumes SettingsState.openVpnSettingsRequested once the screen has
+    // launched the deep link it names.
+    val onVpnSettingsOpened: () -> Unit = {},
     // Defaulted for the same reason as the four above (Task 15, this section's own newest
     // field) — neither SettingsHwidLayoutTest nor SettingsDnsSectionTest's full positional
     // construction bears on the diagnostics toggle.
     val onPerTagBreakdownChanged: (Boolean) -> Unit = {},
+    // Defaulted for the same reason as the fields above.
+    val onLightweightModeChanged: (Boolean) -> Unit = {},
 )
 
 /**
@@ -340,7 +350,7 @@ private fun HwidControl(
  * [SettingsTunnelSection] renders its own "Tunnel" title internally, the same way
  * [SettingsDnsSection] does for "DNS".
  *
- * Also hosts the battery-optimisation prompt (Task 13, spec §7.2): [SettingsState.showBatteryPrompt]
+ * Also hosts the battery-optimisation prompt (Task 13, M8 spec §7.2): [SettingsState.showBatteryPrompt]
  * is true for the one moment between a survival setting being switched on and the user responding.
  * Both the dialog's own dismiss and its "open battery settings" action resolve through
  * [SettingsActions.onBatteryPromptResolved] — ARCHITECTURE.md §9's "respect refusal" means the
@@ -356,24 +366,29 @@ private fun TunnelSection(
         state = state,
         onBootAutostartChange = actions.onBootAutostartChanged,
         onFailClosedChange = actions.onFailClosedChanged,
-        onOpenVpnSettings = {
-            // Spec §7.2: the prompt's third trigger. The deep link still opens whether or not a
-            // prompt is due — shouldPromptForBattery decides that, and never twice.
-            //
-            // The order of these two statements is not load-bearing, and an earlier version of
-            // this comment claimed it was. onAlwaysOnOpened() does not raise a flag in state: it
-            // launches a coroutine that performs a PowerManager binder round trip and a Room
-            // read before it may set showBatteryPrompt, so when — and whether — the dialog
-            // appears is governed by that suspension, not by which line ran first.
-            // openVpnSettings starts the system VPN screen synchronously, and in practice covers
-            // this one well before the prompt can resolve, so the user meets the prompt on
-            // return, after doing the thing it is about. That is the experience wanted; it is
-            // what the asynchrony produces rather than something this ordering guarantees.
-            actions.onAlwaysOnOpened()
-            openVpnSettings(context)
-        },
+        onLightweightModeChange = actions.onLightweightModeChanged,
+        // M8.5 spec §6 #10: the ViewModel decides whether a battery prompt comes first;
+        // the deep link is launched from openVpnSettingsRequested below, never directly,
+        // so the prompt can no longer be buried under the system VPN screen.
+        onOpenVpnSettings = actions.onAlwaysOnRequested,
         onOpenBatterySettings = { openBatterySettings(context) },
     )
+
+    // Controller ruling R14 (M8.5 spec §6 #10, final fix wave finding #1): the confirm path on
+    // the battery dialog below starts the battery-optimisation list on top of this screen, which
+    // moves this screen off RESUMED without stopping it — Compose keeps composing frames until
+    // ON_STOP. Gating the deep link on RESUMED, rather than firing it the instant the ViewModel
+    // requests it, is what stops it from launching a frame later and burying that battery screen
+    // under ACTION_VPN_SETTINGS: the launch now waits for the user to come back from battery
+    // settings (or, when no prompt is due, fires immediately, since the screen is resumed then
+    // too).
+    val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    LaunchedEffect(state.openVpnSettingsRequested, lifecycleState) {
+        if (shouldLaunchVpnSettings(state.openVpnSettingsRequested, lifecycleState)) {
+            openVpnSettings(context)
+            actions.onVpnSettingsOpened()
+        }
+    }
 
     if (state.showBatteryPrompt) {
         AlertDialog(
@@ -414,13 +429,13 @@ private fun XrayVersionState.displayText(): String =
         XrayVersionState.Unavailable -> stringResource(R.string.settings_about_xray_version_unavailable)
     }
 
-/** Spec §7.1: the app cannot set always-on VPN or its lockdown itself — both are system settings. */
+/** M8 spec §7.1: the app cannot set always-on VPN or its lockdown itself — both are system settings. */
 private fun openVpnSettings(context: Context) {
     launchSettingsIntent(context, Settings.ACTION_VPN_SETTINGS)
 }
 
 /**
- * Spec §7.2: the settings *list*, not `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — that direct
+ * M8 spec §7.2: the settings *list*, not `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` — that direct
  * prompt needs the `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission, one of the most
  * policy-sensitive on Android, and ARCHITECTURE.md §14.7 says nothing here should foreclose Google
  * Play. One extra tap is cheaper than that permission, and no new permission is declared for it.

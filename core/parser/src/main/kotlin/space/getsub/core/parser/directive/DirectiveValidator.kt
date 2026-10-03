@@ -5,7 +5,7 @@ package space.getsub.core.parser.directive
 /**
  * A directive that did not survive validation.
  *
- * **Carries the key only, never the value** (§5.6). A rejected value is
+ * **Carries the key only, never the value** (ARCHITECTURE.md §5.6). A rejected value is
  * precisely the hostile input this stage exists to stop, and echoing it into a
  * log or a diagnostic is the leak. The absence of a `value` field is the
  * guarantee; `DirectiveValidatorTest` pins it against a future widening.

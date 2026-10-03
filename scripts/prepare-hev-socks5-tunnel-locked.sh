@@ -17,16 +17,23 @@ fi
 perl "$lock_wrapper" --verify "$repo_root" "$expected_output" "$lock_fd"
 unset SUBSPACE_HEV_PREPARE_LOCK_FD
 
-if [[ $# -ne 3 ]]; then
-    echo "usage: $0 SOURCE_DIR OUTPUT_DIR PATCH_FILE" >&2
+if [[ $# -lt 3 ]]; then
+    echo "usage: $0 SOURCE_DIR OUTPUT_DIR PATCH_FILE..." >&2
     exit 2
 fi
 
 source_dir="$1"
 output_dir="$2"
-patch_file="$3"
+shift 2
 expected_source="$repo_root/third_party/hev-socks5-tunnel"
-expected_patch="$repo_root/third_party/hev-patches/0001-nonblocking-pending-stop.patch"
+expected_patches=(
+    "$repo_root/third_party/hev-patches/0001-nonblocking-pending-stop.patch"
+    "$repo_root/third_party/hev-patches/0002-skip-timeout-if-not-alive.patch"
+)
+patch_series_names=""
+for expected_patch in "${expected_patches[@]}"; do
+    patch_series_names+="${patch_series_names:+, }$(basename "$expected_patch")"
+done
 expected_commit="0a05221275a51a884d93328c55fc2fbc9e9b6974"
 nested_specs=(
     "src/core cbff465b916832455c1cb02f1f9e25a41062054d"
@@ -43,8 +50,8 @@ if [[ "$output_dir" != "$expected_output" ]]; then
     echo "refusing unexpected generated HEV path: $output_dir" >&2
     exit 4
 fi
-if [[ "$patch_file" != "$expected_patch" ]]; then
-    echo "refusing unexpected HEV patch path: $patch_file" >&2
+if [[ "$*" != "${expected_patches[*]}" ]]; then
+    echo "refusing unexpected HEV patch series: $*" >&2
     exit 5
 fi
 if [[ -L "$output_dir" || ( -e "$output_dir" && ! -d "$output_dir" ) ]]; then
@@ -241,7 +248,8 @@ done
 for required in \
     "third-part/lwip 2a11c14c7a32887af25a034e82ef18b0b12076ac Android.mk" \
     "third-part/hev-task-system b1afa0e21fb4ed5a69560e78e54baf0efdebe171 Android.mk" \
-    "third-part/yaml efa36117a8646d26d12b58e05bac472d7854a70d Android.mk"; do
+    "third-part/yaml efa36117a8646d26d12b58e05bac472d7854a70d Android.mk" \
+    "src/core cbff465b916832455c1cb02f1f9e25a41062054d src/hev-socks5.c"; do
     read -r nested_path expected_nested_commit required_path <<<"$required"
     if ! git -C "$source_dir/$nested_path" cat-file -e "$expected_nested_commit:$required_path"; then
         echo "pinned nested HEV tree is missing tracked file: $nested_path/$required_path" >&2
@@ -300,20 +308,23 @@ if ! cmp -s "$expected_before" "$actual_manifest"; then
 fi
 base_tree="$(git -C "$staging_dir" write-tree)"
 
-git -C "$staging_dir" apply --unidiff-zero --check "$patch_file"
-git -C "$staging_dir" apply --unidiff-zero "$patch_file"
+for p in "${expected_patches[@]}"; do
+    git -C "$staging_dir" apply --unidiff-zero --check "$p"
+    git -C "$staging_dir" apply --unidiff-zero "$p"
+done
 git -C "$staging_dir" add -f -A
 
 printf '%s\0' \
     src/hev-main.c \
     src/hev-main.h \
     src/hev-socks5-tunnel.c \
-    src/hev-socks5-tunnel.h |
+    src/hev-socks5-tunnel.h \
+    src/core/src/hev-socks5.c |
     LC_ALL=C sort -z >"$expected_changed"
 git -C "$staging_dir" diff-index --cached --name-only -z "$base_tree" -- |
     LC_ALL=C sort -z >"$actual_changed"
 if ! cmp -s "$expected_changed" "$actual_changed"; then
-    echo "HEV patch changed files outside the reviewed four-file inventory" >&2
+    echo "HEV patch series changed files outside the reviewed five-file inventory" >&2
     exit 18
 fi
 
@@ -335,6 +346,9 @@ while IFS= read -r -d '' entry; do
     src/hev-socks5-tunnel.h)
         object="4ac2071a03975167510639d653148143dfa25f6c"
         ;;
+    src/core/src/hev-socks5.c)
+        object="d06b5d4b0506f75ef8eecccd5fe68e76630251b5"
+        ;;
     esac
     printf '%s %s %s\t%s\0' "$mode" "$object" "$stage" "$path" >>"$expected_after_raw"
 done <"$expected_before"
@@ -342,7 +356,7 @@ LC_ALL=C sort -z "$expected_after_raw" >"$expected_after"
 
 git -C "$staging_dir" ls-files --stage -z | LC_ALL=C sort -z >"$actual_manifest"
 if ! cmp -s "$expected_after" "$actual_manifest"; then
-    echo "patched HEV inventory differs from pinned files plus the reviewed four blobs" >&2
+    echo "patched HEV inventory differs from pinned files plus the reviewed five blobs" >&2
     comm -3 \
         <(tr '\0' '\n' <"$expected_after") \
         <(tr '\0' '\n' <"$actual_manifest") |
@@ -375,10 +389,11 @@ if [[ -L "$output_dir/current" ]]; then
     active_manifest="$scratch_root/active-manifest"
     capture_inventory "$output_dir/current" "$active_manifest" active
     if cmp -s "$expected_after" "$active_manifest"; then
-        echo "Reused verified recursive HEV inventory $expected_commit with $(basename "$patch_file")"
+        echo "Reused verified recursive HEV inventory $expected_commit with $patch_series_names"
         exit 0
     fi
     echo "generated HEV current version does not match the complete reviewed inventory" >&2
+    echo "Remedy: run './gradlew :service:clean', or delete '$output_dir' directly, then rebuild." >&2
     exit 20
 fi
 
@@ -416,4 +431,4 @@ fi
 active_link_tmp=""
 active_published=1
 
-echo "Published verified recursive HEV inventory $expected_commit with $(basename "$patch_file")"
+echo "Published verified recursive HEV inventory $expected_commit with $patch_series_names"

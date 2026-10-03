@@ -47,7 +47,7 @@ class LogCaptureLifecycleTest {
 
         assertTrue("StopLogCapture must exist in the order", stopCapture >= 0)
         assertEquals(
-            "StopLogCapture must be last — spec §3.3, or the capture ends " +
+            "StopLogCapture must be last — M8.5 spec §3.3, or the capture ends " +
                 "before the teardown phases it exists to record",
             order.size - 1,
             stopCapture,
@@ -74,7 +74,7 @@ class LogCaptureLifecycleTest {
     @Test
     fun `StopTrafficSampler sits immediately before StopLogCapture, not any other position`() {
         // TeardownStep.StopTrafficSampler's own KDoc requires this exact adjacency
-        // (spec §1.5): the sampler must stop after the session's final state has
+        // (M8.5 spec §1.5): the sampler must stop after the session's final state has
         // published and before the capture that must outlive it — and nowhere else.
         val order = teardownOrder()
         val samplerIndex = order.indexOf(TeardownStep.StopTrafficSampler)

@@ -45,7 +45,7 @@ public sealed interface OverrideTarget {
 }
 
 /**
- * Applies design §3.3's precedence rule. Pure, non-throwing, no I/O.
+ * Applies design M7.5 spec §3.3's precedence rule. Pure, non-throwing, no I/O.
  *
  * **Resolve at connect, never store the answer.** M7's one Critical was a stored
  * verdict going stale across a subscription refresh; a stored target would go
@@ -65,7 +65,7 @@ public fun resolveOverrideTarget(
 ): OverrideTarget {
     // Gate 0. Only *non-blank* tags can collide: an untagged outbound was never a
     // candidate, and treating two of them as ambiguous would refuse the very
-    // common `proxy` + untagged-freedom shape that runs today (design §3.3).
+    // common `proxy` + untagged-freedom shape that runs today (design M7.5 spec §3.3).
     val named = analysis.outboundTags.filter { it.isNotBlank() }
     if (named.size != named.toSet().size) {
         return OverrideTarget.Unresolvable(OverrideBlocker.AmbiguousOutboundTags)
@@ -141,7 +141,7 @@ private fun resolveBalancer(
     // A6: the core accepts a balancer that selects nothing and then silently
     // drops every packet, so this is the one refusal we must make ourselves.
     if (live.isEmpty()) return OverrideTarget.Unresolvable(OverrideBlocker.BalancerSelectsNothing)
-    // §3.4, widened after the branch review: a prefix that also captures an
+    // M7.5 spec §3.4, widened after the branch review: a prefix that also captures an
     // outbound which does not reach a server puts that outbound inside the user's
     // balancer — proxied traffic leaving unproxied, or vanishing into a blackhole,
     // with no error and no log line. Two sources, one hazard: the outbounds *we*
@@ -174,7 +174,7 @@ private fun resolveBalancer(
     // one of them. Not "the first" or "the last" — among rules that all match
     // everything, only the first fires, and which that is depends on evaluation
     // order this project has not measured. One distinct answer, or refuse.
-    // §3.3 to the letter: distinct **first**, liveness second. Filtering the
+    // M7.5 spec §3.3 to the letter: distinct **first**, liveness second. Filtering the
     // references by liveness before counting them would rescue a config whose
     // catch-alls name one dead and one live balancer — by picking the live one,
     // which is a guess about which catch-all the core reaches first.

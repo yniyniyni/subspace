@@ -11,7 +11,7 @@ import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
 
 /**
- * Spec §3.2. The state machine is the part of M8 most likely to be wrong and the
+ * M8 spec §3.2. The state machine is the part of M8 most likely to be wrong and the
  * only part that is testable without a device, so these are invariants rather
  * than examples.
  */
@@ -26,7 +26,7 @@ class ReconcileTest {
     }
 
     /**
-     * Spec §1.3: a null intent is now answerable, so a sticky restart with
+     * M8 spec §1.3: a null intent is now answerable, so a sticky restart with
      * nothing wanted stops immediately — the outcome START_NOT_STICKY used to
      * protect, reached by asking instead of by refusing.
      */
@@ -69,8 +69,8 @@ class ReconcileTest {
     }
 
     /**
-     * Spec §2.4: with no network there is no timer and no attempt. The service
-     * waits on the callback. A retry loop running in Doze is how §11's six-hour
+     * M8 spec §2.4: with no network there is no timer and no attempt. The service
+     * waits on the callback. A retry loop running in Doze is how ARCHITECTURE.md §11's six-hour
      * screen-off row fails.
      */
     @Test
@@ -86,8 +86,8 @@ class ReconcileTest {
      * yields `Nothing` rather than the `Stop` the intent check alone would give.
      * Move that early return below the intent check and only this test fails.
      *
-     * Spec §2.4 is why the ordering is that way round: no network means no timer and
-     * no attempt, unconditionally. A retry timer running in Doze is how the §11
+     * M8 spec §2.4 is why the ordering is that way round: no network means no timer and
+     * no attempt, unconditionally. A retry timer running in Doze is how the ARCHITECTURE.md §11
      * six-hour screen-off case fails.
      */
     @Test
@@ -99,14 +99,14 @@ class ReconcileTest {
 
     @Test
     fun networkReturningStartsAReconnectingSession() {
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = false)
 
         reconcile(wanted, reconnecting, ReconcileTrigger.NetworkChanged) shouldBe ReconcileAction.Start(7L)
     }
 
     @Test
     fun backoffElapsingRetriesAReconnectingSession() {
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 3)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 3, blocked = false)
 
         reconcile(wanted, reconnecting, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Start(7L)
     }
@@ -127,7 +127,7 @@ class ReconcileTest {
     }
 
     /**
-     * Spec §2.3's cap: TunEstablishFailed retries, but not forever.
+     * M8 spec §2.3's cap: TunEstablishFailed retries, but not forever.
      *
      * The at-cap half pins an input production cannot produce, and that is stated here
      * rather than left to be rediscovered: `settleRetryableFailure` asks
@@ -138,8 +138,8 @@ class ReconcileTest {
      */
     @Test
     fun tunEstablishFailedStopsRetryingAtTheCap() {
-        val underCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 2)
-        val atCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3)
+        val underCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 2, blocked = false)
+        val atCap = ConnectionState.Reconnecting(FailureReason.TunEstablishFailed, attempt = 3, blocked = false)
 
         reconcile(wanted, underCap, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Start(7L)
         reconcile(wanted, atCap, ReconcileTrigger.BackoffElapsed) shouldBe ReconcileAction.Nothing
@@ -150,7 +150,7 @@ class ReconcileTest {
     // Every terminal settlement clears session intent, so `!wanted` is already
     // true when the next trigger arrives. `Stop` from there publishes
     // `Disconnected` over the `Failed`, and the user loses the reason. Seen on a
-    // device in the §11 revocation row: Home read `Disconnected` after another
+    // device in the ARCHITECTURE.md §11 revocation row: Home read `Disconnected` after another
     // VPN app took the route.
 
     @Test
@@ -165,7 +165,7 @@ class ReconcileTest {
      * is, no trigger answers `Stop`, which is the action that would publish
      * `Disconnected` over the reason.
      *
-     * `NetworkLost` is the one that answers `Nothing`, because §2.4's no-network
+     * `NetworkLost` is the one that answers `Nothing`, because M8 spec §2.4's no-network
      * rule returns before the intent is even read; the rest release. Both are
      * non-publishing, which is what "survives" means here.
      */
@@ -238,7 +238,7 @@ class ReconcileTest {
 
     /**
      * The other half, and the reason `Disconnected` is not folded in with
-     * `Failed` as "already down": §1.3's sticky restart answers a null intent,
+     * `Failed` as "already down": M8 spec §1.3's sticky restart answers a null intent,
      * and with nothing wanted this `Stop` is what shuts the service down.
      */
     @Test

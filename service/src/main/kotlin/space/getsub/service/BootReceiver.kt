@@ -18,13 +18,13 @@ import javax.inject.Inject
 private const val TAG = "BootReceiver"
 
 /**
- * Spec §4.2: connect at boot when the user asked for it.
+ * M8 spec §4.2: connect at boot when the user asked for it.
  *
  * Redundant for anyone using always-on VPN — the platform starts the service
  * itself there — and it exists for the user who wants boot start without
  * granting always-on.
  *
- * Carries no config and no profile bytes (§5.6): it writes session intent and
+ * Carries no config and no profile bytes (ARCHITECTURE.md §5.6): it writes session intent and
  * lets `TunnelService` reconcile, exactly as always-on and a sticky restart do.
  */
 @AndroidEntryPoint
@@ -38,7 +38,7 @@ internal class BootReceiver : BroadcastReceiver() {
     ) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val pending = goAsync()
-        // §5.3: Room reads do not go on the main thread, and a receiver's main
+        // ARCHITECTURE.md §5.3: Room reads do not go on the main thread, and a receiver's main
         // thread is the one the system is waiting on.
         CoroutineScope(Dispatchers.IO).launch {
             try {

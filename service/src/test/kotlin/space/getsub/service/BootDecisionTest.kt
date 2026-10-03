@@ -6,7 +6,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.Test
 
 /**
- * Spec §4.2. Boot autostart connects on **every** boot when on, regardless of
+ * M8 spec §4.2. Boot autostart connects on **every** boot when on, regardless of
  * whether the session was wanted when the device went down — a user who asks the
  * app to connect at boot means at every boot. So this path writes intent rather
  * than reading it.

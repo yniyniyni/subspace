@@ -32,7 +32,7 @@ class RawConfigComposerXrayTest {
         TunnelSettings(socksPort = 41080, dnsServer = "1.1.1.1", enableSniffing = true, httpPort = 41081)
 
     // The target panel's balancer template, reduced to its structure. Addresses
-    // and credentials are placeholders — §5.6, and the core does not dial during
+    // and credentials are placeholders — ARCHITECTURE.md §5.6, and the core does not dial during
     // validation, so they need only parse.
     private val balancerConfig =
         """
@@ -192,7 +192,7 @@ class RawConfigComposerXrayTest {
                 }
 
             val message = result.exceptionOrNull()?.message.orEmpty()
-            // §5.6: XrayException's message can quote the config back (LibXrayInvoke's own
+            // ARCHITECTURE.md §5.6: XrayException's message can quote the config back (LibXrayInvoke's own
             // KDoc), so only the exception's class name is safe to surface in a failure
             // message — never `.exceptionOrNull()`. `message` above is read only for the
             // assertions themselves; the failure text below names the two directories (this
@@ -217,7 +217,7 @@ class RawConfigComposerXrayTest {
         runTest {
             val outcome = validate(balancerConfig.replace("FALLBACK_TAG", "proxy-auto"))
 
-            // §5.6: XrayException's message can quote the config back
+            // ARCHITECTURE.md §5.6: XrayException's message can quote the config back
             // (LibXrayInvoke's own KDoc), so only the exception's class name is
             // safe to surface in a failure message — never `.exceptionOrNull()`.
             check(outcome.isSuccess) {
@@ -226,7 +226,7 @@ class RawConfigComposerXrayTest {
         }
 
     /**
-     * Spec §6.2's one unresolved fact, and checklist row 9c.
+     * M7 spec §6.2's one unresolved fact, and checklist row 9c.
      *
      * The target panel's template names `fallbackTag: "proxy"` while its
      * outbounds are `proxy-auto`, `proxy-auto-2`, … — `fallbackTag` is an exact
@@ -334,7 +334,7 @@ class RawConfigComposerXrayTest {
                 "expected the core to reject this two-defect config " +
                     "(observed 2026-08-30 on Pixel 8) but it was accepted"
             }
-            // §5.6: only the exception's class name is safe to surface (see the other tests'
+            // ARCHITECTURE.md §5.6: only the exception's class name is safe to surface (see the other tests'
             // comment above `theCoreAcceptsAComposedBalancerConfig`).
             check(outcome.exceptionOrNull() is XrayException) {
                 "core rejected the config for an unexpected reason: " +
@@ -452,7 +452,7 @@ class RawConfigComposerXrayTest {
      * starts passing, a wrong balancer resolution has become silent and the
      * design's loudness argument no longer holds.
      *
-     * §5.6: the core's message can quote the config back, so the assertion
+     * ARCHITECTURE.md §5.6: the core's message can quote the config back, so the assertion
      * reduces it to a boolean and the failure text names only our own literal.
      */
     @Test

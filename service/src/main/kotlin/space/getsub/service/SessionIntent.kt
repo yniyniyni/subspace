@@ -10,7 +10,7 @@ import space.getsub.core.model.retryability
 /**
  * What the user asked for, as opposed to what is currently true.
  *
- * Spec §1: the two halves are persisted separately in `SettingsRepository`
+ * M8 spec §1: the two halves are persisted separately in `SettingsRepository`
  * (`tunnel_session_wanted` and `active_profile_id`) so they survive `:bg` dying.
  * This type is the pair, read at one instant.
  */
@@ -19,7 +19,7 @@ internal data class SessionIntent(
     val profileRowId: Long?,
 )
 
-/** Why [reconcile] is being asked. Spec §3.2. */
+/** Why [reconcile] is being asked. M8 spec §3.2. */
 internal enum class ReconcileTrigger {
     /** Always-on, boot, or a sticky restart: the service came up with no profile in hand. */
     NullIntentStart,
@@ -42,7 +42,7 @@ internal sealed interface ReconcileAction {
      * and **publish nothing**.
      *
      * The answer from a terminal [ConnectionState.Failed] — for every trigger but
-     * [ReconcileTrigger.NetworkLost], which returns [Nothing] from spec §2.4's
+     * [ReconcileTrigger.NetworkLost], which returns [Nothing] from M8 spec §2.4's
      * early return before intent or state is read at all. Wherever it *is* the
      * answer, the other two are both wrong: `Stop` publishes `Disconnected` over the reason the user needs
      * — the erasure [stopUnlessItWouldEraseAFailure] exists to prevent. `Nothing`
@@ -61,12 +61,12 @@ internal sealed interface ReconcileAction {
 
 /**
  * Decides the *autonomous* reconcile triggers: start, restart, backoff-elapsed,
- * network change (spec §3.2). Human and external actions — the connect button,
+ * network change (M8 spec §3.2). Human and external actions — the connect button,
  * an explicit disconnect, `onRevoke` — act directly and merely update the
  * persisted session intent, which the next reconcile then reads; they do not
  * call this function.
  *
- * Pure so it can be tested at all: §11 says the tunnel is verified manually on a
+ * Pure so it can be tested at all: ARCHITECTURE.md §11 says the tunnel is verified manually on a
  * device every time, which makes every decision embedded in `TunnelService`
  * effectively untested. This is the decision; the service is the effects.
  */
@@ -76,7 +76,7 @@ internal fun reconcile(
     actual: ConnectionState,
     trigger: ReconcileTrigger,
 ): ReconcileAction {
-    // Spec §2.4: no network means no timer and no attempt. Waiting costs nothing;
+    // M8 spec §2.4: no network means no timer and no attempt. Waiting costs nothing;
     // a retry loop in Doze costs the six-hour screen-off case.
     if (trigger == ReconcileTrigger.NetworkLost) return ReconcileAction.Nothing
 
@@ -122,7 +122,7 @@ internal fun reconcile(
  * It was reachable by an ordinary `NetworkChanged`: every terminal settlement
  * clears session intent, so `!wanted` was already true when the next trigger
  * arrived, and the `Failed` arm in [reconcile] was never reached. Observed on a
- * device during the §11 revocation row, where Home read `Disconnected` after
+ * device during the ARCHITECTURE.md §11 revocation row, where Home read `Disconnected` after
  * another VPN app took the route; the observation went unexplained for a day
  * because the row's other assertion — intent cleared — passed.
  *
@@ -142,13 +142,13 @@ internal fun reconcile(
  * without publishing over the reason.
  *
  * **[ConnectionState.Disconnected] still stops, and that is load-bearing** —
- * do not fold it in with `Failed` as "already down". Spec §1.3 answers a sticky
+ * do not fold it in with `Failed` as "already down". M8 spec §1.3 answers a sticky
  * restart by reconciling a null intent, and with nothing wanted the `Stop` is
  * what shuts the service down; that is the outcome `START_NOT_STICKY` used to
  * protect, reached by asking rather than by refusing. `Disconnected` carries no
  * reason to erase, so preserving it buys nothing.
  *
- * Exhaustive with no `else`, for the reason spec §2.2 gives for
+ * Exhaustive with no `else`, for the reason M8 spec §2.2 gives for
  * `FailureReason.retryability`: a state added later must not be silently
  * absorbed by whichever branch happens to catch it.
  */
@@ -165,7 +165,7 @@ private fun stopUnlessItWouldEraseAFailure(actual: ConnectionState): ReconcileAc
     }
 
 /**
- * Spec §2.3: the capped reason is the only one with a ceiling.
+ * M8 spec §2.3: the capped reason is the only one with a ceiling.
  *
  * **Neither `false` answer is reachable from a `Reconnecting` this app
  * published, and both are kept on purpose.** `TunnelService.settleRetryableFailure`
@@ -193,14 +193,14 @@ private fun ConnectionState.Reconnecting.mayAttemptAgain(): Boolean =
 
 /**
  * Whether the attempt a failure is about to publish should be settled as
- * terminal instead of another `Reconnecting` (spec §2.3).
+ * terminal instead of another `Reconnecting` (M8 spec §2.3).
  *
  * Without this, a `RetryableCapped` reason reaching [TUN_ESTABLISH_ATTEMPT_CAP]
  * would publish one more `Reconnecting` that [mayAttemptAgain] then permanently
  * refuses to retry — nothing converts that into `Failed`, so the UI would show
- * "reconnecting" forever over a session that has actually given up (spec §3.4
+ * "reconnecting" forever over a session that has actually given up (M8 spec §3.4
  * names this exact class of gap). `Retryable` is deliberately unbounded: an
- * unbounded retry while a network exists is the point of fail-closed (§2.4),
+ * unbounded retry while a network exists is the point of fail-closed (M8 spec §2.4),
  * not a bug in it.
  */
 internal fun nextAttemptExceedsCap(
@@ -209,14 +209,14 @@ internal fun nextAttemptExceedsCap(
 ): Boolean = retryability == Retryability.RetryableCapped && nextAttempt >= TUN_ESTABLISH_ATTEMPT_CAP
 
 /**
- * Whether the TUN outlives a failed session (spec §6.1).
+ * Whether the TUN outlives a failed session (M8 spec §6.1).
  *
  * Retaining it is the whole kill switch: the interface already carries
  * `0.0.0.0/0` and `::/0`, and with nothing reading the fd a route to nothing is
  * a blackhole. Nothing is added to `establishTun` to achieve this.
  *
  * Two consequences, both correct and both easy to mistake for bugs. **DNS
- * blackholes too**, because the TUN is what advertises the resolver (§5.2,
+ * blackholes too**, because the TUN is what advertises the resolver (ARCHITECTURE.md §5.2,
  * lever 1) — which is also what makes the failure visible rather than silently
  * degraded. And **per-app deny-listed apps keep working**, because they are
  * outside the TUN by construction (§8); fail-closed cannot reach them.

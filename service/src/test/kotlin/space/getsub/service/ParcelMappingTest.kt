@@ -10,6 +10,7 @@ import io.kotest.matchers.string.shouldNotContain
 import org.junit.Test
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
+import space.getsub.core.model.Health
 import space.getsub.core.model.Profile
 import space.getsub.core.model.Security
 import space.getsub.core.model.StartupStage
@@ -157,7 +158,7 @@ class ParcelMappingTest {
     /**
      * The more dangerous sibling. Reading an unknown security kind as
      * [Security.None] strips REALITY and produces a connection in the clear
-     * that looks to the user exactly like a dead server — §5.1's symptom
+     * that looks to the user exactly like a dead server — ARCHITECTURE.md §5.1's symptom
      * shape, with the user's traffic actually exposed.
      */
     @Test
@@ -201,7 +202,7 @@ class ParcelMappingTest {
 
     @Test
     fun `profile toString does not leak secrets`() {
-        // §5.6. A data class would have printed the uuid and REALITY key, and
+        // ARCHITECTURE.md §5.6. A data class would have printed the uuid and REALITY key, and
         // toString lands in crash output without anyone choosing to log it.
         val rendered = ProfileParcel.from(profile).toString()
         rendered shouldNotContain "70cc48c5"
@@ -235,7 +236,7 @@ class ParcelMappingTest {
     fun `failure detail is redacted crossing the boundary`() {
         // Redaction happens on both sides. It is idempotent, so the second pass
         // is free — and it means a receiver cannot be handed a raw address even
-        // if the sender is ever changed (§5.6).
+        // if the sender is ever changed (ARCHITECTURE.md §5.6).
         val state = failure(FailureReason.CoreStartFailed, "dial tcp 203.0.113.44:443 refused")
         ConnectionStateParcel.from(state).toState().let { it as ConnectionState.Failed }
             .detail shouldNotContain "203.0.113.44"
@@ -264,21 +265,39 @@ class ParcelMappingTest {
             reason = 0,
             detail = "",
             attempt = 0,
+            health = 0,
+            blocked = false,
         ).toState() shouldBe ConnectionState.Disconnected
     }
 
     @Test
     fun reconnectingRoundTripsThroughTheMapping() {
-        val state = ConnectionState.Reconnecting(reason = FailureReason.CoreStartFailed, attempt = 2)
+        val state = ConnectionState.Reconnecting(reason = FailureReason.CoreStartFailed, attempt = 2, blocked = false)
 
         val restored = ConnectionStateParcel.from(state).toState()
 
         restored shouldBe state
     }
 
+    @Test
+    fun `every health value survives the parcel mapping`() {
+        Health.entries.forEach { health ->
+            val state = ConnectionState.Connected(10L, 1080, 8080, health)
+            ConnectionStateParcel.from(state).toState() shouldBe state
+        }
+    }
+
+    @Test
+    fun `blocked survives the parcel mapping in both directions`() {
+        listOf(true, false).forEach { blocked ->
+            val state = ConnectionState.Reconnecting(FailureReason.TunnelStartFailed, attempt = 3, blocked = blocked)
+            ConnectionStateParcel.from(state).toState() shouldBe state
+        }
+    }
+
     /**
      * The discriminant is what tells the two sides apart. A collision silently turns
-     * one state into another across the binder — §5.5's "an app showing Disconnected
+     * one state into another across the binder — ARCHITECTURE.md §5.5's "an app showing Disconnected
      * while the tunnel is up is worse than one that crashes", by mis-numbering.
      */
     @Test
@@ -289,7 +308,7 @@ class ParcelMappingTest {
                 ConnectionState.Connecting(StartupStage.StartingCore),
                 ConnectionState.Connected(sinceEpochMillis = 1L, socksPort = 1080),
                 ConnectionState.Disconnecting,
-                ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1),
+                ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 1, blocked = false),
                 failure(FailureReason.ConfigRejected, "detail"),
             ).map { state -> ConnectionStateParcel.from(state).kind }
 

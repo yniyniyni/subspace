@@ -88,7 +88,7 @@ class DirectiveValidatorTest {
 
     @Test
     fun `a rejection never carries the rejected value`() {
-        // §5.6. DirectiveRejection has no value field at all, so this is a
+        // ARCHITECTURE.md §5.6. DirectiveRejection has no value field at all, so this is a
         // structural guarantee — the test pins it against a future widening.
         val secret = "https://evil.example/steal?token=SUPERSECRET"
         val result = DirectiveValidator.validate(listOf(header("new-url", "not-a-url")))

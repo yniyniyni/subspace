@@ -119,7 +119,7 @@ class LaunchPingerTest {
      */
     @Test
     fun `a reconnect in flight suppresses it without burning the claim`() {
-        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)
+        val reconnecting = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false)
         val subject = pinger(state = reconnecting)
 
         subject.shouldRun(1L, enabledGlobally = true, allowMetered = false, providerValue = null) shouldBe false

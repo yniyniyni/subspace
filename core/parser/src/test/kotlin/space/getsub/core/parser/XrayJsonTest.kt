@@ -136,7 +136,7 @@ class XrayJsonTest {
      * Element provenance, part 1 (device-fixes finding, part 2): a bare top-level object is
      * its own element, so the profile it yields carries the whole (already-trimmed here)
      * document as [space.getsub.core.model.Profile.rawJson] — same byte-for-byte
-     * behaviour §6 has always described for a single hand-pasted `config.json`.
+     * behaviour ARCHITECTURE.md §6 has always described for a single hand-pasted `config.json`.
      */
     @Test
     fun `a bare top-level object's profile carries the whole document as rawJson`() {

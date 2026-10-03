@@ -1,18 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permission: see Stores Exception in LICENSE.
+// TooManyFunctions: the ICU-soundness fix added three small, independently
+// tested gate predicates (hasNonAscii, keyedHostGate, labelledHostGate)
+// alongside the existing pattern/gate pairs. Each is a single necessary
+// condition kept separate so RedactionGateTest can pin it directly; merging
+// them back to satisfy a count would hide the exact thing under test.
+@file:Suppress("TooManyFunctions")
+
 package space.getsub.core.model
 
 private const val REDACTED = "<redacted>"
 
 // A sentinel no pattern below can match, so an already-redacted string survives
 // a second pass unchanged. See the note on idempotence in [redact].
-private const val SENTINEL = "R"
+internal const val SENTINEL = "R"
 
-private val UUID_PATTERN =
+// The pattern vals and pipeline helpers below are `internal` rather than
+// `private` solely so RedactionBenchmark.kt (same module, `:core:model`'s
+// test source set, which Gradle's Kotlin plugin compiles as a friend of
+// `main`) can time each pattern's pass in isolation (M8.5 spec §3.2, Task 21).
+// No behaviour changes with the widened visibility — RedactionOracleTest and
+// RedactionGateTest still pass unchanged.
+internal val UUID_PATTERN =
     Regex("""\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b""")
-private val URL_PATTERN = Regex("""\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+""")
-private val IPV4_PATTERN = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
-private val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
+internal val URL_PATTERN = Regex("""\b[a-zA-Z][a-zA-Z0-9+.-]*://\S+""")
+internal val IPV4_PATTERN = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
+internal val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
 
 /**
  * A message that is **nothing but** a `, `-separated list of geo filenames.
@@ -29,7 +42,7 @@ private val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
  * in every string that ever reaches [redact] — including the config libXray
  * quotes back when `testXray` rejects one. `RoutingEntries` accepts any domain
  * body without whitespace, `/` or `:`, so `corp.internal.dat` is a legal routing
- * rule, and a routing rule is user browsing data under §5.6. Anchoring to the
+ * rule, and a routing rule is user browsing data under ARCHITECTURE.md §5.6. Anchoring to the
  * whole message means the exemption can only ever apply to a string that
  * contains nothing else — a config dump with a `.dat`-suffixed rule in it is not
  * one, and is redacted normally.
@@ -50,7 +63,7 @@ private val HOSTNAME_PATTERN = Regex("""\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b""")
  */
 private val GEO_FILE_LIST_MESSAGE = Regex("$GEO_FILE_NAME_REGEX(?:, $GEO_FILE_NAME_REGEX)*")
 
-private val BASE64_BLOB_PATTERN = Regex("""\b[A-Za-z0-9+/_-]{24,}={0,2}\b""")
+internal val BASE64_BLOB_PATTERN = Regex("""\b[A-Za-z0-9+/_-]{24,}={0,2}\b""")
 
 /**
  * IPv6 literals, compressed (`::1`, `2001:db8::1`) or full (eight groups).
@@ -63,7 +76,7 @@ private val BASE64_BLOB_PATTERN = Regex("""\b[A-Za-z0-9+/_-]{24,}={0,2}\b""")
  * This is only the *candidate* shape. [isIpv6Address] decides, because two
  * colons of pure decimals is also what a clock reads like — see residual §2.
  */
-private val IPV6_PATTERN = Regex("""(?<![0-9A-Fa-f:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:.])""")
+internal val IPV6_PATTERN = Regex("""(?<![0-9A-Fa-f:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![0-9A-Fa-f:.])""")
 
 /**
  * Three colons is the point past which a decimal-only run stops being a plausible
@@ -86,10 +99,155 @@ private const val MIN_DECIMAL_ONLY_IPV6_COLONS = 3
  * and it is not a well-formed IPv6 address: without `::` an address carries
  * seven colons, and with `::` the first signal already caught it.
  */
-private fun isIpv6Address(candidate: String): Boolean =
+internal fun isIpv6Address(candidate: String): Boolean =
     candidate.contains("::") ||
         candidate.any { it in "abcdefABCDEF" } ||
         candidate.count { it == ':' } >= MIN_DECIMAL_ONLY_IPV6_COLONS
+
+/** The minimum colons [IPV6_PATTERN]'s `{2,7}` repetition requires. */
+private const val MIN_IPV6_CANDIDATE_COLONS = 2
+
+/** A character [IPV6_PATTERN]'s own core class — `[0-9A-Fa-f]` plus the literal `:` — would accept. */
+private fun isIpv6AlphabetChar(c: Char): Boolean = (c in '0'..'9') || (c in 'a'..'f') || (c in 'A'..'F') || c == ':'
+
+/**
+ * Replaces exactly what `s.replace(IPV6_PATTERN) { if (isIpv6Address(it.value)) SENTINEL else it.value }`
+ * would, with one deliberate difference (a sentence-final `.` does not block a
+ * candidate; see [endsSentence]), without [IPV6_PATTERN]'s whole-string lookaround scan — row 7's measured
+ * dominant cost (M8.5 spec §3.2, Task 21; `docs/agent/research/2026-09-26-m8.5-row7-release.md`).
+ *
+ * ## Why this matches [IPV6_PATTERN] on every input
+ *
+ * Every character [IPV6_PATTERN] can *consume* is a hex digit or `:` — its core,
+ * `(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}`, has no other character class in
+ * it. So any match is entirely contained in one maximal run of
+ * [isIpv6AlphabetChar] characters. Its lookbehind, `(?<![0-9A-Fa-f:.])`, then
+ * forbids the match from starting anywhere *inside* such a run: the character
+ * immediately before an interior position is itself hex-or-colon, which the
+ * lookbehind rejects. The only position where "the character before" is *not*
+ * part of the run is the run's own first character (or the start of the whole
+ * string). The lookahead, `(?![0-9A-Fa-f:.])`, argues the same from the other
+ * end. So a run has **at most one** possible match: the run in its entirety —
+ * and only when neither neighbour (if one exists) is `.`, the one forbidden
+ * character [isIpv6AlphabetChar] doesn't already exclude from the run itself.
+ *
+ * That turns "scan the whole message for a match, backtracking over the
+ * quantified group at every position" into: find each maximal
+ * [isIpv6AlphabetChar] run with one linear scan (no backtracking, because
+ * nothing is being matched yet — this is a character-class walk); reject a
+ * run outright if either side touches a `.`; and only for what's left, ask
+ * whether the run as a *whole* satisfies [IPV6_PATTERN] via `Regex.matches`
+ * on that short candidate substring rather than `Regex.replace` on the
+ * (potentially much longer) message. [isIpv6Address] then decides exactly as
+ * before, on exactly the same candidate string.
+ *
+ * `Regex.matches` requires the match to consume the *entire* input region
+ * with no anchors needed, so it is immune to the `$`-before-a-trailing-line-
+ * terminator subtlety a literal `^...$` would carry — not that it would
+ * matter here, since [isIpv6AlphabetChar] excludes every line-terminator
+ * character from ever appearing inside a candidate run in the first place.
+ *
+ * ## ICU
+ *
+ * Nothing here leans on `\s`, `\d`, `\b` or case-insensitive matching — the
+ * three divergence sources this file's other gates have to reason about
+ * (`hasNonAscii`, `hasColonBeforeWhitespace`). [isIpv6AlphabetChar] is three
+ * fixed, case-explicit `Char` ranges plus a literal, identical under the
+ * JVM's `java.util.regex` and Android's ICU-backed engine, so there is no
+ * JVM/device gap to close for the scan itself. The one regex call this
+ * function still makes — `IPV6_PATTERN.matches(run)` — runs the *same*
+ * compiled pattern the ungated code always ran, so whatever ICU does with
+ * its lookaround is unchanged from before this function existed.
+ * `RedactionOracleTest`'s IPv6-dense corpus is the equivalence proof this
+ * reasoning predicts; `IcuRedactionProbeTest.icuIpv6CandidateScanMatchesTheWholeRun`
+ * is the on-device check for this new code path, per the task's "add
+ * on-device cases for any new code path" rule.
+ */
+internal fun redactIpv6Candidates(s: String): String {
+    if (s.none { it == ':' }) return s
+    // Built only once a run is replaced: most lines have none (row 7).
+    var out: StringBuilder? = null
+    var copied = 0
+    var i = 0
+    while (i < s.length) {
+        if (!isIpv6AlphabetChar(s[i])) {
+            i++
+            continue
+        }
+        val start = i
+        while (i < s.length && isIpv6AlphabetChar(s[i])) i++
+        // isIpv6Address first: both are pure, and it rejects a clock (`10:22:25`,
+        // the start of every xray line) without running the regex.
+        val replace =
+            countColons(s, start, i) >= MIN_IPV6_CANDIDATE_COLONS &&
+                s.substring(start, i).let { run -> isIpv6Address(run) && isIpv6Candidate(s, start, i, run) }
+        if (replace) {
+            val builder = out ?: StringBuilder(s.length).also { out = it }
+            builder.append(s, copied, start).append(SENTINEL)
+            copied = i
+        }
+    }
+    return out?.append(s, copied, s.length)?.toString() ?: s
+}
+
+private fun countColons(
+    s: String,
+    start: Int,
+    end: Int,
+): Int {
+    var n = 0
+    for (k in start until end) if (s[k] == ':') n++
+    return n
+}
+
+/**
+ * Whether the maximal run `s[start, end)` (= [run]), already known to hold
+ * [MIN_IPV6_CANDIDATE_COLONS] colons, is [IPV6_PATTERN]'s one possible match: no
+ * `.` touching it (except a sentence-final one, see [endsSentence]) and the
+ * pattern matches it whole.
+ */
+private fun isIpv6Candidate(
+    s: String,
+    start: Int,
+    end: Int,
+    run: String,
+): Boolean {
+    val precededByDot = start > 0 && s[start - 1] == '.'
+    val followedByDot = end < s.length && s[end] == '.' && !endsSentence(s, end)
+    return !precededByDot && !followedByDot && IPV6_PATTERN.matches(run)
+}
+
+/**
+ * Whether the `.` at [dot] is sentence punctuation rather than part of a larger
+ * token: it ends [s], or whitespace follows it.
+ *
+ * [IPV6_PATTERN]'s lookahead forbids any following `.`, which kept `12:34:ab.5`
+ * and dotted-quad tails out, but also let `connection to 2001:db8::1.` through
+ * unredacted (ARCHITECTURE.md §5.6). A dot followed by whitespace or the end
+ * cannot continue an address, a version or a hostname, so it does not block
+ * the candidate. "Whitespace" is only what both regex engines call `\s`
+ * ([isRegexSpaceOnBothEngines]).
+ *
+ * Still open: a dot followed by anything else, as in `(peer fd00::1.)`, a quoted
+ * `"…2001:db8::1."`, `2001:db8::1...`, or a dot before a no-break or other Unicode
+ * space (U+00A0, U+2000–U+200A, U+2028/9, U+3000), still blocks the candidate.
+ */
+private fun endsSentence(
+    s: String,
+    dot: Int,
+): Boolean {
+    val next = dot + 1
+    return next == s.length || isRegexSpaceOnBothEngines(s[next])
+}
+
+/**
+ * Space, tab through CR, and [NEL]: what ICU, the engine on the device, calls `\s`
+ * among these, and all of which the JVM's `\s` covers too except [NEL]. Deliberately
+ * narrower than [Char.isWhitespace], which also accepts U+001C–U+001F and Unicode
+ * spaces that `\S` (and so every later pass's token) still includes on at least one
+ * engine. A wider test would split a token a later rule would otherwise redact whole.
+ */
+private fun isRegexSpaceOnBothEngines(c: Char): Boolean = c == ' ' || c in '\t'..'\r' || c == NEL
 
 /**
  * A destination as the *value* of a named key: `"address":"vpnserver"` from a
@@ -102,11 +260,11 @@ private fun isIpv6Address(candidate: String): Boolean =
  * The value group deliberately stops at a quote, comma, brace, bracket or space
  * so `{"address":"vpnserver","port":443}` gives up the host and keeps the port.
  */
-private val KEYED_HOST_PATTERN =
+internal val KEYED_HOST_PATTERN =
     Regex("""\b(address|server|host|sni|servername|domain)\b"?\s*[:=]\s*"?([^"\s,}\]]+)""", RegexOption.IGNORE_CASE)
 
 /** The value group of [KEYED_HOST_PATTERN]. */
-private const val KEYED_VALUE_GROUP = 2
+internal const val KEYED_VALUE_GROUP = 2
 
 /**
  * Go's error chaining puts the innermost context first: `vpnserver: connection
@@ -136,10 +294,10 @@ private const val KEYED_VALUE_GROUP = 2
  * `json: cannot unmarshal ...`. As everywhere here, the guard fails safe: a
  * server genuinely named `json` leaks the string "json".
  */
-private val BARE_HOST_PREFIX_PATTERN = Regex("""(?<!\S)(\S+):(?=\s)""")
+internal val BARE_HOST_PREFIX_PATTERN = Regex("""(?<!\S)(\S+):(?=\s)""")
 
 /** The candidate group of [BARE_HOST_PREFIX_PATTERN] — the leading token. */
-private const val BARE_TOKEN_GROUP = 1
+internal const val BARE_TOKEN_GROUP = 1
 
 /**
  * The token introduced by a word that names a destination.
@@ -158,7 +316,7 @@ private const val BARE_TOKEN_GROUP = 1
  * that redacts any short token after any suggestive word destroys far more
  * diagnostics than it protects. Closing that is a design change scoped to M3.
  */
-private val LABELLED_HOST_PATTERN =
+internal val LABELLED_HOST_PATTERN =
     Regex("""\b(dial|address|server|host|lookup)\b(\s+(?:tcp|udp|ip)[46]?\b)?(\s+)(\S+)""", RegexOption.IGNORE_CASE)
 
 /**
@@ -185,7 +343,7 @@ private const val NON_HOST_WORD_LIST =
 private val NON_HOST_WORDS: Set<String> = NON_HOST_WORD_LIST.split(" ").toSet()
 
 /** The trailing `(\S+)` of [LABELLED_HOST_PATTERN] — the candidate destination. */
-private const val LABELLED_TOKEN_GROUP = 4
+internal const val LABELLED_TOKEN_GROUP = 4
 
 /**
  * Removes anything that could identify a server or authenticate to it.
@@ -222,23 +380,236 @@ private const val LABELLED_TOKEN_GROUP = 4
  * config is.
  */
 public fun redact(message: String): String {
-    if (GEO_FILE_LIST_MESSAGE.matches(message)) return message
+    if (isGeoFileListCandidate(message) && GEO_FILE_LIST_MESSAGE.matches(message)) return message
     return redactEveryPattern(message)
 }
 
-private fun redactEveryPattern(message: String): String =
-    message
-        .replace(REDACTED, SENTINEL)
-        .replace(URL_PATTERN, SENTINEL)
-        .replace(UUID_PATTERN, SENTINEL)
-        .replace(IPV4_PATTERN, SENTINEL)
-        .replace(IPV6_PATTERN) { match -> if (isIpv6Address(match.value)) SENTINEL else match.value }
-        .replace(HOSTNAME_PATTERN, SENTINEL)
-        .replace(BASE64_BLOB_PATTERN, SENTINEL)
-        .replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
-        .replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
-        .replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
-        .replace(SENTINEL, REDACTED)
+/**
+ * Necessary for [GEO_FILE_LIST_MESSAGE]: the whole message must match, and its last
+ * name ends in `\.dat` (no `IGNORE_CASE`). Row 7: this match ran on every line.
+ */
+internal fun isGeoFileListCandidate(message: String): Boolean = message.endsWith(".dat")
+
+/**
+ * [redact] for a captured log body, keeping xray's own header verbatim:
+ * `2026/10/03 10:22:25.651837 [Warning] [3909243532] `.
+ *
+ * Row 7: every xray line starts with that header, about a third of what redaction
+ * would otherwise scan. It is digits, `/`, `:`, `.`, brackets and a fixed level word,
+ * with at most 10-digit runs (well under [BASE64_BLOB_PATTERN]'s 24), so it cannot
+ * hold a secret, and it ends in a space, so no pattern's token or `\b`
+ * boundary can span it. Its `/` also means the whole body can never be a geo file
+ * list, so skipping [GEO_FILE_LIST_MESSAGE] for the rest changes nothing.
+ * `RedactionOracleTest` holds this equal to [redact] on header-led lines.
+ */
+public fun redactLogBody(body: String): String {
+    val header = xrayHeaderLength(body)
+    if (header == 0) return redact(body)
+    return body.substring(0, header) + redactEveryPattern(body.substring(header))
+}
+
+private val KEYED_WORDS = listOf("address", "server", "host", "sni", "domain")
+private val LABEL_WORDS = listOf("dial", "address", "server", "host", "lookup")
+
+/**
+ * True when [s] contains any character outside the ASCII range.
+ *
+ * Necessary before trusting [KEYED_WORDS]/[LABEL_WORDS] as a skip signal on a
+ * real device: Android's `java.util.regex` is ICU-backed, and ICU's
+ * case-insensitive matching does *full* Unicode case folding, which is
+ * sometimes many-to-one — German `ß` folds to `ss`, and the ligatures `ﬆ`/`ﬅ`
+ * fold to `st`. That means [KEYED_HOST_PATTERN]/[LABELLED_HOST_PATTERN], both
+ * compiled with `RegexOption.IGNORE_CASE`, can match `addreß`, `ADDREẞ`, `hoﬆ`
+ * or `hoﬅ` as the word `address`/`host` on-device, even though Kotlin's
+ * `String.contains(ignoreCase = true)` — which folds one character at a time
+ * and can never turn one character into two — says the word isn't there. A
+ * gate that trusted only the Kotlin keyword check would sometimes skip a
+ * pattern ICU would still fire on the real engine: a leak our JVM tests
+ * cannot see, because the JVM's `java.util.regex` doesn't fold this way.
+ * Any non-ASCII character forces the pattern to run instead. For pure-ASCII
+ * input, Kotlin's `ignoreCase` is already a superset of ICU's folding, so the
+ * cheap keyword check alone is safe and the gate can still skip.
+ */
+internal fun hasNonAscii(s: String): Boolean = s.any { it.code >= ASCII_LIMIT }
+
+/**
+ * Whether [s] contains any of [words] (all lowercase ASCII), ignoring case.
+ *
+ * Only reached for ASCII [s] (both gates check [hasNonAscii] first), where an
+ * ASCII-only case-insensitive comparison is the same test as
+ * `contains(ignoreCase = true)` and much cheaper than its case-folded comparison
+ * at every position; it also avoids lowercasing a copy (row 7, Passes 4 and 5).
+ */
+private fun containsAnyIgnoreCase(
+    s: String,
+    words: List<String>,
+): Boolean = words.any { word -> containsAsciiIgnoreCase(s, word) }
+
+/** [word] (lowercase ASCII letters) in [s], ASCII case-insensitively, without copying [s]. */
+private fun containsAsciiIgnoreCase(
+    s: String,
+    word: String,
+): Boolean {
+    val last = s.length - word.length
+    for (start in 0..last) {
+        var k = 0
+        while (k < word.length && asciiLower(s[start + k]) == word[k]) k++
+        if (k == word.length) return true
+    }
+    return false
+}
+
+private fun asciiLower(c: Char): Char = if (c in 'A'..'Z') c + ('a' - 'A') else c
+
+/** Necessary for [KEYED_HOST_PATTERN]: see [hasNonAscii] for why non-ASCII alone must pass. */
+internal fun keyedHostGate(s: String): Boolean = hasNonAscii(s) || containsAnyIgnoreCase(s, KEYED_WORDS)
+
+/** Necessary for [LABELLED_HOST_PATTERN]: see [hasNonAscii] for why non-ASCII alone must pass. */
+internal fun labelledHostGate(s: String): Boolean = hasNonAscii(s) || containsAnyIgnoreCase(s, LABEL_WORDS)
+
+/**
+ * The same passes in the same order, each behind a **necessary** condition for
+ * its pattern to match at all (M8.5 spec §3.2, as amended: row 7 measured ten
+ * ungated regex passes at 1.31 ms per line). A gate may only skip a pattern that
+ * cannot match; `RedactionOracleTest` holds this function equal to the ungated
+ * original. Each gate tests the *current* intermediate string, because each
+ * pattern runs on the previous one's output.
+ */
+internal fun redactEveryPattern(message: String): String {
+    // Both literal swaps are skipped when their first character is absent: they ran on
+    // every line, and Kotlin's replace scans the whole string either way (row 7).
+    var s = if (message.indexOf('<') >= 0) message.replace(REDACTED, SENTINEL) else message
+    if (s.contains("://")) s = s.replace(URL_PATTERN, SENTINEL)
+    if (s.contains('-')) s = s.replace(UUID_PATTERN, SENTINEL)
+    if (hasIpv4Shape(s)) s = s.replace(IPV4_PATTERN, SENTINEL)
+    if (s.count { it == ':' } >= 2) {
+        s = redactIpv6Candidates(s)
+    }
+    if (hasHostnameShape(s)) s = s.replace(HOSTNAME_PATTERN, SENTINEL)
+    if (hasBase64Run(s)) s = s.replace(BASE64_BLOB_PATTERN, SENTINEL)
+    if (keyedHostGate(s)) {
+        s = s.replace(KEYED_HOST_PATTERN) { match -> replaceTail(match, KEYED_VALUE_GROUP) }
+    }
+    if (hasColonBeforeWhitespace(s)) {
+        s = redactBarePrefixes(s)
+    }
+    if (labelledHostGate(s)) {
+        s = s.replace(LABELLED_HOST_PATTERN) { match -> replaceTail(match, LABELLED_TOKEN_GROUP) }
+    }
+    return if (s.indexOf(SENTINEL[0]) >= 0) s.replace(SENTINEL, REDACTED) else s
+}
+
+/** [IPV4_PATTERN]'s `(?:\d{1,3}\.){3}\d{1,3}` holds three `.`-then-digit pairs. */
+private const val IPV4_DOT_DIGIT_PAIRS = 3
+
+/**
+ * Necessary for [IPV4_PATTERN]: three places where a `.` is followed by a digit.
+ *
+ * Every xray line opens with `2026/10/03 10:22:25.651837`, so the old `contains('.')`
+ * gate ran this pass on every line (row 7, Pass 4). The digit test is
+ * [Char.isDigit], Unicode `Nd`, because ICU's `\d` matches every decimal digit, not
+ * only ASCII. A high surrogate also counts: ICU matches by code point, and some `Nd`
+ * digits (U+1D7CE onwards) are outside the BMP.
+ */
+internal fun hasIpv4Shape(s: String): Boolean {
+    var pairs = 0
+    for (i in 0 until s.length - 1) {
+        if (s[i] == '.' && mayBeDigit(s[i + 1]) && ++pairs >= IPV4_DOT_DIGIT_PAIRS) return true
+    }
+    return false
+}
+
+/**
+ * Necessary for [HOSTNAME_PATTERN]: a `.` followed by two ASCII letters, its
+ * `\.[a-zA-Z]{2,}` top-level label. The pattern has no `IGNORE_CASE`, so ICU's
+ * case folding cannot widen `[a-zA-Z]`.
+ */
+internal fun hasHostnameShape(s: String): Boolean {
+    for (i in 0 until s.length - 2) {
+        if (s[i] == '.' && isAsciiLetter(s[i + 1]) && isAsciiLetter(s[i + 2])) return true
+    }
+    return false
+}
+
+private fun mayBeDigit(c: Char): Boolean = c.isDigit() || c.isHighSurrogate()
+
+private fun isAsciiLetter(c: Char): Boolean = c in 'a'..'z' || c in 'A'..'Z'
+
+/** [BASE64_BLOB_PATTERN]'s minimum run length, mirrored in [hasBase64Run]'s gate. */
+private const val BASE64_RUN_LENGTH = 24
+
+/** The ASCII boundary: [BASE64_BLOB_PATTERN]'s `[A-Za-z0-9]` class is 7-bit only. */
+private const val ASCII_LIMIT = 128
+
+/** A character [BASE64_BLOB_PATTERN] itself would accept as part of its run. */
+private fun isBase64RunChar(c: Char): Boolean =
+    (c.isLetterOrDigit() && c.code < ASCII_LIMIT) || c == '+' || c == '/' || c == '_' || c == '-'
+
+/** Necessary for [BASE64_BLOB_PATTERN]: a run of [BASE64_RUN_LENGTH]+ characters from its class. */
+internal fun hasBase64Run(s: String): Boolean {
+    var run = 0
+    for (c in s) {
+        run = if (isBase64RunChar(c)) run + 1 else 0
+        if (run >= BASE64_RUN_LENGTH) return true
+    }
+    return false
+}
+
+/** U+0085, NEL: Unicode `White_Space`, which ICU's `(?=\s)` matches, but [Char.isWhitespace] does not. */
+private const val NEL = '\u0085'
+
+/**
+ * Necessary for [BARE_HOST_PREFIX_PATTERN]: a `:` immediately followed by
+ * whitespace. `(?=\s)` is what the pattern actually tests, and on Android
+ * `\s` is ICU's `\p{White_Space}`, which recognises [NEL] even though
+ * [Char.isWhitespace] does not — checked explicitly here so the reason
+ * survives a `git blame` rather than being folded silently into
+ * `isWhitespace()`.
+ */
+internal fun hasColonBeforeWhitespace(s: String): Boolean {
+    for (i in 0 until s.length - 1) {
+        val next = s[i + 1]
+        if (s[i] == ':' && (next.isWhitespace() || next == NEL)) return true
+    }
+    return false
+}
+
+/** ASCII `\s`, identical under the JVM's regex and ICU: tab, LF, VT, FF, CR, space. */
+private fun isAsciiRegexWhitespace(c: Char): Boolean = c == ' ' || c in '\t'..'\r'
+
+/**
+ * Exactly `s.replace(BARE_HOST_PREFIX_PATTERN) { replaceHead(it, BARE_TOKEN_GROUP) }`,
+ * without the regex on ASCII input (row 7, Pass 4: every xray line has an
+ * `inbound: ` that opens [hasColonBeforeWhitespace]).
+ *
+ * `(?<!\S)(\S+):(?=\s)` can only start where a token starts, and since `:` is
+ * itself `\S`, the colon it needs is the token's last character, with whitespace
+ * after it. So the scanner walks whitespace-separated tokens and matches a token of
+ * two or more characters ending in `:` that is followed by whitespace. Non-ASCII
+ * input goes to the regex, so ICU's `\s` (which includes NEL and other Unicode
+ * spaces) stays authoritative wherever the two could differ.
+ */
+internal fun redactBarePrefixes(s: String): String {
+    if (hasNonAscii(s)) return s.replace(BARE_HOST_PREFIX_PATTERN) { match -> replaceHead(match, BARE_TOKEN_GROUP) }
+    var out: StringBuilder? = null
+    var copied = 0
+    var i = 0
+    while (i < s.length) {
+        if (isAsciiRegexWhitespace(s[i])) {
+            i++
+            continue
+        }
+        val start = i
+        while (i < s.length && !isAsciiRegexWhitespace(s[i])) i++
+        val isMatch = i < s.length && i - start >= 2 && s[i - 1] == ':'
+        if (isMatch && !isNotAHost(s.substring(start, i - 1))) {
+            val builder = out ?: StringBuilder(s.length).also { out = it }
+            builder.append(s, copied, start).append(SENTINEL).append(':')
+            copied = i
+        }
+    }
+    return out?.append(s, copied, s.length)?.toString() ?: s
+}
 
 /**
  * Whether a positional candidate should be left alone: already a sentinel, or a
@@ -253,7 +624,7 @@ private fun isNotAHost(token: String): Boolean =
  * the match's trailing text. Dropping its length leaves everything the rule
  * matched in front of it — label, separator, quote — intact.
  */
-private fun replaceTail(
+internal fun replaceTail(
     match: MatchResult,
     group: Int,
 ): String {
@@ -266,7 +637,7 @@ private fun replaceTail(
  * *leading* text, so what follows it — the colon in
  * `vpnserver: connection refused` — survives.
  */
-private fun replaceHead(
+internal fun replaceHead(
     match: MatchResult,
     group: Int,
 ): String {

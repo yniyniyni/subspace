@@ -43,7 +43,7 @@ import java.util.Base64
 // makes Tokyo and Osaka byte-identical *outbounds* (identityHash is derived from the outbound
 // alone, never the name — that is the whole point of subscriptionKey being a separate axis,
 // spec D8), which collides on ProfileEntity's (groupId, identityHash) unique index exactly the
-// way spec §4.3's documented, bounded limitation describes. A real subscription would not
+// way M4 spec §4.3's documented, bounded limitation describes. A real subscription would not
 // hand out two genuinely identical servers under different names, so [uuidFor] derives a
 // distinct, deterministic (same name -> same uuid, across fetches) credential per name — the
 // fixture now models distinct servers the way a real subscription does, which is what these
@@ -354,7 +354,7 @@ class SubscriptionSyncerTest {
 
     @Test
     fun theActiveServerIsKeptAndFlaggedWhenTheProviderDropsIt() = runTest {
-        // Spec D4: deleting the row under a running tunnel leaves §5.5's single
+        // Spec D4: deleting the row under a running tunnel leaves ARCHITECTURE.md §5.5's single
         // source of truth holding a profileId that no longer resolves.
         val id = addSubscription()
         response = FetchOutcome.Success("${link("Tokyo")}\n${link("Osaka")}", emptyMap())
@@ -574,7 +574,7 @@ class SubscriptionSyncerTest {
         stored.lastFetchStatus shouldBe "HwidRequired"
         stored.lastFetchedAt shouldBe 2L
         ((stored.lastAttemptedAt ?: 0L) > 1L) shouldBe true
-        // §5.6: a closed vocabulary, never a raw message.
+        // ARCHITECTURE.md §5.6: a closed vocabulary, never a raw message.
         stored.lastFetchDetail?.contains("http") shouldBe false
     }
 

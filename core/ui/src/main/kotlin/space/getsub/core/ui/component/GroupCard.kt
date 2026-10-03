@@ -79,7 +79,7 @@ private const val CARET_ROTATION_EXPANDED = 180f
  * is the container only; [content] supplies the node rows.
  *
  * @param name the group's display name — never a server address, so nothing
- *   here needs §5.6's redaction care.
+ *   here needs ARCHITECTURE.md §5.6's redaction care.
  * @param profileCount the group's real size, independent of any active
  *   search/filter the caller may be applying to [content] — see
  *   [space.getsub.feature.profiles.list.ServersGroup.totalProfileCount]'s

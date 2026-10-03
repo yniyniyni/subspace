@@ -35,7 +35,7 @@ internal sealed interface RoutingResolution {
      * The active rule set references geo databases that are not on disk.
      *
      * @property missing the filenames, so the user is told what to re-download.
-     *   Filenames are shape, not content — `geoip.dat` reveals nothing (§5.6).
+     *   Filenames are shape, not content — `geoip.dat` reveals nothing (ARCHITECTURE.md §5.6).
      */
     data class MissingGeoData(val missing: Set<String>) : RoutingResolution
 }

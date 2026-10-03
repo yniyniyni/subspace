@@ -100,7 +100,7 @@ public constructor() {
      *
      * The importer treats the resulting [kotlinx.coroutines.CancellationException]
      * as a cancelled generation: the previous generation stays live and its files
-     * stay on disk (spec §7.4).
+     * stay on disk (M6 spec §7.4).
      */
     public fun cancel(setId: Long) {
         jobs[setId]?.cancel()

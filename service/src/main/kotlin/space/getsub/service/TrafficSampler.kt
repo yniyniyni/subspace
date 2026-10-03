@@ -12,7 +12,7 @@ import space.getsub.core.model.TrafficSample
  * clock, so every edge below is a JVM unit test rather than a device
  * observation. [TrafficSamplerLoop] supplies the timer.
  *
- * **Why deltas rather than the raw value** (spec §1.3): hev's counters are
+ * **Why deltas rather than the raw value** (M8.5 spec §1.3): hev's counters are
  * plain `static size_t`, and we build `arm64-v8a`, `armeabi-v7a` and
  * `x86_64` (`service/build.gradle.kts`). On the 32-bit ABI, `size_t` is 32
  * bits, so a byte counter can wrap at 4 GiB and the raw value would fall back

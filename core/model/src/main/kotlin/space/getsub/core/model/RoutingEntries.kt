@@ -5,7 +5,7 @@ package space.getsub.core.model
 /** Which half of a [RuleBucket] an entry belongs to. Decides which prefixes are legal. */
 public enum class BucketField { SITES, IPS }
 
-/** Why an entry is not usable. A closed vocabulary; no member carries the entry (§5.6). */
+/** Why an entry is not usable. A closed vocabulary; no member carries the entry (ARCHITECTURE.md §5.6). */
 public enum class EntryProblem {
     Blank,
     MissingGeoCode,
@@ -27,7 +27,7 @@ private const val GEOSITE_DAT = "geosite.dat"
  * whether an `ext:` reference is usable), `GeoAssetRepository` in `:core:data`
  * (which decides what may be written to the geo directory), and `Redaction`'s
  * [redact] exemption. The last is why drift is not merely untidy — widening the
- * redaction copy alone would fail *unsafe*, letting a hostname through §5.6.
+ * redaction copy alone would fail *unsafe*, letting a hostname through ARCHITECTURE.md §5.6.
  *
  * A `String` rather than a `Regex` so `Redaction` can embed it in a larger
  * pattern; [SAFE_GEO_FILE_NAME] is the compiled form for whole-name matching.
@@ -98,7 +98,7 @@ public object RoutingEntries {
      * The `.dat` file [entry] needs, or null when it resolves without one.
      *
      * Literal CIDRs and literal domains return null, which is why a rule set built
-     * only from them activates with no download at all (spec §4.3).
+     * only from them activates with no download at all (M5 spec §4.3).
      */
     @Suppress("ReturnCount") // One early return per classification branch keeps the mapping direct.
     public fun geoFileFor(
@@ -271,7 +271,7 @@ public object RoutingEntries {
 /**
  * Every `.dat` file this rule set needs on disk before it can be activated.
  *
- * The activation gate's input (spec §4.3). An empty result means the set can be
+ * The activation gate's input (M5 spec §4.3). An empty result means the set can be
  * activated immediately with no download.
  */
 public fun RoutingRuleSet.requiredGeoFiles(): Set<String> =

@@ -53,7 +53,7 @@ public interface PassthroughValidator {
  * [BoundPassthroughValidator] cannot tell that collision apart from a real
  * core refusal, so it would be written as a **permanent** `CoreRejected`
  * for a config the core never actually evaluated (§10.4). Tracked as an
- * open question on the §11 device checklist rather than asserted either way:
+ * open question on the M7 spec §11 device checklist rather than asserted either way:
  * `docs/agent/research/2026-08-25-m7-device-verification.md`, Question 4.
  */
 private const val VALIDATION_PORT = 41080

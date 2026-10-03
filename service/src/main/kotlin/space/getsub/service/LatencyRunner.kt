@@ -46,7 +46,7 @@ internal class LatencyRunner<T>(
      * one asserting nothing reaches the scope's handler.
      *
      * Takes a class name, never a message: a Room or libXray error can quote a
-     * stored config value (§5.6).
+     * stored config value (ARCHITECTURE.md §5.6).
      */
     private val onMeasurementError: (String) -> Unit = {},
 ) {
@@ -103,7 +103,7 @@ internal class LatencyRunner<T>(
                                 // coroutine. `scope` belongs to TunnelService and
                                 // carries the start-sequence CoroutineExceptionHandler,
                                 // so an escaping throw published a fabricated
-                                // `CoreStartFailed` — §5.5's lying UI while the tunnel
+                                // `CoreStartFailed` — ARCHITECTURE.md §5.5's lying UI while the tunnel
                                 // was still carrying traffic — and left currentState
                                 // `Failed`, which opens startTunnel's duplicate-connect
                                 // guard and leaks the live TUN fd (§5.4). Room can throw

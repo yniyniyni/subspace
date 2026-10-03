@@ -1,0 +1,19 @@
+# Backport of upstream hev-socks5-core commit
+# 162dd996299fc2d2bff2dd63728f8a2cd71ed31a
+# "HevSocks5: Skip setting the timeout if not alive."
+#
+# Fixes the W7/N5 teardown hang (M8.5 spec §5,
+# docs/agent/research/2026-09-26-m8.5-w7-repro.md): a session mid-handshake
+# whose timeout has already reached 0 (terminated/not alive) can have that 0
+# overwritten by a later hev_socks5_set_timeout() call from the connect or
+# handshake phase, reviving a timer on a session that should already be
+# winding down and stalling teardown for up to the phase's own timeout.
+# Applied verbatim, byte-for-byte identical to upstream's change.
+diff --git a/src/core/src/hev-socks5.c b/src/core/src/hev-socks5.c
+index 845cd64..d06b5d4 100644
+--- a/src/core/src/hev-socks5.c
++++ b/src/core/src/hev-socks5.c
+@@ -34 +34,2 @@ hev_socks5_set_timeout (HevSocks5 *self, int timeout)
+-    self->timeout = timeout;
++    if (self->timeout)
++        self->timeout = timeout;

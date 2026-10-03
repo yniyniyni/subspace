@@ -408,7 +408,7 @@ class PassthroughAnalysisTest {
 
     @Test
     fun `a rule limited to one network is not a catch-all reference`() {
-        // Design §3.3 admits `network` on the strength of "tcp,udp" being the
+        // Design M7.5 spec §3.3 admits `network` on the strength of "tcp,udp" being the
         // complete set a TUN carries. "tcp" alone states no default for UDP, so
         // reading it as the config naming its catch-all balancer would resolve the
         // override off a rule covering half the traffic.

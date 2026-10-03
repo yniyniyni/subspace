@@ -44,11 +44,11 @@ strip_noise() {
 
 while IFS= read -r file; do
     if strip_noise "$file" | grep -qE '\brunBlocking\b'; then
-        echo "§12 runBlocking outside tests: $file"
+        echo "ARCHITECTURE.md §12 runBlocking outside tests: $file"
         found=1
     fi
     if strip_noise "$file" | grep -q '!!'; then
-        echo "§12 not-null assertion (!!): $file"
+        echo "ARCHITECTURE.md §12 not-null assertion (!!): $file"
         found=1
     fi
 done < <(

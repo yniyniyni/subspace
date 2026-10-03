@@ -13,11 +13,11 @@ import java.io.File
 /**
  * Owns the libXray lifecycle for one tunnel session.
  *
- * Every call is slow and runs on IO (§5.3) — the connect button must stay
+ * Every call is slow and runs on IO (ARCHITECTURE.md §5.3) — the connect button must stay
  * responsive through the whole start sequence.
  *
  * Instances are single-use: create one per connection, so a stale protector
- * reference cannot survive a service recreation (§5.1).
+ * reference cannot survive a service recreation (ARCHITECTURE.md §5.1).
  *
  * @param geoAssetDir Where `geoip.dat`/`geosite.dat` are installed —
  *   `GeoAssetRepository.geoDirectory()` in production. A constructor
@@ -96,7 +96,7 @@ public class XrayController private constructor(
     }
 
     /**
-     * §6: validate before starting. A malformed config makes libXray fail in a way
+     * ARCHITECTURE.md §6: validate before starting. A malformed config makes libXray fail in a way
      * that is hard to attribute; catching it here produces a real error instead.
      *
      * Takes a [File] because `testXray` accepts only a path — and validating the
@@ -121,11 +121,11 @@ public class XrayController private constructor(
      * Starts the core.
      *
      * [protector] is wired here, on every start, rather than in a constructor or
-     * `init` block. §5.1 requires re-wiring whenever the service is recreated, and
+     * `init` block. ARCHITECTURE.md §5.1 requires re-wiring whenever the service is recreated, and
      * a code path that *cannot* skip the wiring beats one that must remember to.
      *
      * There is deliberately no DNS call: libXray v26.7.11 has no `setDNS`, so the
-     * generated config is the only place DNS can be configured. §5.2 needs three
+     * generated config is the only place DNS can be configured. ARCHITECTURE.md §5.2 needs three
      * levers, and this one carries two of them: the config's `dns` block and the
      * **port-53 hijack** — a routing rule sending all port-53 traffic to the
      * `dns-out` outbound, which is the lever that reaches an app ignoring the
@@ -145,7 +145,7 @@ public class XrayController private constructor(
             // gomobile maps Go's int to a Java long; VpnService.protect() takes an
             // int, so the bridge narrows here. The Go wrapper discards the returned
             // boolean, so a false does not abort the dial — it surfaces only as
-            // §5.1's symptom. SocketProtector's implementation must log it.
+            // ARCHITECTURE.md §5.1's symptom. SocketProtector's implementation must log it.
             try {
                 invocation.retainProtector(protector)
                 invocation.runXray(configFile, env)
@@ -156,16 +156,16 @@ public class XrayController private constructor(
         }
     }
 
-    /** True when the core reports itself running. §5.5 — never infer this locally. */
+    /** True when the core reports itself running. ARCHITECTURE.md §5.5 — never infer this locally. */
     public suspend fun isRunning(): Boolean =
         withContext(io) {
             LibXrayInvoke.call("getXrayState")?.optBoolean("running", false) ?: false
         }
 
     /**
-     * Idempotent — teardown runs from disconnect, onRevoke, and onDestroy (§5.4).
+     * Idempotent — teardown runs from disconnect, onRevoke, and onDestroy (ARCHITECTURE.md §5.4).
      *
-     * The broad catch here is the one permitted in this milestone: §5.4 requires
+     * The broad catch here is the one permitted in this milestone: ARCHITECTURE.md §5.4 requires
      * teardown to complete even when a step fails, because a leaked fd wedges the
      * VPN subsystem until reboot. Stopping an already-stopped core is not an error
      * worth propagating.
@@ -179,13 +179,13 @@ public class XrayController private constructor(
      * Same as [stop], without a coroutine.
      *
      * `VpnService.onDestroy` and `onRevoke` have no scope that outlives them, and
-     * §5.4 requires teardown to finish before the process goes away — a leaked fd
+     * ARCHITECTURE.md §5.4 requires teardown to finish before the process goes away — a leaked fd
      * wedges the VPN subsystem until reboot. Suspending there would mean either
-     * abandoning the teardown or wrapping it in `runBlocking`, which §12 bans.
+     * abandoning the teardown or wrapping it in `runBlocking`, which ARCHITECTURE.md §12 bans.
      *
      * This does block its caller. That is a deliberate, bounded exception to
-     * §5.3: stopping the core is a single JSON call into an already-running Go
-     * runtime, and §5.4's "must complete" outranks §5.3's "must not block" on the
+     * ARCHITECTURE.md §5.3: stopping the core is a single JSON call into an already-running Go
+     * runtime, and ARCHITECTURE.md §5.4's "must complete" outranks ARCHITECTURE.md §5.3's "must not block" on the
      * teardown path specifically. Do not use this on the start path.
      */
     @Suppress("SwallowedException")
@@ -198,7 +198,7 @@ public class XrayController private constructor(
             invocation.stopXray()
         } catch (e: XrayException) {
             // Deliberately swallowed — see the KDoc above. Not logged, because
-            // the message can quote the config (§5.6) and the caller already
+            // the message can quote the config (ARCHITECTURE.md §5.6) and the caller already
             // publishes a state transition.
         }
     }

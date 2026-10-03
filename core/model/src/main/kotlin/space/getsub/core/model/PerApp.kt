@@ -35,7 +35,7 @@ public enum class PerAppMode {
  * device, so a hand-edited or future-version row can never widen exposure.
  *
  * Note `proxy` is **not** an alias here, though it is INCY's word for `on`. Happ is
- * authoritative where the two disagree (spec §2.1), and silently accepting a
+ * authoritative where the two disagree (M5.5 spec §2.1), and silently accepting a
  * near-miss in a security-relevant setting is worse than falling back to `Off`.
  */
 public fun perAppModeFrom(value: String?): PerAppMode =

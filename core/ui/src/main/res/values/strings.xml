@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ARCHITECTURE.md §12: strings live here from the first commit; no
-     hardcoded UI text. §5.6: no string here may interpolate a server
+     hardcoded UI text. ARCHITECTURE.md §5.6: no string here may interpolate a server
      address, uuid, or key. -->
 <resources>
     <!-- Generic QR camera surface. The scanner emits decoded text only; the
@@ -37,7 +37,7 @@
     <string name="bottom_sheet_test_title">Sheet Title</string>
 
     <!-- GroupCard (Task 18). A group's name is not a secret the way a server
-         address is (§5.6) — it never interpolates one. -->
+         address is (ARCHITECTURE.md §5.6) — it never interpolates one. -->
     <!-- %1$s = the group's name, %2$d = its real (unfiltered) profile count. -->
     <string name="group_card_expand_description">Expand %1$s, %2$d servers</string>
     <string name="group_card_collapse_description">Collapse %1$s, %2$d servers</string>

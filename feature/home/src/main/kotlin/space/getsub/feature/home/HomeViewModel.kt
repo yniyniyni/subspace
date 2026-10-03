@@ -25,7 +25,7 @@ internal class HomeViewModel @Inject constructor(
     val state: StateFlow<HomeState> = _state.asStateFlow()
 
     init {
-        // §5.5: connection comes from the service and is only ever mirrored
+        // ARCHITECTURE.md §5.5: connection comes from the service and is only ever mirrored
         // here — this combine never derives it from anything local. The
         // active profile is likewise read, never chosen, by this screen:
         // choosing happens on the Servers screen via
@@ -49,13 +49,21 @@ internal class HomeViewModel @Inject constructor(
                 isMeasuringLatency = activeProfile != null && activeProfile.id in measuring,
             )
             // Chained rather than folded into the combine above: the five-flow
-            // overload tops out at five, and traffic (§5.5, mirrored verbatim
+            // overload tops out at five, and traffic (ARCHITECTURE.md §5.5, mirrored verbatim
             // like connection) is the sixth source.
         }.combine(tunnel.traffic) { partial, traffic -> partial.copy(traffic = traffic) }
             // A seventh source, chained the same way: the per-tag breakdown
             // setting (M8.5 spec §2), which HomeScreen needs to tell "off"
             // apart from perTag simply having nothing yet.
             .combine(tunnel.perTagBreakdown) { partial, enabled -> partial.copy(perTagBreakdownEnabled = enabled) }
+            // An eighth: lightweight mode hides traffic and the breakdown, whatever the
+            // breakdown setting says (`:bg` stops sending samples too).
+            .combine(tunnel.lightweightMode) { partial, lightweight ->
+                partial.copy(
+                    trafficHidden = lightweight,
+                    perTagBreakdownEnabled = partial.perTagBreakdownEnabled && !lightweight,
+                )
+            }
             .onEach { _state.value = it }
             .launchIn(viewModelScope)
     }

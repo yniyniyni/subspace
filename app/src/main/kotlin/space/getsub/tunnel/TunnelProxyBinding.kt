@@ -11,7 +11,7 @@ import javax.inject.Singleton
 /**
  * Reads the loopback HTTP proxy port out of the service's published state.
  *
- * §5.5: the service owns connection state and this reads it, rather than keeping
+ * ARCHITECTURE.md §5.5: the service owns connection state and this reads it, rather than keeping
  * a local flag about whether a tunnel is up — except for the one flag it does
  * keep, [TunnelClient.isBound], which is not a guess about the tunnel: it is an
  * honest record that the Binder handshake completed and this client currently
@@ -24,7 +24,7 @@ import javax.inject.Singleton
  * listening. A background worker reading that frozen value would dial a real
  * port with no tunnel behind it — worst case, a *different* local app that has
  * since bound the same loopback port, since Android gives loopback no per-app
- * isolation, in which case the subscription URL such a worker forms (§5.6, a
+ * isolation, in which case the subscription URL such a worker forms (ARCHITECTURE.md §5.6, a
  * secret) would be sent there. [isBound] is what lets this decline to answer
  * instead of guessing: unbound means no live link to the source of truth, so no
  * port is handed out, full stop — regardless of what [TunnelClient.state] still

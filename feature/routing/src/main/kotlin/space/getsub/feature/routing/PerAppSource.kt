@@ -82,7 +82,7 @@ constructor(
         // process death between the two writes. Landing packages first leaves the
         // old mode governing a new list, which the resolver handles; landing mode
         // first could leave AllowList governing an empty list — the one state
-        // PerAppResolver refuses to start (§6.3).
+        // PerAppResolver refuses to start (M5.5 spec §6.3).
         perAppRepository.setUserPackages(packages)
         perAppRepository.setMode(mode)
     }
@@ -91,7 +91,7 @@ constructor(
      * Whether a per-app change has a live session to reapply to.
      *
      * Exhaustive with no `else`: M8 added `Reconnecting` and an `is`-chain
-     * absorbed it silently (spec §2.2 chose this shape for
+     * absorbed it silently (M8 spec §2.2 chose this shape for
      * `FailureReason.retryability` for the same reason).
      *
      * `Reconnecting` is **false**, and deliberately not "true because a retained

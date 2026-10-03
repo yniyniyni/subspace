@@ -80,7 +80,7 @@ private fun RouteOutcome.targetFor(proxy: OverrideTarget.Resolved): OverrideTarg
  * noise in the config.
  *
  * **Entries keep their stored order.** The user's ordering carries meaning and
- * stored order is stable, so §6's byte-determinism holds without sorting them.
+ * stored order is stable, so ARCHITECTURE.md §6's byte-determinism holds without sorting them.
  * Contrast `appendWebSocketSettings`, which must sort because a `Map`'s
  * iteration order is a property of its implementation rather than of its
  * contents.
@@ -129,7 +129,7 @@ internal fun routingRuleLines(
  * document wrote them and only ever appends. Nothing then named the target for
  * unmatched traffic, so it went wherever the document happened to list first:
  * a `freedom` outbound in first position sent everything outside the tunnel
- * (§5.2), and a balancer config's unmatched traffic bypassed the balancer M7.5
+ * (ARCHITECTURE.md §5.2), and a balancer config's unmatched traffic bypassed the balancer M7.5
  * exists to name. The app owns the rules on this branch by design (spec §4.2),
  * and owning them means saying what the default is rather than inheriting an
  * accident of the document's outbound order.

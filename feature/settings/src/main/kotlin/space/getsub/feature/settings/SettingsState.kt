@@ -65,19 +65,23 @@ internal data class SettingsState(
     val geoUpdateResults: Map<String, GeoInstallResult> = emptyMap(),
     /** Whether a *scheduled* geo refresh may run on a metered network. A manual update always can. */
     val geoRefreshOnMetered: Boolean = false,
-    /** Connect every time the device starts (spec §4.2). See [SettingsSource.bootAutostart]. */
+    /** Connect every time the device starts (M8 spec §4.2). See [SettingsSource.bootAutostart]. */
     val bootAutostart: Boolean = false,
     /**
-     * Whether the TUN is retained while a wanted session is down (spec §6). Defaults to on —
+     * Whether the TUN is retained while a wanted session is down (M8 spec §6). Defaults to on —
      * matches [space.getsub.core.data.SettingsRepository.failClosed]'s own default.
      */
     val failClosed: Boolean = true,
     /**
-     * Spec §7.2, ARCHITECTURE.md §9: "prompt once, respect refusal" — true for the one moment
+     * M8 spec §7.2, ARCHITECTURE.md §9: "prompt once, respect refusal" — true for the one moment
      * between a survival setting (boot autostart or fail-closed) being switched on and the user
      * responding, per [shouldPromptForBattery]'s own gate in [SettingsViewModel].
      */
     val showBatteryPrompt: Boolean = false,
+    /** M8.5 spec §6 #10: the screen should launch ACTION_VPN_SETTINGS now. Consumed by onVpnSettingsOpened. */
+    val openVpnSettingsRequested: Boolean = false,
+    /** The prompt on screen was raised by the always-on row, so answering it opens VPN settings. */
+    val vpnSettingsAfterPrompt: Boolean = false,
     /**
      * Whether xray's `stats`/`policy`/`metrics` blocks are emitted so the per-server traffic
      * breakdown (Task 7's [SettingsDiagnosticsSection]) can be shown on Home. Defaults to off —
@@ -86,9 +90,11 @@ internal data class SettingsState(
      * [SettingsDiagnosticsSection]'s summary text for what turning it on exposes.
      */
     val perTagBreakdown: Boolean = false,
+    /** No traffic numbers and no session log, for slower phones. See [SettingsSource.lightweightMode]. */
+    val lightweightMode: Boolean = false,
     /**
      * True while a tunnel session is up, mirrored from [TunnelSessionSource] (ARCHITECTURE.md
-     * §5.5: never inferred locally — the same discipline
+     * ARCHITECTURE.md §5.5: never inferred locally — the same discipline
      * [space.getsub.feature.home.HomeState.connection] follows for the same underlying state).
      *
      * Drives [perTagBreakdownSessionNoticeVisible] directly: whether toggling [perTagBreakdown]
@@ -132,7 +138,7 @@ internal data class SettingsState(
     val perTagBreakdownSessionNoticeVisible: Boolean
         get() = sessionConnected
 
-    /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (§5.6). */
+    /** Keep the provider-facing identifier visible in the UI, never in diagnostic output (ARCHITECTURE.md §5.6). */
     override fun toString(): String =
         "SettingsState(theme=$theme, appVersion=$appVersion, xrayVersion=$xrayVersion, " +
             "hwidEnabled=$hwidEnabled, hwid=<redacted>, dns=<redacted>)"

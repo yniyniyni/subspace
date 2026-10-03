@@ -5,7 +5,7 @@ package space.getsub.core.parser.directive
 private const val BOOL_TRUE = "true"
 private const val BOOL_FALSE = "false"
 
-/** Why a directive value did not survive validation. Never carries the value itself (§5.6). */
+/** Why a directive value did not survive validation. Never carries the value itself (ARCHITECTURE.md §5.6). */
 public enum class RejectionReason {
     /** Not in the registry at all. Ignored and logged (§A.1). */
     UnknownKey,

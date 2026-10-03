@@ -16,7 +16,7 @@ import org.junit.Test
 import space.getsub.core.ui.theme.SubspaceTheme
 
 /**
- * Spec §7, §7.1, §7.2: covers the tunnel section — always-on VPN as a link (never a switch,
+ * Spec §7, M8 spec §7.1, M8 spec §7.2: covers the tunnel section — always-on VPN as a link (never a switch,
  * since this app cannot own that system state) and the boot-autostart/fail-closed switches.
  */
 class SettingsTunnelSectionTest {
@@ -40,7 +40,7 @@ class SettingsTunnelSectionTest {
 
         composeRule.onNodeWithText("Always-on VPN").performClick()
 
-        // Spec §7.1: the app cannot enable always-on or its lockdown; both are
+        // M8 spec §7.1: the app cannot enable always-on or its lockdown; both are
         // system settings. A switch here would lie about who owns the state.
         opened shouldBe true
 

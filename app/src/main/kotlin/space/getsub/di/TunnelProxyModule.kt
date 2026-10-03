@@ -15,7 +15,7 @@ import space.getsub.tunnel.TunnelProxyBinding
  * Separate from [GeoModule] because the consumers are unrelated: the subscription
  * pipeline in `:core:data` needs this too, and geo assets are not a reason for it
  * to exist. Same module for the same reason [GeoModule] is here — `:app` is the
- * only place `:service` and `:core:model` are both in scope (§4).
+ * only place `:service` and `:core:model` are both in scope (M5 spec §4).
  */
 @Module
 @InstallIn(SingletonComponent::class)

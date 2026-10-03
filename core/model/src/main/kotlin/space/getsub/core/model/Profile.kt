@@ -18,7 +18,7 @@ package space.getsub.core.model
  *   profile parsed out of a hand-written Xray config, and then it is the exact bytes of the
  *   *element* that produced it — the whole document for a bare top-level object, or that one
  *   array entry when the document is a top-level array of configs (`XrayJson.kt`). `:core:data`
- *   stores this as `kind = RAW_JSON`'s `rawJson` column and derives identity from it (§6),
+ *   stores this as `kind = RAW_JSON`'s `rawJson` column and derives identity from it (ARCHITECTURE.md §6),
  *   falling back to [outbound]-based identity when several profiles share one element's bytes
  *   (one element with several outbounds) — see `ProfileRepository.import`'s KDoc. Every other
  *   container (share links, base64 lists, Clash YAML) has a bounded field set and leaves this
@@ -44,7 +44,7 @@ public sealed interface Outbound {
     public val port: Int
 }
 
-// §5.6: server addresses, UUIDs, passwords and REALITY key material are secrets, and these five
+// ARCHITECTURE.md §5.6: server addresses, UUIDs, passwords and REALITY key material are secrets, and these five
 // classes are where they actually live. Kotlin generates a toString() that prints every one of them
 // verbatim, so a single `Log.d("$outbound")` — or any exception message that interpolates a profile
 // — leaks the whole credential set. `:core:data` already guards its own entities this way; these
@@ -122,7 +122,7 @@ public data class StreamSettings(
 public sealed interface Security {
     public data object None : Security
 
-    /** REALITY — the TLS-camouflage transport (§13). */
+    /** REALITY — the TLS-camouflage transport (ARCHITECTURE.md §13). */
     public data class Reality(
         val serverName: String,
         val publicKey: String,

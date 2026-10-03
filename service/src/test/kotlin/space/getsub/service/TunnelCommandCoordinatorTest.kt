@@ -185,9 +185,9 @@ class TunnelCommandCoordinatorTest {
         }
 
     /**
-     * Spec §3.1: reconcile rides the existing channel rather than a second
+     * M8 spec §3.1: reconcile rides the existing channel rather than a second
      * mechanism. Two orderings would give the service two answers to "what happens
-     * next" — the shape §5.5 forbids.
+     * next" — the shape ARCHITECTURE.md §5.5 forbids.
      */
     @Test
     fun reconcileIsOrderedWithSessionCommands() =

@@ -42,7 +42,7 @@ public enum class ComposeFailure {
 /** The outcome of composing a stored config. */
 public sealed interface ComposeResult {
     public data class Ok(val json: String) : ComposeResult {
-        // §5.6: this is the whole composed config — server UUID, REALITY
+        // ARCHITECTURE.md §5.6: this is the whole composed config — server UUID, REALITY
         // private key, the user's routing/dns text, all of it.
         override fun toString(): String = "Ok(<redacted, ${json.length} bytes>)"
     }
@@ -57,7 +57,7 @@ public sealed interface ComposeResult {
  * [XrayConfigGenerator] stays the single author of those bytes and the two
  * paths cannot drift in what a rule looks like.
  *
- * §5.6: routing entries are domains the user visits.
+ * ARCHITECTURE.md §5.6: routing entries are domains the user visits.
  */
 public data class OverrideBlocks(
     val routingJson: String,
@@ -73,7 +73,7 @@ public data class OverrideBlocks(
  * ARCHITECTURE.md §6's passthrough half. Unlike [XrayConfigGenerator], which
  * writes a config from a typed model, this **edits a parsed tree** — anything
  * the design does not name survives untouched, which is the entire point of
- * storing the bytes (§6: extraction is lossy and the loss is permanent).
+ * storing the bytes (ARCHITECTURE.md §6: extraction is lossy and the loss is permanent).
  *
  * Four rewrites are unconditional, each forced by an existing invariant rather
  * than by preference:
@@ -81,9 +81,9 @@ public data class OverrideBlocks(
  * - `inbounds` — the config's listeners are on ports we did not allocate
  *   (§10.6; the target panel ships 10808/10809) and tun2socks dials ours.
  * - `env` — Go cannot see a Java `setenv`, so the asset directory travels in the
- *   invoke `env` object (§6).
+ *   invoke `env` object (ARCHITECTURE.md §6).
  * - `log` — `access: "none"`, or gomobile pipes one line per destination the
- *   user reaches into logcat (§5.6, found on device during M1).
+ *   user reaches into logcat (ARCHITECTURE.md §5.6, found on device during M1).
  * - `stats`/`policy`/`metrics` — a config's own metrics listener is an
  *   unaudited open port, and counters are M8's.
  *
@@ -147,7 +147,7 @@ public object RawConfigComposer {
             kept["dns"] = parsedOverride.dns
             kept["outbounds"] = JsonArray(outbounds + parsedOverride.extraOutbounds)
 
-            // spec §2.4: only the override branch may carry these — it already
+            // M8.5 spec §2.4: only the override branch may carry these — it already
             // replaces `routing`/`dns` wholesale, so three more blocks change
             // nothing about the pure branch's "as written" promise, which this
             // `if (override != null)` guard is what keeps intact.
@@ -161,7 +161,7 @@ public object RawConfigComposer {
                 // adding the one destOverride entry that block's fakeDns requires is
                 // completing our own substitution, not second-guessing the config's
                 // sniffing choice — unlike the pure-passthrough branch below, which
-                // must never touch a config's own sniffing (spec §4.2, research §5b.5).
+                // must never touch a config's own sniffing (M7 spec §4.2, research §5b.5).
                 if (settings.dns?.fakeDns == true) {
                     SniffingSettings(DEFAULT_SNIFFING.destOverride + "fakedns")
                 } else {
@@ -214,7 +214,7 @@ public object RawConfigComposer {
      *
      * Split out of [compose] so its own branching (a null check and a `forEach`)
      * does not count against that function's cyclomatic complexity — the
-     * decision itself stays exactly where spec §2.4 requires it: only
+     * decision itself stays exactly where M8.5 spec §2.4 requires it: only
      * [compose]'s override branch calls this at all, so a null
      * [TunnelSettings.metricsPort] (breakdown off, or no port could be
      * allocated) leaves the map exactly as [STRIPPED] left it, on both
@@ -316,7 +316,7 @@ public object RawConfigComposer {
      * Emits the tree with `inbounds` spliced in as text.
      *
      * Keys are written in sorted order so the same input always produces the
-     * same bytes — the determinism contract §6 places on [XrayConfigGenerator],
+     * same bytes — the determinism contract ARCHITECTURE.md §6 places on [XrayConfigGenerator],
      * met here by ordering rather than by hand-writing.
      */
     private fun render(

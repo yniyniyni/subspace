@@ -103,7 +103,7 @@ public data class ImportPreview(
  *
  * The ordered lifecycle is the contract: decide before I/O, materialise generation
  * `n + 1` while `n` remains live, publish rules and generation in one Room write,
- * and only then sweep `n` (spec §7.4).
+ * and only then sweep `n` (M6 spec §7.4).
  */
 @Singleton
 @Suppress(
@@ -376,7 +376,7 @@ internal constructor(
     /**
      * Copies [id] into an editable rule set under [name], carrying its assets.
      *
-     * Spec §4.2's "Duplicate and edit". The copy must own its own generation
+     * M6 spec §4.2's "Duplicate and edit". The copy must own its own generation
      * rather than fall back to the shared catalogue: an imported profile's
      * `geosite.dat` came from *its* upstream, so a copy that kept
      * `geosite:cn` rules while silently reading a same-named shared file would
@@ -618,13 +618,13 @@ internal constructor(
     }
 
     /**
-     * Finds bytes for [url] the device already holds, per spec §7.4.1.
+     * Finds bytes for [url] the device already holds, per M6 spec §7.4.1.
      *
-     * The row being updated is a legitimate source. §7.4 keeps its live
+     * The row being updated is a legitimate source. M6 spec §7.4 keeps its live
      * generation intact and leased until the swap, and its bytes are exactly
-     * the ones §7.4.1 exists to stop re-fetching: excluding it made every
+     * the ones M6 spec §7.4.1 exists to stop re-fetching: excluding it made every
      * update of a geo-backed profile re-download its own unchanged files,
-     * which a large geosite cannot finish inside §7.5's three-minute cap.
+     * which a large geosite cannot finish inside M6 spec §7.5's three-minute cap.
      * Only the directory being staged right now is off limits.
      */
     @Suppress("ReturnCount") // Shared, per-set, and absent are the three ordered candidate outcomes.

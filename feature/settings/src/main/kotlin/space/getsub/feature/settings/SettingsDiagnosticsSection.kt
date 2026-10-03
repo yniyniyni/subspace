@@ -17,7 +17,7 @@ import androidx.compose.ui.semantics.semantics
 import space.getsub.core.ui.component.SettingRow
 
 /**
- * Diagnostics: the session log viewer (spec §3.4), reached the same way
+ * Diagnostics: the session log viewer (M8.5 spec §3.4), reached the same way
  * [SettingsScreen]'s existing "Routing" and "Per-app proxy" rows reach their
  * own pushed destinations — a single [SettingRow] navigating out, not a
  * dialog or an inline expansion — plus the per-server traffic breakdown

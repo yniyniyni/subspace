@@ -55,7 +55,7 @@ internal fun currentProcessName(): String =
  * It writes its own PID and process name into `settings` *before* the profile row so that, by the
  * time the reader observes the profile, the evidence of who wrote it is already committed.
  *
- * `runBlocking` is permitted here: §12 forbids it outside tests, and this is test-only source in
+ * `runBlocking` is permitted here: ARCHITECTURE.md §12 forbids it outside tests, and this is test-only source in
  * `androidTest` (`scripts/check-forbidden.sh` excludes that source set for the same reason).
  */
 class WriterService : Service() {
@@ -107,7 +107,7 @@ class WriterService : Service() {
                     identityHash = "written",
                     name = WRITTEN_PROFILE_NAME,
                     protocol = "vless",
-                    // Documentation range (RFC 5737), never a real endpoint — §5.6.
+                    // Documentation range (RFC 5737), never a real endpoint — ARCHITECTURE.md §5.6.
                     address = "198.51.100.1",
                     port = 443,
                     transport = "tcp · reality",

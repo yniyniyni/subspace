@@ -86,7 +86,7 @@ internal data class DirectiveRow(
 )
 
 /**
- * §7's failure taxonomy, resolved from [StoredSubscription]'s own two-column encoding
+ * M4 spec §7's failure taxonomy, resolved from [StoredSubscription]'s own two-column encoding
  * ([StoredSubscription.lastFetchStatus] holds a [SubscriptionSyncFailure] name, `NoServers`, or
  * `null` on server-bearing success) into something the screen can render without re-deriving that mapping — see
  * [toLastFetchState].
@@ -139,7 +139,7 @@ internal fun StoredSubscription.toLastFetchState(): LastFetchState {
 /**
  * What [SubscriptionDetailScreen] renders.
  *
- * @property redactedUrl the subscription's URL with everything past the host stripped (§5.6) —
+ * @property redactedUrl the subscription's URL with everything past the host stripped (ARCHITECTURE.md §5.6) —
  *   see [redactUrl]. Blank only while [loading].
  * @property quotaUsedBytes/[quotaTotalBytes] `subscription-userinfo`'s own fields, forwarded
  *   straight to [space.getsub.core.ui.component.QuotaBar] — `null` under the same
@@ -178,7 +178,7 @@ internal data class SubscriptionDetailState(
 )
 
 /**
- * §5.6: a subscription URL is a secret alongside server addresses and REALITY keys — this keeps
+ * ARCHITECTURE.md §5.6: a subscription URL is a secret alongside server addresses and REALITY keys — this keeps
  * the origin (useful for telling two subscriptions apart at a glance) while dropping the path
  * and query string, which is where a provider's access token typically lives.
  *

@@ -33,7 +33,7 @@ import space.getsub.feature.profiles.R
  * localisation (M9) a translation job rather than a refactor.
  *
  * Never carries anything beyond [ParseFailure.index], the closed-vocabulary
- * [FailureDetail], and bounded numeric measurements (§5.6) — there is no
+ * [FailureDetail], and bounded numeric measurements (ARCHITECTURE.md §5.6) — there is no
  * channel here for the address, UUID, or key that failed to parse.
  */
 @Composable

@@ -156,7 +156,7 @@ class PerAppViewModelTest {
         model.state.value.rows.first { it.packageName == "com.example.bank" }.isSelected shouldBe false
     }
 
-    // §7.2: selected, then uninstalled. Shown, flagged, removable by hand — never
+    // M5.5 spec §7.2: selected, then uninstalled. Shown, flagged, removable by hand — never
     // dropped for the user. §8's skip-and-continue already makes it harmless at
     // connect time, so there is nothing to protect them from.
     @Test
@@ -235,7 +235,7 @@ class PerAppViewModelTest {
     }
 
     // Once, at the explicit Save. Per-toggle would drop the tunnel repeatedly
-    // through a multi-app edit (spec §7.3).
+    // through a multi-app edit (M5.5 spec §7.3).
     @Test
     fun aMultiAppEditReconnectsExactlyOnce() = runTest(dispatcher) {
         val source = FakeSource(apps).apply { tunnelActive.value = true }
@@ -334,7 +334,7 @@ class PerAppViewModelTest {
         model.state.value.isEmptyAllowList shouldBe false
     }
 
-    // §7.2: selected first, each group still by label. Fixed at load — see
+    // M5.5 spec §7.2: selected first, each group still by label. Fixed at load — see
     // PerAppViewModel.selectedFirst for why it does not re-sort under a finger.
     @Test
     fun selectedRowsSortAheadOfUnselectedOnes() = runTest(dispatcher) {

@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import space.getsub.core.model.ConnectionState
 import space.getsub.core.model.FailureReason
+import space.getsub.core.model.Health
 import space.getsub.core.model.StartupStage
 import space.getsub.core.model.failure
 
@@ -43,7 +44,7 @@ class ConnectionStateParcelRoundTripTest {
             ConnectionState.Connecting(StartupStage.EstablishingTun),
             ConnectionState.Connected(sinceEpochMillis = 1_700_000_000_000L, socksPort = 10808, httpProxyPort = 10809),
             ConnectionState.Disconnecting,
-            ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2),
+            ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
             failure(FailureReason.ConfigRejected, "a detail"),
         ).forEach { state -> roundTrip(state) shouldBe state }
     }
@@ -58,5 +59,27 @@ class ConnectionStateParcelRoundTripTest {
             roundTrip(ConnectionState.Connected(sinceEpochMillis = 5L, socksPort = 1080, httpProxyPort = 8080))
 
         restored shouldBe ConnectionState.Connected(sinceEpochMillis = 5L, socksPort = 1080, httpProxyPort = 8080)
+    }
+
+    @Test
+    fun everyHealthValueSurvivesRealMarshalling() {
+        Health.entries.forEach { health ->
+            val state =
+                ConnectionState.Connected(
+                    sinceEpochMillis = 10L,
+                    socksPort = 1080,
+                    httpProxyPort = 8080,
+                    health = health,
+                )
+            roundTrip(state) shouldBe state
+        }
+    }
+
+    @Test
+    fun blockedSurvivesRealMarshallingInBothDirections() {
+        listOf(true, false).forEach { blocked ->
+            val state = ConnectionState.Reconnecting(FailureReason.TunnelStartFailed, attempt = 3, blocked = blocked)
+            roundTrip(state) shouldBe state
+        }
     }
 }

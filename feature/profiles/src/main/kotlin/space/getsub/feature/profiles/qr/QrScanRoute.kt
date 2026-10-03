@@ -29,7 +29,7 @@ import space.getsub.feature.profiles.add.ImportViewModel
  * That handle is `Bundle`-backed (marshaled into the Activity's
  * saved-instance-state on process death) — exactly the channel
  * [ImportViewModel]'s own KDoc already rules out for config material
- * (§5.6). Sharing the ViewModel instance instead keeps a scanned payload in
+ * (ARCHITECTURE.md §5.6). Sharing the ViewModel instance instead keeps a scanned payload in
  * process memory only, the same lifetime every other path into
  * `import(raw)` already has.
  *

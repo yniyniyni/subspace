@@ -135,7 +135,7 @@ class ImportReviewViewModelTest {
         viewModel.confirm()
 
         viewModel.offer(link, RoutingSourceKind.Deeplink)
-        // Spec §7.3: silent. A sheet the user sees hourly is a sheet they stop reading.
+        // M6 spec §7.3: silent. A sheet the user sees hourly is a sheet they stop reading.
         viewModel.state.value.stage shouldBe Stage.Done
     }
 

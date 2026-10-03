@@ -355,7 +355,7 @@ class SubscriptionFetcherTest {
 
     @Test
     fun `a failure detail names the exception and never quotes its message`() = runTest {
-        // §5.6, and the reason FetchOutcome.Failed.detail carries a class name rather than the
+        // ARCHITECTURE.md §5.6, and the reason FetchOutcome.Failed.detail carries a class name rather than the
         // message: DNS and TLS exception messages routinely embed the host, and a subscription
         // URL's host is a secret. This host does not resolve, so the message would contain it.
         val host = "no-such-host-b7f2a1.invalid"

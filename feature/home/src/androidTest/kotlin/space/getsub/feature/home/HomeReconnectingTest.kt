@@ -15,7 +15,7 @@ import space.getsub.core.model.FailureReason
 import space.getsub.core.ui.theme.SubspaceTheme
 
 /**
- * Spec §7.3 / §5.5: [ConnectionState.Reconnecting] is neither [ConnectionState.Connected]
+ * M8 spec §7.3 / ARCHITECTURE.md §5.5: [ConnectionState.Reconnecting] is neither [ConnectionState.Connected]
  * nor [ConnectionState.Failed], and rendering it as either is a lie the user acts on.
  */
 class HomeReconnectingTest {
@@ -24,14 +24,22 @@ class HomeReconnectingTest {
 
     @Test
     fun reconnectingIsNotRenderedAsConnected() {
-        setContent(homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)))
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
+            ),
+        )
 
         composeRule.onNodeWithText("Reconnecting…", substring = true).assertIsDisplayed()
     }
 
     @Test
     fun reconnectingIsNotRenderedAsFailed() {
-        setContent(homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2)))
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
+            ),
+        )
 
         // "Disconnected" alone would not catch this: ConnectionState.Failed never renders that
         // literal string — it renders reason.labelRes(), which for CoreStartFailed is exactly
@@ -42,7 +50,7 @@ class HomeReconnectingTest {
     }
 
     /**
-     * Spec §7.3, and ruling R23. A `Retryable` reason retries for as long as a network
+     * M8 spec §7.3, and ruling R23. A `Retryable` reason retries for as long as a network
      * exists, so this state has no bound; with the kill switch on (the default) the user has
      * no connectivity while it retries. Home is therefore the exit, and this asserts the tap
      * actually reaches [HomeActions.onDisconnect].
@@ -55,7 +63,10 @@ class HomeReconnectingTest {
     @Test
     fun reconnectingOffersAWorkingDisconnect() {
         var disconnects = 0
-        val state = homeState(connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2))
+        val state =
+            homeState(
+                connection = ConnectionState.Reconnecting(FailureReason.CoreStartFailed, attempt = 2, blocked = false),
+            )
         composeRule.setContent {
             SubspaceTheme {
                 HomeScreenContent(state = state, actions = actions.copy(onDisconnect = { disconnects++ }))
@@ -69,6 +80,36 @@ class HomeReconnectingTest {
         composeRule.onNodeWithContentDescription("Disconnect").performClick()
 
         disconnects shouldBe 1
+    }
+
+    @Test
+    fun blockedReconnectingSaysTrafficIsBlocked() {
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(
+                    FailureReason.CoreStartFailed,
+                    attempt = 2,
+                    blocked = true,
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("traffic is blocked", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun openReconnectingSaysTrafficIsNotProtected() {
+        setContent(
+            homeState(
+                connection = ConnectionState.Reconnecting(
+                    FailureReason.CoreStartFailed,
+                    attempt = 2,
+                    blocked = false,
+                ),
+            ),
+        )
+
+        composeRule.onNodeWithText("traffic is not protected", substring = true).assertIsDisplayed()
     }
 
     private fun setContent(state: HomeState) {

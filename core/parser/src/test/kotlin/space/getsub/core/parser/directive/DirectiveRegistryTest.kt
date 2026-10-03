@@ -137,7 +137,7 @@ class DirectiveRegistryTest {
      * This set is the whole reason the blanket assertion below was narrowed rather
      * than deleted. Adding a member here is a claim that the key cannot take effect
      * without the user approving it, in a UI that shows them what they are
-     * approving. `routing` earns it through M6's import review sheet (spec §6).
+     * approving. `routing` earns it through M6's import review sheet (M6 spec §6).
      */
     @Suppress("VariableNaming", "ktlint:standard:property-naming")
     private val CONFIRMED_DANGEROUS_KEYS = setOf("routing")
@@ -211,7 +211,7 @@ class DirectiveRegistryTest {
 
     @Test
     fun `the M4-consumed set is exactly the keys this milestone acts on`() {
-        // Pins spec §1.1's scope. Adding a consumer without amending the spec
+        // Pins M4 spec §1.1's scope. Adding a consumer without amending the spec
         // fails here, deliberately.
         DirectiveRegistry.specs.values
             .filter { it.consumer == Consumer.Subscriptions }

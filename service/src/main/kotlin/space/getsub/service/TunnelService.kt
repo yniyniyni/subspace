@@ -721,8 +721,11 @@ class TunnelService : VpnService() {
             // allocated (metricsPort itself). ARCHITECTURE.md §5.6 — fetchMetricsPayload/
             // parseMetricsPayload never throw and this reads only the port
             // number, never a tag or a payload, so nothing here is loggable.
+            // Lightweight mode stops this poll as soon as it is switched on, mid-session too.
             readTags = {
-                metricsPort?.let { port -> fetchMetricsPayload(port)?.let(::parseMetricsPayload) } ?: emptyList()
+                tagsToPoll(lightweight) {
+                    metricsPort?.let { port -> fetchMetricsPayload(port)?.let(::parseMetricsPayload) } ?: emptyList()
+                }
             },
         )
 
@@ -1039,16 +1042,14 @@ class TunnelService : VpnService() {
         }
 
     /**
-     * Keeps [lightweight] current. A failed Room read leaves it as it was (off on a
-     * fresh instance): the only effect is traffic samples still being sent, never a
-     * wrong connection state. Class name only in the log (ARCHITECTURE.md §5.6).
+     * Keeps [lightweight] current. A failed Room read ends this collector and leaves the
+     * value as it was until the next service instance: samples keep being sent (or stay
+     * suppressed), never a wrong connection state. Class name only in the log
+     * (ARCHITECTURE.md §5.6).
      */
     private suspend fun collectLightweightMode() {
         settingsRepository.lightweightMode
-            .catch { e ->
-                if (e is CancellationException) throw e
-                Log.e(TAG, "lightweight-mode collector failed: ${e.javaClass.simpleName}")
-            }
+            .catch { e -> Log.e(TAG, "lightweight-mode collector failed: ${e.javaClass.simpleName}") }
             .collect { enabled -> lightweight = enabled }
     }
 
@@ -1455,25 +1456,30 @@ class TunnelService : VpnService() {
      */
     private fun broadcastTrafficSample(sample: TrafficSample) {
         synchronized(lock) {
-            // Lightweight mode: the UI gets no samples, but health below still does.
-            if (sendsTrafficToUi(lightweight)) {
-                val parcel = TrafficSampleParcel.from(sample)
-                val count = callbacks.beginBroadcast()
-                repeat(count) { i ->
-                    try {
-                        callbacks.getBroadcastItem(i).onTrafficSample(parcel)
-                    } catch (e: android.os.RemoteException) {
-                        Log.w(TAG, "traffic callback dropped: ${e.javaClass.simpleName}")
+            // Lightweight mode: the UI gets no samples, but health always does.
+            deliverTrafficSample(
+                lightweight,
+                toUi = {
+                    val parcel = TrafficSampleParcel.from(sample)
+                    val count = callbacks.beginBroadcast()
+                    repeat(count) { i ->
+                        try {
+                            callbacks.getBroadcastItem(i).onTrafficSample(parcel)
+                        } catch (e: android.os.RemoteException) {
+                            Log.w(TAG, "traffic callback dropped: ${e.javaClass.simpleName}")
+                        }
                     }
-                }
-                callbacks.finishBroadcast()
-            }
-            // M8.5 spec §4.2/M8.5 spec §4.3: the sampler is health's only input. Published
-            // through publishLocked, so the notification follows (Task 4).
-            healthDetector?.let { detector ->
-                val detected = detector.accept(sample, SystemClock.elapsedRealtime())
-                nextHealthState(currentState, detected, healthGeneration, generation)?.let(::publishLocked)
-            }
+                    callbacks.finishBroadcast()
+                },
+                // M8.5 spec §4.2/M8.5 spec §4.3: the sampler is health's only input. Published
+                // through publishLocked, so the notification follows (Task 4).
+                toHealth = {
+                    healthDetector?.let { detector ->
+                        val detected = detector.accept(sample, SystemClock.elapsedRealtime())
+                        nextHealthState(currentState, detected, healthGeneration, generation)?.let(::publishLocked)
+                    }
+                },
+            )
         }
     }
 
@@ -1575,8 +1581,14 @@ class TunnelService : VpnService() {
                 // the setting is read here, inside the startup coroutine, so it is
                 // still read before anything in the start sequence logs.
                 scope.launch {
-                    if (capturesSessionLog(lightweight = lightweightAtStart())) {
-                        logCapture.start()
+                    val lightweightNow = lightweightAtStart()
+                    // Under the lock, with the generation re-checked: a stop or a newer
+                    // connect during the read above has already run teardown, and a late
+                    // start here would leave capture running with nothing to stop it.
+                    synchronized(lock) {
+                        startCaptureIfCurrent(lightweightNow, stillCurrent = { gen == generation }) {
+                            logCapture.start()
+                        }
                     }
                     val started = resolveAndStartCore(gen, profile, rowId) ?: return@launch
                     when (val outcome = attachTun(gen, started.xray, started.ports, started.dnsPlan, rowId)) {

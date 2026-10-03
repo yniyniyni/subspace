@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import javax.inject.Inject
 
 /**
@@ -62,10 +63,20 @@ public class LogRepository(
             readRingFile(File(dir, "log.1")) + readRingFile(File(dir, "log.0"))
         }
 
+    /**
+     * Empties `log.0` in place and deletes `log.1`.
+     *
+     * `:bg`'s `LogRing` keeps `log.0` open in append mode (row 7: opening it per
+     * line was a quarter of the capture thread). Deleting it would leave that
+     * writer on an unlinked inode, and every line after the clear would vanish.
+     * Truncating keeps the same inode, so the writer's next append lands at the
+     * start of the now-empty file. `log.1` is not held open, so deleting it is safe.
+     */
     public suspend fun clear() {
         withContext(Dispatchers.IO) {
             runCatching {
-                File(dir, "log.0").delete()
+                val log0 = File(dir, "log.0")
+                if (log0.isFile) FileOutputStream(log0).close()
                 File(dir, "log.1").delete()
             }
         }

@@ -685,8 +685,10 @@ class TunnelService : VpnService() {
      * `by lazy`, not an eager initialiser: [filesDir] is a `Context` method,
      * and a field initialiser runs before `attachBaseContext()` — the same
      * reason [foreignVpn] just below is `by lazy` rather than built inline.
+     * The ring itself is process-wide ([LogRing.shared]): it holds `log.0` open,
+     * and a destroyed instance's capture may still be draining into it.
      */
-    private val logRing by lazy { LogRing(File(filesDir, LOG_DIR_NAME)) }
+    private val logRing by lazy { LogRing.shared(File(filesDir, LOG_DIR_NAME)) }
     private val logCapture by lazy { LogCapture(logRing) }
 
     private val lock = Any()

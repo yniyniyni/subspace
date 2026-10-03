@@ -37,6 +37,24 @@ class LogRepositoryTest {
             assertEquals(emptyList<String>(), repo.lines())
         }
 
+    /**
+     * `:bg`'s `LogRing` keeps `log.0` open in append mode. Deleting the file would
+     * leave it writing to an unlinked inode, so every line after a clear would
+     * vanish. [LogRepository.clear] empties `log.0` in place instead.
+     */
+    @Test
+    fun `a writer holding log 0 open keeps writing visible lines after a clear`() =
+        runTest {
+            val dir = tmp.newFolder("logs")
+            val log0 = File(dir, "log.0")
+            java.io.FileOutputStream(log0, true).use { writer ->
+                writer.write("before\n".toByteArray())
+                LogRepository(dir).clear()
+                writer.write("after\n".toByteArray())
+            }
+            assertEquals(listOf("after"), LogRepository(dir).lines())
+        }
+
     @Test
     fun `clear removes both files`() =
         runTest {

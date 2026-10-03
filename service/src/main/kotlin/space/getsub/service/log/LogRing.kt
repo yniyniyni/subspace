@@ -3,6 +3,7 @@
 package space.getsub.service.log
 
 import java.io.File
+import java.io.FileOutputStream
 
 /**
  * A bounded, rotating on-disk line ring.
@@ -22,6 +23,16 @@ import java.io.File
  * bounded guarantee and keeps the newest line: what is lost is older history, which
  * was about to be discarded anyway. Logging must never abort a teardown, and bounded
  * beats keeping the most history.
+ *
+ * **`log.0` stays open.** Opening, writing and closing it for every line, after
+ * three `stat`s, was a quarter of the capture thread's CPU under a connection
+ * storm (row 7, Pass 4, `docs/agent/research/2026-09-26-m8.5-row7-release.md`).
+ * Each line is still one unbuffered `write`, so a killed process loses nothing it
+ * did not lose before. The size is counted in memory and re-read from the open
+ * file before any rotation, because `LogRepository.clear` in `:main` empties
+ * `log.0` in place rather than deleting it (a deleted file would leave this
+ * writer on an unlinked inode). There is one ring per directory per process
+ * ([shared]), so only one writer ever holds the file.
  *
  * Every operation swallows [java.io.IOException]. Logging is a diagnostic, and
  * a diagnostic that can abort a tunnel teardown is worse than one that silently
@@ -47,31 +58,87 @@ internal class LogRing(
 
     private val lock = Any()
 
+    /** `log.0`, held open in append mode. Null until the first append, or after a failure. */
+    private var stream: FileOutputStream? = null
+
+    /** Bytes in `log.0` as this ring last knew them; re-read before any rotation. */
+    private var size = 0L
+
+    private var appendsSinceExistenceCheck = 0
+
     override fun append(line: String) {
         synchronized(lock) {
-            runCatching {
-                if (!dir.exists()) dir.mkdirs()
-                if (current.exists() && current.length() >= maxBytesPerFile) {
-                    if (previous.exists()) previous.delete()
-                    if (!current.renameTo(previous)) {
-                        // Rotation failed (renameTo returns false on failure). Clear
-                        // current to prevent unbounded growth. Oldest history is lost,
-                        // but bounded is the guarantee that matters.
-                        current.delete()
-                    }
-                }
-                current.appendText(line + "\n")
-            }
+            runCatching { write((line + "\n").toByteArray(Charsets.UTF_8)) }
+                .onFailure { closeStream() }
         }
     }
 
+    private fun write(bytes: ByteArray) {
+        var out = openStream()
+        if (size >= maxBytesPerFile) {
+            // `LogRepository.clear` may have emptied the file from `:main`; only the
+            // real size decides a rotation.
+            size = out.channel.size()
+            if (size >= maxBytesPerFile) {
+                rotate()
+                out = openStream()
+            }
+        }
+        out.write(bytes)
+        size += bytes.size
+    }
+
+    /**
+     * The open `log.0`, opening it if needed. Every [EXISTENCE_CHECK_INTERVAL]
+     * appends it checks that `log.0` still exists, so a file deleted from outside
+     * costs at most that many lines instead of everything until the next rotation.
+     */
+    private fun openStream(): FileOutputStream {
+        val open = stream
+        if (open != null && stillCurrent()) return open
+        closeStream()
+        if (!dir.exists()) dir.mkdirs()
+        val opened = FileOutputStream(current, true)
+        stream = opened
+        size = opened.channel.size()
+        return opened
+    }
+
+    /** True between checks; on every [EXISTENCE_CHECK_INTERVAL]th call, whether `log.0` still exists. */
+    private fun stillCurrent(): Boolean {
+        if (++appendsSinceExistenceCheck < EXISTENCE_CHECK_INTERVAL) return true
+        appendsSinceExistenceCheck = 0
+        return current.exists()
+    }
+
+    private fun rotate() {
+        closeStream()
+        if (previous.exists()) previous.delete()
+        if (!current.renameTo(previous)) {
+            current.delete()
+        }
+    }
+
+    private fun closeStream() {
+        runCatching { stream?.close() }
+        stream = null
+    }
+
     internal companion object {
-        /**
-         * M8.5 spec §3.3. About an hour of a talkative session, and small enough that
-         * a share is sendable over a chat app. A guess in the same sense
-         * [space.getsub.service.TrafficSamplerLoop]'s interval is — spec §9 row 8
-         * is what settles it.
-         */
         const val DEFAULT_MAX_BYTES_PER_FILE: Long = 512L * 1024
+
+        /** Appends between checks that `log.0` has not been deleted from under the open stream. */
+        const val EXISTENCE_CHECK_INTERVAL = 256
+
+        private val rings = mutableMapOf<String, LogRing>()
+
+        /**
+         * The one ring for [dir] in this process. Each `TunnelService` instance used to
+         * build its own, and a capture from a destroyed instance can still be draining
+         * when the next one starts. Two rings holding `log.0` open would each count its
+         * size and rotate it, leaving the other writing into `log.1`.
+         */
+        fun shared(dir: File): LogRing =
+            synchronized(rings) { rings.getOrPut(dir.absolutePath) { LogRing(dir) } }
     }
 }
